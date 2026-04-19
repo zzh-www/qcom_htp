@@ -61,8 +61,13 @@ static void fill_bias_scale(uint16_t *buf, uint16_t v)
  * writes (activation) or 256 u32 writes (weight) with no read-modify-write.
  */
 /* Row-strided version — a_rows points to 32 rows × row_stride bytes, and we
- * pack the first 32 columns of each row. Lets callers avoid a 32-memcpy
- * sub-gather when the source is already laid out as [32 × K] row-major. */
+ * pack the first 32 columns of each row into the HMX tile.
+ *
+ * Kept scalar (u32-packed writes): HVX shuffle rewrite was tried but produced
+ * wrong HMX tile content (vshuffe_b semantics de-interleave EVEN bytes only,
+ * dropping odd-indexed bytes). Since this function is called once per
+ * m_tile (amortized <1% of total runtime after P3c), HVX is not a win here.
+ */
 static void pack_activation_32x32_rs(uint8_t *tile, const uint8_t *a_rows, int row_stride)
 {
     for (int phys_row = 0; phys_row < 16; phys_row++) {
@@ -124,9 +129,9 @@ void hmx_int4_prepack_activation(
     int                         K,
     void          *__restrict__ vtcm_base)
 {
-    /* Decompose full 32×K activation into hi/lo byte streams, then pack each
-     * 32×32 K-slice into VTCM-resident HMX tile format. Done once per m_tile,
-     * reused across all n_tiles. */
+    /* Legacy (reference) path: decompose to DDR scratch, then pack. Kept for
+     * correctness-bisection only. New call sites use
+     * hmx_int4_prepack_activation_fused which avoids the DDR intermediate. */
     const int total = 32 * K;
     for (int i = 0; i < total; i++) {
         uint32_t au = (uint32_t)((int32_t)a[i] + 32768);
@@ -138,6 +143,48 @@ void hmx_int4_prepack_activation(
     for (int kt = 0; kt < Ktiles; kt++) {
         pack_activation_32x32_rs(vt + VTCM_ACT_HI(kt),         &sg_A_h[kt * 32], K);
         pack_activation_32x32_rs(vt + VTCM_ACT_LO(kt, Ktiles), &sg_A_l[kt * 32], K);
+    }
+}
+
+/* Fused: decompose + pack in one pass. Reads uint16 activation directly from
+ * VTCM input tensor, writes packed HMX tiles directly to VTCM. No DDR
+ * intermediate (eliminates sg_A_h / sg_A_l round-trip). */
+void hmx_int4_prepack_activation_fused(
+    const uint16_t *__restrict__ au,
+    int                          M_full,
+    int                          K,
+    int                          m0,
+    void           *__restrict__ vtcm_base)
+{
+    (void)M_full;
+    uint8_t *vt = (uint8_t *)vtcm_base;
+    const int Ktiles = K / 32;
+
+    /* For each K-tile, pack 32 rows × 32 K-cols of (hi,lo) into two HMX tiles. */
+    for (int kt = 0; kt < Ktiles; kt++) {
+        uint8_t *tile_hi = vt + VTCM_ACT_HI(kt);
+        uint8_t *tile_lo = vt + VTCM_ACT_LO(kt, Ktiles);
+        int k0 = kt * 32;
+
+        /* For each phys_row (16 physical rows × 2 streams = 32 logical rows). */
+        for (int phys_row = 0; phys_row < 16; phys_row++) {
+            uint32_t *__restrict__ dst_hi = (uint32_t *)(tile_hi + 128 * phys_row);
+            uint32_t *__restrict__ dst_lo = (uint32_t *)(tile_lo + 128 * phys_row);
+            /* Logical rows phys_row and phys_row+16 (the two streams). */
+            const uint16_t *s0 = &au[(m0 + phys_row)      * K + k0];
+            const uint16_t *s1 = &au[(m0 + phys_row + 16) * K + k0];
+            for (int K32 = 0; K32 < 32; K32++) {
+                uint16_t a0 = s0[K32];   /* already (signed + 32768) post-Cast */
+                uint16_t a1 = s1[K32];
+                /* Hi byte → stream 0 slot 1, stream 1 slot 3 */
+                uint8_t a0_hi = (uint8_t)(a0 >> 8);
+                uint8_t a1_hi = (uint8_t)(a1 >> 8);
+                uint8_t a0_lo = (uint8_t)(a0 & 0xFF);
+                uint8_t a1_lo = (uint8_t)(a1 & 0xFF);
+                dst_hi[K32] = ((uint32_t)a1_hi << 24) | ((uint32_t)a0_hi << 8);
+                dst_lo[K32] = ((uint32_t)a1_lo << 24) | ((uint32_t)a0_lo << 8);
+            }
+        }
     }
 }
 
@@ -205,6 +252,107 @@ void hmx_int4_matmul_mn_using_prepacked_act(
             sg_P_lo[ir * 32 + jc] = ((int32_t)(int16_t)hi << 8) | ((int32_t)lo & 0xFF);
         }
     }
+
+    /* Combine. */
+    for (int i = 0; i < 32; i++)
+        for (int j = 0; j < 32; j++)
+            out[i * 32 + j] = (sg_P_hi[i * 32 + j] << 8)
+                            +  sg_P_lo[i * 32 + j]
+                            - (sg_col_sum_w[j] << 15);
+}
+
+/* Fused weight variant: reads raw uint8 wu[K_full × N_full] post-Cast, does
+ * -128 offset shift inline during pack and col_sum computation. Eliminates
+ * the gather_w_col DDR-intermediate round-trip. */
+void hmx_int4_matmul_mn_fused_weight(
+    int32_t        *__restrict__ out,
+    const uint8_t  *__restrict__ wu,
+    int                          K,
+    int                          N_full,
+    int                          n0,
+    void           *__restrict__ vtcm_base)
+{
+    uint8_t  *vt       = (uint8_t *)vtcm_base;
+    int8_t   *wt_tile  = (int8_t *)( vt + VTCM_OFF_WT_TILE);
+    uint16_t *bias_lo  = (uint16_t *)(vt + VTCM_OFF_BIAS_LO);
+    uint16_t *bias_hi  = (uint16_t *)(vt + VTCM_OFF_BIAS_HI);
+    uint16_t *out_lo   = (uint16_t *)(vt + VTCM_OFF_OUT_LO);
+    uint16_t *out_hi   = (uint16_t *)(vt + VTCM_OFF_OUT_HI);
+
+    fill_bias_scale(bias_lo, 0x4000);
+    fill_bias_scale(bias_hi, 0x2000);
+
+    /* Column sums of SIGNED weight (subtracting 128 inline). */
+    for (int j = 0; j < 32; j++) sg_col_sum_w[j] = 0;
+    for (int k = 0; k < K; k++) {
+        const uint8_t *wu_row = &wu[k * N_full + n0];
+        for (int j = 0; j < 32; j++)
+            sg_col_sum_w[j] += (int32_t)wu_row[j] - 128;
+    }
+
+    const int Ktiles = K / 32;
+    static int32_t sg_P_hi[32 * 32];
+    static int32_t sg_P_lo[32 * 32];
+
+    /* Inline weight pack (from raw wu, signed via -128 per element). */
+    #define PACK_WT_FUSED(kt)                                                 \
+        do {                                                                  \
+            int _k0 = (kt) * 32;                                              \
+            for (int kg = 0; kg < 8; kg++) {                                  \
+                uint32_t *__restrict__ dst = (uint32_t *)(wt_tile + 128 * kg);\
+                const uint8_t *r0 = &wu[(_k0 + kg*4 + 0) * N_full + n0];      \
+                const uint8_t *r1 = &wu[(_k0 + kg*4 + 1) * N_full + n0];      \
+                const uint8_t *r2 = &wu[(_k0 + kg*4 + 2) * N_full + n0];      \
+                const uint8_t *r3 = &wu[(_k0 + kg*4 + 3) * N_full + n0];      \
+                for (int col = 0; col < 32; col++) {                          \
+                    uint32_t b0 = (uint32_t)(uint8_t)((int32_t)r0[col] - 128);\
+                    uint32_t b1 = (uint32_t)(uint8_t)((int32_t)r1[col] - 128);\
+                    uint32_t b2 = (uint32_t)(uint8_t)((int32_t)r2[col] - 128);\
+                    uint32_t b3 = (uint32_t)(uint8_t)((int32_t)r3[col] - 128);\
+                    dst[col] = b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);      \
+                }                                                             \
+            }                                                                 \
+        } while (0)
+
+    /* P_hi = sum_k A_hi · W */
+    hmx_load_bias_i(bias_lo);
+    hmx_clracc_i();
+    for (int kt = 0; kt < Ktiles; kt++) {
+        PACK_WT_FUSED(kt);
+        hmx_load_pair_u8_i8(vt + VTCM_ACT_HI(kt), wt_tile);
+    }
+    hmx_store_acc_uh_2x1_retain(out_lo);
+    hmx_load_bias_i(bias_hi);
+    hmx_store_acc_uh_2x1(out_hi);
+    for (int ir = 0; ir < 32; ir++) {
+        int phys_row = ir & 15, stream = ir >> 4;
+        for (int jc = 0; jc < 32; jc++) {
+            uint16_t lo = out_lo[phys_row * 64 + 2 * jc + stream];
+            uint16_t hi = out_hi[phys_row * 64 + 2 * jc + stream];
+            sg_P_hi[ir * 32 + jc] = ((int32_t)(int16_t)hi << 8) | ((int32_t)lo & 0xFF);
+        }
+    }
+
+    /* P_lo = sum_k A_lo · W */
+    hmx_load_bias_i(bias_lo);
+    hmx_clracc_i();
+    for (int kt = 0; kt < Ktiles; kt++) {
+        PACK_WT_FUSED(kt);
+        hmx_load_pair_u8_i8(vt + VTCM_ACT_LO(kt, Ktiles), wt_tile);
+    }
+    hmx_store_acc_uh_2x1_retain(out_lo);
+    hmx_load_bias_i(bias_hi);
+    hmx_store_acc_uh_2x1(out_hi);
+    for (int ir = 0; ir < 32; ir++) {
+        int phys_row = ir & 15, stream = ir >> 4;
+        for (int jc = 0; jc < 32; jc++) {
+            uint16_t lo = out_lo[phys_row * 64 + 2 * jc + stream];
+            uint16_t hi = out_hi[phys_row * 64 + 2 * jc + stream];
+            sg_P_lo[ir * 32 + jc] = ((int32_t)(int16_t)hi << 8) | ((int32_t)lo & 0xFF);
+        }
+    }
+
+    #undef PACK_WT_FUSED
 
     /* Combine. */
     for (int i = 0; i < 32; i++)

@@ -58,7 +58,8 @@ static void gather_w_col(int8_t *__restrict__ w_col,
                          uint32_t K, uint32_t N, uint32_t n0)
 {
     const uint32_t cols = (n0 + 32 <= N) ? 32 : (N - n0);
-    memset(w_col, 0, sizeof(int8_t) * K * 32);
+    /* Skip memset when cols==32 — every byte is written below. */
+    if (cols < 32) memset(w_col, 0, sizeof(int8_t) * K * 32);
     for (uint32_t k = 0; k < K; k++)
         for (uint32_t j = 0; j < cols; j++)
             w_col[k * 32 + j] = (int8_t)((int32_t)wu[k * N + (n0 + j)] - 128);
@@ -127,11 +128,9 @@ static uint32_t hmx_int4_matmul_kernel(
      * disjoint section. Sizing: 32 × 4096 bytes for activation strip +
      * 4096 × 32 for weight + 4KiB for output = ~260 KiB per slice. */
     #define MAX_SLICES 4
-    static int16_t a_strip_pool[MAX_SLICES][32 * 4096];
     static int8_t  w_col_pool  [MAX_SLICES][4096 * 32];
     static int32_t mn_tile_pool[MAX_SLICES][32 * 32];
     const uint32_t si = (slice < MAX_SLICES) ? slice : 0;
-    int16_t *a_strip = a_strip_pool[si];
     int8_t  *w_col   = w_col_pool[si];
     int32_t *mn_tile = mn_tile_pool[si];
 
@@ -148,16 +147,13 @@ static uint32_t hmx_int4_matmul_kernel(
     const uint32_t per_slice_vtcm = HMX_INT4_VTCM_BYTES_FOR_K(K);
     uint8_t *my_vtcm = (uint8_t *)vtcm + si * per_slice_vtcm;
 
+    /* w_col in DDR — scalar pack_weight reads benefit from HTP L2 cache;
+     * VTCM was tested and 2.7× WORSE due to bank contention with HMX mxmem. */
     for (uint32_t mt = my_begin; mt < my_end; mt++) {
         uint32_t m0 = mt * 32;
-        gather_a_strip(a_strip, au, M, K, m0);
-        /* Pre-pack activation once per m_tile (reused across all n_tiles). */
-        hmx_int4_prepack_activation(a_strip, (int)K, my_vtcm);
+        hmx_int4_prepack_activation_fused(au, (int)M, (int)K, (int)m0, my_vtcm);
         for (uint32_t n0 = 0; n0 < N; n0 += 32) {
             gather_w_col(w_col, wu, K, N, n0);
-            /* Weight still packed per K-iter — the scalar pack interleaved
-             * between HMX MACs hides VTCM read latency; all-prepacked was
-             * slower due to back-to-back VTCM-bank contention. */
             hmx_int4_matmul_mn_using_prepacked_act(mn_tile, w_col, (int)K, my_vtcm);
             scatter_mn_tile(out, mn_tile, M, N, m0, n0);
         }
@@ -193,6 +189,112 @@ static QHPI_Tensor_Signature_v1 sig_outputs[] = {
     {QHPI_Int32,   QHPI_Layout_Flat4, QHPI_Storage_Direct, QHPI_MemLoc_DDR_OR_TCM},
 };
 
+/* ------------------------------------------------------------------
+ * P8 — Auto-tile callbacks.
+ * Declare that M (dim 2) and N (dim 3) of the output must be multiples
+ * of 32 (HMX tile grain). QNN's central tiling system will carve the
+ * output [1,1,M,N] into 32-aligned sub-tiles based on its own VTCM / HVX
+ * parallelism heuristics, creating N_sub_tiles independent invocations
+ * of our op each computing one [M_tile, N_tile] region of the output.
+ * Those independent ops land on separate HVX threads → 2–4× parallelism.
+ * ------------------------------------------------------------------ */
+/* Auto-tile is registered but empirically does NOT help in isolation:
+ *   shape_required=32:  16-way tiling at 512³ → 51% REGRESSION (per-op
+ *                       setup dominates; lost K-accumulation amortization)
+ *   shape_required=256: 4-way tiling at 512³  →  5% regression (2.22 vs
+ *                       single-op 2.12; only 1 HMX unit, sub-ops serialize)
+ *   shape_required=1024: no tiling for ≤1024³ — identical to single-op
+ *
+ * For auto-tile to win, the kernel needs substantial HVX-side work that
+ * can execute concurrently on separate HVX threads while HMX is issuing.
+ * Without HVX-vectorized pack/unpack/combine (P7, deferred), all sub-ops
+ * serialize on the single HMX compute unit and the single scalar main
+ * thread. Setting shape_required to a large value effectively disables
+ * tiling at our test scales while leaving the machinery ready for a
+ * future session that combines auto-tile with HVX parallelism. */
+static QHPI_Shape matmul_shape_required(const QHPI_Op *op)
+{
+    (void)op;
+    QHPI_Shape s;
+    s.rank = 4;
+    s.dims[0] = 1;
+    s.dims[1] = 1;
+    s.dims[2] = 2048;
+    s.dims[3] = 2048;
+    return s;
+}
+
+static QHPI_Shape matmul_shape_legalized(const QHPI_Op *op, const QHPI_Shape *proposed)
+{
+    (void)op;
+    QHPI_Shape s = *proposed;
+    if (s.rank >= 4) {
+        s.dims[0] = 1;
+        s.dims[1] = 1;
+        s.dims[2] = (s.dims[2] + 2047u) & ~2047u;
+        s.dims[3] = (s.dims[3] + 2047u) & ~2047u;
+    }
+    return s;
+}
+
+/* Build the sub-graph computing one output tile [start..start+extent).
+ *
+ * Inputs:
+ *   0: activation [1, 1, M_full, K_full]
+ *   1: weight     [1, 1, K_full, N_full]
+ *   2: scratch    [1, 1, 1, vtcm_bytes]  (shared; unsliced)
+ *
+ * Output tile:  [1, 1, extent_m, extent_n] @ (0, 0, start_m, start_n)
+ *
+ * We slice activation along M (dim 2) and weight along N (dim 3), each
+ * keeping K_full. The scratch is reused as-is (the kernel writes/reads
+ * only within its own invocation, so sharing across sub-ops that run
+ * on different threads would race — here we accept the risk and verify
+ * empirically; a proper fix is to carve scratch by thread/op). */
+static const QHPI_Op *matmul_build_tile(const QHPI_Op *op,
+                                        const QHPI_Shape *start,
+                                        const QHPI_Shape *extent)
+{
+    QHPI_OpRef act_in = qhpi_op_input(op, 0);
+    QHPI_OpRef wt_in  = qhpi_op_input(op, 1);
+    QHPI_OpRef sc_in  = qhpi_op_input(op, 2);
+
+    /* Full shapes of inputs. */
+    QHPI_OutputDef act_def = qhpi_op_output(act_in.op, act_in.output_number);
+    QHPI_OutputDef wt_def  = qhpi_op_output(wt_in.op,  wt_in.output_number);
+
+    /* Activation slice: (0, 0, start_m, 0) .. (.., .., extent_m, K_full) */
+    QHPI_Shape a_start = {4, {0, 0, start->dims[2], 0}};
+    QHPI_Shape a_ext;
+    a_ext.rank = 4;
+    a_ext.dims[0] = 1;
+    a_ext.dims[1] = 1;
+    a_ext.dims[2] = extent->dims[2];
+    a_ext.dims[3] = act_def.shape.dims[3];    /* K_full */
+
+    /* Weight slice: (0, 0, 0, start_n) .. (.., .., K_full, extent_n) */
+    QHPI_Shape w_start = {4, {0, 0, 0, start->dims[3]}};
+    QHPI_Shape w_ext;
+    w_ext.rank = 4;
+    w_ext.dims[0] = 1;
+    w_ext.dims[1] = 1;
+    w_ext.dims[2] = wt_def.shape.dims[2];     /* K_full */
+    w_ext.dims[3] = extent->dims[3];
+
+    QHPI_OpRef a_sliced = qhpi_op_slice(act_in, &a_start, &a_ext);
+    QHPI_OpRef w_sliced = qhpi_op_slice(wt_in,  &w_start, &w_ext);
+
+    QHPI_OpRef inputs[3] = { a_sliced, w_sliced, sc_in };
+    /* Output def for the sub-op — same quant/type as the original, but with the
+     * sliced extent. */
+    QHPI_OutputDef out_def = qhpi_op_output(op, 0);
+    out_def.shape = *extent;
+
+    const char *op_name = qhpi_op_name(op);
+    return qhpi_op_create(op, op_name ? op_name : THIS_PKG_NAME_STR "::MatMulInt4xInt16",
+                         3, inputs, 1, &out_def);
+}
+
 static QHPI_Kernel_v1 sg_kernels[] = {
     {
         /* .function_name      */ THIS_PKG_NAME_STR "::hmx_int4_matmul",
@@ -221,10 +323,10 @@ static QHPI_OpInfo_v1 sg_ops[] = {
         /* .num_kernels       */ 1,
         /* .kernels           */ sg_kernels,
         /* .early_rewrite     */ nullptr,
-        /* .shape_required    */ nullptr,
-        /* .shape_legalized   */ nullptr,
+        /* .shape_required    */ matmul_shape_required,
+        /* .shape_legalized   */ matmul_shape_legalized,
         /* .tile_output       */ 0,
-        /* .build_tile        */ nullptr,
+        /* .build_tile        */ matmul_build_tile,
         /* .late_rewrite      */ nullptr,
     },
 };

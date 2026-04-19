@@ -397,3 +397,112 @@ from 2.17 toward O(1e-3) — close to QNN's built-in performance.
 P6 (HVX-vectorize pack_activation) and P7 (HVX-vectorize rest of
 scalar) are **obsoleted by P9** — the entire problem they solve gets
 moved out of our kernel into QNN's framework op.
+
+## Crouton probe result (sub-agent, 2026-04-20)
+
+Swapped signatures to `QHPI_Layout_Crouton_{16,8}` + `Storage_Indirect`.
+QNN successfully auto-inserted `ForceFormat_Crouton_f2c@{CH.FH, CB.FB}`
+upstream of our op — mechanism confirmed. But Crouton output format is
+NOT HMX-tile-ready:
+
+| Tensor                     | block_table_length | block_shape       |
+|----------------------------|-------------------:|-------------------|
+| activation [1,1,32,32] u16 | 8                  | [1, 8, 2, 32]     |
+| weight [1,1,32,32] u8      | 4                  | [1, 8, 8, 32]     |
+
+Activation block 0 bytes: LE uint16 with adjacent-M-pair-interleaved
+along K. Our HMX mxmem expects 4-byte slots of (pad, s0, pad, s1).
+Not the same — a secondary pack would still be needed.
+
+Combined with re-reading ch03's HVX+HMX example (which uses Flat4 +
+Direct + plain mxmem on homogeneous fp16), the conclusion is: **stay
+on Flat4 + Direct** (ch03 architecture), keep our own pack (we still
+need int16→byte-split for u8·i8 HMX path), and optimize pack in-place.
+Crouton route is a dead end for int16×int8 matmul.
+
+## P6 — fused prepack_activation (completed 2026-04-20)
+
+Eliminated the DDR round-trip by fusing decomp + pack directly from the
+input VTCM uint16 tensor into the output VTCM HMX tile (no intermediate
+sg_A_h / sg_A_l / a_strip writes).
+
+| Shape  | Pre-P6 | Post-P6 | Δ     |
+|--------|-------:|--------:|-------|
+| 32³    |  8.47  |  7.79   | −8%   |
+| 128³   |  3.88  |  3.21   | −17%  |
+| 256³   |  3.11  |  2.48   | −20%  |
+| 512³   |  2.17  |  2.12   | −2%   |
+
+Big wins at mid sizes where activation prepack was a larger fraction;
+negligible at 512³ where it was already amortized. All bit-exact.
+
+Tried and REVERTED within P6:
+- HVX `pack_activation_32x32_rs`: vshuffe_b de-interleaves even-indexed
+  bytes (drops odd halves) — wrong semantics. Would need vshuff (not
+  vshuffe). Deferred; function is <1% of runtime after fused prepack.
+- Fused weight path (stride-N read from wu inside pack): **2× REGRESSION**
+  (4.33 vs 2.13 @ 512³). Stride-N VTCM reads hit bank conflicts in a
+  tight loop; the contiguous w_col DDR+cache path is ~2× faster.
+- w_col placed in VTCM: **2.7× REGRESSION** (5.75 vs 2.13 @ 512³). VTCM
+  scalar reads compete with HMX mxmem for the same VTCM banks, serializing.
+
+**Key learning**: on HTP v75, DDR+L2-cache beats VTCM for scalar-heavy
+hot loops. VTCM is strictly for HMX `mxmem` loads. Don't move data to
+VTCM unless HMX will consume it.
+
+## P7 (HVX-vectorize remaining scalars) — deferred
+
+Net budget for all remaining scalar hot paths combined: ≤5% of runtime.
+HVX effort with debug cost does not pay back here. Would become
+meaningful IF we had cross-tile parallelism (P8) to overlap HVX work
+with HMX compute on separate threads. Deferred.
+
+## P8 — QHPI auto-tile callbacks (registered, not active at test scales)
+
+Registered `shape_required` + `shape_legalized` + `build_tile`. QNN's
+central tiler successfully creates multiple sub-op nodes when the
+output exceeds the alignment:
+
+- `shape_required = 32`: 16-way tiling at 512³ → **51% REGRESSION**
+  (per-op setup overhead, K-accumulation amortization lost).
+- `shape_required = 256`: 4-way tiling at 512³ → **5% regression**
+  (sub-ops serialize on the single HMX unit).
+- `shape_required = 2048`: no tiling at test scales → identical to
+  single-op performance.
+
+The machinery works (verified bit-exact at 512³ / 1024³ with tiling
+enabled), but without HVX-vectorized pack/unpack to run concurrently
+on separate HVX threads, tiled sub-ops just serialize on the single
+HMX compute unit and the single scalar main thread. Setting
+`shape_required = 2048` effectively disables tiling at test scales
+while leaving the machinery ready for a future session that combines
+auto-tile with HVX parallelism (P7+P8 together).
+
+## Final state (2026-04-20)
+
+| Shape  | baseline | final | speedup |
+|--------|---------:|------:|--------:|
+| 32³    |  8.47    | 7.79  | 1.09×   |
+| 128³   |  3.88    | 3.21  | 1.21×   |
+| 256³   |  3.11    | 2.48  | 1.25×   |
+| 512³   |  8.33    | 2.12  | 3.93×   |
+
+Total at 512³: 2.12 cycles/MAC = 285 M cycles per 512³ inference.
+Bit-exact correctness at all shapes.
+
+Gap to target: w8a16 at 108 K cycles — still **2600× away**. Physical
+upper bound with our 2-packet-per-tile decomposition is ~108 K (same
+packet count as w8a16). The remaining gap is almost entirely in the
+HMX MAC loop cycle-per-packet — built-in kernels achieve ~16 cyc/packet
+(evidence: 66K cycles for 4096 packets at 512³ w8a8), our kernel is
+running at ~35 K cycles per 32³ logical tile at K=∞ asymptote, i.e.
+~17 K cyc/packet. That's 1000× over built-in.
+
+The 1000× per-packet gap suggests our HMX MAC issues are not
+pipelining: every `mxmem` load stalls for VTCM latency (~100+ cycles)
+with no overlap. Built-in uses `:dilate` modifier + specific access
+patterns that pipeline through the VTCM port. Matching this requires
+either reverse-engineering `:dilate` semantics + tile layout OR
+adopting the Crouton layout (which is what ConvLayer uses). The
+Crouton path was probed (found accessible but non-trivial to consume)
+and left as the most promising next avenue, above P7/P8.

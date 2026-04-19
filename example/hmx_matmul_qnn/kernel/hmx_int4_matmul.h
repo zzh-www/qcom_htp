@@ -44,10 +44,24 @@ extern "C" {
  * arrays (hi + lo), amortizing decomposition and pack cost across all
  * n_tiles that will consume this activation.
  *
- * @param a          [32*K] int16 row-major activation.
+ * FUSED variant: consumes raw QNN-provided uint16 activation directly
+ * (values are post-Cast = signed_int16 + 32768). Splits hi/lo bytes and
+ * packs into HMX tile format in one pass, with zero DDR intermediate.
+ *
+ * @param au         [M_full × K_full] uint16 activation in VTCM (post-Cast).
+ * @param M_full     Total M extent of source tensor (stride 0 base).
  * @param K          Reduction dim (multiple of 32).
+ * @param m0         Starting M row for the 32-row strip to pack.
  * @param vtcm_base  Pointer to HMX_INT4_VTCM_BYTES_FOR_K(K) bytes of VTCM.
  */
+void hmx_int4_prepack_activation_fused(
+    const uint16_t *__restrict__ au,
+    int                          M_full,
+    int                          K,
+    int                          m0,
+    void           *__restrict__ vtcm_base);
+
+/* Legacy entry for correctness reference (scalar decomp via sg_A_h scratch). */
 void hmx_int4_prepack_activation(
     const int16_t *__restrict__ a,
     int                         K,
@@ -70,6 +84,19 @@ void hmx_int4_matmul_mn_using_prepacked_act(
     const int8_t  *__restrict__ w,
     int                         K,
     void          *__restrict__ vtcm_base);
+
+/*
+ * Fused variant: reads weight directly from QNN-provided uint8 tensor
+ * (post-Cast = signed_int8 + 128), eliminating the gather_w_col DDR
+ * round-trip. Computes the -128 offset shift inline during pack/col_sum.
+ */
+void hmx_int4_matmul_mn_fused_weight(
+    int32_t        *__restrict__ out,
+    const uint8_t  *__restrict__ wu,
+    int                          K,
+    int                          N_full,
+    int                          n0,
+    void           *__restrict__ vtcm_base);
 
 #ifdef __cplusplus
 }
