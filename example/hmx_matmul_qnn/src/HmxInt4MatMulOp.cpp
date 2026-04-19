@@ -170,17 +170,23 @@ static uint32_t hmx_int4_matmul_kernel(
  * Tensor signatures + op registration.
  * ------------------------------------------------------------------ */
 /*
- * Type labels match what QNN actually supplies after graph optimization:
- * INT_16/INT_8 host tensors get coerced to QUInt16/QUInt8 with TCM placement.
- * The kernel reads raw bytes and reinterprets as int16/int8 internally — the
- * only thing that matters at match time is the bit-width and placement.
+ * Signature uses Crouton layout for activation + weight. QNN's graph
+ * optimizer auto-inserts ForceFormat_Crouton before our op, which is the
+ * HVX-vectorized pack used by all the built-in HMX ops (see
+ * ConvLayer_s1.opt disassembly: no HVX pack in the hot loop — data is
+ * pre-laid-out by a separate framework op).
+ *
+ * Crouton_16 = 8×8×32 chunks of 16-bit data (4 KB per chunk);
+ * Crouton_8  = 8×8×32 chunks of 8-bit data  (2 KB per chunk).
  */
+/* For now, stay on Flat4 + Direct — kernel body still does its own pack.
+ * Next step (P6): swap to Crouton_16 / Crouton_8 + Indirect and rewrite
+ * kernel body to consume block-table data directly. Verified working:
+ * declaring Crouton signatures causes QNN to auto-insert
+ * ForceFormat_Crouton_f2c@{CH.FH, CB.FB} nodes upstream of our op. */
 static QHPI_Tensor_Signature_v1 sig_inputs[] = {
-    /* activation: int16 bits (labeled QUInt16 by QNN). */
     {QHPI_QUInt16, QHPI_Layout_Flat4, QHPI_Storage_Direct, QHPI_MemLoc_TCM_Only},
-    /* weight: int8 bits, sign-extended int4 (labeled QUInt8 by QNN). */
     {QHPI_QUInt8,  QHPI_Layout_Flat4, QHPI_Storage_Direct, QHPI_MemLoc_TCM_Only},
-    /* scratch: uint8, TCM only. */
     {QHPI_QUInt8,  QHPI_Layout_Flat4, QHPI_Storage_Direct, QHPI_MemLoc_TCM_Only},
 };
 static QHPI_Tensor_Signature_v1 sig_outputs[] = {

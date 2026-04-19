@@ -293,3 +293,107 @@ Rough gain estimate stacking P6 → P7 → P8:
 - After P8 (4-way graph tiling): cycles/MAC ~0.015 (4× more)
 - Total target: close to w8a16's 8e-4 (17× remaining gap) and within
   reach of w8a8's 5e-4 for some shapes.
+
+## P5 — Decoded QNN built-in kernel, found a bigger structural lever
+
+Disassembled `libQnnHtpV75Skel.so` with `hexagon-llvm-objdump -d`,
+searching for HMX instruction patterns. Three key findings:
+
+### 1. v75 HMX instruction set usage in the skel
+
+| suffix         | count | interpretation                        |
+|----------------|------:|---------------------------------------|
+| activation.ub  |  724  | uint8 activation (dominant int path)  |
+| weight.b       |  448  | int8 weight (all `:dilate` — Conv use)|
+| weight.n       |  232  | **int4 nibble — alive in v75!**       |
+| weight.hf      |  110  | fp16 weight                           |
+| activation.hf  |  110  | fp16 activation                       |
+| weight.c       |   44  | (chunked?)                            |
+
+`weight.n` is the native int4 path. Every internal use pairs with
+`:dilate` modifier, so the QNN compiler uses it via Conv2D-with-dilate=1
+(MatMul-as-Conv pattern). Explains why `w4a16` MatMul fails at
+compose time — the native int4 HMX path is live but QNN gates it
+behind Conv2D-+-LPBQ only.
+
+### 2. Internal ConvLayer kernels have NO HVX pack in the hot loop
+
+Sample disassembly of one of the HMX kernel bodies
+(`hmx_convhnh_5x5_stride1` @ 0x214294, inside `loop0/loop1`):
+
+```
+; Inner MAC loop body (after pointer setup):
+{ activation.ub = mxmem(r13, r8)
+  weight.b      = mxmem(r14, r28):dilate }   ; endloop0
+...
+mxmem(r5, r6):before:sat.uh = acc:2x1        ; readback outside loop
+```
+
+All scalar instructions inside the loop are `memw` (pointer loads) and
+`addasl` / `sub` / `or` (address arithmetic). **Zero HVX vshuff, zero
+byte-level pack ops.** Data is already in HMX-tile-ready format before
+the kernel runs.
+
+### 3. QNN has a dedicated HVX pack op: ForceFormat_Crouton
+
+Tested by changing our kernel signature from `QHPI_Layout_Flat4` →
+`QHPI_Layout_Crouton_16`/`Crouton_8` + `Storage_Indirect`. Result:
+
+```
+graph_prepare.cc:186: Input 0: op=[ForceFormat_Crouton_f2c@CH.FH] output0=[...QUint16Crouton_TCM]
+graph_prepare.cc:186: Input 1: op=[ForceFormat_Crouton_f2c@CB.FB] output0=[...QUint8Crouton_TCM]
+```
+
+**QNN's optimizer auto-inserts `ForceFormat_Crouton_f2c` in front of
+any kernel whose input signature demands Crouton layout.** This is the
+same HVX-optimized pack the built-in ConvLayer uses. Conversion is:
+flat half (FH) → crouton half (CH), flat byte (FB) → crouton byte (CB).
+
+Our kernel graph-finalizes successfully under this signature but
+produces wrong output — the kernel body still calls
+`qhpi_tensor_raw_data()`, which is Direct-storage-only; for
+Indirect-storage Crouton input we need `qhpi_tensor_block_table()`
+plus an understanding of how to iterate the 2 KB blocks.
+
+### Crouton layout shape — `R4CroutonLayout` definition
+
+From `tools/qnn-sdk/include/QNN/HTP/core/memory_layout.h:311`:
+
+```cpp
+class R4CroutonLayout : public ChunkedMemoryLayout<4, 0,0, 1,0, 2,0, 3,0,
+                                                    1,8, 2,8, 3,32> {};
+```
+
+4-rank tensor chunked by 8 (dim 1), 8 (dim 2), 32 (dim 3). Chunk volume
+= 8·8·32 = 2048 elements.
+- `Crouton_8`:  2 KB per chunk — **matches HMX activation tile byte
+  count exactly** (2 KB).
+- `Crouton_16`: 4 KB per chunk (twice HMX tile).
+- `Crouton_32`: 8 KB per chunk.
+
+The Indirect storage block_table returns pointers to these chunks in
+their storage order (VTCM-resident blocks of 2–8 KB).
+
+## Revised plan (supersedes prior P6/P7)
+
+**P9 (new, high-priority):** Rewrite kernel body to consume Crouton
+block-table directly. After this change:
+- Delete `pack_activation_32x32_rs`, `pack_weight_32x32`, and all the
+  per-tile pack scratch — framework handles it via
+  `ForceFormat_Crouton`.
+- Delete the per-K-iter activation decomposition into sg_A_h/sg_A_l —
+  handle it via a one-pass HVX operation at the tile-load boundary (or
+  possibly fold it into the HMX accumulator setup; need to see if
+  Crouton_16 chunk pair-layout makes it automatic).
+- Kernel body becomes: for each (m_tile, n_tile): clracc → K-loop of
+  HMX MAC pair loads from block-table pointers → dual-scale readback →
+  combine into int32 output.
+
+Expected impact: reduces kernel to roughly match internal ConvLayer's
+scalar footprint (~few hundred cycles per tile, not tens of
+thousands). If this works, single-thread cycles/MAC should collapse
+from 2.17 toward O(1e-3) — close to QNN's built-in performance.
+
+P6 (HVX-vectorize pack_activation) and P7 (HVX-vectorize rest of
+scalar) are **obsoleted by P9** — the entire problem they solve gets
+moved out of our kernel into QNN's framework op.
