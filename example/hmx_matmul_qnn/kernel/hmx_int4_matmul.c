@@ -25,6 +25,9 @@
 static inline __attribute__((always_inline)) void hmx_clracc_i(void)
 { asm volatile("mxclracc" ::: "memory"); }
 
+static inline __attribute__((always_inline)) void hmx_swapacc_i(void)
+{ asm volatile("mxswapacc" ::: "memory"); }
+
 static inline __attribute__((always_inline))
 void hmx_load_bias_i(const void *p)
 { asm volatile("bias = mxmem(%0)" :: "r"(p) : "memory"); }
@@ -48,6 +51,21 @@ void hmx_load_pair_u8_i8(const void *act, const void *wt)
 {
     asm volatile(
         "{ activation.ub = mxmem(%0, %1)\n"
+        "  weight.b      = mxmem(%2, %3) }\n"
+        :: "r"(act), "r"(HMX_RT_ACT),
+           "r"(wt),  "r"(HMX_RT_WT)
+        : "memory");
+}
+
+/* `:above` activation load — hypothesis (from built-in ConvLayer disassembly):
+ * routes this MAC to the OTHER accumulator (the one not-current), without
+ * changing which acc is "current". Lets two back-to-back MACs go to different
+ * accs to break the data-dependency chain (pipelinable). */
+static inline __attribute__((always_inline))
+void hmx_load_pair_u8_i8_above(const void *act, const void *wt)
+{
+    asm volatile(
+        "{ activation.ub = mxmem(%0, %1):above\n"
         "  weight.b      = mxmem(%2, %3) }\n"
         :: "r"(act), "r"(HMX_RT_ACT),
            "r"(wt),  "r"(HMX_RT_WT)
@@ -269,6 +287,133 @@ void hmx_int4_matmul_mn_using_prepacked_act(
     }
 
     /* Combine. */
+    for (int i = 0; i < 32; i++)
+        for (int j = 0; j < 32; j++)
+            out[i * 32 + j] = (sg_P_hi[i * 32 + j] << 8)
+                            +  sg_P_lo[i * 32 + j]
+                            - (sg_col_sum_w[j] << 15);
+}
+
+/* Dual-accumulator matmul. Alternates MAC targets between HMX acc A and
+ * acc B via mxswapacc between each HMX issue. This mirrors the built-in
+ * ConvLayer_s1 hot loop pattern observed in libQnnHtpV75Skel.so
+ * disassembly — the swapacc breaks the per-packet data-dependency chain
+ * so MAC packets can pipeline back-to-back in the HMX unit.
+ *
+ * Bookkeeping: after Ktiles×2 MACs with 1 swap per MAC, acc A has the
+ * even-index MACs (0, 2, 4, ...) and acc B has the odd-index MACs.
+ * Final readback reads both accs via dual-scale convert + :retain and
+ * the scalar combine sums them back into one int32. */
+static void hmx_dualacc_k_loop_partial(
+    int32_t       *__restrict__ dst_P,
+    const uint8_t *__restrict__ vt_base,
+    int                          is_hi_stream,
+    int                          K,
+    const int8_t  *__restrict__ w,
+    int8_t        *__restrict__ wt_tile,
+    uint16_t      *__restrict__ bias_lo,
+    uint16_t      *__restrict__ bias_hi,
+    uint16_t      *__restrict__ out_lo_A,
+    uint16_t      *__restrict__ out_hi_A,
+    uint16_t      *__restrict__ out_lo_B,
+    uint16_t      *__restrict__ out_hi_B)
+{
+    const int Ktiles = K / 32;
+
+    /* Clear both accs. */
+    hmx_load_bias_i(bias_lo);
+    hmx_clracc_i();
+    hmx_swapacc_i();
+    hmx_clracc_i();
+    hmx_swapacc_i();   /* now current = A, both cleared */
+
+    /* Built-in ConvLayer pattern matched more precisely:
+     *   MAC 0 with :above (→ other acc), MAC 1 plain (→ current), swap,
+     *   MAC 2 with :above (→ other acc, now the original current),
+     *   MAC 3 plain (→ current, now the original other), swap.
+     * Net effect: each acc receives half of the MACs, but adjacent pairs
+     * fire into DIFFERENT accs, breaking the data-dep chain between them. */
+    int kt = 0;
+    for (; kt + 1 < Ktiles; kt += 2) {
+        uint8_t *act_ptr_0 = (uint8_t *)vt_base
+            + (is_hi_stream ? VTCM_ACT_HI(kt)     : VTCM_ACT_LO(kt,     Ktiles));
+        uint8_t *act_ptr_1 = (uint8_t *)vt_base
+            + (is_hi_stream ? VTCM_ACT_HI(kt + 1) : VTCM_ACT_LO(kt + 1, Ktiles));
+
+        pack_weight_32x32(wt_tile, &w[kt * 32 * 32]);
+        hmx_load_pair_u8_i8_above(act_ptr_0, wt_tile);   /* → other acc */
+        pack_weight_32x32(wt_tile, &w[(kt + 1) * 32 * 32]);
+        hmx_load_pair_u8_i8(act_ptr_1, wt_tile);          /* → current acc */
+        hmx_swapacc_i();
+    }
+    if (kt < Ktiles) {
+        pack_weight_32x32(wt_tile, &w[kt * 32 * 32]);
+        uint8_t *act_ptr = (uint8_t *)vt_base
+            + (is_hi_stream ? VTCM_ACT_HI(kt) : VTCM_ACT_LO(kt, Ktiles));
+        hmx_load_pair_u8_i8(act_ptr, wt_tile);
+    }
+    /* After Ktiles swaps: if Ktiles even, current is A (Ktiles ended with
+     * a swap leaving us back where we started). If odd, current is B. */
+
+    /* Read current acc with dual-scale readback. */
+    hmx_store_acc_uh_2x1_retain(out_lo_A);
+    hmx_load_bias_i(bias_hi);
+    hmx_store_acc_uh_2x1(out_hi_A);
+
+    /* Swap to the other acc and read it too. */
+    hmx_swapacc_i();
+    hmx_load_bias_i(bias_lo);
+    hmx_store_acc_uh_2x1_retain(out_lo_B);
+    hmx_load_bias_i(bias_hi);
+    hmx_store_acc_uh_2x1(out_hi_B);
+
+    /* Reconstruct + sum. */
+    for (int ir = 0; ir < 32; ir++) {
+        int phys_row = ir & 15, stream = ir >> 4;
+        for (int jc = 0; jc < 32; jc++) {
+            int idx = phys_row * 64 + 2 * jc + stream;
+            uint16_t loA = out_lo_A[idx], hiA = out_hi_A[idx];
+            uint16_t loB = out_lo_B[idx], hiB = out_hi_B[idx];
+            int32_t valA = ((int32_t)(int16_t)hiA << 8) | ((int32_t)loA & 0xFF);
+            int32_t valB = ((int32_t)(int16_t)hiB << 8) | ((int32_t)loB & 0xFF);
+            dst_P[ir * 32 + jc] = valA + valB;
+        }
+    }
+}
+
+void hmx_int4_matmul_mn_dualacc(
+    int32_t       *__restrict__ out,
+    const int8_t  *__restrict__ w,
+    int                         K,
+    void          *__restrict__ vtcm_base)
+{
+    uint8_t  *vt       = (uint8_t *)vtcm_base;
+    int8_t   *wt_tile  = (int8_t *)( vt + VTCM_OFF_WT_TILE);
+    uint16_t *bias_lo  = (uint16_t *)(vt + VTCM_OFF_BIAS_LO);
+    uint16_t *bias_hi  = (uint16_t *)(vt + VTCM_OFF_BIAS_HI);
+    uint16_t *out_lo_A = (uint16_t *)(vt + VTCM_OFF_OUT_LO);
+    uint16_t *out_hi_A = (uint16_t *)(vt + VTCM_OFF_OUT_HI);
+    /* Reuse fixed region past 8K (before prepack at 12K): 8K..12K is free. */
+    uint16_t *out_lo_B = (uint16_t *)(vt + 8  * 1024);
+    uint16_t *out_hi_B = (uint16_t *)(vt + 10 * 1024);
+
+    fill_bias_scale(bias_lo, 0x4000);
+    fill_bias_scale(bias_hi, 0x2000);
+
+    /* col_sum_w (reused across partials). */
+    for (int j = 0; j < 32; j++) sg_col_sum_w[j] = 0;
+    for (int k = 0; k < K; k++)
+        for (int j = 0; j < 32; j++)
+            sg_col_sum_w[j] += (int32_t)w[k * 32 + j];
+
+    static int32_t sg_P_hi[32 * 32];
+    static int32_t sg_P_lo[32 * 32];
+
+    hmx_dualacc_k_loop_partial(sg_P_hi, vt, 1, K, w, wt_tile,
+                                bias_lo, bias_hi, out_lo_A, out_hi_A, out_lo_B, out_hi_B);
+    hmx_dualacc_k_loop_partial(sg_P_lo, vt, 0, K, w, wt_tile,
+                                bias_lo, bias_hi, out_lo_A, out_hi_A, out_lo_B, out_hi_B);
+
     for (int i = 0; i < 32; i++)
         for (int j = 0; j < 32; j++)
             out[i * 32 + j] = (sg_P_hi[i * 32 + j] << 8)

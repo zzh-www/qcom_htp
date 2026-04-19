@@ -554,3 +554,53 @@ matching the built-in's Crouton+dilate pipelining architecture, which
 needs HMX ISA documentation we don't have access to (HMX docs are
 Qualcomm-internal; V75 PRM bundled with SDK only covers scalar +
 HVX, not HMX).
+
+## P11 — Dual-accumulator via `mxswapacc` (tried, opaque semantics)
+
+Built-in `ConvLayer_s1.opt` hot loop disassembly shows a
+**two-accumulator pipelining pattern**:
+
+```asm
+{ activation.ub = mxmem(r0,r6):above         ; MAC 1 to "other" acc
+  weight.b      = mxmem(r23,r9):dilate }
+{ activation.ub = mxmem(r6,r9)               ; MAC 2 to "current" acc
+  weight.b      = mxmem(r0,r23):dilate }
+mxswapacc                                    ; swap roles
+{ activation.ub = mxmem(r9,r3):above         ; MAC 3
+  weight.b      = mxmem(r6,r0):dilate }
+{ activation.ub = mxmem(r3,r5)               ; MAC 4
+  weight.b      = mxmem(r6,r9):dilate }
+mxswapacc
+```
+
+Key ISA features not documented in public headers:
+- `mxswapacc` — swaps which of the two accs is "current"
+- `:above` modifier on `activation.ub = mxmem` — hypothesis: routes
+  the MAC to the "other" (non-current) acc. Net: back-to-back
+  `:above` + plain MACs target different accs → no data dep → pipeline.
+
+Tried 3 implementations:
+1. Swap after every MAC (1-per-swap): wrong output at K ≥ 64, 16%
+   slower than baseline (2.12 → 2.47).
+2. Swap after every 2 MACs (matching built-in issue count):
+   wrong output, same 2.47 cycles.
+3. `:above` on 1st MAC of each pair + plain on 2nd + swap after pair:
+   wrong output, same 2.47 cycles.
+
+Diagnostic: no inner swaps, just final swap + dual readback of both
+accs → **correct output** (readback mechanics are right). So the
+issue is in the inner swap+`:above` pattern semantics.
+
+Without Qualcomm HMX ISA docs we cannot determine what `mxswapacc`
+and `:above` exactly do. Three-tries-no-luck; kernel retained
+in-tree (`hmx_int4_matmul_mn_dualacc`, `hmx_load_pair_u8_i8_above`)
+for future retry when docs become available.
+
+## Final state (2026-04-20)
+
+**2.12 cycles/MAC at 512³, bit-exact, 3.93× over baseline.**
+Achievable entirely from algorithmic + memory-hierarchy understanding.
+The remaining 1000× per-HMX-packet gap to built-in kernels sits
+behind ISA features (`mxswapacc`, `:above`, `:dilate`+Crouton) whose
+precise semantics require Qualcomm HMX documentation not bundled
+with the SDK.
