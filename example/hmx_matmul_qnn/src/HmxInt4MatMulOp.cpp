@@ -147,8 +147,13 @@ static uint32_t hmx_int4_matmul_kernel(
     const uint32_t per_slice_vtcm = HMX_INT4_VTCM_BYTES_FOR_K(K);
     uint8_t *my_vtcm = (uint8_t *)vtcm + si * per_slice_vtcm;
 
-    /* w_col in DDR — scalar pack_weight reads benefit from HTP L2 cache;
-     * VTCM was tested and 2.7× WORSE due to bank contention with HMX mxmem. */
+    /* Revert: scalar pack_weight interleaved in K loop (between HMX issues)
+     * is FASTER than all-prepacked on v75. Likely because:
+     *  - HMX MAC packets have strong acc-data dependency → back-to-back issues
+     *    serialize anyway (pipeline can't fire),
+     *  - scalar work between MACs hides VTCM bank latency,
+     *  - larger VTCM footprint in all-prepacked thrashes banks / cache.
+     * All-prepacked kernel still in the codebase for future retest. */
     for (uint32_t mt = my_begin; mt < my_end; mt++) {
         uint32_t m0 = mt * 32;
         hmx_int4_prepack_activation_fused(au, (int)M, (int)K, (int)m0, my_vtcm);

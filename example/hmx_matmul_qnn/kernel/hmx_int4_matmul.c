@@ -29,16 +29,28 @@ static inline __attribute__((always_inline))
 void hmx_load_bias_i(const void *p)
 { asm volatile("bias = mxmem(%0)" :: "r"(p) : "memory"); }
 
+/* Rt value controls some aspect of HMX mxmem tile geometry. Empirical values:
+ *   0x07FF (2047)  — standard 2 KB tile, what our int16 kernel has used
+ *   0x7FFF (32767) — ch03 uses this for activation.hf
+ *   0x0780 (1920)  — ch03 uses this for weight.hf
+ *   0x00FF         — shorter mask
+ *   0xFFFF         — wider mask
+ * Parameterized here so we can sweep by rebuilding with -DHMX_RT_ACT=N. */
+#ifndef HMX_RT_ACT
+#define HMX_RT_ACT 2047
+#endif
+#ifndef HMX_RT_WT
+#define HMX_RT_WT  2047
+#endif
+
 static inline __attribute__((always_inline))
 void hmx_load_pair_u8_i8(const void *act, const void *wt)
 {
-    /* Single VLIW packet: activation.ub + weight.b issue together, then the
-     * HMX MAC engine multiplies+accumulates into the hot acc. */
     asm volatile(
         "{ activation.ub = mxmem(%0, %1)\n"
         "  weight.b      = mxmem(%2, %3) }\n"
-        :: "r"(act), "r"(2047),
-           "r"(wt),  "r"(2047)
+        :: "r"(act), "r"(HMX_RT_ACT),
+           "r"(wt),  "r"(HMX_RT_WT)
         : "memory");
 }
 
@@ -99,7 +111,7 @@ static void pack_weight_32x32(int8_t *tile, const int8_t *w_32x32)
 }
 
 /* ============== Persistent scratch (kept off stack per debugging notes) === */
-#define HMX_INT4_MAX_K   4096
+#define HMX_INT4_MAX_K   8192
 static uint8_t  sg_A_h[32 * HMX_INT4_MAX_K];
 static uint8_t  sg_A_l[32 * HMX_INT4_MAX_K];
 static int32_t  sg_col_sum_w[32];
@@ -117,10 +129,13 @@ static int32_t  sg_col_sum_w[32];
 #define VTCM_OFF_OUT_LO     (4 * 1024)           /* 2 KB */
 #define VTCM_OFF_OUT_HI     (6 * 1024)           /* 2 KB */
 #define VTCM_OFF_PREPACK    (12 * 1024)
+/* Activation tiles: [12K, 12K + 2*Ktiles*2048) — hi then lo */
 #define VTCM_ACT_HI(k32)                   (VTCM_OFF_PREPACK + (k32) * 2048)
 #define VTCM_ACT_LO(k32, Ktiles)           (VTCM_OFF_PREPACK + ((Ktiles) + (k32)) * 2048)
-#define VTCM_WT(k32, Ktiles)               (VTCM_OFF_PREPACK + 2 * (Ktiles) * 2048 + (k32) * 1024)
-#define VTCM_OFF_COLSUM(Ktiles)            (VTCM_OFF_PREPACK + 2 * (Ktiles) * 2048 + (Ktiles) * 1024)
+/* Weight tiles: right after activation prepack, 1 KB each. */
+#define VTCM_WT_REGION_BASE(Ktiles)        (VTCM_OFF_PREPACK + 2 * (Ktiles) * 2048)
+#define VTCM_WT(k32, Ktiles)               (VTCM_WT_REGION_BASE(Ktiles) + (k32) * 1024)
+#define VTCM_OFF_COLSUM(Ktiles)            (VTCM_WT_REGION_BASE(Ktiles) + (Ktiles) * 1024)
 
 /* ============== Public kernels ============================================ */
 
@@ -360,6 +375,88 @@ void hmx_int4_matmul_mn_fused_weight(
             out[i * 32 + j] = (sg_P_hi[i * 32 + j] << 8)
                             +  sg_P_lo[i * 32 + j]
                             - (sg_col_sum_w[j] << 15);
+}
+
+/* Pre-pack ALL weight K-tiles upfront so inner MAC loop has no scalar work
+ * between HMX issues — enables back-to-back HMX MAC pipelining. */
+void hmx_int4_prepack_weight_tiles(
+    const int8_t  *__restrict__ w,
+    int                         K,
+    void          *__restrict__ vtcm_base)
+{
+    uint8_t *vt = (uint8_t *)vtcm_base;
+    const int Ktiles = K / 32;
+    /* col_sum_w in one pass. */
+    int32_t *cs = (int32_t *)(vt + VTCM_OFF_COLSUM(Ktiles));
+    for (int j = 0; j < 32; j++) cs[j] = 0;
+    for (int kt = 0; kt < Ktiles; kt++) {
+        pack_weight_32x32((int8_t *)(vt + VTCM_WT(kt, Ktiles)), &w[kt * 32 * 32]);
+        for (int kk = 0; kk < 32; kk++)
+            for (int j = 0; j < 32; j++)
+                cs[j] += (int32_t)w[(kt * 32 + kk) * 32 + j];
+    }
+}
+
+void hmx_int4_matmul_mn_all_prepacked(
+    int32_t       *__restrict__ out,
+    int                         K,
+    void          *__restrict__ vtcm_base)
+{
+    uint8_t  *vt       = (uint8_t *)vtcm_base;
+    uint16_t *bias_lo  = (uint16_t *)(vt + VTCM_OFF_BIAS_LO);
+    uint16_t *bias_hi  = (uint16_t *)(vt + VTCM_OFF_BIAS_HI);
+    uint16_t *out_lo   = (uint16_t *)(vt + VTCM_OFF_OUT_LO);
+    uint16_t *out_hi   = (uint16_t *)(vt + VTCM_OFF_OUT_HI);
+
+    fill_bias_scale(bias_lo, 0x4000);
+    fill_bias_scale(bias_hi, 0x2000);
+
+    const int Ktiles = K / 32;
+    const int32_t *cs = (const int32_t *)(vt + VTCM_OFF_COLSUM(Ktiles));
+    static int32_t sg_P_hi[32 * 32];
+    static int32_t sg_P_lo[32 * 32];
+
+    /* P_hi: back-to-back HMX issues, no scalar in between — pipeline enabled. */
+    hmx_load_bias_i(bias_lo);
+    hmx_clracc_i();
+    for (int kt = 0; kt < Ktiles; kt++) {
+        hmx_load_pair_u8_i8(vt + VTCM_ACT_HI(kt), vt + VTCM_WT(kt, Ktiles));
+    }
+    hmx_store_acc_uh_2x1_retain(out_lo);
+    hmx_load_bias_i(bias_hi);
+    hmx_store_acc_uh_2x1(out_hi);
+    for (int ir = 0; ir < 32; ir++) {
+        int phys_row = ir & 15, stream = ir >> 4;
+        for (int jc = 0; jc < 32; jc++) {
+            uint16_t lo = out_lo[phys_row * 64 + 2 * jc + stream];
+            uint16_t hi = out_hi[phys_row * 64 + 2 * jc + stream];
+            sg_P_hi[ir * 32 + jc] = ((int32_t)(int16_t)hi << 8) | ((int32_t)lo & 0xFF);
+        }
+    }
+
+    /* P_lo */
+    hmx_load_bias_i(bias_lo);
+    hmx_clracc_i();
+    for (int kt = 0; kt < Ktiles; kt++) {
+        hmx_load_pair_u8_i8(vt + VTCM_ACT_LO(kt, Ktiles), vt + VTCM_WT(kt, Ktiles));
+    }
+    hmx_store_acc_uh_2x1_retain(out_lo);
+    hmx_load_bias_i(bias_hi);
+    hmx_store_acc_uh_2x1(out_hi);
+    for (int ir = 0; ir < 32; ir++) {
+        int phys_row = ir & 15, stream = ir >> 4;
+        for (int jc = 0; jc < 32; jc++) {
+            uint16_t lo = out_lo[phys_row * 64 + 2 * jc + stream];
+            uint16_t hi = out_hi[phys_row * 64 + 2 * jc + stream];
+            sg_P_lo[ir * 32 + jc] = ((int32_t)(int16_t)hi << 8) | ((int32_t)lo & 0xFF);
+        }
+    }
+
+    for (int i = 0; i < 32; i++)
+        for (int j = 0; j < 32; j++)
+            out[i * 32 + j] = (sg_P_hi[i * 32 + j] << 8)
+                            +  sg_P_lo[i * 32 + j]
+                            - (cs[j] << 15);
 }
 
 /* Legacy entry kept for API compat. */

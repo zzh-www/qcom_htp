@@ -506,3 +506,51 @@ either reverse-engineering `:dilate` semantics + tile layout OR
 adopting the Crouton layout (which is what ConvLayer uses). The
 Crouton path was probed (found accessible but non-trivial to consume)
 and left as the most promising next avenue, above P7/P8.
+
+## P10 — HMX mxmem modifier + Rt sweep (2026-04-20)
+
+Tested whether `:dilate` modifier or different Rt values close the
+gap to built-in kernels. Key findings:
+
+**`:dilate` modifier** added to `weight.b = mxmem(...):dilate`:
+- Correctness: PRESERVED (0 mismatches at 32³ / 512³)
+- Performance: 2.12 → 2.12 at 512³ (no change)
+- Conclusion: `:dilate` with our Rt=2047 is a no-op for 1×1-conv-equivalent matmul.
+
+**Rt value sweep** at 512³:
+
+| ACT Rt | WT Rt  | cycles/MAC | correctness |
+|-------:|-------:|-----------:|:-----------:|
+| 2047   | 2047   | 2.12       | ✓           |
+| 32767  | 2047   | 2.12       | ✓           |
+| 2047   | 32767  | 2.14       | ✓           |
+| 32767  | 1920   | 2.12       | ✓  (ch03 values) |
+| 0      | 0      | 2.12       | ✗  (all mismatch) |
+| 0xFFFF | 0xFFFF | 2.17       | ✓           |
+
+Rt value is a tile-geometry config (0 = invalid), not a pipeline
+hint. Values in [2047, 32767] behave identically. No 1000× unlock here.
+
+**Full pre-pack weight + all-prepacked kernel** (re-attempted
+iter-4 with revised VTCM layout):
+
+- Kernel body becomes pure HMX MAC issues (no scalar between),
+  intended to enable back-to-back HMX pipelining.
+- Correctness: maintained after fixing a 64-byte VTCM offset mistake.
+- Performance: 2.12 → **3.47 REGRESSION** at 512³ (+64% slower).
+
+Conclusion: the scalar pack_weight between HMX MAC issues is
+**paradoxically beneficial** — it likely hides a fixed per-packet HMX
+latency (accumulator data-dependency + VTCM read stall). Removing it
+exposes serial latency. Built-in kernels that achieve ~16 cyc/packet
+must be using something beyond plain back-to-back `activation.ub =
+mxmem + weight.b = mxmem` — likely `:dilate`-with-structured-Rt that
+reads from Crouton chunk sequences in a way that overlaps VTCM
+responses across consecutive issues.
+
+**Closing position**: 2.12 cycles/MAC at 512³ appears to be the
+single-thread scalar-interleaved-HMX ceiling. Further 10-100× requires
+matching the built-in's Crouton+dilate pipelining architecture, which
+needs HMX ISA documentation we don't have access to (HMX docs are
+Qualcomm-internal; V75 PRM bundled with SDK only covers scalar +
+HVX, not HMX).

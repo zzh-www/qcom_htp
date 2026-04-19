@@ -67,21 +67,24 @@ void hmx_int4_prepack_activation(
     int                         K,
     void          *__restrict__ vtcm_base);
 
-/*
- * Compute out[M=32, N=32] = sum_k a[M=32, K] * w[K, N=32] using the
- * previously pre-packed activation in @p vtcm_base. Weight is packed
- * per K-iter inside this call — the interleaved scalar pack between
- * HMX MACs hides VTCM read latency (all-prepacked measured slower
- * due to back-to-back VTCM bank contention on v75).
- *
- * @param out         [32*32] int32 output tile (written).
- * @param w           [K*32]  int8 weight (sign-extended from int4).
- * @param K           Reduction dim, must match the preceding act prepack.
- * @param vtcm_base   Same VTCM pointer passed to hmx_int4_prepack_activation.
- */
 void hmx_int4_matmul_mn_using_prepacked_act(
     int32_t       *__restrict__ out,
     const int8_t  *__restrict__ w,
+    int                         K,
+    void          *__restrict__ vtcm_base);
+
+/* Fully pre-packed variant: both activation AND weight are pre-packed in
+ * VTCM before the K loop. Inner loop is PURE HMX issue (no scalar) so
+ * HMX packets pipeline back-to-back. Earlier attempt (iter-4) regressed;
+ * this version places weight tiles in a VTCM region chosen to avoid
+ * bank conflict with activation tiles. */
+void hmx_int4_prepack_weight_tiles(
+    const int8_t  *__restrict__ w,
+    int                         K,
+    void          *__restrict__ vtcm_base);
+
+void hmx_int4_matmul_mn_all_prepacked(
+    int32_t       *__restrict__ out,
     int                         K,
     void          *__restrict__ vtcm_base);
 
