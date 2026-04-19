@@ -221,6 +221,14 @@ void hmx_int4_prepack_activation_fused(
     }
 }
 
+/* Diagnostic: "U8XI8_SINGLE_PARTIAL" mode skips the A_lo partial entirely,
+ * so the inner HMX loop runs once (not twice). Output will be wrong (missing
+ * low-byte contribution + offset terms) — this is a pure cycle-count probe
+ * to measure the u8·i8 single-partial HMX ceiling for our kernel structure. */
+#ifndef U8XI8_SINGLE_PARTIAL
+#define U8XI8_SINGLE_PARTIAL 0
+#endif
+
 void hmx_int4_matmul_mn_using_prepacked_act(
     int32_t       *__restrict__ out,
     const int8_t  *__restrict__ w,
@@ -267,6 +275,7 @@ void hmx_int4_matmul_mn_using_prepacked_act(
         }
     }
 
+#if !U8XI8_SINGLE_PARTIAL
     /* P_lo = sum_k A_lo · W */
     hmx_load_bias_i(bias_lo);
     hmx_clracc_i();
@@ -285,6 +294,11 @@ void hmx_int4_matmul_mn_using_prepacked_act(
             sg_P_lo[ir * 32 + jc] = ((int32_t)(int16_t)hi << 8) | ((int32_t)lo & 0xFF);
         }
     }
+#else
+    /* Zero out P_lo in single-partial mode (output will be wrong; cycle
+     * count alone is the measurement target). */
+    for (int i = 0; i < 32 * 32; i++) sg_P_lo[i] = 0;
+#endif
 
     /* Combine. */
     for (int i = 0; i < 32; i++)

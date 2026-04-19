@@ -45,7 +45,7 @@ compile_bin "$OUT" \
     "$SCRIPT_DIR/int16_matmul_hmx.c"
 
 # Probes: build if source exists.
-for probe in probe_hmx_acc probe_dual_scale probe_bias_slots probe_2x2 probe_f16_profile; do
+for probe in probe_hmx_acc probe_dual_scale probe_bias_slots probe_2x2 probe_f16_profile probe_weight_types; do
     src="$SCRIPT_DIR/$probe.c"
     if [ -f "$src" ]; then
         echo "=== Compile: $probe ==="
