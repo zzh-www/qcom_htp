@@ -110,11 +110,97 @@ Target for iteration 2: **`cycles_per_MAC ≤ 0.5` at 512³**. This brings
 us within ~30× of the HMX floor — still short, but closes the biggest
 structural gap.
 
-## Known issue: warning "Selecting disabled op for HmxInt4MatMulPackage"
+## Iteration 2 — per-(m,n) K-accumulated kernel
 
-Present at every graphFinalize. TBD whether this actually prevents HMX
-scheduling or whether it's cosmetic. If HMX is being serialized to a
-single thread under this flag, self-slicing (`multithreaded=true`)
-combined with graph-level HVX threads would unlock 4× parallelism on
-top of whatever the kernel does. Investigate by instrumenting the
-kernel entry with `FARF` and counting invocations per execute.
+Rewrite `hmx_int4_matmul_tile` → `hmx_int4_matmul_mn_tile`: one
+invocation consumes the full K dim for one (m_tile, n_tile) output, with
+a single `mxclracc` at the start and 1 dual-scale readback at the end
+per partial (instead of (K/32) × 2 readbacks). Big structural win.
+
+| Shape  | cycles/MAC | vs iter 1 |
+|--------|-----------:|----------:|
+| 32³    |      8.63  |    +3%    |
+| 128³   |      3.88  |   −53%    |
+| 256³   |      3.11  |   −63%    |
+| 512³   |    **2.74** |   **−67%** |
+
+Cycles/MAC now decreases with scale because per-(m,n) overhead stays
+constant while K grows. 32³ regresses because K=32 gives no
+amortization and we added the upfront full-K decomp cost.
+
+## Iteration 3 — pack micro-optimizations
+
+Three small changes stacked:
+
+- **3a**: replaced 1024 stride-4 byte writes + memset in both
+  `pack_activation_32x32` and `pack_weight_32x32` with 4-byte u32 writes
+  (no read-modify-write, no memset needed).
+- **3b**: added a row-stride variant `pack_activation_32x32_rs` and
+  removed the inner 32-memcpy sub-gather in the K loop — we now read the
+  activation directly from the row-major [32×K] strip.
+- **3c**: **pre-pack activation**. The full activation 32×K is
+  decomposed into (A_hi, A_lo) byte streams and packed into VTCM as
+  K/32 ready-to-HMX-load tiles **once per m_tile**, then reused across
+  all n_tiles. Kills the per-K-iter activation pack.
+
+Cumulative at 512³: 2.74 → 2.58 → 2.44 → **2.17** cycles/MAC.
+
+## Iteration 4 — pre-pack weight too (REGRESSED, reverted)
+
+Extended the prepack to also pack all K weight tiles into VTCM before
+the inner HMX MAC loop — the idea was to make the MAC loop purely HMX
+issues with zero scalar pack interleaved. Result: **2.17 → 3.51** at
+512³ (60% slower).
+
+Diagnosis: HMX `{activation.ub = mxmem(p); weight.b = mxmem(q)}` back-
+to-back from two VTCM regions appears to stall on VTCM bank contention.
+The scalar `pack_weight_32x32` in the previous iteration naturally
+interleaved between MACs and *helped* by decoupling VTCM reads. Moral:
+on v75, dense VTCM bandwidth is the bottleneck for this kernel, not
+compute. Reverted weight to per-K-iter scalar pack.
+
+## Iteration 2 blocked — multi-threading (self-slicing is HVX-only)
+
+Tried `multithreaded=true` with self-slicing on the M axis. Graph
+prepare rejects it: `Can't set self_slicing=6 slices on non-HVX op`.
+QNN's self-slicing mechanism is gated on `QHPI_RESOURCE_HVX` alone;
+`QHPI_RESOURCE_HMX` ops cannot self-slice. Adding HVX to the bitmask
+produces `invalid resource flag 0x6`. Alternative multi-threading
+paths (graph-level fan-out, host-side slice dispatch) deferred — this
+is a structural QNN constraint, not a kernel issue.
+
+## Summary table
+
+| Iter | Cumulative cycles/MAC @ 512³ | cycles @ 512³ | vs baseline |
+|-----:|-----------------------------:|--------------:|------------:|
+| 0    | 8.47                          | 1,137 M       |     1×      |
+| 1    | 8.33 (weight-pack-hoist)      | 1,118 M       | 1.02×       |
+| 2    | 2.74 (K-accumulation)         |   367 M       | 3.10×       |
+| 3a   | 2.58 (u32 packed writes)      |   346 M       | 3.29×       |
+| 3b   | 2.44 (row-strided pack)       |   327 M       | 3.48×       |
+| 3c   | **2.17** (prepack activation) | **291 M**     | **3.91×**   |
+
+## Honest assessment vs targets
+
+| Target          | 512³ cycles | My gap  |
+|-----------------|------------:|--------:|
+| HMX theo. floor | ~2 M        | ~145×   |
+| w8a8 (stretch)  | 66 K        | ~4400×  |
+| w8a16 (pass)    | 108 K       | ~2700×  |
+| w16a16 (float)  | 677 K       | ~430×   |
+
+Still very far from passing. The **structural** remaining wins needed
+to close the gap:
+
+1. **Honest HVX vectorization of all scalar hot paths** — pack loops,
+   decomp, combine, col_sum. Each is 5-10× on its own; collectively
+   maybe 10-20× overall.
+2. **Graph-level parallelism** — partition M into separate subgraphs
+   QNN can schedule concurrently, bypassing the self-slicing HVX gate.
+3. **Native `weight.n` (int4 nibble) HMX path** — cuts weight VTCM
+   traffic in half, possibly 2× throughput in memory-bound regimes.
+   Tile layout is undocumented and needs reverse-engineering.
+
+Each of these is substantial (days of work). Without them, the 2.17
+cycles/MAC floor is likely the near-term ceiling for this single-thread,
+scalar-pack-based implementation.

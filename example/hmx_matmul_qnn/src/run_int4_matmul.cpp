@@ -121,7 +121,10 @@ int main(int argc, char **argv) {
     uint32_t aDims[] = {1, 1, (uint32_t)M, (uint32_t)K};
     uint32_t wDims[] = {1, 1, (uint32_t)K, (uint32_t)N};
     uint32_t oDims[] = {1, 1, (uint32_t)M, (uint32_t)N};
-    const uint32_t vtcm_bytes = 12 * 1024;
+    /* Per-slice VTCM: fixed 12 KiB + pre-packed act hi+lo (K*256 B) +
+     * pre-packed weight (K*32 B) + col_sum_w (128 B). */
+    const uint32_t per_slice_vtcm = 12 * 1024 + K * 256 + K * 32 + 128;
+    const uint32_t vtcm_bytes = per_slice_vtcm * 4;
     uint32_t sDims[] = {1, 1, 1, vtcm_bytes};
 
     auto aT = mk_tensor("activation", QNN_TENSOR_TYPE_APP_WRITE,

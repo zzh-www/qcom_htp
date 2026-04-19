@@ -37,43 +37,42 @@ static inline uint32_t dim_at(const QHPI_Shape &s, uint32_t i)
  * ------------------------------------------------------------------ */
 /* Un-shift Cast offsets while gathering — the data in memory is
  * (signed_value + zero_offset) per the Cast; recover signed values for the
- * HMX kernel which expects the ordinary int16/int8 interpretation. */
-static void gather_a_tile(int16_t tile[32 * 32], const uint16_t *au,
-                          uint32_t M, uint32_t K, uint32_t m0, uint32_t k0)
+ * HMX kernel which expects the ordinary int16/int8 interpretation.
+ *
+ * Gather the M=32 × K strip of activation and the K × N=32 column of weight
+ * from the user tensors into contiguous row-major int16/int8 buffers that
+ * hmx_int4_matmul_mn_tile consumes. */
+static void gather_a_strip(int16_t *__restrict__ a_strip,
+                           const uint16_t *au,
+                           uint32_t M, uint32_t K, uint32_t m0)
 {
     const uint32_t rows = (m0 + 32 <= M) ? 32 : (M - m0);
-    const uint32_t cols = (k0 + 32 <= K) ? 32 : (K - k0);
-    memset(tile, 0, sizeof(int16_t) * 32 * 32);
+    memset(a_strip, 0, sizeof(int16_t) * 32 * K);
     for (uint32_t i = 0; i < rows; i++)
-        for (uint32_t j = 0; j < cols; j++)
-            tile[i * 32 + j] = (int16_t)((int32_t)au[(m0 + i) * K + (k0 + j)] - 32768);
+        for (uint32_t k = 0; k < K; k++)
+            a_strip[i * K + k] = (int16_t)((int32_t)au[(m0 + i) * K + k] - 32768);
 }
 
-static void gather_w_tile(int8_t tile[32 * 32], const uint8_t *wu,
-                          uint32_t K, uint32_t N, uint32_t k0, uint32_t n0)
+static void gather_w_col(int8_t *__restrict__ w_col,
+                         const uint8_t *wu,
+                         uint32_t K, uint32_t N, uint32_t n0)
 {
-    const uint32_t rows = (k0 + 32 <= K) ? 32 : (K - k0);
     const uint32_t cols = (n0 + 32 <= N) ? 32 : (N - n0);
-    memset(tile, 0, sizeof(int8_t) * 32 * 32);
-    for (uint32_t i = 0; i < rows; i++)
+    memset(w_col, 0, sizeof(int8_t) * K * 32);
+    for (uint32_t k = 0; k < K; k++)
         for (uint32_t j = 0; j < cols; j++)
-            tile[i * 32 + j] = (int8_t)((int32_t)wu[(k0 + i) * N + (n0 + j)] - 128);
+            w_col[k * 32 + j] = (int8_t)((int32_t)wu[k * N + (n0 + j)] - 128);
 }
 
-static void scatter_accum_tile(int32_t *out, const int32_t tile[32 * 32],
-                               uint32_t M, uint32_t N, uint32_t m0, uint32_t n0,
-                               bool first_k)
+static void scatter_mn_tile(int32_t *out, const int32_t tile[32 * 32],
+                            uint32_t M, uint32_t N, uint32_t m0, uint32_t n0)
 {
     const uint32_t rows = (m0 + 32 <= M) ? 32 : (M - m0);
     const uint32_t cols = (n0 + 32 <= N) ? 32 : (N - n0);
     for (uint32_t i = 0; i < rows; i++) {
         int32_t *dst = &out[(m0 + i) * N + n0];
         const int32_t *src = &tile[i * 32];
-        if (first_k) {
-            for (uint32_t j = 0; j < cols; j++) dst[j] = src[j];
-        } else {
-            for (uint32_t j = 0; j < cols; j++) dst[j] += src[j];
-        }
+        for (uint32_t j = 0; j < cols; j++) dst[j] = src[j];
     }
 }
 
@@ -85,7 +84,7 @@ static uint32_t hmx_int4_matmul_kernel(
     uint32_t num_outputs, QHPI_Tensor **outputs,
     uint32_t num_inputs, const QHPI_Tensor *const *inputs)
 {
-    (void)handle; (void)num_outputs; (void)num_inputs;
+    (void)num_outputs; (void)num_inputs;
 
     /* QNN supplies post-Cast data: uint16 = (signed_int16 + 32768) and
      * uint8 = (signed_int8 + 128). gather_*_tile undoes that shift. */
@@ -93,6 +92,12 @@ static uint32_t hmx_int4_matmul_kernel(
     const uint8_t  *wu    = (const uint8_t  *)qhpi_tensor_raw_data(inputs[1]);
     void           *vtcm  =                   qhpi_tensor_raw_data(inputs[2]);
     int32_t        *out   = (int32_t *)qhpi_tensor_raw_data(outputs[0]);
+
+    /* Self-slicing across the M dimension (P2). Each slice handles a
+     * contiguous band of m_tiles; no cross-slice sync needed since each
+     * thread writes a distinct output region. */
+    const uint32_t slice = qhpi_slice_number(handle);
+    const uint32_t nslc  = qhpi_num_slices(handle);
 
     QHPI_Shape as = qhpi_tensor_shape(inputs[0]);
     QHPI_Shape ws = qhpi_tensor_shape(inputs[1]);
@@ -118,22 +123,43 @@ static uint32_t hmx_int4_matmul_kernel(
         }
     }
 #else
-    /* Static tile buffers — QHPI threads have small stacks; the kernel is
-     * single-slice (multithreaded=false) so sequential invocations don't
-     * race on these. */
-    static int16_t a_tile[32 * 32];
-    static int8_t  w_tile[32 * 32];
-    static int32_t p_tile[32 * 32];
-    for (uint32_t m0 = 0; m0 < M; m0 += 32) {
+    /* Per-slice static scratch. Up to 4 slices supported; each slice owns a
+     * disjoint section. Sizing: 32 × 4096 bytes for activation strip +
+     * 4096 × 32 for weight + 4KiB for output = ~260 KiB per slice. */
+    #define MAX_SLICES 4
+    static int16_t a_strip_pool[MAX_SLICES][32 * 4096];
+    static int8_t  w_col_pool  [MAX_SLICES][4096 * 32];
+    static int32_t mn_tile_pool[MAX_SLICES][32 * 32];
+    const uint32_t si = (slice < MAX_SLICES) ? slice : 0;
+    int16_t *a_strip = a_strip_pool[si];
+    int8_t  *w_col   = w_col_pool[si];
+    int32_t *mn_tile = mn_tile_pool[si];
+
+    /* Partition M-tiles across slices. Each tile is 32 rows.
+     * Total m_tile count = ceil(M / 32). Slice s handles
+     * [s * ceil_tiles / nslc, (s+1) * ceil_tiles / nslc). */
+    const uint32_t m_tiles = (M + 31) / 32;
+    const uint32_t my_begin = (slice     * m_tiles) / nslc;
+    const uint32_t my_end   = ((slice+1) * m_tiles) / nslc;
+
+    /* Each slice needs its own VTCM scratch region. Size is
+     * HMX_INT4_VTCM_BYTES_FOR_K(K); carve the scratch tensor into
+     * MAX_SLICES equal slots. */
+    const uint32_t per_slice_vtcm = HMX_INT4_VTCM_BYTES_FOR_K(K);
+    uint8_t *my_vtcm = (uint8_t *)vtcm + si * per_slice_vtcm;
+
+    for (uint32_t mt = my_begin; mt < my_end; mt++) {
+        uint32_t m0 = mt * 32;
+        gather_a_strip(a_strip, au, M, K, m0);
+        /* Pre-pack activation once per m_tile (reused across all n_tiles). */
+        hmx_int4_prepack_activation(a_strip, (int)K, my_vtcm);
         for (uint32_t n0 = 0; n0 < N; n0 += 32) {
-            bool first = true;
-            for (uint32_t k0 = 0; k0 < K; k0 += 32) {
-                gather_a_tile(a_tile, au, M, K, m0, k0);
-                gather_w_tile(w_tile, wu, K, N, k0, n0);
-                hmx_int4_matmul_tile(p_tile, a_tile, w_tile, vtcm);
-                scatter_accum_tile(out, p_tile, M, N, m0, n0, first);
-                first = false;
-            }
+            gather_w_col(w_col, wu, K, N, n0);
+            /* Weight still packed per K-iter — the scalar pack interleaved
+             * between HMX MACs hides VTCM read latency; all-prepacked was
+             * slower due to back-to-back VTCM-bank contention. */
+            hmx_int4_matmul_mn_using_prepacked_act(mn_tile, w_col, (int)K, my_vtcm);
+            scatter_mn_tile(out, mn_tile, M, N, m0, n0);
         }
     }
 #endif
@@ -167,7 +193,7 @@ static QHPI_Kernel_v1 sg_kernels[] = {
         /* .function           */ hmx_int4_matmul_kernel,
         /* .resources          */ QHPI_RESOURCE_HMX,
         /* .source_destructive */ false,
-        /* .multithreaded      */ false,
+        /* .multithreaded      */ false,      /* self-slicing is HVX-only in QNN */
         /* .variable_inputs    */ false,
         /* .variable_outputs   */ false,
         /* .min_inputs         */ 3,
