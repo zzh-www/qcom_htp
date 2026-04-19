@@ -19,6 +19,7 @@ example/hmx_matmul_int16/probe_cycle_bench
 example/hmx_matmul_int16/probe_f16_profile
 example/hmx_matmul_int16/test_int16_matmul
 example/hmx_matmul_device/build/
+example/hmx_matmul_qnn/build/
 
 # docs/hexagon-tutorial/ is a separately-cloned git repo; don't track.
 docs/hexagon-tutorial/
