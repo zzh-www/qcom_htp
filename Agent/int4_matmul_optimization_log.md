@@ -204,3 +204,92 @@ to close the gap:
 Each of these is substantial (days of work). Without them, the 2.17
 cycles/MAC floor is likely the near-term ceiling for this single-thread,
 scalar-pack-based implementation.
+
+## Decoded: how QNN built-in MatMul is lowered (from chrometrace_htp.json)
+
+Extracted from `example/qnn_matmul_profile/sweep_data_2026-04-19/s{32,128,256}/`
+(tar-extracted) + `.../s512/` for w8a8, w8a16, fp16. Node count per
+(size, config):
+
+| size | w8a8 | w8a16 | fp16 |
+|-----:|-----:|------:|-----:|
+| 32³  |  5   |  5    |  5   |
+| 128³ |  5   |  5    |  5   |
+| 256³ |  5   |  5    |  5   |
+| 512³ | **14** | **14** | **8** |
+
+At ≤ 256³ the compiler emits one big `ConvLayer_s1.opt` (int) or
+`ConvLayer.fp16.s1.tcm` (fp16) kernel plus weight/bias staging
+(`weights_to_vtcm`, `bias_to_vtcm`, `ForceFormat_Crouton`,
+`InputSlice`).
+
+**At 512³ the matmul is tiled across the output plane:**
+- `w8a8` / `w8a16`: **4-way** tiling — 2 `InputSlicePad` split activation
+  on M into two 256×K halves; 2 `weights_to_vtcm` stage the two 256-N
+  halves of the weight; **4 independent `ConvLayer_s1.opt` kernels**
+  each compute one [256, 512, 256] sub-tile; then **2 `Concat`** ops
+  stitch them back on N, then on M.
+- `fp16`: 2-way (only M split) — 2 `ConvLayer.fp16.s1.tcm` each doing
+  [256, 512, 512]; 1 `Concat`. Simpler because fp16 HMX tile has
+  different VTCM density.
+
+### Byte-level tile size decoding (w8a8 @ 512³)
+
+From each node's `scalar_params.mem_{dram,vtcm}_{read,write}`:
+
+| node                     | bytes      | decoded                                   |
+|--------------------------|-----------:|-------------------------------------------|
+| InputSlicePad (×2)       | 131,072 ea | 256·512·1 B = half of [512,512] int8 act  |
+| weights_to_vtcm (×2)     | 131,072 ea | 512·256·1 B = half of [512,512] int8 wt   |
+| bias_to_vtcm (×2)        |   2,048 ea | 256 channels × 8 B (int16 scale)          |
+| ConvLayer_s1.opt (×4)    | R 264,192  | act tile 131K + wt tile 131K + bias 2K    |
+|                          | W  65,536  | output 256·256·1 B = ¼ of [512,512]       |
+
+Confirms the sub-tile: **[M=256, K=512, N=256]** per `ConvLayer_s1.opt`.
+
+### Graph topology
+
+```
+A[1,M=512,K=512] ─┬─ InputSlicePad(M_top)  ─┬─ ConvLayer(A_top, W_left)  → C_00 [256,256]
+                  │                         └─ ConvLayer(A_top, W_right) → C_01
+                  └─ InputSlicePad(M_bot)  ─┬─ ConvLayer(A_bot, W_left)  → C_10
+                                            └─ ConvLayer(A_bot, W_right) → C_11
+W[1,K=512,N=512] ─┬─ weights_to_vtcm(W_left)
+                  └─ weights_to_vtcm(W_right)
+        C_00,C_01,C_10,C_11 ─ Concat_N(×2) ─ Concat_M ─ Output
+```
+
+4 ConvLayer kernels are data-independent → QNN scheduler runs them
+concurrently across 4 HVX threads. The scalar-overhead-free HMX
+throughput plus 4-way thread parallelism is what delivers
+**w8a8 @ 512³ = 66 K cycles** (4.96e-4 cycles/MAC).
+
+### Gap reconciliation
+
+Our current: 2.17 cycles/MAC ≈ **4400× slower per MAC** than w8a8. Even
+if we replicated the 4-way graph-level parallelism perfectly, we'd
+only close a 4× gap → still ~1100× short. The QNN kernel must be
+running at ~5e-4 cycles/MAC *per thread* — which means their pack /
+decomp / combine / unpack paths are all HVX-vectorized, not scalar.
+
+## Revised roadmap (user directive: 先 HMX 最优 tile 布局, 再 HVX 切片 concat)
+
+1. **P6: HVX-vectorize `pack_activation_32x32`** — highest-leverage
+   scalar hot spot. Expected 5-10× on this function alone.
+2. **P7: HVX-vectorize remaining scalar paths** (pack_weight, decomp,
+   unpack readback, combine, col_sum).
+3. **P5 (optional scouting)**: reverse-engineer
+   `libQnnHtpV75Skel.so` symbol `ConvLayer_s1.opt` to see the exact
+   HVX intrinsic sequence they use — may reveal tile-layout tricks.
+4. **P8: Graph-level 2×2 tiling** — emit 4 `Int4MatMulTile` nodes +
+   2 `q::Concat` ops in host harness when M,N > 256. Uses QNN
+   built-in `Concat`; only our tile kernel is custom.
+5. (deferred) Native `weight.n` (int4 nibble) HMX path for VTCM
+   bandwidth savings at very large K.
+
+Rough gain estimate stacking P6 → P7 → P8:
+- After P6 (pack_activation HVX): cycles/MAC ~1.0 (-55%)
+- After P7 (all scalar HVX): cycles/MAC ~0.05 (20× more)
+- After P8 (4-way graph tiling): cycles/MAC ~0.015 (4× more)
+- Total target: close to w8a16's 8e-4 (17× remaining gap) and within
+  reach of w8a8's 5e-4 for some shapes.
