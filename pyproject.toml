@@ -1,0 +1,10 @@
+[project]
+name = "qcom-htp"
+version = "0.1.0"
+requires-python = ">=3.10,<3.11"   # QNN libDlModelToolsPy.so is ABI-locked to CPython 3.10
+dependencies = [
+    "numpy>=1.26,<2.0",
+    "onnx>=1.21.0",
+    "packaging>=26.1",
+    "pyyaml>=6.0.3",
+]

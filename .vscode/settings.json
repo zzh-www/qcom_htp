@@ -1,0 +1,14 @@
+{
+    "// compile_commands.json lives in .vscode/ — tell both common": "",
+    "// C/C++ extensions where to find it.": "",
+
+    "clangd.arguments": [
+        "--compile-commands-dir=${workspaceFolder}/.vscode",
+        "--query-driver=**/hexagon-clang*,**/aarch64-linux-android*-clang*",
+        "--background-index",
+        "--header-insertion=never"
+    ],
+
+    "C_Cpp.default.compileCommands": "${workspaceFolder}/.vscode/compile_commands.json",
+    "C_Cpp.intelliSenseEngine": "default"
+}

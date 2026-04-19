@@ -1,0 +1,27 @@
+  Chapter 1: HVX + HMX on Simulator
+========================================
+
+[Init] VTCM base=0xd9000000  size=8192 KB
+[Init] HVX acquired (idx=0)
+[Init] HMX acquired (0)
+
+-- Test 1: HVX fill -> HMX matmul ----------
+  act: 0x3C00(1.0) 0x3C00(1.0) 0x3C00(1.0) 0x3C00(1.0)
+  wt : 0x4000(2.0) 0x4000(2.0) 0x4000(2.0) 0x4000(2.0)
+  out: 0x5410(65.0) 0x5410(65.0) 0x5410(65.0) 0x5410(65.0)
+  result=65.0  expected~=64.0
+[PASS] Test 1
+
+-- Test 2: HMX matmul -> HVX ReLU ----------
+  matmul: 0xCFC0(-31.0) 0xCFC0(-31.0) 0xCFC0(-31.0) 0xCFC0(-31.0)
+  matmul result=-31.0  expected~=-32.0
+  relu  : 0x0000(0.0) 0x0000(0.0) 0x0000(0.0) 0x0000(0.0)
+[PASS] Test 2
+
+-- Test 3: Multi-tile accumulation ---------
+  out: 0x5410(65.0) 0x5410(65.0) 0x5410(65.0) 0x5410(65.0)
+  result=65.0  expected~=64.0
+[PASS] Test 3
+
+========================================
+  Results: 3 PASS / 0 FAIL
