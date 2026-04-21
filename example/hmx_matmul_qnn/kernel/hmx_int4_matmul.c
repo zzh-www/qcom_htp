@@ -32,18 +32,24 @@ static inline __attribute__((always_inline))
 void hmx_load_bias_i(const void *p)
 { asm volatile("bias = mxmem(%0)" :: "r"(p) : "memory"); }
 
-/* Rt value controls some aspect of HMX mxmem tile geometry. Empirical values:
- *   0x07FF (2047)  — standard 2 KB tile, what our int16 kernel has used
- *   0x7FFF (32767) — ch03 uses this for activation.hf
- *   0x0780 (1920)  — ch03 uses this for weight.hf
- *   0x00FF         — shorter mask
- *   0xFFFF         — wider mask
- * Parameterized here so we can sweep by rebuilding with -DHMX_RT_ACT=N. */
+/* Rt = byte-mask for HMX mxmem tile footprint. Correct mask = matches the
+ * real operand's VTCM byte size:
+ *   activation tile = 2 KB → Rt_act = 0x7FF (2047)
+ *   weight tile     = 1 KB → Rt_wt  = 0x3FF (1023)
+ *
+ * Silicon probe (Agent/qnn_hmx_pipelining.md, 2026-04-22): changing only
+ * Rt_wt from 2047 → 0x3FF drops HMX cyc/packet from 19.68 → 7.89 (2.5×
+ * speedup) because oversized masks over-speculate into adjacent VTCM banks
+ * and trigger stalls on subsequent weight loads.
+ *
+ * Prior RE (2026-04-20) tested Rt_wt in {2047, 32767, 1920} — never 0x3FF.
+ * Reverse-engineered from libQnnHtpV75Skel.so::hmx_convbbb1x1_stride1
+ * @ 0x2ea7f4 which sets r25=0x3FF for its weight Rt. */
 #ifndef HMX_RT_ACT
 #define HMX_RT_ACT 2047
 #endif
 #ifndef HMX_RT_WT
-#define HMX_RT_WT  2047
+#define HMX_RT_WT  0x3FF
 #endif
 
 static inline __attribute__((always_inline))
@@ -54,6 +60,24 @@ void hmx_load_pair_u8_i8(const void *act, const void *wt)
         "  weight.b      = mxmem(%2, %3) }\n"
         :: "r"(act), "r"(HMX_RT_ACT),
            "r"(wt),  "r"(HMX_RT_WT)
+        : "memory");
+}
+
+/* `:cm` (Convolution Mode) variant on activation. Reverse-engineered from
+ * libQnnHtpV75Skel.so::hmx_convbbb1x1_stride1 @ 0x2ea820 — the internal
+ * 1×1 conv (=matmul) kernel uses `activation.ub = mxmem(ptr, Rt):cm` for
+ * its back-to-back MAC loop. Rt in that kernel: r7|0x1c for activation,
+ * 0x3ff for weight. Hypothesis: `:cm` + matching Rt enables HMX to treat
+ * consecutive mxmem issues as part of a streaming conv sequence,
+ * triggering the credit-based pipelining we've been missing. */
+static inline __attribute__((always_inline))
+void hmx_load_pair_u8_i8_cm(const void *act, const void *wt, int rt_act, int rt_wt)
+{
+    asm volatile(
+        "{ activation.ub = mxmem(%0, %1):cm\n"
+        "  weight.b      = mxmem(%2, %3) }\n"
+        :: "r"(act), "r"(rt_act),
+           "r"(wt),  "r"(rt_wt)
         : "memory");
 }
 
@@ -127,6 +151,10 @@ static void pack_weight_32x32(int8_t *tile, const int8_t *w_32x32)
         }
     }
 }
+
+/* (Ablation of pack_weight measured: 2.12 → 1.96 cyc/MAC, i.e. pack_weight
+ * accounts for only ~8% of total. Main cost is elsewhere — K loop HMX
+ * VTCM write→read stalls + per-call col_sum_w recomputation.) */
 
 /* ============== Persistent scratch (kept off stack per debugging notes) === */
 #define HMX_INT4_MAX_K   8192
@@ -261,6 +289,8 @@ void hmx_int4_matmul_mn_using_prepacked_act(
     hmx_clracc_i();
     for (int kt = 0; kt < Ktiles; kt++) {
         pack_weight_32x32(wt_tile, &w[kt * 32 * 32]);
+        /* Built-in 1x1 conv kernel's Rt values: act ~0x1c | 2047 = 2047|0x1c,
+         * weight = 0x3ff. Try them with :cm modifier to trigger HMX streaming. */
         hmx_load_pair_u8_i8(vt + VTCM_ACT_HI(kt), wt_tile);
     }
     hmx_store_acc_uh_2x1_retain(out_lo);
@@ -308,16 +338,22 @@ void hmx_int4_matmul_mn_using_prepacked_act(
                             - (sg_col_sum_w[j] << 15);
 }
 
-/* Dual-accumulator matmul. Alternates MAC targets between HMX acc A and
- * acc B via mxswapacc between each HMX issue. This mirrors the built-in
- * ConvLayer_s1 hot loop pattern observed in libQnnHtpV75Skel.so
- * disassembly — the swapacc breaks the per-packet data-dependency chain
- * so MAC packets can pipeline back-to-back in the HMX unit.
+/* Dual-accumulator matmul — HMX has TWO accumulators (A, B). mxswapacc
+ * swaps which is "current". MAC packets always go to "current". A MAC's
+ * output feeds into current's future MACs — this is the data-dependency
+ * chain that caps back-to-back MAC throughput. By alternating current
+ * between A and B via mxswapacc, consecutive MACs write to different
+ * accs and break the dep chain, enabling HMX pipelining.
  *
- * Bookkeeping: after Ktiles×2 MACs with 1 swap per MAC, acc A has the
- * even-index MACs (0, 2, 4, ...) and acc B has the odd-index MACs.
- * Final readback reads both accs via dual-scale convert + :retain and
- * the scalar combine sums them back into one int32. */
+ * Silicon semantics (Agent/qnn_hmx_pipelining.md, probe_dualacc_device.c):
+ *   - :above is a NO-OP for accumulator routing (goes to current same as plain)
+ *   - mxswapacc truly swaps current/other
+ *   - store :after.uh without :retain clears BOTH accs (not just current)
+ *   - store :after:retain.uh preserves both accs
+ *
+ * Pattern: clear A and B; then MAC → swap → MAC → swap → ... Ktiles times.
+ * After Ktiles MACs, A has even-k-iters, B has odd-k-iters. Readback
+ * uses :retain on all stores except the final one. */
 static void hmx_dualacc_k_loop_partial(
     int32_t       *__restrict__ dst_P,
     const uint8_t *__restrict__ vt_base,
@@ -334,52 +370,40 @@ static void hmx_dualacc_k_loop_partial(
 {
     const int Ktiles = K / 32;
 
-    /* Clear both accs. */
+    /* Clear both accs: clr (clears current=A), swap (cur=B), clr (B=0), swap back. */
     hmx_load_bias_i(bias_lo);
     hmx_clracc_i();
     hmx_swapacc_i();
     hmx_clracc_i();
-    hmx_swapacc_i();   /* now current = A, both cleared */
+    hmx_swapacc_i();   /* both cleared, current = A */
 
-    /* Built-in ConvLayer pattern matched more precisely:
-     *   MAC 0 with :above (→ other acc), MAC 1 plain (→ current), swap,
-     *   MAC 2 with :above (→ other acc, now the original current),
-     *   MAC 3 plain (→ current, now the original other), swap.
-     * Net effect: each acc receives half of the MACs, but adjacent pairs
-     * fire into DIFFERENT accs, breaking the data-dep chain between them. */
-    int kt = 0;
-    for (; kt + 1 < Ktiles; kt += 2) {
-        uint8_t *act_ptr_0 = (uint8_t *)vt_base
-            + (is_hi_stream ? VTCM_ACT_HI(kt)     : VTCM_ACT_LO(kt,     Ktiles));
-        uint8_t *act_ptr_1 = (uint8_t *)vt_base
-            + (is_hi_stream ? VTCM_ACT_HI(kt + 1) : VTCM_ACT_LO(kt + 1, Ktiles));
-
-        pack_weight_32x32(wt_tile, &w[kt * 32 * 32]);
-        hmx_load_pair_u8_i8_above(act_ptr_0, wt_tile);   /* → other acc */
-        pack_weight_32x32(wt_tile, &w[(kt + 1) * 32 * 32]);
-        hmx_load_pair_u8_i8(act_ptr_1, wt_tile);          /* → current acc */
-        hmx_swapacc_i();
-    }
-    if (kt < Ktiles) {
+    /* MAC per k-tile, swap between. Even MACs → A, odd MACs → B. */
+    for (int kt = 0; kt < Ktiles; kt++) {
         pack_weight_32x32(wt_tile, &w[kt * 32 * 32]);
         uint8_t *act_ptr = (uint8_t *)vt_base
             + (is_hi_stream ? VTCM_ACT_HI(kt) : VTCM_ACT_LO(kt, Ktiles));
         hmx_load_pair_u8_i8(act_ptr, wt_tile);
+        hmx_swapacc_i();
     }
-    /* After Ktiles swaps: if Ktiles even, current is A (Ktiles ended with
-     * a swap leaving us back where we started). If odd, current is B. */
+    /* After Ktiles swaps: current = (Ktiles even ? A : B). Normalize: if odd
+     * Ktiles, one extra swap brings us back to A. */
+    if (Ktiles & 1) hmx_swapacc_i();
+    /* Now current = A unconditionally. */
 
-    /* Read current acc with dual-scale readback. */
+    /* Dual-scale readback of A with :retain so B is preserved. */
     hmx_store_acc_uh_2x1_retain(out_lo_A);
     hmx_load_bias_i(bias_hi);
-    hmx_store_acc_uh_2x1(out_hi_A);
+    /* CRITICAL: :retain on this store too — without it, BOTH accs get
+     * cleared and the swap below would read 0. */
+    asm volatile("mxmem(%0, %1):after:retain.uh = acc:2x1\n"
+                 :: "r"(out_hi_A), "r"(0) : "memory");
 
-    /* Swap to the other acc and read it too. */
+    /* Swap to B and read it. */
     hmx_swapacc_i();
     hmx_load_bias_i(bias_lo);
     hmx_store_acc_uh_2x1_retain(out_lo_B);
     hmx_load_bias_i(bias_hi);
-    hmx_store_acc_uh_2x1(out_hi_B);
+    hmx_store_acc_uh_2x1(out_hi_B);   /* last store: no :retain, both clear */
 
     /* Reconstruct + sum. */
     for (int ir = 0; ir < 32; ir++) {
@@ -423,10 +447,75 @@ void hmx_int4_matmul_mn_dualacc(
     static int32_t sg_P_hi[32 * 32];
     static int32_t sg_P_lo[32 * 32];
 
-    hmx_dualacc_k_loop_partial(sg_P_hi, vt, 1, K, w, wt_tile,
-                                bias_lo, bias_hi, out_lo_A, out_hi_A, out_lo_B, out_hi_B);
-    hmx_dualacc_k_loop_partial(sg_P_lo, vt, 0, K, w, wt_tile,
-                                bias_lo, bias_hi, out_lo_A, out_hi_A, out_lo_B, out_hi_B);
+    /* FUSED hi+lo in one K-loop: acc A gets hi-stream partials, acc B gets
+     * lo-stream. pack_weight called ONCE per K-tile (shared). Readback
+     * sequence happens once at end, not twice. Saves:
+     *   - pack_weight K times (instead of 2K)
+     *   - col_sum_w already hoisted to once
+     *   - one HMX clracc + bias setup + dual-scale readback pair
+     * Trade-off: need VTCM space for both acc's dual-scale readback buffers.
+     */
+    const int Ktiles = K / 32;
+
+    /* Clear both accs. */
+    hmx_load_bias_i(bias_lo);
+    hmx_clracc_i();
+    hmx_swapacc_i();
+    hmx_clracc_i();
+    hmx_swapacc_i();    /* both zero, current=A */
+
+    /* Double-buffered weight tile to overlap scalar pack with HMX MAC:
+     * while HMX reads wt_tile_A for tile k, scalar packs wt_tile_B for
+     * tile k+1 (and vice versa). Eliminates the VTCM write→read
+     * dependency on wt_tile that stalls back-to-back MACs. Uses a
+     * second VTCM region (reusing the 8K..10K free zone). */
+    /* Use the legacy act_tile slot @ 0 (unused in prepacked variants) as
+     * wt_tile_B (1 KB). Safe: fixed region is 0..12K with out_lo_B @8K,
+     * out_hi_B @10K; 0..1K was the old act_tile, never touched here. */
+    int8_t *wt_tile_B = (int8_t *)(vt + 0);
+    /* Prepack tile 0 so first MAC doesn't stall. */
+    pack_weight_32x32(wt_tile, &w[0]);
+
+    for (int kt = 0; kt < Ktiles; kt++) {
+        int8_t *cur_wt  = (kt & 1) ? wt_tile_B : wt_tile;
+        int8_t *next_wt = (kt & 1) ? wt_tile   : wt_tile_B;
+
+        /* MAC pair from cur_wt (already packed) */
+        hmx_load_pair_u8_i8(vt + VTCM_ACT_HI(kt), cur_wt);    /* → A */
+        hmx_swapacc_i();
+        hmx_load_pair_u8_i8(vt + VTCM_ACT_LO(kt, Ktiles), cur_wt); /* → B */
+        hmx_swapacc_i();
+
+        /* Pack next tile (unless last). HMX MAC issues above are fire-and-
+         * forget — the scalar pack_weight here runs in parallel with HMX's
+         * internal pipeline. */
+        if (kt + 1 < Ktiles)
+            pack_weight_32x32(next_wt, &w[(kt + 1) * 32 * 32]);
+    }
+    /* Current is A again (we swapped 2×Ktiles, even). */
+
+    /* Dual-scale readback A (hi partial) with :retain. */
+    hmx_store_acc_uh_2x1_retain(out_lo_A);
+    hmx_load_bias_i(bias_hi);
+    asm volatile("mxmem(%0, %1):after:retain.uh = acc:2x1\n"
+                 :: "r"(out_hi_A), "r"(0) : "memory");
+    /* Swap to B (lo partial), read. */
+    hmx_swapacc_i();
+    hmx_load_bias_i(bias_lo);
+    hmx_store_acc_uh_2x1_retain(out_lo_B);
+    hmx_load_bias_i(bias_hi);
+    hmx_store_acc_uh_2x1(out_hi_B);   /* final: both clear */
+
+    for (int ir = 0; ir < 32; ir++) {
+        int phys_row = ir & 15, stream = ir >> 4;
+        for (int jc = 0; jc < 32; jc++) {
+            int idx = phys_row * 64 + 2 * jc + stream;
+            uint16_t loA = out_lo_A[idx], hiA = out_hi_A[idx];
+            uint16_t loB = out_lo_B[idx], hiB = out_hi_B[idx];
+            sg_P_hi[ir * 32 + jc] = ((int32_t)(int16_t)hiA << 8) | ((int32_t)loA & 0xFF);
+            sg_P_lo[ir * 32 + jc] = ((int32_t)(int16_t)hiB << 8) | ((int32_t)loB & 0xFF);
+        }
+    }
 
     for (int i = 0; i < 32; i++)
         for (int j = 0; j < 32; j++)
