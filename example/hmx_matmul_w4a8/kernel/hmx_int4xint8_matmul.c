@@ -95,16 +95,21 @@ static int32_t sg_col_sum_w[32];
  *   [0, 1 KiB)     act_tile  (transient; unused once prepacked)
  *   [1 KiB, 2 KiB) wt_tile   (per-K-iter scalar pack target)
  *   [2 KiB, 3 KiB) bias region: 256 B bias_lo + 256 B bias_hi, rest padding
- *   [3 KiB, 5 KiB) out_lo (2 KiB)
- *   [5 KiB, 7 KiB) out_hi (2 KiB)
+ *   [4 KiB, 6 KiB) out_lo (2 KiB, 2KB-aligned — HMX acc:2x1 store requires this!)
+ *   [6 KiB, 8 KiB) out_hi (2 KiB, 2KB-aligned)
  *   [8 KiB..)      act_prepack (K/32 tiles × 2 KiB)
+ *
+ * Alignment note: HMX mxmem store with `acc:2x1` requires the destination
+ * to be 2KB-aligned. Original layout had out_lo @ 3K and out_hi @ 5K
+ * (both byte-misaligned by 1KB), which caused phys_row 8-15 output to be
+ * silently corrupted. The w4a16 kernel uses 4K/6K for the same reason.
  */
 #define VTCM_OFF_ACT_TILE   (0)
 #define VTCM_OFF_WT_TILE    (1 * 1024)
 #define VTCM_OFF_BIAS_LO    (2 * 1024)
 #define VTCM_OFF_BIAS_HI    (2 * 1024 + 256)
-#define VTCM_OFF_OUT_LO     (3 * 1024)
-#define VTCM_OFF_OUT_HI     (5 * 1024)
+#define VTCM_OFF_OUT_LO     (4 * 1024)
+#define VTCM_OFF_OUT_HI     (6 * 1024)
 #define VTCM_OFF_PREPACK    (8 * 1024)
 #define VTCM_ACT(k32)       (VTCM_OFF_PREPACK + (k32) * 2048)
 
