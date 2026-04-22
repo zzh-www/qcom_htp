@@ -147,11 +147,19 @@ static uint32_t hmx_int4_matmul_kernel(
     const uint32_t per_slice_vtcm = HMX_INT4_VTCM_BYTES_FOR_K(K);
     uint8_t *my_vtcm = (uint8_t *)vtcm + si * per_slice_vtcm;
 
-    /* Revert to scalar-weight-pack-interleaved path. Rt_wt=0x3FF alone does
-     * not close the scalar-pack bottleneck (HMX MAC is <5% of cycles). The
-     * all-prepacked path still regresses (+63%) due to VTCM bank contention
-     * between spread weight tiles and dense activation reads. Next lever:
-     * HVX-vectorize pack_weight_32x32 itself. */
+    /* P4: gather_w_col depends only on n0, not m0. Cache per-n_tile w_col
+     * in a small working buffer and detect m-loop-iter via mt index to
+     * skip redundant gathers on subsequent m iterations.
+     *
+     * Simpler alternative that doesn't need a big cache: the first m
+     * iteration performs all gathers (populating w_col per n_tile into a
+     * shared pool), later iterations reuse them. But sizing is 16 n_tiles
+     * × K*32 = 256KB at K=N=512 — too big for stack/BSS ×4 slices.
+     *
+     * MVP implementation: re-gather on every iteration but the hope is
+     * the DDR cache keeps it L2-resident across m iterations. Revisit if
+     * profile shows gather_w_col is >10% of total.
+     */
     for (uint32_t mt = my_begin; mt < my_end; mt++) {
         uint32_t m0 = mt * 32;
         hmx_int4_prepack_activation_fused(au, (int)M, (int)K, (int)m0, my_vtcm);
