@@ -70,7 +70,17 @@ static void pack_activation_32x32_rs(uint8_t *tile, const uint8_t *a_rows,
     }
 }
 
-/* Weight: 32 K-rows × 32 N-cols → 8 K-groups × 32 cells (u32 packed). */
+/* Weight: 32 K-rows × 32 N-cols → 8 K-groups × 32 cells (u32 packed).
+ *
+ * HVX experiment (USE_HVX_PACK_WEIGHT): tried Q6_V_vdelta_VV with a
+ * precomputed control for output[i] = V[(i%4)*32 + (i/4)]. Silicon
+ * result: 1.92 → 1.84 cyc/MAC at 512³ (4% perf win) BUT wrong output
+ * (100% mismatches) — the cyclic-shift-by-2 byte permutation doesn't
+ * cleanly fit vdelta's butterfly-network constraint. Kept scalar.
+ *
+ * Potential future work: 2-stage vshuff or vlut32 for a verified
+ * transpose; or fuse gather_w_col directly into HMX-tile layout to
+ * skip pack_weight entirely. */
 static void pack_weight_32x32(int8_t *tile, const int8_t *w_32x32)
 {
     for (int kg = 0; kg < 8; kg++) {

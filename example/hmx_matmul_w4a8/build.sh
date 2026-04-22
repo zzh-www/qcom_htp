@@ -52,6 +52,10 @@ if [ "${SCALAR_ONLY:-0}" = "1" ]; then
     EXTRA_DEFS="-DSCALAR_ONLY"
     echo "  (SCALAR_ONLY=1 — HMX path disabled)"
 fi
+if [ "${USE_HVX_PACK_WEIGHT:-0}" = "1" ]; then
+    EXTRA_DEFS="$EXTRA_DEFS -DUSE_HVX_PACK_WEIGHT=1"
+    echo "  (USE_HVX_PACK_WEIGHT=1)"
+fi
 
 OUT_HTP="$SCRIPT_DIR/build/hexagon-$ARCH"
 OUT_ARM="$SCRIPT_DIR/build/aarch64"
