@@ -101,6 +101,42 @@ static uint32_t hmx_matmul_v2_kernel(
     /* Staging: int32 tile buffer for readback decode. 4 KiB. */
     static int32_t mn_tile[32 * 32];
 
+    /* Phase 2 T0 + Path B style wt cache: weight tiles depend only on nt;
+     * pre-pack all N_tiles × K_tiles weight tiles into BSS DDR pool once
+     * per (wu, K, N) tuple. Persistent across inference invocations via
+     * wu-keyed slot allocation. */
+    #define MAX_N_TILES_CACHED 16
+    #define MAX_K_TILES_CACHED 16
+    #define MAX_WU_SLOTS 4
+    struct wu_slot_t { const int8_t *wu; uint32_t K; uint32_t N; };
+    alignas(128) static uint8_t wt_cache[MAX_WU_SLOTS][MAX_N_TILES_CACHED][MAX_K_TILES_CACHED][1024];
+    static volatile wu_slot_t wu_slots[MAX_WU_SLOTS] = {};
+    static volatile uint32_t  cache_pop[MAX_WU_SLOTS] = {};
+
+    int wu_slot = -1;
+    const bool use_wt_cache = (K_tiles <= MAX_K_TILES_CACHED) &&
+                               (N_tiles <= MAX_N_TILES_CACHED);
+    if (use_wt_cache) {
+        for (int s = 0; s < MAX_WU_SLOTS; s++)
+            if (wu_slots[s].wu == wu && wu_slots[s].K == K && wu_slots[s].N == N)
+                { wu_slot = s; break; }
+        if (wu_slot < 0) {
+            for (int s = 0; s < MAX_WU_SLOTS; s++)
+                if (wu_slots[s].wu == nullptr) {
+                    wu_slots[s].wu = wu; wu_slots[s].K = K; wu_slots[s].N = N;
+                    cache_pop[s] = 0;
+                    wu_slot = s; break;
+                }
+        }
+        if (wu_slot >= 0 && !cache_pop[wu_slot]) {
+            for (uint32_t nt = 0; nt < N_tiles; nt++)
+                for (uint32_t kt = 0; kt < K_tiles; kt++)
+                    hmx_core_v2_gather_wt_tile(wt_cache[wu_slot][nt][kt],
+                                                wu, N, kt * 32, nt * 32);
+            __atomic_store_n(&cache_pop[wu_slot], 1, __ATOMIC_RELEASE);
+        }
+    }
+
     for (uint32_t mt = 0; mt < M_tiles; mt++) {
         /* Gather all K_tiles of activation for this m-tile (2 KiB each). */
         for (uint32_t kt = 0; kt < K_tiles; kt++) {
@@ -109,15 +145,18 @@ static uint32_t hmx_matmul_v2_kernel(
         }
 
         for (uint32_t nt = 0; nt < N_tiles; nt++) {
-            /* Gather weight K×N column tiles for this n-tile.
-             * Re-gathered per (mt, nt) pair — easy to hoist out of m-loop
-             * with a cache like Phase 2 T0 if this shows up in profile. */
-            for (uint32_t kt = 0; kt < K_tiles; kt++) {
-                hmx_core_v2_gather_wt_tile(wt_tiles_vtcm + kt * 1024,
-                                            wu, N, kt * 32, nt * 32);
+            /* Populate wt VTCM tiles from cache (or re-gather if cache missed). */
+            if (wu_slot >= 0) {
+                for (uint32_t kt = 0; kt < K_tiles; kt++)
+                    memcpy(wt_tiles_vtcm + kt * 1024,
+                           wt_cache[wu_slot][nt][kt], 1024);
+            } else {
+                for (uint32_t kt = 0; kt < K_tiles; kt++)
+                    hmx_core_v2_gather_wt_tile(wt_tiles_vtcm + kt * 1024,
+                                                wu, N, kt * 32, nt * 32);
             }
 
-            /* HMX 2-pass :cm MAC + dual-scale readback. */
+            /* HMX MAC + dual-scale readback. */
             hmx_matmul_v2_core_mn(act_tiles_vtcm, wt_tiles_vtcm,
                                    K_tiles, bias_vtcm,
                                    out_top_lo, out_top_hi,
