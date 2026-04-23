@@ -73,17 +73,28 @@ static uint32_t hmx_matmul_v2_kernel(
      *   align to 2K boundary:
      *   [OUT_LO, +2K)                  out_lo
      *   [OUT_HI, +2K)                  out_hi */
+    /* HMX 2-KiB aligned VTCM layout:
+     *   [0, 2K)                   reserved (bias at start)
+     *   [2K, 2K + K*1024)         act_tiles
+     *   [rounded up to 2K, + K*1024)  wt_tiles
+     *   [rounded, + 2K)           out_top_lo
+     *   [+ 2K)                    out_top_hi
+     *   [+ 2K)                    out_bot_lo
+     *   [+ 2K)                    out_bot_hi   */
     uint8_t *vt = (uint8_t *)vtcm;
     void     *bias_vtcm = vt;
     hmx_core_v2_fill_bias(bias_vtcm);
 
-    uint8_t *act_tiles_vtcm = vt + 512;
-    uint8_t *wt_tiles_vtcm  = act_tiles_vtcm + K_tiles * 1024;
-    /* Round up to 2 KiB for out buffer alignment */
+    uint8_t *act_tiles_vtcm = vt + 2048;
+    uintptr_t after_act = (uintptr_t)(act_tiles_vtcm + K_tiles * 1024);
+    after_act = (after_act + 2047u) & ~(uintptr_t)2047u;
+    uint8_t *wt_tiles_vtcm  = (uint8_t *)after_act;
     uintptr_t after_wt = (uintptr_t)(wt_tiles_vtcm + K_tiles * 1024);
     after_wt = (after_wt + 2047u) & ~(uintptr_t)2047u;
-    uint16_t *out_lo = (uint16_t *)after_wt;
-    uint16_t *out_hi = (uint16_t *)(after_wt + 2048);
+    uint16_t *out_top_lo = (uint16_t *)(after_wt + 0 * 2048);
+    uint16_t *out_top_hi = (uint16_t *)(after_wt + 1 * 2048);
+    uint16_t *out_bot_lo = (uint16_t *)(after_wt + 2 * 2048);
+    uint16_t *out_bot_hi = (uint16_t *)(after_wt + 3 * 2048);
 
     /* Staging: int32 tile buffer for readback decode. 4 KiB. */
     static int32_t mn_tile[32 * 32];
@@ -104,19 +115,22 @@ static uint32_t hmx_matmul_v2_kernel(
                                             wu, N, kt * 32, nt * 32);
             }
 
-            /* HMX MAC: pure :cm + row-major */
+            /* HMX 2-pass :cm MAC + dual-scale readback. */
             hmx_matmul_v2_core_mn(act_tiles_vtcm, wt_tiles_vtcm,
-                                   K_tiles, bias_vtcm, out_lo, out_hi);
+                                   K_tiles, bias_vtcm,
+                                   out_top_lo, out_top_hi,
+                                   out_bot_lo, out_bot_hi);
 
-            /* Decode dual-scale readback. With `:cm` MAC, the readback
-             * layout is ROW-MAJOR (idx = ir*32 + jc), not the Phase 2
-             * stream-interleaved format. */
-            for (int ir = 0; ir < 32; ir++) {
+            /* Decode: 16 rows × 32 cols per pass, dual-scale int24. */
+            for (int ir = 0; ir < 16; ir++) {
                 for (int jc = 0; jc < 32; jc++) {
                     int idx = ir * 32 + jc;
-                    uint16_t lo = out_lo[idx], hi = out_hi[idx];
+                    uint16_t tlo = out_top_lo[idx], thi = out_top_hi[idx];
+                    uint16_t blo = out_bot_lo[idx], bhi = out_bot_hi[idx];
                     mn_tile[ir * 32 + jc] =
-                        ((int32_t)(int16_t)hi << 8) | ((int32_t)lo & 0xFF);
+                        ((int32_t)(int16_t)thi << 8) | ((int32_t)tlo & 0xFF);
+                    mn_tile[(ir + 16) * 32 + jc] =
+                        ((int32_t)(int16_t)bhi << 8) | ((int32_t)blo & 0xFF);
                 }
             }
 

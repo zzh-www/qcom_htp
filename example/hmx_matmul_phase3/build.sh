@@ -87,7 +87,7 @@ ARM_CXX_FLAGS=(
     --target=aarch64-none-linux-android21
     --sysroot="$NDK_BIN/../sysroot"
     -stdlib=libc++
-    -D__HVXDBL__ -DUSE_OS_LINUX -DANDROID -DPREPARE_DISABLED -DSCALAR_ONLY
+    -D__HVXDBL__ -DUSE_OS_LINUX -DANDROID -DPREPARE_DISABLED
     "-DTHIS_PKG_NAME=$PACKAGE_NAME"
     -I "$QNN_SDK_ROOT/include/QNN"
     -fomit-frame-pointer -fvisibility=default

@@ -214,6 +214,20 @@ int main(int argc, char **argv) {
     std::printf("  oBuf[0..3]=%d %d %d %d  oRef[0..3]=%d %d %d %d\n",
                 oBuf[0], oBuf[1], oBuf[2], oBuf[3],
                 oRef[0], oRef[1], oRef[2], oRef[3]);
+    /* DIAG: show zero-value positions + count. Expected = 1024 non-zero (all 32s). */
+    int nonzero = 0, zero = 0;
+    for (int i = 0; i < M * N; i++) {
+        if (oBuf[i] != 0) nonzero++; else zero++;
+    }
+    std::printf("  RAW: %d non-zero, %d zero out of %d\n", nonzero, zero, M*N);
+    std::printf("  First 20 zero positions: ");
+    int shown = 0;
+    for (int i = 0; i < M * N && shown < 20; i++) {
+        if (oBuf[i] == 0) { std::printf("%d ", i); shown++; }
+    }
+    std::printf("\n");
+    std::printf("  out_lo halfword samples: [0]=%d [31]=%d [32]=%d [63]=%d [64]=%d [512]=%d [1023]=%d\n",
+                oBuf[0], oBuf[31], oBuf[32], oBuf[63], oBuf[64], oBuf[512], oBuf[1023]);
 
     g_qnn.profileFree(profile);
     g_qnn.contextFree(context, nullptr);

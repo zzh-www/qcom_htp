@@ -53,8 +53,10 @@ void hmx_matmul_v2_core_mn(
     const uint8_t *wt_tiles,
     uint32_t       K_tiles,
     void          *bias_vtcm,
-    uint16_t      *out_lo,
-    uint16_t      *out_hi);
+    uint16_t      *out_top_lo,   /* rows 0..15 dual-scale low */
+    uint16_t      *out_top_hi,   /* rows 0..15 dual-scale high */
+    uint16_t      *out_bot_lo,   /* rows 16..31 dual-scale low */
+    uint16_t      *out_bot_hi);  /* rows 16..31 dual-scale high */
 
 /* Helper: gather 32 rows × 32 K-cols from raw row-major activation
  * [M, K] (byte-strided) into a contiguous 1 KiB VTCM tile. Simple byte

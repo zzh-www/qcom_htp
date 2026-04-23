@@ -88,18 +88,11 @@ void hmx_core_v2_gather_wt_tile(
     uint32_t       k0,
     uint32_t       n0)
 {
-    for (int kg = 0; kg < 8; kg++) {
-        uint32_t *dst = (uint32_t *)(tile_vtcm + 128 * kg);
-        const uint8_t *r0 = (const uint8_t *)&wu[(k0 + kg * 4 + 0) * N_full + n0];
-        const uint8_t *r1 = (const uint8_t *)&wu[(k0 + kg * 4 + 1) * N_full + n0];
-        const uint8_t *r2 = (const uint8_t *)&wu[(k0 + kg * 4 + 2) * N_full + n0];
-        const uint8_t *r3 = (const uint8_t *)&wu[(k0 + kg * 4 + 3) * N_full + n0];
-        for (int col = 0; col < 32; col++) {
-            dst[col] =  (uint32_t)r0[col]
-                     | ((uint32_t)r1[col] << 8)
-                     | ((uint32_t)r2[col] << 16)
-                     | ((uint32_t)r3[col] << 24);
-        }
+    /* Row-major 32 K-rows × 32 N-cols, 1 KiB contiguous.
+     * This matches Agent A's probe layout (fill_wt just memset all-1)
+     * and pairs with activation.ub=:cm / weight.b=plain at 7.9 cyc/MAC. */
+    for (uint32_t r = 0; r < 32; r++) {
+        memcpy(tile_vtcm + r * 32, &wu[(k0 + r) * N_full + n0], 32);
     }
 }
 
@@ -108,29 +101,41 @@ void hmx_matmul_v2_core_mn(
     const uint8_t *wt_tiles,
     uint32_t       K_tiles,
     void          *bias_vtcm,
-    uint16_t      *out_lo,
-    uint16_t      *out_hi)
+    uint16_t      *out_top_lo,
+    uint16_t      *out_top_hi,
+    uint16_t      *out_bot_lo,
+    uint16_t      *out_bot_hi)
 {
 #if defined(__hexagon__)
     uint16_t *blo = (uint16_t *)bias_vtcm;
     uint16_t *bhi = blo + 128;
 
+    /* :cm mode: 2 passes × dual-scale readback (4 stores total) for
+     * 32 rows × 32 cols output with int24-range precision. */
+
+    /* Pass 1: rows 0..15 */
     hmx_load_bias_i(blo);
     hmx_clracc_i();
-
-    /* Inner MAC loop — pure HMX. :cm reads 1 KiB row-major per iter. */
     for (uint32_t kt = 0; kt < K_tiles; kt++) {
-        const uint8_t *act_tile = act_tiles + kt * 1024;
-        const uint8_t *wt_tile  = wt_tiles  + kt * 1024;
-        hmx_load_pair_cm(act_tile, wt_tile);
+        hmx_load_pair_cm(act_tiles + kt * 1024,
+                         wt_tiles  + kt * 1024);
     }
-
-    /* Dual-scale readback (low, then high with :retain via asm below) */
-    hmx_store_acc_uh_2x1_retain(out_lo);
+    hmx_store_acc_uh_2x1_retain(out_top_lo);
     hmx_load_bias_i(bhi);
-    hmx_store_acc_uh_2x1(out_hi);
+    hmx_store_acc_uh_2x1(out_top_hi);   /* final → acc cleared */
+
+    /* Pass 2: rows 16..31 — activation pointer +512 bytes. */
+    hmx_load_bias_i(blo);
+    hmx_clracc_i();
+    for (uint32_t kt = 0; kt < K_tiles; kt++) {
+        hmx_load_pair_cm(act_tiles + kt * 1024 + 512,
+                         wt_tiles  + kt * 1024);
+    }
+    hmx_store_acc_uh_2x1_retain(out_bot_lo);
+    hmx_load_bias_i(bhi);
+    hmx_store_acc_uh_2x1(out_bot_hi);
 #else
-    (void)act_tiles; (void)wt_tiles; (void)K_tiles;
-    (void)bias_vtcm; (void)out_lo; (void)out_hi;
+    (void)act_tiles; (void)wt_tiles; (void)K_tiles; (void)bias_vtcm;
+    (void)out_top_lo; (void)out_top_hi; (void)out_bot_lo; (void)out_bot_hi;
 #endif
 }
