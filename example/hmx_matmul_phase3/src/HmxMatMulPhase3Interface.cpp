@@ -15,10 +15,24 @@
 #define THIS_PKG_NAME_STR STRINGIZE(THIS_PKG_NAME)
 
 extern void register_phase3_ops();
+extern "C" void register_hmx_matmul_v2_op();
+extern "C" {
+void register_pack_act_op();
+void register_pack_wt_op();
+void register_combine_op();
+void register_int4_expand_op();
+}
 
 static constexpr auto sg_packageName = THIS_PKG_NAME_STR;
 static constexpr auto sg_opName = "MatMulInt8xInt8Crouton";
-static std::array<const char *, 1> sg_opNames{{sg_opName}};
+static constexpr auto sg_opNameV2      = "MatMulV2";
+static constexpr auto sg_opNamePackAct = "PackActivationToHmxTile";
+static constexpr auto sg_opNamePackWt  = "PackWeightToHmxTile";
+static constexpr auto sg_opNameCombine = "CombineHiLo";
+static constexpr auto sg_opNameInt4Exp = "Int4Expand";
+static std::array<const char *, 6> sg_opNames{{
+    sg_opName, sg_opNameV2, sg_opNamePackAct, sg_opNamePackWt, sg_opNameCombine, sg_opNameInt4Exp
+}};
 
 static Qnn_ApiVersion_t sg_sdkApiVersion = QNN_HTP_API_VERSION_INIT;
 static Qnn_Version_t sg_opsetVersion = {1, 0, 0};
@@ -58,8 +72,14 @@ static Qnn_ErrorHandle_t pkgGetInfo(const QnnOpPackage_Info_t **info) {
 static Qnn_ErrorHandle_t pkgValidateOpConfig(Qnn_OpConfig_t opConfig) {
     if (std::string(sg_packageName) != opConfig.v1.packageName)
         return QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
-    if (std::string(opConfig.v1.typeName) != sg_opName)
-        return QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
+    const std::string tn = opConfig.v1.typeName;
+    bool match = (tn == sg_opName)
+              || (tn == sg_opNameV2)
+              || (tn == sg_opNamePackAct)
+              || (tn == sg_opNamePackWt)
+              || (tn == sg_opNameCombine)
+              || (tn == sg_opNameInt4Exp);
+    if (!match) return QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
     (void)opConfig;
     return QNN_SUCCESS;
 }
@@ -120,6 +140,11 @@ Qnn_ErrorHandle_t HmxMatMulPhase3InterfaceProvider(QnnOpPackage_Interface_t *int
 
 const char *qhpi_init() {
     register_phase3_ops();
+    register_hmx_matmul_v2_op();
+    register_pack_act_op();
+    register_pack_wt_op();
+    register_combine_op();
+    register_int4_expand_op();
     return THIS_PKG_NAME_STR;
 }
 

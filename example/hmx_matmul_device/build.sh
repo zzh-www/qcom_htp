@@ -68,3 +68,16 @@ hexagon-clang -mv75 -O2 \
     "$SCRIPT_DIR/probe_pipeline_device.c" \
     -o "$OUT_PIPE"
 echo "  -> $OUT_PIPE ($(wc -c < "$OUT_PIPE") bytes)"
+
+# probe_cm_row_major — tests whether :cm can consume row-major activation.
+OUT_CM="$BUILD/libprobe_cm_row_major.so"
+hexagon-clang -mv75 -O2 \
+    -mhvx -mhvx-length=128B \
+    -mhmx \
+    -shared -fPIC \
+    -I "$HEXAGON_SDK/incs" \
+    -I "$HEXAGON_SDK/incs/stddef" \
+    -I "$HEXAGON_SDK/rtos/qurt/computev75/include/qurt" \
+    "$SCRIPT_DIR/probe_cm_row_major.c" \
+    -o "$OUT_CM"
+echo "  -> $OUT_CM ($(wc -c < "$OUT_CM") bytes)"
