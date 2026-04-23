@@ -16,6 +16,7 @@
 
 extern void register_phase3_ops();
 extern "C" void register_hmx_matmul_v2_op();
+extern "C" void register_hmx_matmul_v3_op();
 extern "C" {
 void register_pack_act_op();
 void register_pack_wt_op();
@@ -26,12 +27,14 @@ void register_int4_expand_op();
 static constexpr auto sg_packageName = THIS_PKG_NAME_STR;
 static constexpr auto sg_opName = "MatMulInt8xInt8Crouton";
 static constexpr auto sg_opNameV2      = "MatMulV2";
+static constexpr auto sg_opNameV3      = "MatMulV3";
 static constexpr auto sg_opNamePackAct = "PackActivationToHmxTile";
 static constexpr auto sg_opNamePackWt  = "PackWeightToHmxTile";
 static constexpr auto sg_opNameCombine = "CombineHiLo";
 static constexpr auto sg_opNameInt4Exp = "Int4Expand";
-static std::array<const char *, 6> sg_opNames{{
-    sg_opName, sg_opNameV2, sg_opNamePackAct, sg_opNamePackWt, sg_opNameCombine, sg_opNameInt4Exp
+static std::array<const char *, 7> sg_opNames{{
+    sg_opName, sg_opNameV2, sg_opNameV3,
+    sg_opNamePackAct, sg_opNamePackWt, sg_opNameCombine, sg_opNameInt4Exp
 }};
 
 static Qnn_ApiVersion_t sg_sdkApiVersion = QNN_HTP_API_VERSION_INIT;
@@ -75,6 +78,7 @@ static Qnn_ErrorHandle_t pkgValidateOpConfig(Qnn_OpConfig_t opConfig) {
     const std::string tn = opConfig.v1.typeName;
     bool match = (tn == sg_opName)
               || (tn == sg_opNameV2)
+              || (tn == sg_opNameV3)
               || (tn == sg_opNamePackAct)
               || (tn == sg_opNamePackWt)
               || (tn == sg_opNameCombine)
@@ -141,6 +145,7 @@ Qnn_ErrorHandle_t HmxMatMulPhase3InterfaceProvider(QnnOpPackage_Interface_t *int
 const char *qhpi_init() {
     register_phase3_ops();
     register_hmx_matmul_v2_op();
+    register_hmx_matmul_v3_op();
     register_pack_act_op();
     register_pack_wt_op();
     register_combine_op();

@@ -76,6 +76,7 @@ KERNEL_OBJS+=("$OUT_HTP/hmx_core_v2.o")
     "$SCRIPT_DIR/src/HmxMatMulPhase3Interface.cpp" \
     "$SCRIPT_DIR/src/HmxMatMulPhase3Op.cpp" \
     "$SCRIPT_DIR/src/HmxMatMulV2Op.cpp" \
+    "$SCRIPT_DIR/src/HmxMatMulV3Op.cpp" \
     "${KERNEL_OBJS[@]}"
 
 echo "  -> $OUT_HTP/libQnnHmxMatMulPhase3_htp.so"
@@ -120,6 +121,7 @@ ARM_OBJS+=("$OUT_ARM/hmx_core_v2.o")
     "$SCRIPT_DIR/src/HmxMatMulPhase3Interface.cpp" \
     "$SCRIPT_DIR/src/HmxMatMulPhase3Op.cpp" \
     "$SCRIPT_DIR/src/HmxMatMulV2Op.cpp" \
+    "$SCRIPT_DIR/src/HmxMatMulV3Op.cpp" \
     "${ARM_OBJS[@]}" \
     -L "$QNN_SDK_ROOT/lib/aarch64-android" -lQnnHtp -lQnnHtpPrepare
 
@@ -150,6 +152,19 @@ echo "--- Host run_matmul_v2 (aarch64-android) ---"
     -ldl
 
 echo "  -> $OUT_ARM/run_matmul_v2"
+
+# ----- Host V3 matmul runner (pure HMX op, host pre-packs) -----
+echo "--- Host run_matmul_v3 (aarch64-android) ---"
+"$ARM_CXX" -std=c++17 -O2 \
+    --target=aarch64-none-linux-android21 \
+    --sysroot="$NDK_BIN/../sysroot" \
+    -stdlib=libc++ -static-libstdc++ \
+    -I "$QNN_SDK_ROOT/include/QNN" \
+    -o "$OUT_ARM/run_matmul_v3" \
+    "$SCRIPT_DIR/src/run_matmul_v3.cpp" \
+    -ldl
+
+echo "  -> $OUT_ARM/run_matmul_v3"
 
 echo ""
 echo "=== Build complete ==="
