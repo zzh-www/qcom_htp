@@ -73,22 +73,42 @@ not raw throughput.
 ## Remaining puzzle
 
 For random uint8 act × int8 weight @ 512³:
-- cyc/MAC = 0.32 (very fast, mechanism clearly running)
-- oBuf[0..3] = 13837 13837 5706 5706 (pairs duplicate suggests stride issue)
+- cyc/MAC = 1.22 (:cm + Phase-2 packed weight + stride-2 readback)
+- oBuf[0..3] = 3216 6017 -1302 3126
 - oRef[0..3] = 3332 362 -1168 362
 
-Three hypotheses:
-1. Weight tile format for `:cm` is DIFFERENT from plain mxmem. Agent A's
-   test used uniform weight (all-1) so didn't discriminate. Try Phase 2's
-   packed weight format.
-2. Dual-scale readback for `:cm` may have different scaling (not the same
-   `(hi<<8)|(lo&0xff)` as Phase 2).
-3. The 2-pass structure may need to store to the SAME output buffer with
-   `:retain` (as is Phase 2's dualacc pattern) so both passes contribute.
+Pair-duplication is GONE (stride-2 readback confirmed right).
+Values now within MAC range but not bit-exact. Weight tile layout still
+has some detail wrong.
 
-Next-session action: probe weight-layout sensitivity — use non-uniform
-weight (e.g., 1..32 in first row, then zero) + all-1 activation, verify
-which weight-tile layout produces expected pattern via HMX.
+### Progression summary
+| state | max_abs_err @ 512³ |
+|-------|---:|
+| row-major readback, row-major weight | 27084 |
+| stride-2 readback, row-major weight | (same as above, still wrong) |
+| stride-2 readback, Phase 2 packed weight | **12382** (↓ 54%) |
+
+### Next-session probe — isolate weight layout
+
+Write a minimal silicon probe (modeled on Agent A's
+`probe_cm_row_major.c`) with **non-uniform** weight:
+- weight[0,0] = 1, all other bytes = 0  → output[m, 0] per row depends
+  only on activation[m, 0]. From column pattern we learn layout.
+- weight[k, 0] for k=0..31, = k+1. All other zero.
+  → output[m, 0] = sum_k a[m,k] * (k+1). From exact value we know K ordering.
+
+Other potentially useful: weight[0, 0..31] = 1..32, rest 0; activation
+all-1. Output[0, n] should reveal column ordering.
+
+### Also maybe: stream-0 vs stream-1 duality
+
+We saw stream 0 positions (even halfwords) have data, stream 1 (odd)
+are zero. But pair-duplication suggested maybe both? Need more probing.
+
+Also: with stride-2 readback, we're only reading even halfwords. Are
+odd halfwords truly unused, or do they carry the SECOND half of a 32-
+K-tile MAC that we're ignoring? Pass-1 MAC maybe does only K=16, not
+K=32, with second K-16 going to stream 1.
 
 Expected outcome: bit-exact matmul_v2 + cyc/MAC ≈ 2× Phase 2 at larger K
 (since 2 MACs per tile instead of 1; Phase 2's dualacc is similar).

@@ -121,10 +121,13 @@ static uint32_t hmx_matmul_v2_kernel(
                                    out_top_lo, out_top_hi,
                                    out_bot_lo, out_bot_hi);
 
-            /* Decode: 16 rows × 32 cols per pass, dual-scale int24. */
+            /* Decode: stride-2 halfwords per col (Phase 2 2-stream, stream 0).
+             * Row-major gave pair-duplication for K>32; stride-2 removes it.
+             * Values still not bit-exact under random data — weight-K-
+             * ordering or some offset math still needs probe isolation. */
             for (int ir = 0; ir < 16; ir++) {
                 for (int jc = 0; jc < 32; jc++) {
-                    int idx = ir * 32 + jc;
+                    int idx = ir * 64 + 2 * jc;
                     uint16_t tlo = out_top_lo[idx], thi = out_top_hi[idx];
                     uint16_t blo = out_bot_lo[idx], bhi = out_bot_hi[idx];
                     mn_tile[ir * 32 + jc] =

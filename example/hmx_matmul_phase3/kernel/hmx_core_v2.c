@@ -88,11 +88,22 @@ void hmx_core_v2_gather_wt_tile(
     uint32_t       k0,
     uint32_t       n0)
 {
-    /* Row-major 32 K-rows × 32 N-cols, 1 KiB contiguous.
-     * This matches Agent A's probe layout (fill_wt just memset all-1)
-     * and pairs with activation.ub=:cm / weight.b=plain at 7.9 cyc/MAC. */
-    for (uint32_t r = 0; r < 32; r++) {
-        memcpy(tile_vtcm + r * 32, &wu[(k0 + r) * N_full + n0], 32);
+    /* Phase 2 packed format: 8 K-groups × 32 cells × 4 bytes each.
+     * Each cell encodes 4 consecutive K-rows at one N col. Empirically
+     * required for `weight.b = mxmem` even with `:cm` on activation
+     * (Agent A probe used uniform all-1 weight so didn't discriminate). */
+    for (int kg = 0; kg < 8; kg++) {
+        uint32_t *dst = (uint32_t *)(tile_vtcm + 128 * kg);
+        const uint8_t *r0 = (const uint8_t *)&wu[(k0 + kg * 4 + 0) * N_full + n0];
+        const uint8_t *r1 = (const uint8_t *)&wu[(k0 + kg * 4 + 1) * N_full + n0];
+        const uint8_t *r2 = (const uint8_t *)&wu[(k0 + kg * 4 + 2) * N_full + n0];
+        const uint8_t *r3 = (const uint8_t *)&wu[(k0 + kg * 4 + 3) * N_full + n0];
+        for (int col = 0; col < 32; col++) {
+            dst[col] =  (uint32_t)r0[col]
+                     | ((uint32_t)r1[col] << 8)
+                     | ((uint32_t)r2[col] << 16)
+                     | ((uint32_t)r3[col] << 24);
+        }
     }
 }
 
