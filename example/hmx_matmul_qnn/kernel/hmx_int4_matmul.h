@@ -76,12 +76,19 @@ void hmx_int4_matmul_mn_using_prepacked_act(
 /* Dual-accumulator variant: alternates MAC target between HMX acc A and acc B
  * via mxswapacc — breaks the per-packet data-dependency chain observed in
  * built-in ConvLayer_s1.opt, which uses this exact pattern to hit
- * ~16 cyc/packet vs our ~17K. Sums both accs at readback. */
+ * ~16 cyc/packet vs our ~17K. Sums both accs at readback.
+ *
+ * @param col_sum_w_in  Optional pre-computed column sum of `w` (32 int32s).
+ *                      When non-NULL, skips the K×32 scalar accumulation —
+ *                      callers that reuse the same `w` across many (m,n)
+ *                      invocations should hoist this (T1d). NULL keeps
+ *                      backward-compat (compute inline). */
 void hmx_int4_matmul_mn_dualacc(
     int32_t       *__restrict__ out,
     const int8_t  *__restrict__ w,
     int                         K,
-    void          *__restrict__ vtcm_base);
+    void          *__restrict__ vtcm_base,
+    const int32_t *              col_sum_w_in);
 
 /* Fully pre-packed variant: both activation AND weight are pre-packed in
  * VTCM before the K loop. Inner loop is PURE HMX issue (no scalar) so

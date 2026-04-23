@@ -141,14 +141,22 @@ static uint32_t hmx_w4a8_matmul_kernel(
      * (not VTCM) — scalar reads here must not contend with HMX mxmem. */
     #define MAX_N_TILES_CACHED 16
     #define MAX_K_CACHED       512
-    static int8_t w_col_cache[MAX_SLICES][MAX_N_TILES_CACHED][MAX_K_CACHED * 32];
+    alignas(128) static int8_t  w_col_cache  [MAX_SLICES][MAX_N_TILES_CACHED][MAX_K_CACHED * 32];
+    alignas(128) static int32_t col_sum_cache[MAX_SLICES][MAX_N_TILES_CACHED][32];
 
     const uint32_t n_tiles = (N + 31) / 32;
     const bool     use_cache = (K <= MAX_K_CACHED) && (n_tiles <= MAX_N_TILES_CACHED);
 
     if (use_cache) {
-        for (uint32_t n_idx = 0; n_idx < n_tiles; n_idx++)
-            gather_w_col(w_col_cache[si][n_idx], wu, K, N, n_idx * 32);
+        for (uint32_t n_idx = 0; n_idx < n_tiles; n_idx++) {
+            int8_t  *wcv = w_col_cache[si][n_idx];
+            int32_t *csv = col_sum_cache[si][n_idx];
+            gather_w_col(wcv, wu, K, N, n_idx * 32);
+            for (int j = 0; j < 32; j++) csv[j] = 0;
+            for (uint32_t k = 0; k < K; k++)
+                for (int j = 0; j < 32; j++)
+                    csv[j] += (int32_t)wcv[k * 32 + j];
+        }
     }
 
     for (uint32_t mt = my_begin; mt < my_end; mt++) {
@@ -156,14 +164,17 @@ static uint32_t hmx_w4a8_matmul_kernel(
         hmx_int4xint8_prepack_activation(au, (int)M, (int)K, (int)m0, my_vtcm);
         for (uint32_t n_idx = 0; n_idx < n_tiles; n_idx++) {
             uint32_t n0 = n_idx * 32;
-            const int8_t *wc;
+            const int8_t  *wc;
+            const int32_t *cs;
             if (use_cache) {
                 wc = w_col_cache[si][n_idx];
+                cs = col_sum_cache[si][n_idx];
             } else {
                 gather_w_col(w_col, wu, K, N, n0);
                 wc = w_col;
+                cs = nullptr;
             }
-            hmx_int4xint8_matmul_mn(mn_tile, wc, (int)K, my_vtcm);
+            hmx_int4xint8_matmul_mn(mn_tile, wc, (int)K, my_vtcm, cs);
             scatter_mn_tile(out, mn_tile, M, N, m0, n0);
         }
     }

@@ -47,7 +47,7 @@ static int scenario(const char *title,
 
     /* Call the fused-activation-prepack + dualacc matmul path. */
     hmx_int4_prepack_activation_fused(au, TILE, TILE, 0, vtcm_ws);
-    hmx_int4_matmul_mn_dualacc(out_hmx, w, TILE, vtcm_ws);
+    hmx_int4_matmul_mn_dualacc(out_hmx, w, TILE, vtcm_ws, NULL);
 
     int diff = 0, max_abs = 0;
     for (int i = 0; i < TILE*TILE; i++) {

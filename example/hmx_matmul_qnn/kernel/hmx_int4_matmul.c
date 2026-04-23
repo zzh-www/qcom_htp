@@ -445,7 +445,8 @@ void hmx_int4_matmul_mn_dualacc(
     int32_t       *__restrict__ out,
     const int8_t  *__restrict__ w,
     int                         K,
-    void          *__restrict__ vtcm_base)
+    void          *__restrict__ vtcm_base,
+    const int32_t *             col_sum_w_in)
 {
     uint8_t  *vt       = (uint8_t *)vtcm_base;
     int8_t   *wt_tile  = (int8_t *)( vt + VTCM_OFF_WT_TILE);
@@ -460,11 +461,19 @@ void hmx_int4_matmul_mn_dualacc(
     fill_bias_scale(bias_lo, 0x4000);
     fill_bias_scale(bias_hi, 0x2000);
 
-    /* col_sum_w (reused across partials). */
-    for (int j = 0; j < 32; j++) sg_col_sum_w[j] = 0;
-    for (int k = 0; k < K; k++)
-        for (int j = 0; j < 32; j++)
-            sg_col_sum_w[j] += (int32_t)w[k * 32 + j];
+    /* col_sum_w — use caller-provided if available (T1d hoist: col_sum
+     * depends only on n, not m, so callers should compute once per n_tile
+     * rather than once per (m,n) pair). */
+    const int32_t *col_sum_w;
+    if (col_sum_w_in) {
+        col_sum_w = col_sum_w_in;
+    } else {
+        for (int j = 0; j < 32; j++) sg_col_sum_w[j] = 0;
+        for (int k = 0; k < K; k++)
+            for (int j = 0; j < 32; j++)
+                sg_col_sum_w[j] += (int32_t)w[k * 32 + j];
+        col_sum_w = sg_col_sum_w;
+    }
 
     static int32_t sg_P_hi[32 * 32];
     static int32_t sg_P_lo[32 * 32];
@@ -543,7 +552,7 @@ void hmx_int4_matmul_mn_dualacc(
         for (int j = 0; j < 32; j++)
             out[i * 32 + j] = (sg_P_hi[i * 32 + j] << 8)
                             +  sg_P_lo[i * 32 + j]
-                            - (sg_col_sum_w[j] << 15);
+                            - (col_sum_w[j] << 15);
 }
 
 /* Fused weight variant: reads raw uint8 wu[K_full × N_full] post-Cast, does

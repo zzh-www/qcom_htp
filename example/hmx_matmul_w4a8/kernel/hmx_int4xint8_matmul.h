@@ -58,12 +58,15 @@ void hmx_int4xint8_prepack_activation(
 
 /* Compute one (32 × N=32) output tile for K-accumulated u8·i8 MAC.
  * `w[K × 32]` is gather_w_col's output: int8 signed (post –128 un-shift).
- * `out[32 × 32]` in int32, row-major. */
+ * `out[32 × 32]` in int32, row-major.
+ * `col_sum_w_in` optional pre-computed col sum (32 int32); NULL = compute
+ * inline (T1d hoist support). */
 void hmx_int4xint8_matmul_mn(
     int32_t       *__restrict__ out,
     const int8_t  *__restrict__ w,
     int                          K,
-    void          *__restrict__ vtcm_base);
+    void          *__restrict__ vtcm_base,
+    const int32_t *              col_sum_w_in);
 
 #ifdef __cplusplus
 }

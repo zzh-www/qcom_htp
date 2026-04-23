@@ -53,7 +53,7 @@ static int scenario(const char *title,
     /* HMX path: prepack activation to VTCM, then K-accumulated MAC. */
     hmx_int4xint8_prepack_activation(au, TILE, TILE, 0, vtcm_ws);
     /* Weight in K×N layout = [K=32][N=32] row-major = same as w input. */
-    hmx_int4xint8_matmul_mn(out_hmx, w, TILE, vtcm_ws);
+    hmx_int4xint8_matmul_mn(out_hmx, w, TILE, vtcm_ws, NULL);
 
     int diff = 0, max_abs = 0;
     for (int i = 0; i < TILE*TILE; i++) {

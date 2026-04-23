@@ -171,7 +171,8 @@ void hmx_int4xint8_matmul_mn(
     int32_t       *__restrict__ out,
     const int8_t  *__restrict__ w,
     int                          K,
-    void          *__restrict__ vtcm_base)
+    void          *__restrict__ vtcm_base,
+    const int32_t *              col_sum_w_in)
 {
     uint8_t  *vt       = (uint8_t *)vtcm_base;
     int8_t   *wt_tile  = (int8_t *)( vt + VTCM_OFF_WT_TILE);
@@ -183,11 +184,17 @@ void hmx_int4xint8_matmul_mn(
     fill_bias_scale(bias_lo, 0x4000);
     fill_bias_scale(bias_hi, 0x2000);
 
-    /* col_sum_w[n] = sum_k w[k,n]   (signed, int8 values from gather_w_col) */
-    for (int j = 0; j < 32; j++) sg_col_sum_w[j] = 0;
-    for (int k = 0; k < K; k++)
-        for (int j = 0; j < 32; j++)
-            sg_col_sum_w[j] += (int32_t)w[k * 32 + j];
+    /* col_sum_w — T1d hoist support: use caller-provided if available. */
+    const int32_t *col_sum_w;
+    if (col_sum_w_in) {
+        col_sum_w = col_sum_w_in;
+    } else {
+        for (int j = 0; j < 32; j++) sg_col_sum_w[j] = 0;
+        for (int k = 0; k < K; k++)
+            for (int j = 0; j < 32; j++)
+                sg_col_sum_w[j] += (int32_t)w[k * 32 + j];
+        col_sum_w = sg_col_sum_w;
+    }
 
     const int Ktiles = K / 32;
     static int32_t sg_P[32 * 32];
@@ -218,5 +225,5 @@ void hmx_int4xint8_matmul_mn(
      *  true = sum_k (au-128)·w = acc - 128·col_sum_w.) */
     for (int i = 0; i < 32; i++)
         for (int j = 0; j < 32; j++)
-            out[i * 32 + j] = sg_P[i * 32 + j] - (sg_col_sum_w[j] << 7);
+            out[i * 32 + j] = sg_P[i * 32 + j] - (col_sum_w[j] << 7);
 }
