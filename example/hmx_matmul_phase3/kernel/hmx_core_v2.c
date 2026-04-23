@@ -34,6 +34,18 @@ void hmx_load_pair_cm(const void *act, const void *wt)
         : "memory");
 }
 
+/* Phase-2 plain mxmem pair (2-stream activation, packed weight). */
+static inline __attribute__((always_inline))
+void hmx_load_pair_plain(const void *act, const void *wt)
+{
+    __asm__ volatile(
+        "{ activation.ub = mxmem(%0, %1)\n"
+        "  weight.b      = mxmem(%2, %3) }\n"
+        :: "r"(act), "r"(2047),
+           "r"(wt),  "r"(HMX_RT_WT)
+        : "memory");
+}
+
 static inline __attribute__((always_inline))
 void hmx_store_acc_uh_2x1_retain(void *out)
 { __asm__ volatile("mxmem(%0, %1):after:retain.uh = acc:2x1\n"
@@ -54,8 +66,9 @@ void hmx_core_v2_fill_bias(void *bias_vtcm)
     for (int i = 0; i < 128; i++) { blo[i] = 0x4000; bhi[i] = 0x2000; }
 }
 
-/* Gather 32 rows × 32 cols of activation into 1 KiB row-major VTCM tile.
- * Source is [M_full][K_full] row-major (stride = K_full bytes per row). */
+/* Phase 2 activation pack: 2-stream interleaved (bytes [0, s0, 0, s1]
+ * per 4B cell). 32 logical rows × 32 K-cols → 16 phys_rows × 128 B tile
+ * = 2 KiB. Scalar here; could be HVX'd in a separate upstream op. */
 void hmx_core_v2_gather_act_tile(
     uint8_t       *tile_vtcm,
     const uint8_t *au,
@@ -63,8 +76,13 @@ void hmx_core_v2_gather_act_tile(
     uint32_t       m0,
     uint32_t       k0)
 {
-    for (uint32_t r = 0; r < 32; r++) {
-        memcpy(tile_vtcm + r * 32, &au[(m0 + r) * K_full + k0], 32);
+    memset(tile_vtcm, 0, 2048);
+    for (int phys_row = 0; phys_row < 16; phys_row++) {
+        uint32_t *dst = (uint32_t *)(tile_vtcm + 128 * phys_row);
+        const uint8_t *s0 = &au[(m0 + phys_row)      * K_full + k0];
+        const uint8_t *s1 = &au[(m0 + phys_row + 16) * K_full + k0];
+        for (int k = 0; k < 32; k++)
+            dst[k] = ((uint32_t)s1[k] << 24) | ((uint32_t)s0[k] << 8);
     }
 }
 
@@ -121,30 +139,21 @@ void hmx_matmul_v2_core_mn(
     uint16_t *blo = (uint16_t *)bias_vtcm;
     uint16_t *bhi = blo + 128;
 
-    /* :cm mode: 2 passes × dual-scale readback (4 stores total) for
-     * 32 rows × 32 cols output with int24-range precision. */
+    /* Phase 2 plain mxmem path: single MAC sequence covers 32 logical
+     * rows via 2-stream activation tile; dual-scale readback gives full
+     * int24 range. out_bot buffers unused in this path. */
+    (void)out_bot_lo; (void)out_bot_hi;
 
-    /* Pass 1: rows 0..15 */
     hmx_load_bias_i(blo);
     hmx_clracc_i();
     for (uint32_t kt = 0; kt < K_tiles; kt++) {
-        hmx_load_pair_cm(act_tiles + kt * 1024,
-                         wt_tiles  + kt * 1024);
+        /* act_tile stride = 2 KiB (2-stream pack); wt_tile = 1 KiB. */
+        hmx_load_pair_plain(act_tiles + kt * 2048,
+                            wt_tiles  + kt * 1024);
     }
     hmx_store_acc_uh_2x1_retain(out_top_lo);
     hmx_load_bias_i(bhi);
-    hmx_store_acc_uh_2x1(out_top_hi);   /* final → acc cleared */
-
-    /* Pass 2: rows 16..31 — activation pointer +512 bytes. */
-    hmx_load_bias_i(blo);
-    hmx_clracc_i();
-    for (uint32_t kt = 0; kt < K_tiles; kt++) {
-        hmx_load_pair_cm(act_tiles + kt * 1024 + 512,
-                         wt_tiles  + kt * 1024);
-    }
-    hmx_store_acc_uh_2x1_retain(out_bot_lo);
-    hmx_load_bias_i(bhi);
-    hmx_store_acc_uh_2x1(out_bot_hi);
+    hmx_store_acc_uh_2x1(out_top_hi);
 #else
     (void)act_tiles; (void)wt_tiles; (void)K_tiles; (void)bias_vtcm;
     (void)out_top_lo; (void)out_top_hi; (void)out_bot_lo; (void)out_bot_hi;

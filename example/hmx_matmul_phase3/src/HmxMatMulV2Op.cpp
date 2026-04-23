@@ -86,9 +86,11 @@ static uint32_t hmx_matmul_v2_kernel(
     hmx_core_v2_fill_bias(bias_vtcm);
 
     uint8_t *act_tiles_vtcm = vt + 2048;
-    uintptr_t after_act = (uintptr_t)(act_tiles_vtcm + K_tiles * 1024);
+    /* Act tile = 2 KiB each (Phase 2 2-stream pack). */
+    uintptr_t after_act = (uintptr_t)(act_tiles_vtcm + K_tiles * 2048);
     after_act = (after_act + 2047u) & ~(uintptr_t)2047u;
     uint8_t *wt_tiles_vtcm  = (uint8_t *)after_act;
+    /* Weight tile = 1 KiB each (Phase 2 packed). */
     uintptr_t after_wt = (uintptr_t)(wt_tiles_vtcm + K_tiles * 1024);
     after_wt = (after_wt + 2047u) & ~(uintptr_t)2047u;
     uint16_t *out_top_lo = (uint16_t *)(after_wt + 0 * 2048);
@@ -100,9 +102,9 @@ static uint32_t hmx_matmul_v2_kernel(
     static int32_t mn_tile[32 * 32];
 
     for (uint32_t mt = 0; mt < M_tiles; mt++) {
-        /* Gather all K_tiles of activation for this m-tile. */
+        /* Gather all K_tiles of activation for this m-tile (2 KiB each). */
         for (uint32_t kt = 0; kt < K_tiles; kt++) {
-            hmx_core_v2_gather_act_tile(act_tiles_vtcm + kt * 1024,
+            hmx_core_v2_gather_act_tile(act_tiles_vtcm + kt * 2048,
                                          au, K, mt * 32, kt * 32);
         }
 
@@ -121,19 +123,16 @@ static uint32_t hmx_matmul_v2_kernel(
                                    out_top_lo, out_top_hi,
                                    out_bot_lo, out_bot_hi);
 
-            /* Decode: stride-2 halfwords per col (Phase 2 2-stream, stream 0).
-             * Row-major gave pair-duplication for K>32; stride-2 removes it.
-             * Values still not bit-exact under random data — weight-K-
-             * ordering or some offset math still needs probe isolation. */
-            for (int ir = 0; ir < 16; ir++) {
+            /* Phase 2 2-stream dual-scale decode: 32 logical rows in one
+             * readback buffer pair. */
+            (void)out_bot_lo; (void)out_bot_hi;
+            for (int ir = 0; ir < 32; ir++) {
+                int phys_row = ir & 15, stream = ir >> 4;
                 for (int jc = 0; jc < 32; jc++) {
-                    int idx = ir * 64 + 2 * jc;
-                    uint16_t tlo = out_top_lo[idx], thi = out_top_hi[idx];
-                    uint16_t blo = out_bot_lo[idx], bhi = out_bot_hi[idx];
+                    int idx = phys_row * 64 + 2 * jc + stream;
+                    uint16_t lo = out_top_lo[idx], hi = out_top_hi[idx];
                     mn_tile[ir * 32 + jc] =
-                        ((int32_t)(int16_t)thi << 8) | ((int32_t)tlo & 0xFF);
-                    mn_tile[(ir + 16) * 32 + jc] =
-                        ((int32_t)(int16_t)bhi << 8) | ((int32_t)blo & 0xFF);
+                        ((int32_t)(int16_t)hi << 8) | ((int32_t)lo & 0xFF);
                 }
             }
 
