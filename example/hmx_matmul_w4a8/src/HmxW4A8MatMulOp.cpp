@@ -135,12 +135,35 @@ static uint32_t hmx_w4a8_matmul_kernel(
     const uint32_t per_slice_vtcm = HMX_W4A8_VTCM_BYTES_FOR_K(K);
     uint8_t *my_vtcm = (uint8_t *)vtcm + si * per_slice_vtcm;
 
+    /* T0 hoist: gather_w_col depends only on n0. Pre-gather all N/32 w_col
+     * buffers into a per-slice BSS pool before the m-loop → gather runs
+     * N/32 times per slice instead of (my_end-my_begin) × N/32. BSS/DDR
+     * (not VTCM) — scalar reads here must not contend with HMX mxmem. */
+    #define MAX_N_TILES_CACHED 16
+    #define MAX_K_CACHED       512
+    static int8_t w_col_cache[MAX_SLICES][MAX_N_TILES_CACHED][MAX_K_CACHED * 32];
+
+    const uint32_t n_tiles = (N + 31) / 32;
+    const bool     use_cache = (K <= MAX_K_CACHED) && (n_tiles <= MAX_N_TILES_CACHED);
+
+    if (use_cache) {
+        for (uint32_t n_idx = 0; n_idx < n_tiles; n_idx++)
+            gather_w_col(w_col_cache[si][n_idx], wu, K, N, n_idx * 32);
+    }
+
     for (uint32_t mt = my_begin; mt < my_end; mt++) {
         uint32_t m0 = mt * 32;
         hmx_int4xint8_prepack_activation(au, (int)M, (int)K, (int)m0, my_vtcm);
-        for (uint32_t n0 = 0; n0 < N; n0 += 32) {
-            gather_w_col(w_col, wu, K, N, n0);
-            hmx_int4xint8_matmul_mn(mn_tile, w_col, (int)K, my_vtcm);
+        for (uint32_t n_idx = 0; n_idx < n_tiles; n_idx++) {
+            uint32_t n0 = n_idx * 32;
+            const int8_t *wc;
+            if (use_cache) {
+                wc = w_col_cache[si][n_idx];
+            } else {
+                gather_w_col(w_col, wu, K, N, n0);
+                wc = w_col;
+            }
+            hmx_int4xint8_matmul_mn(mn_tile, wc, (int)K, my_vtcm);
             scatter_mn_tile(out, mn_tile, M, N, m0, n0);
         }
     }

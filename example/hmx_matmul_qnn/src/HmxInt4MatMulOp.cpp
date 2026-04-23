@@ -127,9 +127,11 @@ static uint32_t hmx_int4_matmul_kernel(
     /* Per-slice static scratch. Up to 4 slices supported; each slice owns a
      * disjoint section. Sizing: 32 × 4096 bytes for activation strip +
      * 4096 × 32 for weight + 4KiB for output = ~260 KiB per slice. */
+    /* 128-byte alignment required — pack_weight_32x32 now uses HVX
+     * aligned vector loads on these buffers. */
     #define MAX_SLICES 4
-    static int8_t  w_col_pool  [MAX_SLICES][4096 * 32];
-    static int32_t mn_tile_pool[MAX_SLICES][32 * 32];
+    alignas(128) static int8_t  w_col_pool  [MAX_SLICES][4096 * 32];
+    static int32_t              mn_tile_pool[MAX_SLICES][32 * 32];
     const uint32_t si = (slice < MAX_SLICES) ? slice : 0;
     int8_t  *w_col   = w_col_pool[si];
     int32_t *mn_tile = mn_tile_pool[si];
@@ -147,25 +149,41 @@ static uint32_t hmx_int4_matmul_kernel(
     const uint32_t per_slice_vtcm = HMX_INT4_VTCM_BYTES_FOR_K(K);
     uint8_t *my_vtcm = (uint8_t *)vtcm + si * per_slice_vtcm;
 
-    /* P4: gather_w_col depends only on n0, not m0. Cache per-n_tile w_col
-     * in a small working buffer and detect m-loop-iter via mt index to
-     * skip redundant gathers on subsequent m iterations.
+    /* T0 hoist: gather_w_col depends only on n0, not m0. Pre-gather all
+     * N/32 w_col buffers into a per-slice BSS pool before the m-loop, so
+     * gather runs N/32 times per slice instead of (my_end-my_begin) × N/32.
      *
-     * Simpler alternative that doesn't need a big cache: the first m
-     * iteration performs all gathers (populating w_col per n_tile into a
-     * shared pool), later iterations reuse them. But sizing is 16 n_tiles
-     * × K*32 = 256KB at K=N=512 — too big for stack/BSS ×4 slices.
+     * Storage choice: BSS/DDR, not VTCM. Prior experiment (opt log P6)
+     * showed w_col in VTCM regresses 2.7× because scalar byte reads inside
+     * pack_weight_32x32 contend with HMX mxmem for the same VTCM banks.
      *
-     * MVP implementation: re-gather on every iteration but the hope is
-     * the DDR cache keeps it L2-resident across m iterations. Revisit if
-     * profile shows gather_w_col is >10% of total.
-     */
+     * Cache sized for primary test case (≤512³). Falls back to re-gather
+     * for shapes exceeding the cache bounds. */
+    #define MAX_N_TILES_CACHED 16
+    #define MAX_K_CACHED       512
+    alignas(128) static int8_t w_col_cache[MAX_SLICES][MAX_N_TILES_CACHED][MAX_K_CACHED * 32];
+
+    const uint32_t n_tiles = (N + 31) / 32;
+    const bool     use_cache = (K <= MAX_K_CACHED) && (n_tiles <= MAX_N_TILES_CACHED);
+
+    if (use_cache) {
+        for (uint32_t n_idx = 0; n_idx < n_tiles; n_idx++)
+            gather_w_col(w_col_cache[si][n_idx], wu, K, N, n_idx * 32);
+    }
+
     for (uint32_t mt = my_begin; mt < my_end; mt++) {
         uint32_t m0 = mt * 32;
         hmx_int4_prepack_activation_fused(au, (int)M, (int)K, (int)m0, my_vtcm);
-        for (uint32_t n0 = 0; n0 < N; n0 += 32) {
-            gather_w_col(w_col, wu, K, N, n0);
-            hmx_int4_matmul_mn_dualacc(mn_tile, w_col, (int)K, my_vtcm);
+        for (uint32_t n_idx = 0; n_idx < n_tiles; n_idx++) {
+            uint32_t n0 = n_idx * 32;
+            const int8_t *wc;
+            if (use_cache) {
+                wc = w_col_cache[si][n_idx];
+            } else {
+                gather_w_col(w_col, wu, K, N, n0);
+                wc = w_col;
+            }
+            hmx_int4_matmul_mn_dualacc(mn_tile, wc, (int)K, my_vtcm);
             scatter_mn_tile(out, mn_tile, M, N, m0, n0);
         }
     }

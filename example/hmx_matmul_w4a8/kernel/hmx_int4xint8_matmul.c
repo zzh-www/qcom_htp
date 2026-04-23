@@ -10,6 +10,10 @@
 
 #include "hmx_int4xint8_matmul.h"
 #include <string.h>
+#ifdef __hexagon__
+#include <hexagon_types.h>
+#include <hvx_hexagon_protos.h>
+#endif
 
 /* ============== HMX asm wrappers ========================================= */
 static inline __attribute__((always_inline)) void hmx_clracc_i(void)
@@ -70,17 +74,23 @@ static void pack_activation_32x32_rs(uint8_t *tile, const uint8_t *a_rows,
     }
 }
 
-/* Weight: 32 K-rows × 32 N-cols → 8 K-groups × 32 cells (u32 packed).
- *
- * HVX experiment (USE_HVX_PACK_WEIGHT): tried Q6_V_vdelta_VV with a
- * precomputed control for output[i] = V[(i%4)*32 + (i/4)]. Silicon
- * result: 1.92 → 1.84 cyc/MAC at 512³ (4% perf win) BUT wrong output
- * (100% mismatches) — the cyclic-shift-by-2 byte permutation doesn't
- * cleanly fit vdelta's butterfly-network constraint. Kept scalar.
- *
- * Potential future work: 2-stage vshuff or vlut32 for a verified
- * transpose; or fuse gather_w_col directly into HMX-tile layout to
- * skip pack_weight entirely. */
+/* pack_weight_32x32: 4 rows × 32 cols → 32 cells × 4-byte-per-cell.
+ * Output byte index = rotate-right-by-2 of input byte index on 7 bits.
+ * Two back-to-back Q6_Vb_vshuff_Vb produce exactly this permutation
+ * (proof: Agent/hvx_4way_byte_transpose_re.md). memcpy wrappers let
+ * callers pass un-aligned buffers at zero cost on v75. */
+#ifdef __hexagon__
+static void pack_weight_32x32(int8_t *tile, const int8_t *w_32x32)
+{
+    for (int kg = 0; kg < 8; kg++) {
+        HVX_Vector v, s1, s2;
+        memcpy(&v, w_32x32 + 128 * kg, sizeof(HVX_Vector));
+        s1 = Q6_Vb_vshuff_Vb(v);
+        s2 = Q6_Vb_vshuff_Vb(s1);
+        memcpy(tile + 128 * kg, &s2, sizeof(HVX_Vector));
+    }
+}
+#else
 static void pack_weight_32x32(int8_t *tile, const int8_t *w_32x32)
 {
     for (int kg = 0; kg < 8; kg++) {
@@ -97,6 +107,7 @@ static void pack_weight_32x32(int8_t *tile, const int8_t *w_32x32)
         }
     }
 }
+#endif
 
 /* ============== Persistent scratch (off-stack to avoid overflow) ========= */
 static int32_t sg_col_sum_w[32];

@@ -20,6 +20,10 @@
 
 #include "hmx_int4_matmul.h"
 #include <string.h>
+#ifdef __hexagon__
+#include <hexagon_types.h>
+#include <hvx_hexagon_protos.h>
+#endif
 
 /* ============== HMX asm wrappers (shared with the previous per-tile kernel) */
 static inline __attribute__((always_inline)) void hmx_clracc_i(void)
@@ -134,9 +138,30 @@ static void pack_activation_32x32_rs(uint8_t *tile, const uint8_t *a_rows, int r
     }
 }
 
+/* pack_weight_32x32: 4 rows × 32 cols → 32 cells × 4-byte-per-cell.
+ * Per kg of 128 input bytes [r0|r1|r2|r3], output 128 bytes
+ * [r0[0] r1[0] r2[0] r3[0], r0[1] r1[1] r2[1] r3[1], ...].
+ * This is rotate-right-by-2 on the 7-bit byte index → exactly what
+ * two back-to-back Q6_Vb_vshuff_Vb produce. See
+ * Agent/hvx_4way_byte_transpose_re.md for the proof. */
+#ifdef __hexagon__
 static void pack_weight_32x32(int8_t *tile, const int8_t *w_32x32)
 {
-    /* Output per K-group (128 bytes): 32 cells, each a u32 = [K0,K1,K2,K3] */
+    /* memcpy to/from HVX_Vector locals so callers don't need to guarantee
+     * 128-byte alignment — the compiler lowers these to vldu/vstu (or
+     * aligned vmem when the pointer proves aligned). Zero extra cost on
+     * v75 when alignment happens to hold at runtime. */
+    for (int kg = 0; kg < 8; kg++) {
+        HVX_Vector v, s1, s2;
+        memcpy(&v, w_32x32 + 128 * kg, sizeof(HVX_Vector));
+        s1 = Q6_Vb_vshuff_Vb(v);
+        s2 = Q6_Vb_vshuff_Vb(s1);
+        memcpy(tile + 128 * kg, &s2, sizeof(HVX_Vector));
+    }
+}
+#else
+static void pack_weight_32x32(int8_t *tile, const int8_t *w_32x32)
+{
     for (int kg = 0; kg < 8; kg++) {
         uint32_t *__restrict__ dst = (uint32_t *)(tile + 128 * kg);
         const uint8_t *r0 = (const uint8_t *)&w_32x32[(kg * 4 + 0) * 32];
@@ -151,10 +176,7 @@ static void pack_weight_32x32(int8_t *tile, const int8_t *w_32x32)
         }
     }
 }
-
-/* (Ablation of pack_weight measured: 2.12 → 1.96 cyc/MAC, i.e. pack_weight
- * accounts for only ~8% of total. Main cost is elsewhere — K loop HMX
- * VTCM write→read stalls + per-call col_sum_w recomputation.) */
+#endif
 
 /* ============== Persistent scratch (kept off stack per debugging notes) === */
 #define HMX_INT4_MAX_K   8192

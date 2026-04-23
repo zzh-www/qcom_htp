@@ -604,3 +604,67 @@ The remaining 1000× per-HMX-packet gap to built-in kernels sits
 behind ISA features (`mxswapacc`, `:above`, `:dilate`+Crouton) whose
 precise semantics require Qualcomm HMX documentation not bundled
 with the SDK.
+
+## T0 + T1b (2026-04-23) — cyc/MAC drops into sub-1 territory
+
+Two stacked wins on top of the 04-22 fused-dualacc + Rt_wt=0x3FF
+baseline (at 2.08 cyc/MAC):
+
+### T0: hoist `gather_w_col` out of m-loop (both kernels)
+
+Pre-gather all N/32 `w_col` buffers into a per-slice BSS pool before
+the m-loop. Gather now runs N/32 times per slice, not
+(my_end-my_begin) × N/32. BSS/DDR storage (not VTCM — P6 showed VTCM
+contends with HMX mxmem). Applied to
+`example/hmx_matmul_qnn/src/HmxInt4MatMulOp.cpp` and
+`example/hmx_matmul_w4a8/src/HmxW4A8MatMulOp.cpp`.
+
+| kernel | pre-T0 | post-T0 | Δ     |
+|--------|-------:|--------:|------:|
+| w4a16  |  2.08  | **0.73**| 2.85× |
+| w4a8   |  1.92  | **0.56**| 3.43× |
+
+Far bigger than the 04-22 ablation predicted (~10%). The log’s
+pack_weight ablation (8%) did not cleanly isolate gather cost; actual
+share was ~60%+ via DDR stride-N re-reads.
+
+### T1b: HVX `pack_weight_32x32` via two `Q6_Vb_vshuff_Vb`
+
+Target permutation (4-row × 32-col byte transpose → 32 cells × 4-byte)
+= rotate-right-by-2 on 7-bit byte index. Two back-to-back self-shuffles
+on one HVX_Vector produce exactly this mapping (proof in
+`Agent/hvx_4way_byte_transpose_re.md`). Zero setup, 32 HVX insns for
+the whole 1024-B tile vs ~256 scalar ops. Use `memcpy`-based load/store
+so unaligned callers work at zero v75 penalty. Applied to both kernels’
+`pack_weight_32x32`.
+
+| kernel | pre-T1b | post-T1b | Δ vs T0 | Δ vs baseline |
+|--------|--------:|---------:|--------:|--------------:|
+| w4a16  |  0.73   | **0.65** |  11%    | 3.2× (2.08→0.65)|
+| w4a8   |  0.56   | **0.48** |  14%    | 4.0× (1.92→0.48)|
+
+Bit-exact at 512³ (0/262144 mismatches) for both kernels.
+
+### Sub-agent RE: QNN ForceFormat_Crouton_f2c (doc)
+
+See `Agent/forceformat_crouton_re.md`. QNN uses `V6_vshuffvdd(Vu,Vv,Rt)`
+with `Rt=-32` (byte) or `-2` (halfword), two passes for bytes / one for
+halfwords. Output is HMX native **stride-32** depth-32 lane layout —
+different from our **stride-4** u32-lane layout. The pack primitive is
+the same family as ours (vshuff), but the layouts aren’t swappable
+without also changing the HMX binding.
+
+### Gap to QNN built-in (2026-04-23, 512³)
+
+| ours          | cycles | cyc/MAC | vs QNN w8a16 (8.1e-4) |
+|---------------|-------:|--------:|----------------------:|
+| w4a16 post-T1b| 87.1 M | 0.65    | 803× (was 2700×)      |
+| w4a8  post-T1b| 64.9 M | 0.48    | 600× (was 3900×)      |
+
+Next ranked levers (in Agent/int4_matmul_optimization_log.md roadmap
+ordering):
+- HVX `col_sum_w` / readback-unpack / combine loops (each 1K–16K scalar
+  iters per (m,n) tile × 256 tiles).
+- Revisit T3 (host 2×2 tiling) — prior 5% regression was under scalar
+  pack; with HVX work now present, sub-ops may overlap on HVX threads.
+- gather_w_col HVX-ification (contiguous 32-byte inner, vmemu + vsub).
