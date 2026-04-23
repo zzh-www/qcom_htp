@@ -243,23 +243,45 @@ void hmx_int4_prepack_activation_fused(
     uint8_t *vt = (uint8_t *)vtcm_base;
     const int Ktiles = K / 32;
 
-    /* For each K-tile, pack 32 rows × 32 K-cols of (hi,lo) into two HMX tiles. */
+#ifdef __hexagon__
+    /* HVX prepack. Per phys_row: combine s0 (64B) + s1 (64B) → one vector.
+     * tile_hi output halfword [2k]   = s0[k].hi << 8 = (s0[k] & 0xFF00)
+     *                        [2k+1] = s1[k].hi << 8 = (s1[k] & 0xFF00)
+     * So: mask v_combined with 0xFF00 halfword-wise, then self-shuff halfword.
+     * tile_lo analogous: halfword-shl-8 (keeps low byte in high-byte position)
+     * then self-shuff. */
+    const HVX_Vector v_mask_FF00 = Q6_V_vsplat_R(0xFF00FF00);
     for (int kt = 0; kt < Ktiles; kt++) {
         uint8_t *tile_hi = vt + VTCM_ACT_HI(kt);
         uint8_t *tile_lo = vt + VTCM_ACT_LO(kt, Ktiles);
         int k0 = kt * 32;
-
-        /* For each phys_row (16 physical rows × 2 streams = 32 logical rows). */
+        for (int phys_row = 0; phys_row < 16; phys_row++) {
+            const uint16_t *s0 = &au[(m0 + phys_row)      * K + k0];
+            const uint16_t *s1 = &au[(m0 + phys_row + 16) * K + k0];
+            union { HVX_Vector v; uint8_t b[128]; } u;
+            memcpy(&u.b[0],  s0, 64);   /* 32 halfwords s0 */
+            memcpy(&u.b[64], s1, 64);   /* 32 halfwords s1 */
+            HVX_Vector v_hi_prep = Q6_V_vand_VV(u.v, v_mask_FF00);
+            HVX_Vector v_hi_out  = Q6_Vh_vshuff_Vh(v_hi_prep);
+            memcpy(tile_hi + 128 * phys_row, &v_hi_out, sizeof(HVX_Vector));
+            HVX_Vector v_lo_prep = Q6_Vh_vasl_VhR(u.v, 8);
+            HVX_Vector v_lo_out  = Q6_Vh_vshuff_Vh(v_lo_prep);
+            memcpy(tile_lo + 128 * phys_row, &v_lo_out, sizeof(HVX_Vector));
+        }
+    }
+#else
+    for (int kt = 0; kt < Ktiles; kt++) {
+        uint8_t *tile_hi = vt + VTCM_ACT_HI(kt);
+        uint8_t *tile_lo = vt + VTCM_ACT_LO(kt, Ktiles);
+        int k0 = kt * 32;
         for (int phys_row = 0; phys_row < 16; phys_row++) {
             uint32_t *__restrict__ dst_hi = (uint32_t *)(tile_hi + 128 * phys_row);
             uint32_t *__restrict__ dst_lo = (uint32_t *)(tile_lo + 128 * phys_row);
-            /* Logical rows phys_row and phys_row+16 (the two streams). */
             const uint16_t *s0 = &au[(m0 + phys_row)      * K + k0];
             const uint16_t *s1 = &au[(m0 + phys_row + 16) * K + k0];
             for (int K32 = 0; K32 < 32; K32++) {
-                uint16_t a0 = s0[K32];   /* already (signed + 32768) post-Cast */
+                uint16_t a0 = s0[K32];
                 uint16_t a1 = s1[K32];
-                /* Hi byte → stream 0 slot 1, stream 1 slot 3 */
                 uint8_t a0_hi = (uint8_t)(a0 >> 8);
                 uint8_t a1_hi = (uint8_t)(a1 >> 8);
                 uint8_t a0_lo = (uint8_t)(a0 & 0xFF);
@@ -269,6 +291,7 @@ void hmx_int4_prepack_activation_fused(
             }
         }
     }
+#endif
 }
 
 /* Diagnostic: "U8XI8_SINGLE_PARTIAL" mode skips the A_lo partial entirely,
@@ -548,11 +571,28 @@ void hmx_int4_matmul_mn_dualacc(
         }
     }
 
+#ifdef __hexagon__
+    /* HVX combine (kept unpack scalar for debug bisection). Per row = 32
+     * int32 = 1 HVX vector. */
+    HVX_Vector v_col_shifted;
+    memcpy(&v_col_shifted, col_sum_w, sizeof(HVX_Vector));
+    v_col_shifted = Q6_Vw_vasl_VwR(v_col_shifted, 15);
+    for (int i = 0; i < 32; i++) {
+        HVX_Vector v_hi, v_lo, v_hi_shl, v_sum, v_out;
+        memcpy(&v_hi, &sg_P_hi[i * 32], sizeof(HVX_Vector));
+        memcpy(&v_lo, &sg_P_lo[i * 32], sizeof(HVX_Vector));
+        v_hi_shl = Q6_Vw_vasl_VwR(v_hi, 8);
+        v_sum    = Q6_Vw_vadd_VwVw(v_hi_shl, v_lo);
+        v_out    = Q6_Vw_vsub_VwVw(v_sum, v_col_shifted);
+        memcpy(&out[i * 32], &v_out, sizeof(HVX_Vector));
+    }
+#else
     for (int i = 0; i < 32; i++)
         for (int j = 0; j < 32; j++)
             out[i * 32 + j] = (sg_P_hi[i * 32 + j] << 8)
                             +  sg_P_lo[i * 32 + j]
                             - (col_sum_w[j] << 15);
+#endif
 }
 
 /* Fused weight variant: reads raw uint8 wu[K_full × N_full] post-Cast, does

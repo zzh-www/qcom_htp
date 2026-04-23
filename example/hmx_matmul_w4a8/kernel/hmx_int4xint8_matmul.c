@@ -149,10 +149,33 @@ void hmx_int4xint8_prepack_activation(
 
     /* Activation is uint8 (QNN post-Cast, = signed_act + 128). HMX reads it
      * as ub; -128 un-shift deferred to combine via col_sum_w. */
+#ifdef __hexagon__
+    /* HVX: per phys_row, build [s0(32B) | s1(32B) | pad(64B)] → vzxt
+     * bytes→halfwords (low half = [s0 hwords(32) | s1 hwords(32)]) →
+     * halfword asl 8 (each hword becomes byte [0, value]) → self-shuff
+     * halfword interleaves → output bytes [0, s0[k], 0, s1[k], ...].
+     * Since every byte of output tile is written, no memset needed. */
     for (int kt = 0; kt < Ktiles; kt++) {
         uint8_t *tile = vt + VTCM_ACT(kt);
-        /* Zero pad bytes 0,2 per 32-bit slot. Essential: HMX reads all 4 bytes
-         * as two activation streams; stale VTCM bytes corrupt the MAC. */
+        for (int phys_row = 0; phys_row < 16; phys_row++) {
+            const uint8_t *s0 = &au[(m0 + phys_row)      * K + kt * 32];
+            const uint8_t *s1 = &au[(m0 + phys_row + 16) * K + kt * 32];
+            /* 4-way byte transpose via 2× Q6_Vb_vshuff_Vb (same trick as
+             * pack_weight_32x32). Input layout [r0=0|r1=s0|r2=0|r3=s1]
+             * produces output bytes at 4k+i = r_i[k] → [0, s0[k], 0, s1[k]]. */
+            uint8_t staging[128] __attribute__((aligned(128))) = {0};
+            memcpy(&staging[32], s0, 32);   /* r1 = s0 (bytes go to pos 4k+1) */
+            memcpy(&staging[96], s1, 32);   /* r3 = s1 (bytes go to pos 4k+3) */
+            HVX_Vector v_in, v1, v2;
+            memcpy(&v_in, staging, sizeof(HVX_Vector));
+            v1 = Q6_Vb_vshuff_Vb(v_in);
+            v2 = Q6_Vb_vshuff_Vb(v1);
+            memcpy(tile + 128 * phys_row, &v2, sizeof(HVX_Vector));
+        }
+    }
+#else
+    for (int kt = 0; kt < Ktiles; kt++) {
+        uint8_t *tile = vt + VTCM_ACT(kt);
         for (int i = 0; i < 2048; i++) tile[i] = 0;
         for (int phys_row = 0; phys_row < 16; phys_row++) {
             uint32_t *__restrict__ dst = (uint32_t *)(tile + 128 * phys_row);
@@ -165,6 +188,7 @@ void hmx_int4xint8_prepack_activation(
             }
         }
     }
+#endif
 }
 
 void hmx_int4xint8_matmul_mn(
@@ -223,7 +247,19 @@ void hmx_int4xint8_matmul_mn(
     /* Combine: out = acc - 128·col_sum_w.
      * (acc = sum_k au[m,k]·w[k,n],  where au = signed_act + 128.
      *  true = sum_k (au-128)·w = acc - 128·col_sum_w.) */
+#ifdef __hexagon__
+    HVX_Vector v_col_shifted;
+    memcpy(&v_col_shifted, col_sum_w, sizeof(HVX_Vector));
+    v_col_shifted = Q6_Vw_vasl_VwR(v_col_shifted, 7);
+    for (int i = 0; i < 32; i++) {
+        HVX_Vector v_p, v_out;
+        memcpy(&v_p, &sg_P[i * 32], sizeof(HVX_Vector));
+        v_out = Q6_Vw_vsub_VwVw(v_p, v_col_shifted);
+        memcpy(&out[i * 32], &v_out, sizeof(HVX_Vector));
+    }
+#else
     for (int i = 0; i < 32; i++)
         for (int j = 0; j < 32; j++)
             out[i * 32 + j] = sg_P[i * 32 + j] - (col_sum_w[j] << 7);
+#endif
 }
