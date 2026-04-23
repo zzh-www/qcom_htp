@@ -661,6 +661,27 @@ without also changing the HMX binding.
 | w4a16 post-T1b| 87.1 M | 0.65    | 803× (was 2700×)      |
 | w4a8  post-T1b| 64.9 M | 0.48    | 600× (was 3900×)      |
 
+### T1d + Path B final (same session, 2026-04-23, 512³)
+
+- **T1d-1**: hoist col_sum_w to n-tile pre-computation alongside gather
+  (same shape as T0). w4a16: 0.65→0.51 (22%), w4a8: 0.48→0.34 (29%).
+- **Path B**: change cache key from `[slice_idx]` to `[wu_ptr_slot]` with
+  per-n_idx populated flag. Rationale: BSS static arrays persist across
+  inference invocations; wu_ptr keying lets repeat calls to the same
+  weight tensor HIT the cache instead of re-populating. In 5-iter
+  steady-state, only iter 1 populates; iters 2-5 skip gather+col_sum.
+  w4a16: 0.51→0.41 (20%), w4a8: 0.34→0.24 (29%).
+- **T3 retest**: shape_required=256 (4-way auto-tile) with wu-keyed
+  cache still regressed 17% (0.41→0.48). Cache sharing DID reduce
+  preprocessing redundancy from 4× to 2× (vs prior 33% regress without
+  sharing), but residual confirms QNN scheduler serializes our
+  HMX-resource sub-ops. Single-op + cross-inference cache is the win.
+
+| kernel | baseline | final   | total  | vs QNN   |
+|--------|---------:|--------:|-------:|---------:|
+| w4a16  | 2.08     | **0.41**| 5.07×  | 506×     |
+| w4a8   | 1.92     | **0.24**| 8.0×   | 484×     |
+
 Next ranked levers (in Agent/int4_matmul_optimization_log.md roadmap
 ordering):
 - HVX `col_sum_w` / readback-unpack / combine loops (each 1K–16K scalar

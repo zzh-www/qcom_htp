@@ -149,34 +149,49 @@ static uint32_t hmx_int4_matmul_kernel(
     const uint32_t per_slice_vtcm = HMX_INT4_VTCM_BYTES_FOR_K(K);
     uint8_t *my_vtcm = (uint8_t *)vtcm + si * per_slice_vtcm;
 
-    /* T0 hoist: gather_w_col depends only on n0, not m0. Pre-gather all
-     * N/32 w_col buffers into a per-slice BSS pool before the m-loop, so
-     * gather runs N/32 times per slice instead of (my_end-my_begin) × N/32.
+    /* Path B (T3 retest #2): cache keyed by (wu, K, N) slot, not slice
+     * index. This lets concurrent sub-ops emitted by auto-tile SHARE the
+     * cache when they refer to the same (sliced) weight tensor — e.g.
+     * 2×2 split: sub_00/sub_10 share wu[:, 0..N/2], sub_01/sub_11 share
+     * wu[:, N/2..N]. Without sharing, 4 sub-ops each recompute their own
+     * gather+col_sum (observed 33% regression in previous T3 attempt).
      *
-     * Storage choice: BSS/DDR, not VTCM. Prior experiment (opt log P6)
-     * showed w_col in VTCM regresses 2.7× because scalar byte reads inside
-     * pack_weight_32x32 contend with HMX mxmem for the same VTCM banks.
-     *
-     * Cache sized for primary test case (≤512³). Falls back to re-gather
-     * for shapes exceeding the cache bounds. */
+     * Concurrency: race-safe. Data writes are idempotent (same wu_ptr ⇒
+     * same bytes). `populated[slot][n_idx]` is a release-store fence so
+     * other threads see populated only after data is fully written.
+     * Re-entrant populate in the miss path is wasteful but correct. */
     #define MAX_N_TILES_CACHED 16
     #define MAX_K_CACHED       512
-    alignas(128) static int8_t  w_col_cache  [MAX_SLICES][MAX_N_TILES_CACHED][MAX_K_CACHED * 32];
-    /* T1d: col_sum_w depends only on n_idx — precompute alongside w_col. */
-    alignas(128) static int32_t col_sum_cache[MAX_SLICES][MAX_N_TILES_CACHED][32];
+    #define MAX_WU_SLOTS       4
+
+    struct wu_slot_t { const uint8_t *wu; uint32_t K; uint32_t N; };
+    static volatile wu_slot_t wu_slots[MAX_WU_SLOTS];
+    alignas(128) static int8_t  w_col_cache  [MAX_WU_SLOTS][MAX_N_TILES_CACHED][MAX_K_CACHED * 32];
+    alignas(128) static int32_t col_sum_cache[MAX_WU_SLOTS][MAX_N_TILES_CACHED][32];
+    static volatile uint32_t    cache_populated[MAX_WU_SLOTS][MAX_N_TILES_CACHED];
 
     const uint32_t n_tiles = (N + 31) / 32;
     const bool     use_cache = (K <= MAX_K_CACHED) && (n_tiles <= MAX_N_TILES_CACHED);
 
+    /* Find existing slot for this (wu, K, N); else allocate a free slot. */
+    int wu_slot = -1;
     if (use_cache) {
-        for (uint32_t n_idx = 0; n_idx < n_tiles; n_idx++) {
-            int8_t  *wc = w_col_cache[si][n_idx];
-            int32_t *cs = col_sum_cache[si][n_idx];
-            gather_w_col(wc, wu, K, N, n_idx * 32);
-            for (int j = 0; j < 32; j++) cs[j] = 0;
-            for (uint32_t k = 0; k < K; k++)
-                for (int j = 0; j < 32; j++)
-                    cs[j] += (int32_t)wc[k * 32 + j];
+        for (int s = 0; s < MAX_WU_SLOTS; s++) {
+            if (wu_slots[s].wu == wu && wu_slots[s].K == K && wu_slots[s].N == N) {
+                wu_slot = s; break;
+            }
+        }
+        if (wu_slot < 0) {
+            for (int s = 0; s < MAX_WU_SLOTS; s++) {
+                if (wu_slots[s].wu == nullptr) {
+                    wu_slots[s].wu = wu;
+                    wu_slots[s].K = K;
+                    wu_slots[s].N = N;
+                    for (uint32_t i = 0; i < MAX_N_TILES_CACHED; i++)
+                        cache_populated[s][i] = 0;
+                    wu_slot = s; break;
+                }
+            }
         }
     }
 
@@ -187,9 +202,21 @@ static uint32_t hmx_int4_matmul_kernel(
             uint32_t n0 = n_idx * 32;
             const int8_t  *wc;
             const int32_t *cs;
-            if (use_cache) {
-                wc = w_col_cache[si][n_idx];
-                cs = col_sum_cache[si][n_idx];
+            if (wu_slot >= 0) {
+                /* On miss, populate once (others will hit). */
+                if (!cache_populated[wu_slot][n_idx]) {
+                    int8_t  *wcv = w_col_cache[wu_slot][n_idx];
+                    int32_t *csv = col_sum_cache[wu_slot][n_idx];
+                    gather_w_col(wcv, wu, K, N, n0);
+                    for (int j = 0; j < 32; j++) csv[j] = 0;
+                    for (uint32_t k = 0; k < K; k++)
+                        for (int j = 0; j < 32; j++)
+                            csv[j] += (int32_t)wcv[k * 32 + j];
+                    __atomic_store_n(&cache_populated[wu_slot][n_idx], 1,
+                                     __ATOMIC_RELEASE);
+                }
+                wc = w_col_cache[wu_slot][n_idx];
+                cs = col_sum_cache[wu_slot][n_idx];
             } else {
                 gather_w_col(w_col, wu, K, N, n0);
                 wc = w_col;
@@ -264,6 +291,15 @@ static QHPI_Tensor_Signature_v1 sig_outputs[] = {
  * so gather/col_sum happens ONCE and 4 sub-ops consume its output, OR
  * (b) graph-build emits 4 custom sub-ops that share a w_col/col_sum
  * pool. This is the B-方案-2 path in ours_vs_qnn_fundamental_diffs.md. */
+/* Path B final (2026-04-23): measured shape_required=256 (4-way) at 0.48
+ * vs single-op 0.41 cyc/MAC — still 17% regression despite wu-keyed
+ * cache sharing (which reduced pre-processing redundancy from 4× to 2×).
+ * The residual regression confirms QNN scheduler serializes our
+ * HMX-resource sub-ops (no concurrent HMX dispatch). QNN's own ConvLayer
+ * must declare a different resource mix to unlock parallelism — out of
+ * scope here. Keep single-op; the cache-sharing infra from this change
+ * ALSO benefits steady-state reuse across inference iterations (populate
+ * once, hit 4/5 times) — net 0.51→0.41. */
 static QHPI_Shape matmul_shape_required(const QHPI_Op *op)
 {
     (void)op;
