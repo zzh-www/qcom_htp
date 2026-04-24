@@ -65,16 +65,30 @@ python gen_v8_onnx.py
 # qnn-profile-viewer --schematic … → chrometrace.json).
 ```
 
-## Open items (next candidates)
+## Open items (next candidates) — see `Agent/matmul_blueprint_2026-04-25.md`
 
-- Close the 3× pack_act gap to QNN's `InputSlicePad + ForceFormat_Crouton`.
-  Crouton is 12.5%-density crouton layout; staying row-major by design
-  may cap at ~2× if we inline pack into the HMX op (see
-  `Agent/qnn_hmx_pipelining.md` for overlap notes).
-- 1024³: V8 stays 1.6× slower than V6 because V6 overlaps HVX requant with
-  HMX MAC and V8 is pure-HMX. No easy win while keeping HMX-only invariant.
-- Random-mode residual: 28/1024 @ 32³ max_err=1 (fp16 rounding edge), and
-  K-scale drift at 1024³. DIAG uniform modes all 0 mismatches up to 512³.
+**Core finding**: QNN's HMX utilization is only 18.4% (12K cyc MAC in 66K
+timeline). Speed comes from graph-level slicing + parallel HVX pack on
+2 threads, NOT HMX-HVX overlap. V8 HMX kernel is already correct.
+
+Ranked ROI:
+
+1. **Slice ONNX graph M/N into halves → 4 MatMulV8 + 2 pack_act + 2 pack_wt
+   + Concat** (Python-only, `gen_v8_onnx.py` edit). Expected ~3×, no kernel
+   changes. Validates that QNN scheduler dispatches the 2 pack_act
+   instances to separate HVX threads.
+2. **HVX-rewrite `pack_act_rm_hvx.c` + `pack_wt_v3_hvx.c`** to use
+   `V6_vshuffvdd(Vu,Vv,-32)` topology (4 rows × 128 cols per iter, ~8 HVX
+   insns vs our ~128 scalar cyc/tile). Expected ~3× on pack cycles.
+3. **Add weights-to-VTCM prefetch op on HMX resource** — runs during HVX
+   pack window, hides DDR→VTCM latency.
+4. **`TcmDramCopy` → `UntileToRowMajor`** fused Crouton-untile + DDR write
+   (kernel already exists at `kernel/untile_to_rowmajor_hvx.c`).
+
+Dead ends confirmed (don't retry):
+- `:dilate` / `mxswapacc` / `:retain` modifiers on `:cm:sat.ub` — no effect.
+- Multi-threaded HMX — only one HMX unit, `tid=256` is the only one.
+- Row-major scatter in mmv8 — DDR-latency bound at ~1.3M cyc @ 512³.
 
 ## Reference docs
 

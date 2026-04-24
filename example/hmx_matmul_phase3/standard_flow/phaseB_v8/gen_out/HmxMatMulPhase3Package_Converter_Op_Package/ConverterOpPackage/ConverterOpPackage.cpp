@@ -54,7 +54,7 @@ EXPORT_API Qnn_ErrorHandle_t PackActivationU8RowMajorShapeInference(Qnn_OpConfig
     return QNN_SUCCESS;
 }
 EXPORT_API Qnn_ErrorHandle_t PackActivationU8RowMajorDataTypeInference(Qnn_OpConfig_t *op) {
-    set_tensor_dtype(&op->v1.outputTensors[0], QNN_DATATYPE_UINT_8);
+    set_tensor_dtype(&op->v1.outputTensors[0], QNN_DATATYPE_UFIXED_POINT_8);
     return QNN_SUCCESS;
 }
 
@@ -72,7 +72,7 @@ EXPORT_API Qnn_ErrorHandle_t PackWeightToHmxTileV3ShapeInference(Qnn_OpConfig_t 
     return QNN_SUCCESS;
 }
 EXPORT_API Qnn_ErrorHandle_t PackWeightToHmxTileV3DataTypeInference(Qnn_OpConfig_t *op) {
-    set_tensor_dtype(&op->v1.outputTensors[0], QNN_DATATYPE_UINT_8);
+    set_tensor_dtype(&op->v1.outputTensors[0], QNN_DATATYPE_UFIXED_POINT_8);
     return QNN_SUCCESS;
 }
 
@@ -96,7 +96,7 @@ EXPORT_API Qnn_ErrorHandle_t MatMulV8ShapeInference(Qnn_OpConfig_t *op) {
     return QNN_SUCCESS;
 }
 EXPORT_API Qnn_ErrorHandle_t MatMulV8DataTypeInference(Qnn_OpConfig_t *op) {
-    set_tensor_dtype(&op->v1.outputTensors[0], QNN_DATATYPE_UINT_8);
+    set_tensor_dtype(&op->v1.outputTensors[0], QNN_DATATYPE_UFIXED_POINT_8);
     return QNN_SUCCESS;
 }
 
@@ -111,7 +111,7 @@ EXPORT_API Qnn_ErrorHandle_t TcmDramCopyShapeInference(Qnn_OpConfig_t *op) {
     return QNN_SUCCESS;
 }
 EXPORT_API Qnn_ErrorHandle_t TcmDramCopyDataTypeInference(Qnn_OpConfig_t *op) {
-    set_tensor_dtype(&op->v1.outputTensors[0], QNN_DATATYPE_UINT_8);
+    set_tensor_dtype(&op->v1.outputTensors[0], QNN_DATATYPE_UFIXED_POINT_8);
     return QNN_SUCCESS;
 }
 

@@ -1,1 +1,1 @@
-act_raw:=runtime_inputs_u8/act.raw bias_fp16:=runtime_inputs_u8/bias.raw scratch:=runtime_inputs_u8/scratch.raw
+act_raw:=runtime_inputs_u8/act.raw
