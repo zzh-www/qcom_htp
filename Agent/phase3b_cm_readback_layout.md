@@ -1,5 +1,13 @@
 # Phase 3B — `:cm` readback layout RE (2026-04-23, DEFINITIVE)
 
+> ⚠️ Historical note from Phase 3A/B research. Files referenced below
+> (`kernel/pack_act_hvx.c`, `kernel/hmx_core{,_v2}.c`, `src/HmxMatMulV{2-7}Op.cpp`,
+> `src/run_phase3_probe.cpp`, etc.) were moved to
+> `example/hmx_matmul_phase3/_archive/` in the 2026-04-25 V8-only cleanup.
+> Content of this note is still accurate as RE history. See
+> `docs/qnn_custom_op_sop.md` for the current V8 path.
+
+
 ## Headline finding
 
 **`:cm` MAC produces only 16 output rows per invocation, not 32.** The
