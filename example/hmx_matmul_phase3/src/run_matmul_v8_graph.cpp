@@ -167,8 +167,13 @@ int main(int argc, char **argv) {
     uint32_t paDims[]    = {1, (uint32_t)M_tiles, (uint32_t)K_tiles, 1024};  /* row-major 1 KiB tile */
     uint32_t pwDims[]    = {1, (uint32_t)N_tiles, (uint32_t)K_tiles, 1024};  /* P2 packed */
     uint32_t biasDims[]  = {1, 1, (uint32_t)N_tiles, 128};                   /* fp16, 128 entries per nt */
-    uint32_t oDims[]     = {1, 1, (uint32_t)M, (uint32_t)N};
-    /* V8 VTCM scratch: 1 KiB staging slot for HMX sat.ub output (rebroadcast per tile). */
+    /* Output is TILE-LAYOUT [1, M_tiles, N_tiles, 1024] — same total
+     * bytes as row-major [M, N] but tile-contiguous, matching QNN's
+     * ConvLayer_s1.opt native output.  mmv8's HMX sat.ub writes 1 KiB
+     * per tile directly to this buffer — no scatter. */
+    uint32_t oDims[]     = {1, (uint32_t)M_tiles, (uint32_t)N_tiles, 1024};
+    uint32_t oTileDims[] = {1, (uint32_t)M_tiles, (uint32_t)N_tiles, 1024};
+    /* V8 VTCM scratch: 1 KiB staging slot (unused in tile-layout mode). */
     const uint32_t vtcm_bytes = 2 * 1024;
     uint32_t sDims[]     = {1, 1, 1, vtcm_bytes};
 
@@ -184,6 +189,14 @@ int main(int argc, char **argv) {
             wRaw[k*N + n] = (int8_t)((n % 32) + 1);
     } else if (ITERS == 999) {
         for (int i = 0; i < K * N; i++) wRaw[i] = 1;
+    } else if (ITERS == 996) {
+        for (int i = 0; i < K * N; i++) wRaw[i] = 1;  /* wt uniform for DIAG4 */
+    } else if (ITERS == 995) {
+        /* DIAG5: varied (but structured) activation AND weight, uniform bias.
+         * Tests pack_act + pack_wt with non-uniform data. */
+        for (int k = 0; k < K; k++) for (int n = 0; n < N; n++) {
+            wRaw[k*N + n] = (int8_t)((k + n) % 5 - 2);  /* range [-2, 2] */
+        }
     }
 
     /* Build per-column fp16 bias encoding the quant scale.
@@ -207,8 +220,16 @@ int main(int argc, char **argv) {
 
     auto aT   = mk_tensor("act_raw",    QNN_TENSOR_TYPE_APP_WRITE,
                           QNN_DATATYPE_UINT_8, 4, aDims);
+    /* Declare wT as UFIXED_POINT_8 to bypass QNN's auto-inserted Cast
+     * int8→uint8 (+128) that would flip the sign-bit of each weight byte.
+     * V8's :after:cm:sat.ub path treats the packed tile bytes directly as
+     * signed i8 via `weight.b = mxmem(...)`, so we want HMX to see the
+     * ORIGINAL i8 bit pattern, not (raw_i8+128) reinterpreted as i8.
+     * The storage is the same 8-bit byte pattern either way; only the
+     * QNN-level declared signedness changes, which controls whether Cast
+     * fires. */
     auto wT   = mk_tensor("wt_raw",     QNN_TENSOR_TYPE_STATIC,
-                          QNN_DATATYPE_SFIXED_POINT_8, 4, wDims);
+                          QNN_DATATYPE_UFIXED_POINT_8, 4, wDims);
     wT.v1.clientBuf = {wRaw.data(), (uint32_t)wRaw.size()};
     auto paT  = mk_tensor("packed_act", QNN_TENSOR_TYPE_NATIVE,
                           QNN_DATATYPE_UINT_8, 4, paDims);
@@ -218,35 +239,35 @@ int main(int argc, char **argv) {
                           QNN_DATATYPE_UINT_8, 4, sDims);
     auto oT   = mk_tensor("out",        QNN_TENSOR_TYPE_APP_READ,
                           QNN_DATATYPE_UINT_8, 4, oDims);
+    /* Intermediate tile-layout output of mmv8 (VTCM-resident). */
+    auto oTile = mk_tensor("out_tile",  QNN_TENSOR_TYPE_NATIVE,
+                           QNN_DATATYPE_UINT_8, 4, oTileDims);
 
-    /* Bias tensor: STATIC (constant per-column fp16 scales).
-     * HMX `:cm` activation is interpreted as SIGNED int8 (u8 - 128), so:
-     *   acc_HMX = Σ_k (act_u8 - 128) × wt_i8
-     *          = acc_ref - 128 × Σ_k wt_i8[k][n]
-     *          = acc_ref - 128 × col_sum_w[n]
-     * We want final out = sat_u8(round(acc_ref × scale_n) + 128).
-     * HMX computes out = sat_u8(round(acc_HMX × bias/512) + 128).
+    /* Bias tensor: STATIC per-column fp16 scales.
      *
-     * Matching: bias_fp16 = 512 × scale_n (gives right ratio), but we
-     * must either shift the acc by +128 × col_sum_w (can't, HMX fixed)
-     * OR pre-add a constant correction into HMX's implicit +128 zero-
-     * offset, via... hmm, +128 is hardwired.
+     * Silicon formula (probe_hmx_formula + probe_pair_lane T12, 2026-04-24):
+     *   out[m][c] = sat_u8( (bias_raw[2c+1] >> 7)              ← BASELINE (zp)
+     *                     + floor(acc × bias_fp16[2c] / 512) ) ← SCALE (slope)
+     * The TWO LANES ARE ORTHOGONAL CHANNELS:
+     *   - bias[2c+1] top-9-bits = per-col output zero-point
+     *   - bias[2c]   fp16-value = per-col scale
      *
-     * For NOW: just accept acc_HMX ≠ acc_ref and match reference to HMX.
-     * oRef is built using acc_HMX formula so test passes bit-exact. */
+     * For u8 output with uniform zp=128 and per-channel scale_c:
+     *   bias[2c+1] = fp16(2.0) = 0x4000  (gives baseline 128)
+     *   bias[2c]   = fp16(512 * scale_c) (gives scale = scale_c)
+     *
+     * This decouples the encoding: scales can now be arbitrary positive
+     * values (within fp16 range) without disturbing the zp=128 baseline.
+     */
     std::vector<uint16_t> biasArr((size_t)N_tiles * 128, 0);
-    std::vector<int32_t>  col_sum_w(N, 0);
-    for (int n = 0; n < N; n++) {
-        int32_t s = 0;
-        for (int k = 0; k < K; k++) s += wRaw[k*N + n];
-        col_sum_w[n] = s;
-    }
+    const uint16_t FP16_2_0 = 0x4000;   /* (0x4000>>7) = 128 baseline */
     for (int nt = 0; nt < N_tiles; nt++) {
         for (int c = 0; c < 32; c++) {
             int n = nt * 32 + c;
             double scale_n = 1.0 / ((double)K * (1.0 + 0.1 * (n % 7)));
             float  bias_fp = (float)(512.0 * scale_n);
-            biasArr[nt * 128 + c] = fp32_to_fp16(bias_fp);
+            biasArr[nt * 128 + 2 * c]     = fp32_to_fp16(bias_fp);  /* SCALE */
+            biasArr[nt * 128 + 2 * c + 1] = FP16_2_0;                /* zp=128 */
         }
     }
     auto biasT = mk_tensor("bias_fp16", QNN_TENSOR_TYPE_APP_WRITE,
@@ -258,6 +279,7 @@ int main(int argc, char **argv) {
     QCHECK(g_qnn.tensorCreateGraphTensor(graph, &pwT));
     QCHECK(g_qnn.tensorCreateGraphTensor(graph, &biasT));
     QCHECK(g_qnn.tensorCreateGraphTensor(graph, &sT));
+    QCHECK(g_qnn.tensorCreateGraphTensor(graph, &oTile));
     QCHECK(g_qnn.tensorCreateGraphTensor(graph, &oT));
 
     /* Node 1: PackActivationU8RowMajor (HVX, MT=4) — row-major 1 KiB tiles for :cm consumption. */
@@ -286,7 +308,7 @@ int main(int argc, char **argv) {
         op.v1.numOfOutputs = 1; op.v1.outputTensors = outs;
         QCHECK(g_qnn.graphAddNode(graph, op));
     }
-    /* Node 3: MatMulV8 — pure HMX u8×i8→u8 with bias-folded scale. */
+    /* Node 3: MatMulV8 — pure HMX, sat.ub writes tile-layout to VTCM. */
     {
         Qnn_Tensor_t ins[]  = {paT, pwT, biasT, sT};
         Qnn_OpConfig_t op{};
@@ -295,7 +317,20 @@ int main(int argc, char **argv) {
         op.v1.typeName = "MatMulV8";
         op.v1.numOfParams = 0; op.v1.params = nullptr;
         op.v1.numOfInputs = 4; op.v1.inputTensors = ins;
-        op.v1.numOfOutputs = 1; op.v1.outputTensors = &oT;
+        op.v1.numOfOutputs = 1; op.v1.outputTensors = &oTile;
+        QCHECK(g_qnn.graphAddNode(graph, op));
+    }
+    /* Node 4: TcmDramCopy — bulk memcpy tile-layout VTCM → DDR. */
+    {
+        Qnn_Tensor_t ins[]  = {oTile};
+        Qnn_Tensor_t outs[] = {oT};
+        Qnn_OpConfig_t op{};
+        op.version = QNN_OPCONFIG_VERSION_1;
+        op.v1.name = "tcm2ddr"; op.v1.packageName = "HmxMatMulPhase3Package";
+        op.v1.typeName = "TcmDramCopy";
+        op.v1.numOfParams = 0; op.v1.params = nullptr;
+        op.v1.numOfInputs = 1; op.v1.inputTensors = ins;
+        op.v1.numOfOutputs = 1; op.v1.outputTensors = outs;
         QCHECK(g_qnn.graphAddNode(graph, op));
     }
 
@@ -311,67 +346,107 @@ int main(int argc, char **argv) {
     std::vector<uint8_t> oBuf(M * N);
     std::vector<uint8_t> oRef(M * N);
 
-    /* DIAGNOSTIC MODE (V8 calibration): uniform all-1 act + all-1 wt so
-     * acc[m][n] = K everywhere. With bias uniform = 0x4000 (fp16 2.0):
-     *   probe formula: out = sat_u8(round(K × 2 / 512) + 128). */
-    if (ITERS == 999) {   /* DIAG mode 1: uniform all-1 inputs */
-        std::printf("[DIAG1] Uniform all-1 act+wt, bias=0x4000\n");
-        for (int i = 0; i < M * K; i++) aRaw[i] = 1;
-        for (int i = 0; i < K * N; i++) wRaw[i] = 1;
-        for (size_t i = 0; i < biasArr.size(); i++) biasArr[i] = 0x4000;
-        int expected = (int)((double)K / 256.0 + 0.5) + 128;
-        if (expected > 255) expected = 255;
-        std::printf("[DIAG1] Expected out = %d\n", expected);
-        for (int i = 0; i < M * N; i++) oRef[i] = (uint8_t)expected;
-        ITERS = 1;
-    } else if (ITERS == 998) {  /* DIAG mode 2: T2 col-ramp */
-        std::printf("[DIAG2] act=all-1, wt[k][n]=(n%%32)+1 (col ramp), bias=0x4000\n");
-        for (int i = 0; i < M * K; i++) aRaw[i] = 1;
-        for (int k = 0; k < K; k++) for (int n = 0; n < N; n++)
-            wRaw[k*N + n] = (int8_t)((n % 32) + 1);
-        for (size_t i = 0; i < biasArr.size(); i++) biasArr[i] = 0x4000;
-        /* Expected: out[m][n] = sat_u8(round(K × (n+1) × 2 / 512) + 128) */
-        for (int m = 0; m < M; m++) {
-            for (int n = 0; n < N; n++) {
-                int32_t acc = K * ((n % 32) + 1);
-                double scaled = (double)acc * 2.0 / 512.0 + 128.0;
-                int v = (int)(scaled + 0.5);
-                if (v > 255) v = 255; if (v < 0) v = 0;
-                oRef[m*N + n] = (uint8_t)v;
+    /* Silicon bit-exact reference (probe_hmx_formula.c T7..T11, 2026-04-24):
+     *   out[m][c] = sat_u8( (bias_raw[2c+1] >> 7)
+     *                     + floor(acc_hmx[m][c] × bias_fp16[2c+1] / 512) )
+     * where acc_hmx uses PLAIN u8 activation (no signed shift) and i8 weight.
+     * Helper — decode fp16 u16 to float. */
+    auto fp16_to_float = [](uint16_t h) -> double {
+        uint32_t sign = (h >> 15) & 1;
+        uint32_t exp  = (h >> 10) & 0x1F;
+        uint32_t mant = h & 0x3FF;
+        double v;
+        if (exp == 0)        v = std::ldexp((double)mant, -24);
+        else if (exp == 0x1F) v = 0.0;  /* treat ±inf/NaN as 0 for this path */
+        else                  v = std::ldexp((double)(1024 + mant), (int)exp - 25);
+        return sign ? -v : v;
+    };
+
+    /* Silicon-validated formula (T12 pair-lane probe, 2026-04-24):
+     *   baseline comes from bias_raw at lane 2c+1 (top 9 bits)
+     *   scale    comes from bias_raw at lane 2c   (fp16 value / 512) */
+    auto hmx_silicon_u8 = [&](int32_t acc_hmx,
+                              uint16_t bias_raw_baseline,   /* lane 2c+1 */
+                              uint16_t bias_raw_scale)      /* lane 2c   */
+                              -> uint8_t {
+        int baseline = (int)(bias_raw_baseline >> 7);
+        double bv = fp16_to_float(bias_raw_scale);
+        double scaled = (double)acc_hmx * bv / 512.0;
+        int scaled_i = (int)std::floor(scaled);
+        int v = baseline + scaled_i;
+        if (v < 0) v = 0; else if (v > 255) v = 255;
+        return (uint8_t)v;
+    };
+    /* Known residual: ~2-3% of cells in random-data mode off-by-1 due to
+     * silicon's internal fp16-level rounding at cells where `acc × bias / 512`
+     * is fractionally just above an integer (e.g. 3.010 → silicon 2, formula 3).
+     * max_abs_err stays ≤ 1, which is within QNN u8-quant tolerance. */
+
+    /* DIAGNOSTIC MODE: uniform acc + bias to exercise the silicon formula.
+     * All three modes now use the silicon formula to compute oRef. */
+    /* wRaw was already set before graph create (lines ~180) so that wT
+     * STATIC captures it. Only aRaw (APP_WRITE) and biasArr (APP_WRITE)
+     * can be changed here.
+     * DIAG modes use the split encoding:
+     *   bias[2c+1] = 0x4000 (baseline 128), bias[2c] = 0x4000 (scale 2.0)
+     * so floor(acc × 2 / 512) = floor(acc/256). */
+    auto set_diag_bias = [&](uint16_t scale_raw) {
+        for (size_t i = 0; i < biasArr.size(); i++) biasArr[i] = 0;
+        for (int nt = 0; nt < N_tiles; nt++)
+            for (int c = 0; c < 32; c++) {
+                biasArr[nt * 128 + 2 * c]     = scale_raw;  /* SCALE */
+                biasArr[nt * 128 + 2 * c + 1] = 0x4000;     /* BASELINE 128 */
             }
-        }
-        ITERS = 1;
-    } else if (ITERS == 997) {  /* DIAG mode 3: i8-signed wt test */
-        std::printf("[DIAG3] act=all-1, wt[k][n]=-7 all k,n (i8 negative), bias=0x4000\n");
+    };
+    if (ITERS == 999) {
+        std::printf("[DIAG1] Uniform all-1 act+wt, split-bias (zp=128, scale=2/512)\n");
         for (int i = 0; i < M * K; i++) aRaw[i] = 1;
-        for (int i = 0; i < K * N; i++) wRaw[i] = -7;  /* 0xF9 as u8 */
-        for (size_t i = 0; i < biasArr.size(); i++) biasArr[i] = 0x4000;
-        /* Expected if HMX treats as i8: acc = K × 1 × (-7) = -K*7.
-         *   out = sat_u8(round(-K*7 × 2 / 512) + 128)
-         * K=32: acc=-224, scaled=-224*2/512=-0.875, rounded=-1, +128=127. */
-        int32_t acc = -K * 7;
-        double scaled = (double)acc * 2.0 / 512.0 + 128.0;
-        int v = (int)(scaled + (scaled >= 0 ? 0.5 : -0.5));
-        if (v > 255) v = 255; if (v < 0) v = 0;
-        std::printf("[DIAG3] Expected (i8 weight): out = %d\n", v);
-        for (int i = 0; i < M * N; i++) oRef[i] = (uint8_t)v;
+        set_diag_bias(0x4000);
         ITERS = 1;
-    } else {
-        /* HMX :cm treats u8 act as SIGNED (u8 - 128). So acc_HMX behaves like:
-         *   acc_HMX = Σ (act_u8 - 128) × wt_i8 = acc_ref - 128 × col_sum_w[n]
-         * HMX output: out = sat_u8(round(acc_HMX × bias_fp16 / 512) + 128)
-         *                 = sat_u8(round((acc_ref - 128 × col_sum) × scale_n) + 128)
-         * Reference must match this to get bit-exact. */
-        for (int m = 0; m < M; m++) {
-            for (int n = 0; n < N; n++) {
-                int32_t acc_ref = 0;
-                for (int k = 0; k < K; k++) acc_ref += (int32_t)aRaw[m*K + k] * (int32_t)wRaw[k*N + n];
-                int32_t acc_hmx = acc_ref - 128 * col_sum_w[n];
-                double scale_n = 1.0 / ((double)K * (1.0 + 0.1 * (n % 7)));
-                double scaled = (double)acc_hmx * scale_n + 128.0;
-                int v = (int)(scaled + (scaled >= 0 ? 0.5 : -0.5));
-                if (v < 0) v = 0; if (v > 255) v = 255;
-                oRef[m*N + n] = (uint8_t)v;
+    } else if (ITERS == 998) {
+        std::printf("[DIAG2] act=all-1, wt[k][n]=(n%%32)+1, split-bias\n");
+        for (int i = 0; i < M * K; i++) aRaw[i] = 1;
+        set_diag_bias(0x4000);
+        ITERS = 1;
+    } else if (ITERS == 997) {
+        std::printf("[DIAG3] act=all-1, wt=-7 uniform, split-bias\n");
+        for (int i = 0; i < M * K; i++) aRaw[i] = 1;
+        set_diag_bias(0x4000);
+        ITERS = 1;
+    } else if (ITERS == 996) {
+        std::printf("[DIAG4] act[r][k]=(r*4)+1, wt=all-1, split-bias\n");
+        for (int m = 0; m < M; m++) for (int k = 0; k < K; k++)
+            aRaw[m*K + k] = (uint8_t)((m * 4) + 1);
+        set_diag_bias(0x4000);
+        ITERS = 1;
+    } else if (ITERS == 995) {
+        std::printf("[DIAG5] act[r][k]=(r+k)*3%%200, wt[k][n]=(k+n)%%5-2, split-bias\n");
+        for (int m = 0; m < M; m++) for (int k = 0; k < K; k++)
+            aRaw[m*K + k] = (uint8_t)(((m + k) * 3) % 200);
+        set_diag_bias(0x4000);
+        ITERS = 1;
+    }
+    /* Build reference in ALL cases (DIAG or full-random) using the silicon
+     * formula so the compare is bit-exact. */
+    {
+        /* Graph output is TILE-LAYOUT [M_tiles, N_tiles, 1024]:
+         *   oRef[(mt*N_tiles + nt)*1024 + r*32 + c] — matches HMX sat.ub
+         *   direct-to-DDR tile write. */
+        for (int mt = 0; mt < M_tiles; mt++) {
+            for (int r = 0; r < 32; r++) {
+                int m = mt * 32 + r;
+                for (int nt = 0; nt < N_tiles; nt++) {
+                    for (int c = 0; c < 32; c++) {
+                        int n = nt * 32 + c;
+                        int32_t acc_hmx = 0;
+                        for (int k = 0; k < K; k++)
+                            acc_hmx += (int32_t)aRaw[m*K + k] * (int32_t)wRaw[k*N + n];
+                        uint16_t bias_b = biasArr[nt * 128 + 2 * c + 1];
+                        uint16_t bias_s = biasArr[nt * 128 + 2 * c];
+                        oRef[(mt * N_tiles + nt) * 1024 + r * 32 + c] =
+                            hmx_silicon_u8(acc_hmx, bias_b, bias_s);
+                    }
+                }
             }
         }
     }
@@ -447,10 +522,34 @@ int main(int argc, char **argv) {
     std::printf("[Steady] MACs=%llu  cycles_per_MAC=%.4f\n",
                 (unsigned long long)macs, (double)avg / (double)macs);
     std::printf("[Check] mismatches=%d/%d max_abs_err=%d\n", bad, M*N, merr);
-    std::printf("  oBuf[0..7]=%d %d %d %d %d %d %d %d\n",
-                oBuf[0], oBuf[1], oBuf[2], oBuf[3], oBuf[4], oBuf[5], oBuf[6], oBuf[7]);
-    std::printf("  oRef[0..7]=%d %d %d %d %d %d %d %d\n",
-                oRef[0], oRef[1], oRef[2], oRef[3], oRef[4], oRef[5], oRef[6], oRef[7]);
+    if (bad > 0 && bad < 50) {
+        int shown = 0;
+        for (int i = 0; i < M*N && shown < 20; i++) {
+            if (oBuf[i] != oRef[i]) {
+                int m = i / N, n = i % N;
+                int32_t acc = 0;
+                for (int k = 0; k < K; k++)
+                    acc += (int32_t)aRaw[m*K + k] * (int32_t)wRaw[k*N + n];
+                int nt = n / 32, c = n % 32;
+                uint16_t bs = biasArr[nt*128 + 2*c];
+                uint16_t bb = biasArr[nt*128 + 2*c + 1];
+                double bv = fp16_to_float(bs);
+                double raw_scaled = (double)acc * bv / 512.0;
+                std::printf("  mism[m=%d n=%d]: obs=%3d ref=%3d  acc=%6d  bias_b=0x%04x bias_s=0x%04x  raw_scaled=%.4f\n",
+                    m, n, oBuf[i], oRef[i], acc, bb, bs, raw_scaled);
+                shown++;
+            }
+        }
+    }
+    std::printf("  oBuf[0..15]= ");
+    for (int i = 0; i < 16 && i < M*N; i++) std::printf("%3d ", oBuf[i]);
+    std::printf("\n  oBuf[16..31]=");
+    for (int i = 16; i < 32 && i < M*N; i++) std::printf("%3d ", oBuf[i]);
+    std::printf("\n  oRef[0..15]= ");
+    for (int i = 0; i < 16 && i < M*N; i++) std::printf("%3d ", oRef[i]);
+    std::printf("\n  oRef[16..31]=");
+    for (int i = 16; i < 32 && i < M*N; i++) std::printf("%3d ", oRef[i]);
+    std::printf("\n");
 
     g_qnn.profileFree(profile);
     g_qnn.contextFree(context, nullptr);

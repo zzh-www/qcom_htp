@@ -58,7 +58,7 @@ HEX_CFLAGS_COMMON=(
 # Compile kernel files. Agent B's HVX ops use QHPI which has nullptr
 # (C++ header), so compile as C++. hmx_core_v2 is plain C, compile with -x c.
 KERNEL_OBJS=()
-for src in pack_act_hvx pack_wt_hvx pack_act_u8_hvx pack_act_rm_hvx pack_wt_v3_hvx combine_hi_lo_hvx int4_expand_hvx; do
+for src in pack_act_hvx pack_wt_hvx pack_act_u8_hvx pack_act_rm_hvx pack_wt_v3_hvx combine_hi_lo_hvx int4_expand_hvx untile_to_rowmajor_hvx tcm_dram_copy_hvx; do
     obj="$OUT_HTP/${src}.o"
     EXTRA=()
     if [ -n "${PACK_SCALAR_FORCE:-}" ]; then
@@ -119,7 +119,7 @@ ARM_CXX_FLAGS=(
 
 ARM_OBJS=()
 # HVX op files: compile as C++ (they use QHPI / nullptr).
-for src in pack_act_hvx pack_wt_hvx pack_act_u8_hvx pack_act_rm_hvx pack_wt_v3_hvx combine_hi_lo_hvx int4_expand_hvx; do
+for src in pack_act_hvx pack_wt_hvx pack_act_u8_hvx pack_act_rm_hvx pack_wt_v3_hvx combine_hi_lo_hvx int4_expand_hvx untile_to_rowmajor_hvx tcm_dram_copy_hvx; do
     obj="$OUT_ARM/${src}.o"
     "$ARM_CXX" -std=c++17 "${ARM_CXX_FLAGS[@]}" -x c++ \
         -c "$SCRIPT_DIR/kernel/${src}.c" -o "$obj"

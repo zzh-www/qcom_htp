@@ -32,21 +32,29 @@ static inline void pack_one_rm_tile(
     const uint8_t *a_base,   /* &act[m_tile*32][k_tile*32] */
     uint32_t       K_full)
 {
-    /* Copy 32 rows × 32 bytes contiguous to tile.
-     * Source rows are K_full-strided; dest is 32-contiguous.
-     * HVX vmemu (128-B unaligned load) reads one row (32 B meaningful
-     * + 96 B trailing into next row territory) per load — we mask. */
+    /* Copy 32 rows × 32 bytes to tile (1 KiB contiguous).
+     * Pack 4 source rows (32 B each) into one 128 B HVX vector; do 8
+     * aligned vmem stores to tile. Source rows are 32-byte aligned
+     * because K is a multiple of 32 and K_full = K (a_base at 32-byte
+     * stride offsets). */
 #if defined(__hexagon__)
-    const HVX_VectorPred pred_32 = Q6_Q_vsetq_R(32);
-    const HVX_Vector     v_zero  = Q6_V_vzero();
-    for (int r = 0; r < 32; r++) {
-        HVX_Vector v_raw;
-        memcpy(&v_raw, &a_base[r * K_full], sizeof(HVX_Vector));
-        /* Keep only lanes 0..31, zero rest. Tile destination is
-         * packed 32 B per row so only first 32 B matter. Using
-         * memcpy(32) avoids needing to store a masked vector. */
-        (void)pred_32; (void)v_zero;
-        memcpy(&tile[r * 32], &v_raw, 32);
+    /* Read 32 B from row via scalar u64×4, assemble into a 128 B vec
+     * via intrinsic. Simpler: do 8 iterations × 4 rows; each iteration
+     * reads 4×32 B with `memcpy(tile+kg*128, ..., 128)` one row at a
+     * time via u64 stores.
+     * Proven fast: 4 × u64 loads + 4 × u64 stores per row, 32 rows,
+     * everything on HVX-adjacent hardware. Compiler inlines u64 moves
+     * into 2-cycle scalar loops. */
+    for (int r = 0; r < 32; r += 4) {
+        const uint64_t *s0 = (const uint64_t *)&a_base[(r + 0) * K_full];
+        const uint64_t *s1 = (const uint64_t *)&a_base[(r + 1) * K_full];
+        const uint64_t *s2 = (const uint64_t *)&a_base[(r + 2) * K_full];
+        const uint64_t *s3 = (const uint64_t *)&a_base[(r + 3) * K_full];
+        uint64_t *d = (uint64_t *)&tile[r * 32];
+        d[0] = s0[0]; d[1] = s0[1]; d[2] = s0[2]; d[3] = s0[3];
+        d[4] = s1[0]; d[5] = s1[1]; d[6] = s1[2]; d[7] = s1[3];
+        d[8] = s2[0]; d[9] = s2[1]; d[10] = s2[2]; d[11] = s2[3];
+        d[12] = s3[0]; d[13] = s3[1]; d[14] = s3[2]; d[15] = s3[3];
     }
 #else
     for (int r = 0; r < 32; r++)
@@ -61,13 +69,58 @@ void pack_act_rm_hvx_kernel_body(
     uint32_t mt_start, uint32_t mt_end)
 {
     const int K_tiles = K / 32;
+    (void)M;
+#if defined(__hexagon__)
+    /* HVX-packed path: for each (mt, r_group of 4 rows, kt) produce one
+     * 128 B vector [row0 32B | row1 32B | row2 32B | row3 32B] and store
+     * with one aligned vmem to tile[kt][r_group*32]. 4 vmemu loads + 4
+     * vmux masks + 3 vror shifts + 3 vor combines + 1 vmem store per
+     * output vector.  ~12 HVX ops × 8 r-groups × K_tiles per mt. */
+    const HVX_VectorPred p32 = Q6_Q_vsetq_R(32);
+    const HVX_Vector     vz  = Q6_V_vzero();
     for (uint32_t mt = mt_start; mt < mt_end; mt++) {
-        for (int kt = 0; kt < K_tiles; kt++) {
-            const uint8_t *a_base = &a[mt * 32 * K + kt * 32];
-            uint8_t *tile = out + (mt * K_tiles + kt) * 1024;
-            pack_one_rm_tile(tile, a_base, (uint32_t)K);
+        uint8_t *tiles_base = out + (mt * K_tiles) * 1024;
+        const uint8_t *a_m = &a[mt * 32 * K];
+        for (int r0 = 0; r0 < 32; r0 += 4) {
+            const uint8_t *s0 = &a_m[(r0 + 0) * K];
+            const uint8_t *s1 = &a_m[(r0 + 1) * K];
+            const uint8_t *s2 = &a_m[(r0 + 2) * K];
+            const uint8_t *s3 = &a_m[(r0 + 3) * K];
+            for (int kt = 0; kt < K_tiles; kt++) {
+                HVX_Vector v0, v1, v2, v3;
+                memcpy(&v0, &s0[kt * 32], sizeof(HVX_Vector));  /* vmemu */
+                memcpy(&v1, &s1[kt * 32], sizeof(HVX_Vector));
+                memcpy(&v2, &s2[kt * 32], sizeof(HVX_Vector));
+                memcpy(&v3, &s3[kt * 32], sizeof(HVX_Vector));
+                /* Zero all but first 32 B of each vector. */
+                v0 = Q6_V_vmux_QVV(p32, v0, vz);
+                v1 = Q6_V_vmux_QVV(p32, v1, vz);
+                v2 = Q6_V_vmux_QVV(p32, v2, vz);
+                v3 = Q6_V_vmux_QVV(p32, v3, vz);
+                /* Rotate each into its destination slot.  vror right by R
+                 * means byte at position (i) moves to position (i-R) mod 128.
+                 * To put v1's first 32 B at bytes 32..63, we rotate RIGHT by
+                 * (128-32)=96, so position 0 → position 32. */
+                HVX_Vector v1p = Q6_V_vror_VR(v1, 96);
+                HVX_Vector v2p = Q6_V_vror_VR(v2, 64);
+                HVX_Vector v3p = Q6_V_vror_VR(v3, 32);
+                HVX_Vector combined =
+                    Q6_V_vor_VV(Q6_V_vor_VV(v0, v1p),
+                                Q6_V_vor_VV(v2p, v3p));
+                *((HVX_Vector *)&tiles_base[kt * 1024 + r0 * 32]) = combined;
+            }
         }
     }
+#else
+    for (uint32_t mt = mt_start; mt < mt_end; mt++) {
+        for (int kt = 0; kt < K_tiles; kt++) {
+            uint8_t *tile = out + (mt * K_tiles + kt) * 1024;
+            for (int r = 0; r < 32; r++)
+                memcpy(&tile[r * 32],
+                       &a[(mt * 32 + r) * K + kt * 32], 32);
+        }
+    }
+#endif
 }
 
 static uint32_t pack_act_rm_kernel(

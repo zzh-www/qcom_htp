@@ -123,6 +123,43 @@ hexagon-clang -mv75 -O2 \
     -o "$OUT_SU"
 echo "  -> $OUT_SU ($(wc -c < "$OUT_SU") bytes)"
 
+# probe_hmx_formula — T7..T10 to lock down :cm:sat.ub formula +
+# bias lane mapping (col c <-> bias[2c+1]) + activation polarity (plain u8).
+OUT_HF="$BUILD/libprobe_hmx_formula.so"
+hexagon-clang -mv75 -O2 \
+    -mhvx -mhvx-length=128B -mhmx \
+    -shared -fPIC \
+    -I "$HEXAGON_SDK/incs" \
+    -I "$HEXAGON_SDK/incs/stddef" \
+    -I "$HEXAGON_SDK/rtos/qurt/computev75/include/qurt" \
+    "$SCRIPT_DIR/probe_hmx_formula.c" \
+    -o "$OUT_HF"
+echo "  -> $OUT_HF ($(wc -c < "$OUT_HF") bytes)"
+
+# probe_pair_lane — T12 pair-lane bias interaction under non-trivial acc.
+OUT_PL="$BUILD/libprobe_pair_lane.so"
+hexagon-clang -mv75 -O2 \
+    -mhvx -mhvx-length=128B -mhmx \
+    -shared -fPIC \
+    -I "$HEXAGON_SDK/incs" \
+    -I "$HEXAGON_SDK/incs/stddef" \
+    -I "$HEXAGON_SDK/rtos/qurt/computev75/include/qurt" \
+    "$SCRIPT_DIR/probe_pair_lane.c" \
+    -o "$OUT_PL"
+echo "  -> $OUT_PL ($(wc -c < "$OUT_PL") bytes)"
+
+# probe_row_mapping — T11 out-row <-> activation-row mapping probe.
+OUT_RM="$BUILD/libprobe_row_mapping.so"
+hexagon-clang -mv75 -O2 \
+    -mhvx -mhvx-length=128B -mhmx \
+    -shared -fPIC \
+    -I "$HEXAGON_SDK/incs" \
+    -I "$HEXAGON_SDK/incs/stddef" \
+    -I "$HEXAGON_SDK/rtos/qurt/computev75/include/qurt" \
+    "$SCRIPT_DIR/probe_row_mapping.c" \
+    -o "$OUT_RM"
+echo "  -> $OUT_RM ($(wc -c < "$OUT_RM") bytes)"
+
 # probe_cm_singlecell — single (m,n) cell sweep to definitively map
 # acc[m][n] → readback indices (lo + hi) under :cm.
 OUT_CMS="$BUILD/libprobe_cm_singlecell.so"

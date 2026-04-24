@@ -1,0 +1,111 @@
+Architecture of executable does not match command-line architecture, main_arch=73, cmdline_cpu=75.
+hexagon-sim INFO: The rev_id used in the simulation is 0x00008c75 (v75na_1)
+CORE 0:	
+CORE 0:	H2/core info:
+CORE 0:		Build ID: 0x775e7985
+CORE 0:		Guest PC sampling available: true
+CORE 0:		Multi-core:
+CORE 0:			Count: ( 0 == single core) 0
+CORE 0:			ID: 0
+CORE 0:			Shift: 0x00000000
+CORE 0:			TCM base offset per core: 0x00000000
+CORE 0:			NOC master LUT base: 0xd8000000
+CORE 0:			NOC slave LUT base:  0xd8000000
+CORE 0:		Coprocessors:
+CORE 0:		  HLX:
+CORE 0:		    Present: false
+CORE 0:		  HVX:
+CORE 0:		    Present: true
+CORE 0:		    Native vector length: 128
+CORE 0:		    Contexts (when v2x == 0): 4
+CORE 0:		    Can context-switch in kernel: true
+CORE 0:		    VTCM base: 0xd9000000
+CORE 0:		    VTCM size: 8192K
+CORE 0:		  HMX:
+CORE 0:		    Present: true
+CORE 0:		    Units: 1
+CORE 0:		User-mode DMA present: CORE 0:	true
+CORE 0:		Max coprocessor threads per cluster: 2
+CORE 0:		SILVER present: CORE 0:	false
+CORE 0:		Kernel physical address: 0x00000000
+CORE 0:		Kernel page size: 256K
+CORE 0:		Number of kernel pages: 3
+CORE 0:		H2 kernel in TCM: false
+CORE 0:		cfgbase: 0x0000d818
+CORE 0:		TCM base: 0xd8000000
+CORE 0:		TCM size: 0K
+CORE 0:		L2 array size: 1024K
+CORE 0:		L2 cache size: 1024K
+CORE 0:		L2 line size: 128
+CORE 0:		L2 register base: 0xd81a0000
+CORE 0:		CLADE register base: 0x00000000
+CORE 0:		ECC register base: 0x00000000
+CORE 0:		Audio extension: 0
+CORE 0:		TLB entries: 128
+CORE 0:		Replaceable TLB entries: 123
+CORE 0:		STLB: false
+CORE 0:			Enabled: false
+CORE 0:		syscfg: 0x008da37f
+CORE 0:		rev: 0x00008c75
+CORE 0:		Subsystem base: 0x20000000
+CORE 0:		L2VIC physical base: 0x20010000
+CORE 0:		Timer physical base: 0x20020000
+CORE 0:		Timer interrupt: 34
+CORE 0:		Running HW threads mask: 0x0000003f
+CORE 0:	
+CORE 0:	Load VM index 0 /home/zzh/work/qcom_htp/example/hmx_programming_guide/demo07_i8xi8_offset
+CORE 0:		load VA 02000000 at 02000000
+CORE 0:		load VA 0200d000 at 0200d000
+CORE 0:		__boot_cmdline__ found @ 0x0200e030
+CORE 0:		cmdline at 0x0200e030 set to <</home/zzh/work/qcom_htp/example/hmx_programming_guide/demo07_i8xi8_offset >>
+CORE 0:		__boot_net_phys_offset__ found @ 0x02010060
+CORE 0:		net phys offset at 0x02010060 set to <<0x00000000>>
+CORE 0:		__sys_write_mode__ found @ 0x02010064
+CORE 0:		__sys_write_mode__ at 0x02010064 set to <<0x00000000>>
+CORE 0:		__guest_pmap__ not found.
+CORE 0:		end 0x02017208
+CORE 0:		heap_size 0x04000000 (DEFAULT_HEAP_SIZE)
+CORE 0:		heap_start 0x0201720c
+CORE 0:		stack_size 0x00100000 (DEFAULT_STACK_SIZE)
+CORE 0:		total_size 0x05000000
+CORE 0:		__clade_region_high_pd0_start__ found @ 0x00000000
+CORE 0:		CLADE not enabled
+CORE 0:		entry 0x02000000
+CORE 0:		phys_offset 0x00000000
+CORE 0:		load_offset 0x00000000
+CORE 0:		offset_pages 0x00000000
+CORE 0:		fence_lo 0x02000000
+CORE 0:		fence_hi 0xfe000000
+CORE 0:	
+CORE 0:	Config VM index 0
+CORE 0:		Virtual CPUs 32
+CORE 0:		Shared interrupts  0
+CORE 0:		Priority  0
+CORE 0:		Translation type offset
+CORE 0:			Page size 6 (16MB)
+CORE 0:			CCCC  0x7
+CORE 0:			XWRU  0xf
+CORE 0:			PAGES 0x0
+CORE 0:			RAW   0xf76
+CORE 0:		Priority 0
+CORE 0:		Trapmask 0xffffffff
+CORE 0:		VM ID 2
+CORE 0:	
+CORE 0:	Boot VM index 0, ID 2
+CORE 0:	
+CORE 0:	booter: Waiting for interrupts
+--- demo07: i8 × i8 via +128 offset ---
+  CPU: 0 mismatches / 1024
+  HVX: 0 mismatches / 1024
+  [PASS] demo07 (both paths)
+CORE 0:	VM 2 status 0x0
+CORE 0:	VM 2 Live CPUs: 0
+
+Done!
+	T0: Insns=1945351 Packets=875608
+	T1: Insns=66 Packets=66
+	T2: Insns=66 Packets=66
+	T3: Insns=357691 Packets=120339
+	T4: Insns=66 Packets=66
+	T5: Insns=66 Packets=66
+	Total: Insns=2303306 Pcycles=2973225

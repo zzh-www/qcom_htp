@@ -2,12 +2,16 @@
  * HmxMatMulV8Op.cpp — Phase 3D.4: pure-HMX replica of QNN's q::ConvLayer_s1.opt.
  *
  * One-shot u8×i8→u8 matmul using HMX's :after:cm:sat.ub store.
- * Hardware formula (silicon-verified by probe_sat_ub.c):
- *   out[m][n] = saturate_u8( round(acc[m][n] × bias_fp16[n] / 512) + 128 )
- * HMX folds the quantization scale into the per-column fp16 bias:
- *   bias_fp16[n] = 512 × scale_quant[n]
- * so requant (SRDHM + shift + clip + +128 zero-offset) happens entirely in
- * hardware during the readback. No separate HVX requant op needed.
+ * Hardware formula (silicon-verified by probe_hmx_formula.c, 2026-04-24):
+ *   out[m][c] = saturate_u8( (bias_raw[2c+1] >> 7)
+ *                          + floor(acc[m][c] × bias_fp16[2c+1] / 512) )
+ *   with acc = Σ_k act_u8[m][k] × wt_i8[k][c]    (activation is PLAIN u8)
+ *   and col c uses bias lane (2c+1) — odd-indexed fp16 entries only.
+ * Both zero_point and scale are encoded into the per-column fp16 bias:
+ *   baseline (zp) = top 9 bits of raw u16 (= 8×exp_biased for zero mantissa)
+ *   slope (scale) = fp16 value / 512
+ * For u8 output with zp=128 + per-channel scale, pick bias such that
+ * exp_biased=16 (bias ∈ [2.0, 4.0)); mantissa encodes channel scale variation.
  *
  * Signatures:
  *   Input 0: packed_act  [1, M_tiles, K_tiles, 1024] u8   TCM_Only
@@ -28,6 +32,7 @@
 
 #ifdef __hexagon__
 #include <hexagon_types.h>
+#include <hvx_hexagon_protos.h>
 #endif
 
 #define STRINGIZE_DETAIL(X) #X
@@ -105,32 +110,91 @@ static uint32_t hmx_matmul_v8_kernel(
     const uint32_t N_tiles = dim_at_v8(ws, 1);
     const uint32_t N       = dim_at_v8(os, os.rank - 1);
 
-    /* HMX :sat.ub store writes 1 KiB contiguous (32×32) to out_ptr. To
-     * place into row-major [M,N] output with stride N, we write each
-     * tile to VTCM scratch (1 KiB aligned), then scatter 32 rows × 32 B
-     * to DDR output at the right stride. Scatter uses scalar memcpy —
-     * 1 KiB per tile, negligible vs HMX MAC. */
-    for (uint32_t mt = 0; mt < M_tiles; mt++) {
+    /* Tile-layout output: HMX sat.ub writes 1 KiB/tile directly. */
+    const uint32_t out_last_dim = dim_at_v8(os, os.rank - 1);
+    const bool tile_output = (out_last_dim == 1024);
+    if (tile_output) {
+        (void)vtcm_stg;
+        (void)N;
+        /* QNN-style loop order: N-TILE OUTER, M-TILE INNER.
+         * Mimics hmx_convbbb1x1_stride1 @ 0x2ea740 in libQnnHtpV75Skel.so.
+         * Benefits:
+         *   - Load bias ONCE per nt, reuse across M_tiles iterations
+         *     (previously we reloaded bias each (mt, nt) tile — K_tiles
+         *      × M_tiles × N_tiles tiles re-loaded = M_tiles×N_tiles×~50 cyc
+         *      wasted).
+         *   - Weight tile for fixed nt is consumed repeatedly — its VTCM
+         *     lines stay cache-hot.
+         *   - Activation tiles stream through as fast as VTCM can deliver.
+         * K inner loop is 2-MAC unroll (matches QNN's hot-loop packet
+         * structure). */
+        /* Prologue mxclracc — per QNN disasm, acc is cleared ONCE at op
+         * entry; subsequent per-tile sat.ub implicitly clears acc for the
+         * next MAC sequence ("after" on non-retain variant clears both
+         * accs per probe_dualacc_device RE). */
+        asm volatile("mxclracc" ::: "memory");
         for (uint32_t nt = 0; nt < N_tiles; nt++) {
-            const uint8_t  *act_tiles = packed_act + (mt * K_tiles) * 1024;
-            const uint8_t  *wt_tiles  = packed_wt  + (nt * K_tiles) * 1024;
-            const uint16_t *bias_n    = bias_all   + nt * 128;
-            uint8_t        *out_tile  = out + (mt * 32) * N + nt * 32;
-
+            const uint8_t  *wt_tiles = packed_wt + (nt * K_tiles) * 1024;
+            const uint16_t *bias_n   = bias_all  + nt * 128;
+            /* Bias loaded ONCE per nt band. */
             asm volatile("bias = mxmem(%0)" :: "r"(bias_n) : "memory");
-            asm volatile("mxclracc" ::: "memory");
-            for (uint32_t kt = 0; kt < K_tiles; kt++) {
-                hmx_v8_mac_accumulate(
-                    act_tiles + kt * 1024,
-                    wt_tiles  + kt * 1024);
-            }
-            /* HMX writes 1 KiB contiguous to vtcm_stg. */
-            asm volatile("mxmem(%0, %1):after:cm:sat.ub = acc"
-                         :: "r"(vtcm_stg), "r"(0) : "memory");
+            for (uint32_t mt = 0; mt < M_tiles; mt++) {
+                const uint8_t *act_tiles = packed_act + (mt * K_tiles) * 1024;
+                uint8_t       *out_tile  = out + (mt * N_tiles + nt) * 1024;
 
-            /* Scatter 32 rows × 32 B to row-major output. */
-            for (uint32_t r = 0; r < 32; r++) {
-                memcpy(&out_tile[r * N], &vtcm_stg[r * 32], 32);
+                /* No mxclracc per tile — acc already clear from previous
+                 * sat.ub (or from prologue on first tile). */
+                /* 2-MAC unrolled K loop (matches QNN's loop0 body). */
+                uint32_t kt = 0;
+                for (; kt + 1 < K_tiles; kt += 2) {
+                    const uint8_t *a0 = act_tiles + (kt    ) * 1024;
+                    const uint8_t *a1 = act_tiles + (kt + 1) * 1024;
+                    const uint8_t *w0 = wt_tiles  + (kt    ) * 1024;
+                    const uint8_t *w1 = wt_tiles  + (kt + 1) * 1024;
+                    asm volatile(
+                        "{ activation.ub = mxmem(%0, %1):cm\n"
+                        "  weight.b      = mxmem(%2, %3) }\n"
+                        "{ activation.ub = mxmem(%4, %1):cm\n"
+                        "  weight.b      = mxmem(%5, %3) }"
+                        :: "r"(a0), "r"(HMX_RT_ACT_CM),
+                           "r"(w0), "r"(HMX_RT_WT),
+                           "r"(a1), "r"(w1)
+                        : "memory");
+                }
+                /* Tail for odd K_tiles. */
+                if (kt < K_tiles) {
+                    asm volatile(
+                        "{ activation.ub = mxmem(%0, %1):cm\n"
+                        "  weight.b      = mxmem(%2, %3) }"
+                        :: "r"(act_tiles + kt * 1024), "r"(HMX_RT_ACT_CM),
+                           "r"(wt_tiles  + kt * 1024), "r"(HMX_RT_WT)
+                        : "memory");
+                }
+                asm volatile("mxmem(%0, %1):after:cm:sat.ub = acc"
+                             :: "r"(out_tile), "r"(0) : "memory");
+            }
+        }
+    } else {
+        /* Legacy row-major path: VTCM staging + scalar scatter. */
+        for (uint32_t mt = 0; mt < M_tiles; mt++) {
+            for (uint32_t nt = 0; nt < N_tiles; nt++) {
+                const uint8_t  *act_tiles = packed_act + (mt * K_tiles) * 1024;
+                const uint8_t  *wt_tiles  = packed_wt  + (nt * K_tiles) * 1024;
+                const uint16_t *bias_n    = bias_all   + nt * 128;
+                uint8_t        *out_tile  = out + (mt * 32) * N + nt * 32;
+
+                asm volatile("bias = mxmem(%0)" :: "r"(bias_n) : "memory");
+                asm volatile("mxclracc" ::: "memory");
+                for (uint32_t kt = 0; kt < K_tiles; kt++) {
+                    hmx_v8_mac_accumulate(
+                        act_tiles + kt * 1024,
+                        wt_tiles  + kt * 1024);
+                }
+                asm volatile("mxmem(%0, %1):after:cm:sat.ub = acc"
+                             :: "r"(vtcm_stg), "r"(0) : "memory");
+                for (uint32_t r = 0; r < 32; r++) {
+                    memcpy(&out_tile[r * N], &vtcm_stg[r * 32], 32);
+                }
             }
         }
     }
@@ -145,7 +209,11 @@ static QHPI_Tensor_Signature_v1 sig_inputs_v8[] = {
     {QHPI_QUInt8,  QHPI_Layout_Flat4, QHPI_Storage_Direct, QHPI_MemLoc_TCM_Only},   /* vtcm staging (1 KiB aligned) */
 };
 static QHPI_Tensor_Signature_v1 sig_outputs_v8[] = {
-    {QHPI_QUInt8,  QHPI_Layout_Flat4, QHPI_Storage_Direct, QHPI_MemLoc_DDR_OR_TCM}, /* u8 out */
+    /* TCM-only output.  In tile-layout mode, sat.ub writes 1 KiB per
+     * tile directly to this VTCM buffer — matches QNN ConvLayer_s1.opt.
+     * A follow-up TcmDramCopy op bulk-memcpys to DDR if the graph end
+     * requires DDR. */
+    {QHPI_QUInt8,  QHPI_Layout_Flat4, QHPI_Storage_Direct, QHPI_MemLoc_TCM_Only},
 };
 
 static QHPI_Kernel_v1 sg_kernels_v8[] = {

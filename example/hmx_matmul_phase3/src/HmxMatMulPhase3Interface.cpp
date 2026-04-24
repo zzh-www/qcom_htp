@@ -30,6 +30,8 @@ void register_pack_act_rm_op();
 void register_pack_wt_v3_op();
 void register_combine_op();
 void register_int4_expand_op();
+void register_untile_to_rowmajor_op();
+void register_tcm_dram_copy_op();
 }
 
 static constexpr auto sg_packageName = THIS_PKG_NAME_STR;
@@ -184,6 +186,8 @@ const char *qhpi_init() {
     register_pack_wt_v3_op();
     register_combine_op();
     register_int4_expand_op();
+    register_untile_to_rowmajor_op();
+    register_tcm_dram_copy_op();
     return THIS_PKG_NAME_STR;
 }
 
