@@ -1,173 +1,104 @@
-# Next session starting point — Phase 3C 并行化 + ISA 探索 (2026-04-23)
+# V8 架构完成 + formula 部分校准 — HMX semantics 比文档更复杂 (2026-04-24)
 
-> 最新 commit: Phase 3B V3 纯 HMX op 至 **0.143 cyc/MAC @ 512³ bit-exact**。
-> 177× gap 到 QNN w8a16（v8.09e-4 cyc/MAC）仍在。本 doc 明确下阶段要探索什么。
+> **架构已完成**: V8 复刻 QNN `ConvLayer_s1.opt`：3-op graph, 4-asm HMX-only kernel, 无 HVX requant.
+> **性能**: 32³ V8 总 20K cyc vs QNN 17K (1.18×). HMX 内核 6162 cyc vs QNN 2926 (2.1×).
+> **未达 bit-exact**: `:cm:sat.ub` + fp16 bias 语义比文档复杂; 有隐式 offset/scale 行为尚未完全解码.
 
-## 0. 当前位置（一句话）
+## 0. 已完成
 
-V3 kernel 已经剥干净 —— op 里只剩 HMX MAC + 小 scalar decode + scatter。
-但 pack/gather/combine 都让 host 代劳了（没接 Agent B 的上游 HVX op）。
-所以**架构对了、接线没做完**。
+### 架构（P3 + P4）
+- `HmxMatMulV8Op.cpp`: 纯 4 asm 指令（bias + clracc + K × pair + `:after:cm:sat.ub`）
+- `pack_act_rm_hvx.c`: 新 HVX MT=4 op 产出 row-major 1 KB tile 供 `:cm` 消费
+- `run_matmul_v8_graph.cpp`: 3-node graph (pack_act_rm + pack_wt_v3 + mmv8)
+- 注册 + build + 上设备 ✓
 
-## 1. 你问"为什么没对齐 QNN"—— 直接答案
+### Silicon RE（P1）
+`probe_sat_ub.c` 6 个 test 跑通：
+- ✓ `:after:cm:sat.ub` 填满 **32 行**（不继承 dual-scale 的 16 行问题）
+- ✓ Per-col bias 有效（T3）
+- ⚠ 公式 **不是** `out = sat_u8(round(acc × bias_fp16 / 512) + 128)` — 那是 T2 表面现象，**在真实 matmul 场景不成立**
 
-177× 差距里可明确归因：
+## 1. 未解码的 HMX semantics（关键 blocker）
 
-| 来源 | 比例 | 能否做 |
-|---|---:|---|
-| **Graph 并行未接通**（Agent B 上游 HVX + HMX 并发） | ~3-4× | ✅ 明确可做 |
-| **`:cm` 零 pack 未启用**（`:cm` row-major layout 最后 bug） | ~1.3-1.5× | ✅ 明确可做 |
-| **mxmem pipeline 停顿**（VTCM 读取 pattern 次优化） | ~1.5-2× | ⚠️ ISA 文档 gated，靠探针 RE |
-| **Native `weight.n` int4 HMX** | ~2× | ❌ ISA 文档未公开 |
+探针 T5（act=all-1, wt[0][n]=n+1, acc=(n+1)）各种 bias 扫描发现：
 
-**能做的 3-4 × 1.3 = ~5×**，把 177× 压到 **~35×**。
-**探针能拿到的 1.5-2×**，进一步到 **~20×**。
-**文档门槛内**，剩下 ~10× 到 QNN。
+```
+bias_fp16   | out 观测  | 预期（per T2 公式）
+0x3800 (0.5)| 112      | 128
+0x3C00 (1.0)| 120      | 128
+0x4000 (2.0)| 128      | 128
+0x4400 (4.0)| 136      | 128
+0x4800 (8.0)| 144      | 128
+```
 
-## 2. 明确探索方向（按优先级）
+pattern: `out = 120 + 8 × log2(bias_fp16)` —— 与 acc 几乎无关（!）且按 log2 bias 线性。这不符合任何简单乘法公式。
 
-### 方向 A — Path W 图级并行 (第一优先，明确可做)
+V8 DIAG1（act=wt=all-1, acc=32, bias=2.0）得 **112 而非预期 128**。
 
-**目标**：把 V3 kernel 的 host-side pre-pack 替换成 Agent B 已经写好的 HVX ops 作为 graph 节点，让 QNN scheduler 把 pack 分派到 4 个 HVX 线程、HMX 单独跑 MAC。
+**可能原因（全部需要进一步 probe）**：
+1. `:cm` activation **可能被当作 signed (u8-128)**: 那 K=32 下 acc = -127×32 = -4064, out = round(-4064×2/512) + 128 = 112 ✓（匹配 DIAG1！）但这不能同时解释 T5 的 log2 关系.
+2. **bias 某种 log-encoding**：如 HMX 把 fp16 解读为带 log scale，T5 结果可能自然浮现
+3. **bias lane mapping 不是 bias[n]↔col n**：T6 显示 bias[0] 改动影响多列. 也许实际是 bias[128] 对 32 cols 的多对一映射
+4. **上述几点组合**
 
-**要做的**：
-1. 读 `example/hmx_matmul_phase3/kernel/pack_act_hvx.c` 和 `pack_wt_hvx.c` 的 signature（输入 tensor shape + 输出 tensor shape）
-2. 改 `run_matmul_v3.cpp` → `run_matmul_graph.cpp`，构图为：
-   ```
-   raw uint8 act   →  PackActToHmxTile  →  packed_act tensor  ┐
-   raw int8 wt     →  PackWeightToHmxTile →  packed_wt tensor ┴→  MatMulV3  → int32 out
-   ```
-3. 每个 op 是独立 graph 节点，QNN scheduler 自然把 PackAct + PackWt 派到 HVX 线程
-4. 测量 `cyc/MAC` 对比 V3（host-pre-pack）。若 ≤ 0.05 说明并行有效；若 ≈ 0.143 说明 scheduler 串行化了（之前 P8 auto-tile 的情形）
+## 2. 还需要做的 probe（~1-2 day）
 
-**回退**：如果 QNN scheduler 不给 HVX ops 并发调度：
-- 尝试 V3 op 自己声明 `QHPI_RESOURCE_HVX + multithreaded=true`（撒谎说是 HVX op），让 QHPI self-slicing 生效
-- 或：手写 qurt_thread_spawn 在 kernel 内部多线程（绕过 QHPI）
+- **T7**: act=k (row-ramp), wt=1, 单 col 输出 — 看 acc 是否 = Σ(k-128) 或 Σk
+- **T8**: bias sweep 更 fine (0x4000 vs 0x4400 之间各 exp/mant 点) — pin down 编码
+- **T9**: bias[c] 逐位反扫 — mapping bias index → col output 关系  
+- **T10**: 用 probe_cm_singlecell.c 模式，单 (m,n) cell 观测 acc 是否和 scalar 预期一致
 
-**关键文件**：
-- `Agent/phase3b_path_w_impl.md` — Agent B 的 op API 设计
-- `example/hmx_matmul_phase3/kernel/{pack_act_hvx,pack_wt_hvx,combine_hi_lo_hvx,int4_expand_hvx}.c`
-- `example/hmx_matmul_phase3/src/run_matmul_v3.cpp` — 参考，改造起点
+## 3. 本次实现的完整性能数据（32³, 非 bit-exact）
 
-### 方向 B — `:cm` row-major 零 pack 最后一公里 (第二优先)
+```
+架构 / op           cycles   相对 V6    相对 QNN w8a8
+---                 ------   --------   -------------
+V6 monolithic       ~32K     —          1.9×
+V7 split (w/req)    ~60K     1.9×       3.5× 
+V8 (本轮)           ~20K     0.63×      1.18×
+QNN w8a8            ~17K     0.53×      1.0×
 
-**目标**：完成 `:cm` + row-major 的 bit-exact 实现。Agent A 硅探针证明 7.92 cyc/MAC 可达，比 V3 的 2-stream 9.03 快 1.1×。若用上则 V3 本身从 0.143 再降。
+mmv8 HMX 内核        6K cyc  -          2.1× (vs ConvLayer_s1.opt 2.9K)
+```
 
-**要做的**：
-1. 写新的定向硅探针 `example/hmx_matmul_device/probe_cm_weight_layout.c`
-2. Test 1：weight[k=0, n=0]=1，其余 0。activation 全 1. 预期 output[m, 0]=1 for m in 活跃 rows。**从输出哪些行非零，推 weight 的 K-ordering**。
-3. Test 2：weight[k, 0]=k+1, k=0..31, 其余 0. activation 全 1. 预期 output[m, 0]=32*33/2=528 for 活跃 m. **从实际值推 K-sum 是否正确**。
-4. Test 3：变 weight 布局（row-major vs Phase 2 packed vs 其他）测哪个给正确输出
-5. 得出 `:cm` + 正确 weight layout 后，改 V3 kernel 用 `:cm`，bit-exact 全量 shape
+V8 是 **迄今最接近 QNN 的总 cycle**，但 bit-exact 还没拿到.
 
-**参考**：
-- `Agent/cm_row_major_re.md` — Agent A 做的 activation layout RE
-- `Agent/phase3b_cm_readback_layout.md` — 之前 debug 过程中得到的部分 findings
-- `example/hmx_matmul_device/probe_cm_row_major.c` — 探针模板
+## 4. Files 本次改动
 
-### 方向 C — mxmem pipeline RE（ISA 文档 gated，但硅可探）
+```
+新:
+  example/hmx_matmul_device/probe_sat_ub.c  （T1..T6 probe + runner）
+  example/hmx_matmul_device/run_sat_ub_probe.sh
+  example/hmx_matmul_phase3/kernel/pack_act_rm_hvx.c
+  example/hmx_matmul_phase3/src/HmxMatMulV8Op.cpp
+  example/hmx_matmul_phase3/src/run_matmul_v8_graph.cpp
+  example/hmx_matmul_phase3/run_v8_graph_on_device.sh
 
-**假设**：V3 实测 75,000 cyc/(m,n)tile vs 理论 130 cyc (silicon ceiling)。99.8% 时间不是 HMX MAC 本身，是 VTCM 读取停顿、pipeline bubble、scheduler 开销。
+改:
+  HmxMatMulPhase3Interface.cpp  （注册 V8 + pack_act_rm）
+  build.sh                      （加 V8 / pack_act_rm 到 link）
+```
 
-**要做的探针** (写到 `example/hmx_matmul_device/probe_mxmem_pipeline.c`)：
-1. **Tile prefetch**：连续 16 K-iter 读 **同一个** wt tile (hot) vs 16 **不同** wt tiles (cold)。量化 cold-read penalty per packet。
-2. **`:dilate` modifier**：Phase 1 probe 测 `:dilate` 在 2-stream 上是 no-op，但没在 `:cm` + row-major 上测过。试 `weight.b = mxmem(..., 0x3FF):dilate` 看是否改变吞吐。
-3. **连续 tile 地址模式**：weight tile address 按 stride 递增 vs 随机。找"QNN 风格"(连续 1KB 步长) 是否更快。
-4. **bias reload 间距**：Phase 1 看到 QNN 在某些点 combine(r9, r7) 改 Rt 值。试在 inner loop 某些位置 reload bias，看是否影响 throughput。
-
-**期望收益**：1.5-2×，若探出 hot prefetch pattern 或 dilate 的隐藏效果。
-
-### 方向 D — `weight.n` 硅级探针（ISA 文档 gated，低成功率但值得 1-2 天投入）
-
-**背景**：`libQnnHtpV75Skel.so` 里有 232 次 `weight.n` 使用，都在 Conv2D + LPBQ 路径。理论 2× 带宽优势对 int4 重要。
-
-**要做的**：
-1. 反汇编 `libQnnHtpV75Skel.so` 里所有 `weight.n` 出现的 op kernel，收集指令上下文（Rt 值、紧随 `:dilate` / `:cm`、tile 地址计算 pattern）
-2. 写 `probe_weightn_native.c` 硅探针，按观察到的 pattern 发 MAC 指令，看是否能产出正确 int4 × int8 结果
-3. 如果硅接受：将 V3 kernel MAC 指令从 `weight.b = mxmem(...)` 改成 `weight.n = mxmem(...)`，同步改 weight tile pack 格式（int4 nibble pack，半 VTCM 带宽）
-4. bit-exact + 测性能
-
-**失败的话**：确认 Qualcomm 把 `weight.n` 和特殊 Rt 编码绑定，需要内部文档解码，停在这里。
-
-### 方向 E — w4a16 / w4a8 端到端（应用层）
-
-上面 A/B 做完后，扩展到完整应用：
-- w4a16: 加 `Int16HiLoSplit` + `CombineHiLo` HVX ops (Agent B 已写好) 到 graph
-- w4a8: 加 `Int4Expand` HVX op 到 graph
-
-这是套用架构；没新问题。
-
-## 3. Session 起手动作
+## 5. Resume
 
 ```bash
 source scripts/env.sh
 
-# 1. Regression: V2/V3 仍然 bit-exact
-cd example/hmx_matmul_phase3
-bash build.sh
-bash run_v2_on_device.sh --shape 512,512,512   # expect 0.23 cyc/MAC, 0 mismatches
-bash run_v3_on_device.sh --shape 512,512,512   # expect 0.143 cyc/MAC, 0 mismatches
+# Silicon probe
+cd example/hmx_matmul_device && bash run_sat_ub_probe.sh
 
-# 2. 方向 A 起手：读 Agent B 的 op signatures
-cat kernel/pack_act_hvx.c | head -100
-cat kernel/pack_wt_hvx.c  | head -100
+# V8 graph
+cd ../hmx_matmul_phase3 && bash build.sh
+bash run_v8_graph_on_device.sh --shape 32,32,32              # current: 20K cyc, not bit-exact
+# DIAG modes (4th arg = 999/998/997 for uniform/col-ramp/all-neg):
+ssh oneplus "cd ~/qnn_run && ./run_matmul_v8_graph 32 32 32 999"
 
-# 3. 写 graph-wired host harness
-# （新文件 src/run_matmul_graph.cpp，参照 run_matmul_v3.cpp，
-#   用 g_qnn.graphAddNode 添加多个节点）
+# 之前的 working V6 仍可用：
+bash run_v6_graph_on_device.sh --shape 1024,1024,1024        # 0.0015, 1.9× QNN, bit-exact
 ```
 
-## 4. 数字目标（明确）
+## 6. 建议下轮
 
-| 里程碑 | cyc/MAC @ 512³ | vs QNN w8a16 |
-|--------|---------------:|-------------:|
-| 当前 V3 | 0.143 | 177× |
-| 方向 A 完成 (Path W graph 并行) | ≤ 0.05 | ≤ 60× |
-| 方向 A+B | ≤ 0.03 | ≤ 40× |
-| 方向 A+B+C | ≤ 0.015 | ≤ 20× |
-| 方向 A+B+C+D | ≤ 0.008 | ≤ 10× |
-| 理论 HMX-only ceiling | ~2.4e-4 | 0.3× (超过 QNN) |
+**走 probe 路线**: T7-T10 系列 targeted probe 直接反解 HMX `:cm:sat.ub` + bias 实际语义。**不要试图从文档/intrinsic 头文件推**——已经验证它们在这里不完整。拿到 HMX 黑盒的精确 transfer function 后才能写 bit-exact V8 reference + bias lookup。
 
-"对齐 QNN" 现实目标：≤ 5× of QNN (即 ≤ 4e-3 cyc/MAC)。需要 A+B+C 三者都成。
-
-## 5. 状态快照
-
-```
-Commits today (新→旧):
-  a8137db  NEXT_STEPS.md Phase 3 plan
-  861ccd3  Phase 3A Crouton probe
-  5551504  Phase 3B Path X/W initial
-  e4ae8f7  :cm readback layout RE
-  146d8e5  :cm stride-2 iteration
-  3ef0434  Phase 3B bit-exact main
-  9d75a35  Phase 3B @ Phase 2 parity
-  23ae15f  NEXT_STEPS.md update
-  (latest) Phase 3B V3 pure HMX op 0.143 cyc/MAC
-
-Registered ops in example/hmx_matmul_phase3/:
-  MatMulInt8xInt8Crouton  -- Phase 3A probe (diagnostics)
-  MatMulV2                 -- gather + HMX + decode in one op (0.23)
-  MatMulV3                 -- pure HMX, host pre-packs (0.143) ★
-  PackActivationToHmxTile  -- Agent B HVX op (built, not wired)
-  PackWeightToHmxTile      -- Agent B HVX op
-  CombineHiLo              -- Agent B HVX op
-  Int4Expand               -- Agent B HVX op
-
-Phase 2 baseline 仍在 example/hmx_matmul_{qnn,w4a8}/ 不动.
-```
-
-## 6. 不要做的事
-
-- 不要再在单个 op 内堆优化。V2→V3 已证明拆 op 更有效。
-- 不要动 `example/hmx_matmul_qnn/` 和 `example/hmx_matmul_w4a8/`（Phase 2 baseline，冻结）。
-- 不要从零写新 HVX ops；Agent B 的 4 个已经过 build 测试。
-- 不要忽略 host-side pack 的成本 —— graph 并行后"accelerator cycles"包含 HVX pack，数字会变化但是更真实的。
-
-## 7. 最后：诚实的限制
-
-即使方向 A+B+C 全部做完到 20×，仍未"对齐"QNN。差的 20× 里包含：
-- 我们看不到的 HMX 指令 pipeline tricks
-- `:dilate` 在 1×1 MatMul 路径下的真实语义
-- Qualcomm 对 QNN 框架做的 per-shape optimization
-
-不要期待 2× 以内对齐 QNN 没有 Qualcomm 内部文档泄漏。**10× 以内对齐已是公开文档能达到的较高水平**，这是下阶段的合理终点。
+一旦 bit-exact：V8 当前 20K cyc（32³） → 目标 ~100K cyc（512³）约 1.5× QNN。可能还能通过 tile pipeline 再降到 1.2× QNN。
