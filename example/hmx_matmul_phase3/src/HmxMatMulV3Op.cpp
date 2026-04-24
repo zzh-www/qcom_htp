@@ -76,13 +76,13 @@ static uint32_t hmx_matmul_v3_kernel(
     uint16_t *out_top_hi = (uint16_t *)(vt + 4096);
     uint16_t *out_bot_lo = (uint16_t *)(vt + 6144);   /* unused (plain-mxmem path) */
     uint16_t *out_bot_hi = (uint16_t *)(vt + 8192);
-    static int32_t mn_tile[32 * 32];
 
     /* Core loop. NO gather, NO pack, NO scalar data movement.
-     * Inputs are already HMX-tile-format bytes from upstream pack. */
+     * Inputs are already HMX-tile-format bytes from upstream pack.
+     * Dual-scale decode + scatter fused into one HVX pass per tile — no
+     * scalar intermediate buffer. */
     for (uint32_t mt = 0; mt < M_tiles; mt++) {
         for (uint32_t nt = 0; nt < N_tiles; nt++) {
-            /* Direct VTCM pointers into pre-packed tile arrays. */
             const uint8_t *act_tiles = packed_act + (mt * K_tiles) * 2048;
             const uint8_t *wt_tiles  = packed_wt  + (nt * K_tiles) * 1024;
 
@@ -90,22 +90,9 @@ static uint32_t hmx_matmul_v3_kernel(
                                    out_top_lo, out_top_hi,
                                    out_bot_lo, out_bot_hi);
 
-            /* Dual-scale decode — small scalar arithmetic, kept inline. */
-            for (int ir = 0; ir < 32; ir++) {
-                int phys_row = ir & 15, stream = ir >> 4;
-                for (int jc = 0; jc < 32; jc++) {
-                    int idx = phys_row * 64 + 2 * jc + stream;
-                    uint16_t lo = out_top_lo[idx], hi = out_top_hi[idx];
-                    mn_tile[ir * 32 + jc] =
-                        ((int32_t)(int16_t)hi << 8) | ((int32_t)lo & 0xFF);
-                }
-            }
-            /* Scatter 32×32 tile to [M, N] output. */
-            for (uint32_t i = 0; i < 32; i++) {
-                int32_t *d = &out[(mt * 32 + i) * N + nt * 32];
-                const int32_t *s = &mn_tile[i * 32];
-                for (uint32_t j = 0; j < 32; j++) d[j] = s[j];
-            }
+            int32_t *out_tile_base = &out[(mt * 32) * N + nt * 32];
+            hmx_matmul_v2_decode_scatter_hvx(out_tile_base, N,
+                                              out_top_lo, out_top_hi);
         }
     }
     return QHPI_Success;
