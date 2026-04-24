@@ -81,3 +81,58 @@ hexagon-clang -mv75 -O2 \
     "$SCRIPT_DIR/probe_cm_row_major.c" \
     -o "$OUT_CM"
 echo "  -> $OUT_CM ($(wc -c < "$OUT_CM") bytes)"
+
+# probe_cm_weight_layout — varies weight patterns + layouts under :cm to
+# pin down the weight-tile byte layout HMX expects.
+OUT_CMW="$BUILD/libprobe_cm_weight_layout.so"
+hexagon-clang -mv75 -O2 \
+    -mhvx -mhvx-length=128B \
+    -mhmx \
+    -shared -fPIC \
+    -I "$HEXAGON_SDK/incs" \
+    -I "$HEXAGON_SDK/incs/stddef" \
+    -I "$HEXAGON_SDK/rtos/qurt/computev75/include/qurt" \
+    "$SCRIPT_DIR/probe_cm_weight_layout.c" \
+    -o "$OUT_CMW"
+echo "  -> $OUT_CMW ($(wc -c < "$OUT_CMW") bytes)"
+
+# probe_cm_readback — pins down the dual-scale readback layout under :cm.
+OUT_CMR="$BUILD/libprobe_cm_readback.so"
+hexagon-clang -mv75 -O2 \
+    -mhvx -mhvx-length=128B \
+    -mhmx \
+    -shared -fPIC \
+    -I "$HEXAGON_SDK/incs" \
+    -I "$HEXAGON_SDK/incs/stddef" \
+    -I "$HEXAGON_SDK/rtos/qurt/computev75/include/qurt" \
+    "$SCRIPT_DIR/probe_cm_readback.c" \
+    -o "$OUT_CMR"
+echo "  -> $OUT_CMR ($(wc -c < "$OUT_CMR") bytes)"
+
+# probe_sat_ub — verifies :after:cm:sat.ub single-byte HMX readback,
+# primarily whether it fills all 32 output rows (vs the 16-of-32 limitation
+# found on :after.uh acc:2x1). Drives Phase 3D.4 V8 replica decision.
+OUT_SU="$BUILD/libprobe_sat_ub.so"
+hexagon-clang -mv75 -O2 \
+    -mhvx -mhvx-length=128B -mhmx \
+    -shared -fPIC \
+    -I "$HEXAGON_SDK/incs" \
+    -I "$HEXAGON_SDK/incs/stddef" \
+    -I "$HEXAGON_SDK/rtos/qurt/computev75/include/qurt" \
+    "$SCRIPT_DIR/probe_sat_ub.c" \
+    -o "$OUT_SU"
+echo "  -> $OUT_SU ($(wc -c < "$OUT_SU") bytes)"
+
+# probe_cm_singlecell — single (m,n) cell sweep to definitively map
+# acc[m][n] → readback indices (lo + hi) under :cm.
+OUT_CMS="$BUILD/libprobe_cm_singlecell.so"
+hexagon-clang -mv75 -O2 \
+    -mhvx -mhvx-length=128B \
+    -mhmx \
+    -shared -fPIC \
+    -I "$HEXAGON_SDK/incs" \
+    -I "$HEXAGON_SDK/incs/stddef" \
+    -I "$HEXAGON_SDK/rtos/qurt/computev75/include/qurt" \
+    "$SCRIPT_DIR/probe_cm_singlecell.c" \
+    -o "$OUT_CMS"
+echo "  -> $OUT_CMS ($(wc -c < "$OUT_CMS") bytes)"
