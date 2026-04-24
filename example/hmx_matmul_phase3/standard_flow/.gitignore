@@ -38,3 +38,6 @@
 # on-device results
 */device_out/
 */output/
+
+# sweep driver artifacts (run results, not source)
+*/sweep_v9/

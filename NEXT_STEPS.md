@@ -51,39 +51,57 @@ for d in 999 998 997 996 995; do
 done
 ```
 
-### Standard flow — ONNX → DLC → ctx-binary → qnn-net-run optrace
+### Standard flow — shape-adaptive ONNX (V9)
 ```bash
 cd example/hmx_matmul_phase3
 bash build.sh && bash build_x86.sh
 
 cd standard_flow/phaseB_v8
-python gen_v8_onnx.py
+# Any shape:
+python gen_v8_graph.py --M 4096 --K 4096 --N 4096
 (cd gen_out/HmxMatMulPhase3Package_Converter_Op_Package && make cpu)
-
-# Full pipeline (see docs/qnn_custom_op_sop.md §7-§10 for exact commands;
-# ctxgen + schematic + on-device qnn-net-run --use_native_input_files +
-# qnn-profile-viewer --schematic … → chrometrace.json).
+# Then convert → ctxgen → qnn-net-run (see docs/qnn_custom_op_sop.md §7-§10)
+# Or one-shot sweep:
+bash sweep_v9.sh                           # 512/1024/2048/4096
+SHAPES="32 128 256" bash sweep_v9.sh       # override
 ```
 
-## Open items (next candidates) — see `Agent/matmul_blueprint_2026-04-25.md`
+## Current V9 perf vs QNN native (2026-04-25, see `Agent/v9_sweep_results_2026-04-25.md`)
 
-**Core finding**: QNN's HMX utilization is only 18.4% (12K cyc MAC in 66K
-timeline). Speed comes from graph-level slicing + parallel HVX pack on
-2 threads, NOT HMX-HVX overlap. V8 HMX kernel is already correct.
+| Shape | V9 cycles | QNN cycles | V9/QNN | V9 cyc/MAC | QNN cyc/MAC |
+|-------|----------:|-----------:|-------:|-----------:|------------:|
+| 512³  |    540K   |    67K     |   8.1× | 4.22e-3    | 5.2e-4      |
+| 1024³ |   3.08M   |   182K     |  16.9× | 3.01e-3    | 1.8e-4      |
+| 2048³ |   21.1M   |   1.42M    |  14.9× | 2.58e-3    | 1.7e-4      |
+| 4096³ |   161M    |   28.9M    |   5.6× | 2.47e-3    | 4.4e-4      |
 
-Ranked ROI:
+V9 cyc/MAC converges to ~2.5 (fixed overhead amortizes). QNN hits
+best 0.17 at 1024-2048³, degrades at 4096³ due to spill/fill.
 
-1. **Slice ONNX graph M/N into halves → 4 MatMulV8 + 2 pack_act + 2 pack_wt
-   + Concat** (Python-only, `gen_v8_onnx.py` edit). Expected ~3×, no kernel
-   changes. Validates that QNN scheduler dispatches the 2 pack_act
-   instances to separate HVX threads.
-2. **HVX-rewrite `pack_act_rm_hvx.c` + `pack_wt_v3_hvx.c`** to use
-   `V6_vshuffvdd(Vu,Vv,-32)` topology (4 rows × 128 cols per iter, ~8 HVX
-   insns vs our ~128 scalar cyc/tile). Expected ~3× on pack cycles.
-3. **Add weights-to-VTCM prefetch op on HMX resource** — runs during HVX
-   pack window, hides DDR→VTCM latency.
-4. **`TcmDramCopy` → `UntileToRowMajor`** fused Crouton-untile + DDR write
-   (kernel already exists at `kernel/untile_to_rowmajor_hvx.c`).
+**VTCM overflow threshold**: between 1024³ (0 spill) and 2048³ (8.8 MB
+spill). Compiler auto-inserts @Spill/@Fill for our custom ops when
+the graph has enough tile instances. V9 at 4096³: 62 MB spill +
+452 MB fill (hidden in the compiler's memory management).
+
+## Open items (next candidates)
+
+Ranked ROI (post-V9, see `Agent/matmul_blueprint_2026-04-25.md`,
+`Agent/v9_sweep_results_2026-04-25.md`):
+
+1. **HVX vshuff pack rewrite** — `pack_act_rm_hvx.c` at 600K cyc/call
+   vs QNN's ForceFormat_Crouton ~5K cyc/call. Use `V6_vshuffvdd(Vu,Vv,-32)`
+   topology (`Agent/forceformat_crouton_re.md` §4). Expected 3-5× total.
+2. **Smaller N_TILE at large shape** — planner currently picks N_TILE=256
+   everywhere; at 4096³ this forces 62 MB spill. Shrinking to 64 or 128
+   (QNN uses 64 at 4096³) would reduce spill and bring us closer to QNN.
+3. **Investigate mmv8 inner loop at large K** — per-MAC cost is 28× above
+   QNN at 4096³ despite same silicon primitives. Likely bank-conflict or
+   cache-line penalty from the 64-iter K loop; probe to confirm.
+4. **Fix `--profiling_option optrace` on multi-instance V9 graphs**
+   (execution fails; `detailed` works).
+
+Dead ends confirmed (don't retry):
+- `:dilate` / `mxswapacc` / `:retain` modifiers on `:cm:sat.ub` — no effect.
 
 Dead ends confirmed (don't retry):
 - `:dilate` / `mxswapacc` / `:retain` modifiers on `:cm:sat.ub` — no effect.
