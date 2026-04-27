@@ -50,13 +50,27 @@ $QNN_SDK_ROOT/bin/x86_64-linux-clang/qairt-converter \
 
 echo "=== [3/5] qnn-context-binary-generator ==="
 rm -rf "$OUT_DIR/ctx"
+# --profiling_level detailed + --profiling_option optrace is what makes
+# ctxgen actually emit schematic.bin (alongside the bottom_mapping.json).
+# Without these two flags, schematic is processed in-memory and discarded —
+# so optrace decode on the runtime profile log later fails.
 $QNN_SDK_ROOT/bin/x86_64-linux-clang/qnn-context-binary-generator \
     --backend $QNN_SDK_ROOT/lib/x86_64-linux-clang/libQnnHtp.so \
     --dlc_path "$OUT_DIR/v8c8.dlc" \
     --op_packages "$X86_PKG:HmxMatMulPhase3InterfaceProvider" \
     --binary_file v8c8_ctx --output_dir "$OUT_DIR/ctx" \
     --config_file htp_config.json \
+    --profiling_level detailed --profiling_option optrace \
     --save_backend_op_mapping 2>&1 | tee "$OUT_DIR/ctxgen.log" | tail -3
+# Schematic lands in CWD (which is SCRIPT_DIR after our cd above) under
+# the input model basename → "v8c8_schematic.bin". Move into OUT_DIR/ctx
+# for self-contained per-shape artifacts.
+if [ -f "$SCRIPT_DIR/v8c8_schematic.bin" ]; then
+    mv "$SCRIPT_DIR/v8c8_schematic.bin" "$OUT_DIR/ctx/v8c8_schematic.bin"
+elif [ -f "v8c8_schematic.bin" ]; then
+    mv v8c8_schematic.bin "$OUT_DIR/ctx/v8c8_schematic.bin"
+fi
+ls -la "$OUT_DIR/ctx/" | grep -i schem || echo "  (warn: no schematic.bin produced)"
 
 echo "  --- ctxgen node summary ---"
 python3 -c "
