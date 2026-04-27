@@ -65,7 +65,7 @@ typedef struct {
     uint32_t alt_rt;          /* +0x18 — Rt for last-K MAC + odd-tail */
 } hmx_conv_mask_desc_t;
 
-#if defined(__hexagon__) && defined(V9_USE_DLSYM)
+#if defined(__hexagon__) && (defined(V9_USE_DLSYM) || defined(V9_USE_NATIVE_KERNEL) || defined(V9_PARAMS_PROBE))
 extern "C" void hmx_convbbb1x1_stride1(
     const hmx_conv_out_desc_t  *out_desc,
     const hmx_conv_act_desc_t  *act_desc,
@@ -74,9 +74,11 @@ extern "C" void hmx_convbbb1x1_stride1(
     const hmx_conv_mask_desc_t *mask_desc);
 #endif
 
-#if defined(__hexagon__) && defined(V9_DUMP_HMX_PARAMS)
+#if defined(__hexagon__) && (defined(V9_DUMP_HMX_PARAMS) || defined(V9_PARAMS_PROBE) || defined(V9_USE_NATIVE_KERNEL))
 /* libQnnHtpV75Skel.so :: set_hmx_params_conv1x1 — fills a 0x40-byte
- * hmx_params descriptor block at *out_params. Dynamic symbol, dlsym-able. */
+ * hmx_params descriptor block at *out_params. GLOBAL DEFAULT export
+ * (verified via llvm-readelf), reachable from our op-pkg .so via the
+ * R_HEX_JMP_SLOT cross-.so call mechanism (Agent/dlsym_spike_PASS_2026-04-25.md). */
 extern "C" void _Z22set_hmx_params_conv1x1P10hmx_paramsmmmmm(
     void     *out_params,  /* r0 — 64-byte buffer */
     uint32_t  arg1,        /* r1 */
@@ -566,6 +568,122 @@ static uint32_t hmx_matmul_v9_kernel(
         *(int32_t *)(out_buf + 32) = sum_w_c0;
 
         out_buf[63] = 0x5A;
+    }
+    return QHPI_Success;
+#elif defined(V9_PARAMS_PROBE)
+    /* Step 5.1 — characterize set_hmx_params_conv1x1 args.
+     *
+     * Calls dlsym'd set_hmx_params_conv1x1 with a sweep of arg combinations,
+     * dumps each resulting 0x40-byte descriptor into the output Crouton_8
+     * tensor at predictable row/col positions so the post-Untile row-major
+     * output reveals each case at out[case_idx][0..127].
+     *
+     * Layout per case (128 bytes / row):
+     *   bytes 0..3   : arg1
+     *   bytes 4..7   : arg2
+     *   bytes 8..11  : arg3
+     *   bytes 12..15 : arg4
+     *   bytes 16..19 : arg5
+     *   bytes 20..23 : 0xDEADBEEF magic
+     *   bytes 24..87 : 64-byte descriptor output from set_hmx_params_conv1x1
+     *   bytes 88..127: zeros
+     *
+     * Crouton_8 output [1, M/32, 32, N] real layout (empirically reverse-
+     * engineered via initial probe iteration). Each block holds 8 row-chunks
+     * at row-stride 32 (not 64-contiguous as a naive HMX-tile-major model
+     * would suggest):
+     *   block_idx = ((m % 32) / 8) * out_n_chunks + (n / 32)
+     *   inblk_off = (m / 32) * 256 + (m % 8) * 32 + (n % 32)
+     * out_n_chunks = N / 32. Block 0 covers logical rows
+     *   {0..7, 32..39, 64..71, 96..103, 128..135, 160..167, 192..199, 224..231}
+     * × cols 0..31 (8 sub-chunks × 8 rows × 32 cols = 2048 B).
+     *
+     * Run with: EXTRA_DEFS="-DV9_C8_ALIGNMENT_TEST -DV9_PARAMS_PROBE" */
+    {
+        void **out_blocks = qhpi_tensor_block_table(outputs[0]);
+        if (!out_blocks) return QHPI_Success;
+
+        uint32_t blocks = qhpi_tensor_block_table_length(inputs[0]);
+        uint32_t S = 0;
+        if (blocks == 4)         S = 32;
+        else if (blocks == 8)    S = 64;
+        else if (blocks == 16)   S = 128;
+        else if (blocks == 32)   S = 256;
+        else if (blocks == 128)  S = 512;
+        else if (blocks == 512)  S = 1024;
+        if (S == 0) return QHPI_Success;
+
+        const uint32_t M = S, N = S;
+        const uint32_t out_n_chunks = N / 32;
+
+        /* Use actual block_table_length to bound writes safely. */
+        const uint32_t total_out_blocks = qhpi_tensor_block_table_length(outputs[0]);
+        const uint32_t bytes_per_block =
+            total_out_blocks > 0 ? (uint32_t)(M * N) / total_out_blocks : 0;
+        for (uint32_t bi = 0; bi < total_out_blocks; bi++) {
+            uint8_t *blk = (uint8_t *)out_blocks[bi];
+            if (blk) for (uint32_t k = 0; k < bytes_per_block; k++) blk[k] = 0;
+        }
+
+        /* Probe-arg sweep. The 5 args are well-aligned to mask_desc semantics
+         * via internal bit-twiddling; we vary each parameter to characterize
+         * its contribution to output bytes. */
+        struct ProbeArgs {
+            uint32_t r1, r2, r3, r4, r5;
+        };
+        const ProbeArgs cases[] = {
+            /* Baseline + isolated bit sweeps */
+            {0x000, 0x000, 0x000, 0x000, 0x000},   /*  0 — all zero */
+            {0x400, 0x000, 0x000, 0x000, 0x000},   /*  1 — arg1 bit 10 (r2 = 32 path) */
+            {0x600, 0x000, 0x000, 0x000, 0x000},   /*  2 — arg1 r2-field = 48 */
+            {0x780, 0x000, 0x000, 0x000, 0x000},   /*  3 — arg1 r2-field = 60 */
+            {0x7C0, 0x000, 0x000, 0x000, 0x000},   /*  4 — arg1 r2-field = 62 */
+            /* arg2 sweep (likely K-related count) */
+            {0x000, 0x008, 0x000, 0x000, 0x000},   /*  5 — arg2 = 8 */
+            {0x000, 0x020, 0x000, 0x000, 0x000},   /*  6 — arg2 = 32 */
+            {0x000, 0x100, 0x000, 0x000, 0x000},   /*  7 — arg2 = 256 (K total) */
+            /* arg3 (stored at +0x00 << 5) */
+            {0x000, 0x000, 0x001, 0x000, 0x000},   /*  8 — arg3 = 1 */
+            {0x000, 0x000, 0x010, 0x000, 0x000},   /*  9 — arg3 = 16 */
+            {0x000, 0x000, 0x020, 0x000, 0x000},   /* 10 — arg3 = 32 */
+            /* arg4 (negated, low 3 bits via if-r5-bit5) */
+            {0x000, 0x000, 0x000, 0x008, 0x020},   /* 11 — arg4=8, arg5 bit5 set */
+            {0x000, 0x000, 0x000, 0x020, 0x020},   /* 12 — arg4=32 */
+            /* arg5: r13 = (r5>>8)&0x1F (depth/spread) */
+            {0x000, 0x000, 0x000, 0x000, 0x100},   /* 13 — arg5 r13-field = 1 */
+            {0x000, 0x000, 0x000, 0x000, 0x200},   /* 14 — arg5 r13-field = 2 */
+            {0x000, 0x000, 0x000, 0x000, 0x300},   /* 15 — arg5 r13-field = 3 (path A) */
+        };
+        const uint32_t n_cases = sizeof(cases) / sizeof(cases[0]);
+
+        for (uint32_t i = 0; i < n_cases && i < 16; i++) {
+            uint8_t desc[64] __attribute__((aligned(16)));
+            for (uint32_t j = 0; j < 64; j++) desc[j] = 0xCD;
+            set_hmx_params_conv1x1(desc, cases[i].r1, cases[i].r2,
+                                   cases[i].r3, cases[i].r4, cases[i].r5);
+
+            /* Pack header (24 B) + descriptor (64 B) + zero pad (40 B) = 128 B. */
+            uint8_t row[128];
+            for (uint32_t j = 0; j < 128; j++) row[j] = 0;
+            *(uint32_t *)(row + 0)  = cases[i].r1;
+            *(uint32_t *)(row + 4)  = cases[i].r2;
+            *(uint32_t *)(row + 8)  = cases[i].r3;
+            *(uint32_t *)(row + 12) = cases[i].r4;
+            *(uint32_t *)(row + 16) = cases[i].r5;
+            *(uint32_t *)(row + 20) = 0xDEADBEEF;
+            for (uint32_t j = 0; j < 64; j++) row[24 + j] = desc[j];
+
+            /* Scatter row[0..127] into Crouton_8 output blocks using the
+             * empirically-correct layout. */
+            const uint32_t m = i;
+            for (uint32_t n = 0; n < 128 && n < N; n++) {
+                uint32_t block_idx = ((m % 32) / 8) * out_n_chunks + (n / 32);
+                uint32_t inblk_off = (m / 32) * 256 + (m % 8) * 32 + (n % 32);
+                if (block_idx >= total_out_blocks) continue;
+                uint8_t *blk = (uint8_t *)out_blocks[block_idx];
+                if (blk) blk[inblk_off] = row[n];
+            }
+        }
     }
     return QHPI_Success;
 #elif defined(V9_KERNEL_NOOP) || defined(V9_C8_ALIGNMENT_TEST)
