@@ -168,6 +168,9 @@ BbbKMajor 与 native ConvLayer_s1.opt 在**纯 HMX kernel cyc** 上差 **5.3×**
 
 ## Step 5 — 切到 descriptor-driven autonomous HMX (NEW MAIN PATH)
 
+> **完整执行计划 + Profile 验证方法**: `docs/v8c8_step5_descriptor_driven_plan.md`
+> **架构洞见**: `docs/hmx_dsp_vs_descriptor_driven.md`
+
 ### 目标
 
 V8C8 BbbKMajor steady-state HMX kernel cyc: 8,000 → 1,500 (5.3× 提速)。
