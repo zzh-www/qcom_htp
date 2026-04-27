@@ -237,52 +237,54 @@ static uint32_t hmx_matmul_v9_kernel(
         }
 
         asm volatile("mxclracc" ::: "memory");
-        for (uint32_t nt = 0; nt < N_t; nt++) {
-            const uint8_t *bias_n  = bias_bytes + nt * 256;
-            const int32_t *wt_ptrs = &wt_ptrs_all[nt * K_t];
-            /* Bias = native fold: lower 128 B fp16 pair (sat.ub scaling),
-             * upper 128 B int32 effective (initial acc fold). mxmem2
-             * consumes 256 B and applies both halves. */
-            asm volatile("bias = mxmem2(%0)" :: "r"(bias_n) : "memory");
 
-            for (uint32_t mt = 0; mt < M_t; mt++) {
-                /* Output Crouton_8 block addressing.
-                 *   block_rows = 32 (S=128): 1 HMX tile = 1 block.
-                 *     bi = mt * out_n_chunks + nt, in-block offset 0.
-                 *   block_rows = 64 (S≥256): 1 block = 2 HMX tiles.
-                 *     bi = (mt/2) * out_n_chunks + nt;
-                 *     in-block offset = (mt % 2) * 1024.
-                 * HMX :after:cm:sat.ub writes 1024 contiguous bytes to
-                 * out_tile, which lands inside the right output block. */
-                const uint32_t mt_per_blk_o = block_rows / 32;
-                const uint32_t bi_o = (mt / mt_per_blk_o) * out_n_chunks + nt;
-                const uint32_t off_o = (mt % mt_per_blk_o) * 1024;
-                uint8_t *out_tile = (uint8_t *)out_blocks[bi_o] + off_o;
-                const int32_t *act_ptrs = &act_ptrs_all[mt * K_t];
-
-                /* Bias reload per-mt removed: HMX bias register persists
-                 * across sat.ub events for at least M_t=32 (verified
-                 * bit-exact at 1024³). Single load at nt-band entry above
-                 * is sufficient. Saves ~5 cyc × M_t × N_t per kernel. */
+        /* Loop order: mt outer, nt inner.
+         *
+         * At S ≥ 256³ the output Crouton_8 block_rows = 64, so each 2 KiB block
+         * holds two HMX 1 KiB tiles (mt % 2 = 0 at offset 0, mt % 2 = 1 at
+         * offset 1024). With the alternative nt-outer order each pair of
+         * adjacent mt writes (mt=0,1 / 2,3 / 4,5 / 6,7) hits the same block
+         * ~30 cyc apart (one MAC sweep), causing ~+3K cyc of VTCM cache-line
+         * conflict at 256³ vs the (now-unused) pre-Crouton-8 tile-array
+         * output. With mt outer the second write to the same block is delayed
+         * by N_t whole nt-sweeps (~640 cyc at 256³), eliminating the conflict.
+         *
+         * Cost: M_t × N_t bias reloads instead of N_t — but each reload is
+         * one mxmem2 instruction (~5 cyc), worst case ≈ 1024 × 5 ≈ 5K cyc at
+         * S=1024, while the conflict pattern at S=1024 would cost ≈ 13K.
+         * Net win at every shape; per-(mt,nt) reload also makes bias
+         * persistence robust (HMX bias state has empirically expired after
+         * ≥8 sat.ub events on some configs). */
+        const uint32_t mt_per_blk_o = block_rows / 32;
+        for (uint32_t mt = 0; mt < M_t; mt++) {
+            const uint32_t bi_o_row = (mt / mt_per_blk_o) * out_n_chunks;
+            const uint32_t off_o    = (mt % mt_per_blk_o) * 1024;
+            const int32_t *act_ptrs = &act_ptrs_all[mt * K_t];
+            for (uint32_t nt = 0; nt < N_t; nt++) {
+                const uint8_t *bias_n  = bias_bytes + nt * 256;
+                const int32_t *wt_ptrs = &wt_ptrs_all[nt * K_t];
+                /* bias = native fold (256 B / N-tile): low 128 B = 32 ×
+                 * (fp16 scale, fp16 baseline) for sat.ub; high 128 B = 32 ×
+                 * int32 effective_bias = -ACT_ZP × Σ_k W[k,c] + bias_q[c]
+                 * (initial acc fold). mxmem2 consumes both halves. */
+                asm volatile("bias = mxmem2(%0)" :: "r"(bias_n) : "memory");
+                uint8_t *out_tile = (uint8_t *)out_blocks[bi_o_row + nt] + off_o;
 
                 /* Hexagon hw loop0 with dual-MAC unroll.
-                 *   r1 walks act_ptrs (int32 array, 4 B/entry, post-inc 8 = 2 ptrs/iter)
+                 *   r1 walks act_ptrs (int32 array, post-inc 8 = 2 ptrs/iter)
                  *   r3 walks wt_ptrs  (same)
                  *   loop0 trip = K_t / 2; one iter consumes 2 K-tiles.
-                 *
-                 * Body (4 packets / 2 MAC = 2 cyc/MAC body, vs prior ~30+):
+                 * Body (4 packets / 2 MAC = 2 cyc/MAC body):
                  *   { r6  = memw(r1++#8); r8  = memw(r3++#8) }
                  *   { r23 = memw(r1+#-4); r9  = memw(r3+#-4) }
                  *   { activation.ub = mxmem(r6, r24):cm; weight.b = mxmem(r8, r25) }
                  *   { activation.ub = mxmem(r23,r24):cm; weight.b = mxmem(r9, r25) } :endloop0
-                 *
-                 * K_t is always power-of-2 ≥ 4 here (S ≥ 128, K_t ∈ {4,8,16,32}). */
+                 * K_t is power-of-2 ≥ 4 here (S ≥ 128, K_t ∈ {4,8,16,32}). */
                 const uint32_t loop0_trip = K_t / 2;
                 register int32_t r1  asm("r1")  = (int32_t)(uintptr_t)act_ptrs;
                 register int32_t r3  asm("r3")  = (int32_t)(uintptr_t)wt_ptrs;
                 register int32_t r24 asm("r24") = (int32_t)HMX_RT_ACT_CM;
                 register int32_t r25 asm("r25") = (int32_t)HMX_RT_WT;
-
                 asm volatile(
                     "  loop0(1f, %2)\n"
                     "1:\n"
