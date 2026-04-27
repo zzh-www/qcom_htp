@@ -1,0 +1,4400 @@
+# python_pprint_graph_summary, truegraph = 1, inorder=0
+graph_before_optimization = { # :::BEGIN:graph_before_optimization:::
+	0x0000000000000003: {
+		'operation':'q::Output',
+		'inputs' : [
+			(0x1c,0),
+			(0x21,0),
+			(0x26,0),
+			(0x2b,0),
+			(0x30,0),
+			(0x35,0),
+			(0x3a,0),
+			(0x3f,0),
+		],
+		'outputs' : [
+		],
+	},
+	0x0000000000000004: {
+		'operation':'$Shape',
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [0,0,0,0],
+			},
+		],
+	},
+	0x0000000000000010: {
+		'operation':'q::QNN_Reshape',
+		'inputs' : [
+			(0x100000000002,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000000000000011: {
+		'operation':'q::QNN_Reshape',
+		'inputs' : [
+			(0x100000000002,1),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000000000000012: {
+		'operation':'q::QNN_Reshape',
+		'inputs' : [
+			(0x100000000002,2),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000000000000013: {
+		'operation':'q::QNN_Reshape',
+		'inputs' : [
+			(0x100000000002,3),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000000000000014: {
+		'operation':'q::QNN_Reshape',
+		'inputs' : [
+			(0x100000000002,4),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000000000000015: {
+		'operation':'q::QNN_Reshape',
+		'inputs' : [
+			(0x100000000002,5),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000000000000016: {
+		'operation':'q::QNN_Reshape',
+		'inputs' : [
+			(0x100000000002,6),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000000000000017: {
+		'operation':'q::QNN_Reshape',
+		'inputs' : [
+			(0x100000000002,7),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000000000000018: {
+		'operation':'$Const',
+# CONTENT HASH: 97441ebc
+		'datalen': 65536,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000000000000019: {
+		'operation':'q::QNN_FullyConnected',
+		'inputs' : [
+			(0x10,0),
+			(0x18,0),
+			(0x1a,0),
+			(0x1b,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x000000000000001a: {
+		'operation':'$Const',
+# CONTENT HASH: ad72c64b
+		'datalen': 1024,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QInt32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,1,1,256],
+			},
+		],
+	},
+	0x000000000000001b: {
+		'operation':'$Const',
+# VALUES: 0.000000, 
+# CONTENT HASH: 9efb862a
+		'data': "00",
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,1,1,1],
+			},
+		],
+	},
+	0x000000000000001c: {
+		'operation':'q::QNN_Reshape',
+		'inputs' : [
+			(0x19,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x000000000000001d: {
+		'operation':'$Const',
+# CONTENT HASH: fee73df4
+		'datalen': 65536,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x000000000000001e: {
+		'operation':'q::QNN_FullyConnected',
+		'inputs' : [
+			(0x11,0),
+			(0x1d,0),
+			(0x1a,0),
+			(0x1b,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000000000000021: {
+		'operation':'q::QNN_Reshape',
+		'inputs' : [
+			(0x1e,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000000000000022: {
+		'operation':'$Const',
+# CONTENT HASH: acf25a2c
+		'datalen': 65536,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000000000000023: {
+		'operation':'q::QNN_FullyConnected',
+		'inputs' : [
+			(0x12,0),
+			(0x22,0),
+			(0x1a,0),
+			(0x1b,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000000000000026: {
+		'operation':'q::QNN_Reshape',
+		'inputs' : [
+			(0x23,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000000000000027: {
+		'operation':'$Const',
+# CONTENT HASH: 52d8b35e
+		'datalen': 65536,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000000000000028: {
+		'operation':'q::QNN_FullyConnected',
+		'inputs' : [
+			(0x13,0),
+			(0x27,0),
+			(0x1a,0),
+			(0x1b,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x000000000000002b: {
+		'operation':'q::QNN_Reshape',
+		'inputs' : [
+			(0x28,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x000000000000002c: {
+		'operation':'$Const',
+# CONTENT HASH: 4f98c656
+		'datalen': 65536,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x000000000000002d: {
+		'operation':'q::QNN_FullyConnected',
+		'inputs' : [
+			(0x14,0),
+			(0x2c,0),
+			(0x1a,0),
+			(0x1b,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000000000000030: {
+		'operation':'q::QNN_Reshape',
+		'inputs' : [
+			(0x2d,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000000000000031: {
+		'operation':'$Const',
+# CONTENT HASH: 47df9a4e
+		'datalen': 65536,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000000000000032: {
+		'operation':'q::QNN_FullyConnected',
+		'inputs' : [
+			(0x15,0),
+			(0x31,0),
+			(0x1a,0),
+			(0x1b,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000000000000035: {
+		'operation':'q::QNN_Reshape',
+		'inputs' : [
+			(0x32,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000000000000036: {
+		'operation':'$Const',
+# CONTENT HASH: f09e3546
+		'datalen': 65536,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000000000000037: {
+		'operation':'q::QNN_FullyConnected',
+		'inputs' : [
+			(0x16,0),
+			(0x36,0),
+			(0x1a,0),
+			(0x1b,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x000000000000003a: {
+		'operation':'q::QNN_Reshape',
+		'inputs' : [
+			(0x37,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x000000000000003b: {
+		'operation':'$Const',
+# CONTENT HASH: 0f8bb4b8
+		'datalen': 65536,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x000000000000003c: {
+		'operation':'q::QNN_FullyConnected',
+		'inputs' : [
+			(0x17,0),
+			(0x3b,0),
+			(0x1a,0),
+			(0x1b,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x000000000000003f: {
+		'operation':'q::QNN_Reshape',
+		'inputs' : [
+			(0x3c,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000100000000002: {
+		'operation':'q::Input',
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+}
+# :::END:graph_before_optimization:::
+# :::BEGIN:dead_nodes:graph_before_optimization
+# *** use '--setopt dead_nodes 1' to collect & report dead-node info
+graph_before_optimization_remapped_ids = {
+}
+graph_before_optimization_dead_nodes = {
+# 0 items
+# id map 14 items
+}
+# :::END:dead_nodes:graph_before_optimization
+
+tile_groups = {
+} # tile_groups 
+# python_pprint_graph_summary, truegraph = 1, inorder=0
+graph_after_optimization = { # :::BEGIN:graph_after_optimization:::
+	0x0000100200000008: {
+		'operation':'$Const',
+# VALUES: 8.000000, 
+# CONTENT HASH: 31427852
+		'data': "08000000",
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 0,
+				'zero_offset': 0, 'stepsize': 0.0,
+				'dims': [],
+			},
+		],
+	},
+	0x0000100382d28377: {
+		'operation':'$Shape',
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.0,
+				'dims': [0,0,0,0],
+			},
+		],
+	},
+	0x0000100382d28378: {
+		'operation':'$Shape',
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.0,
+				'dims': [0,0,0,1],
+			},
+		],
+	},
+	0x0000100382d28379: {
+		'operation':'$Shape',
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.0,
+				'dims': [0,0,0,2],
+			},
+		],
+	},
+	0x0000100382d2837a: {
+		'operation':'$Shape',
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.0,
+				'dims': [0,0,0,3],
+			},
+		],
+	},
+	0x0000100382d2837b: {
+		'operation':'$Shape',
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.0,
+				'dims': [0,0,0,4],
+			},
+		],
+	},
+	0x0000100382d2837c: {
+		'operation':'$Shape',
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.0,
+				'dims': [0,0,0,5],
+			},
+		],
+	},
+	0x0000100382d2837d: {
+		'operation':'$Shape',
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.0,
+				'dims': [0,0,0,6],
+			},
+		],
+	},
+	0x0000100382d2837e: {
+		'operation':'$Shape',
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.0,
+				'dims': [0,0,0,7],
+			},
+		],
+	},
+	0x000010038ad40c8f: {
+		'operation':'$Shape',
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.0,
+				'dims': [0,0,8,0],
+			},
+		],
+	},
+	0x000010038ad40c90: {
+		'operation':'$Shape',
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.0,
+				'dims': [0,0,8,1],
+			},
+		],
+	},
+	0x000010038ad40c91: {
+		'operation':'$Shape',
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.0,
+				'dims': [0,0,8,2],
+			},
+		],
+	},
+	0x000010038ad40c92: {
+		'operation':'$Shape',
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.0,
+				'dims': [0,0,8,3],
+			},
+		],
+	},
+	0x000010038ad40c93: {
+		'operation':'$Shape',
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.0,
+				'dims': [0,0,8,4],
+			},
+		],
+	},
+	0x000010038ad40c94: {
+		'operation':'$Shape',
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.0,
+				'dims': [0,0,8,5],
+			},
+		],
+	},
+	0x000010038ad40c95: {
+		'operation':'$Shape',
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.0,
+				'dims': [0,0,8,6],
+			},
+		],
+	},
+	0x000010038ad40c96: {
+		'operation':'$Shape',
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.0,
+				'dims': [0,0,8,7],
+			},
+		],
+	},
+	0x0000100399fb24bb: {
+		'operation':'$Shape',
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.0,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000111100000002: {
+		'operation':'q::*InputSlice',
+		'inputs' : [
+			(0x100382d28377,0),
+			(0x100382d28377,0),
+			(0x100399fb24bb,0),
+			(0x10038ad40c8f,0),
+			(0x100399fb24bb,0),
+			(0x100399fb24bb,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000111200000002: {
+		'operation':'q::*InputSlice',
+		'inputs' : [
+			(0x100382d28377,0),
+			(0x100382d28377,0),
+			(0x100399fb24bb,0),
+			(0x10038ad40c90,0),
+			(0x100399fb24bb,0),
+			(0x100399fb24bb,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000111300000002: {
+		'operation':'q::*InputSlice',
+		'inputs' : [
+			(0x100382d28377,0),
+			(0x100382d28377,0),
+			(0x100399fb24bb,0),
+			(0x10038ad40c91,0),
+			(0x100399fb24bb,0),
+			(0x100399fb24bb,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000111400000002: {
+		'operation':'q::*InputSlice',
+		'inputs' : [
+			(0x100382d28377,0),
+			(0x100382d28377,0),
+			(0x100399fb24bb,0),
+			(0x10038ad40c92,0),
+			(0x100399fb24bb,0),
+			(0x100399fb24bb,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000111500000002: {
+		'operation':'q::*InputSlice',
+		'inputs' : [
+			(0x100382d28377,0),
+			(0x100382d28377,0),
+			(0x100399fb24bb,0),
+			(0x10038ad40c93,0),
+			(0x100399fb24bb,0),
+			(0x100399fb24bb,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000111600000002: {
+		'operation':'q::*InputSlice',
+		'inputs' : [
+			(0x100382d28377,0),
+			(0x100382d28377,0),
+			(0x100399fb24bb,0),
+			(0x10038ad40c94,0),
+			(0x100399fb24bb,0),
+			(0x100399fb24bb,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000111700000002: {
+		'operation':'q::*InputSlice',
+		'inputs' : [
+			(0x100382d28377,0),
+			(0x100382d28377,0),
+			(0x100399fb24bb,0),
+			(0x10038ad40c95,0),
+			(0x100399fb24bb,0),
+			(0x100399fb24bb,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000111800000002: {
+		'operation':'q::*InputSlice',
+		'inputs' : [
+			(0x100382d28377,0),
+			(0x100382d28377,0),
+			(0x100399fb24bb,0),
+			(0x10038ad40c96,0),
+			(0x100399fb24bb,0),
+			(0x100399fb24bb,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x000011b200000019: {
+		'operation':'q::ConvLayer.opt.bias_to_vtcm',
+		'inputs' : [
+			(0x127d00000019,0),
+		],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,8,1,64],
+			},
+		],
+	},
+	0x000011b50000001e: {
+		'operation':'q::ConvLayer.opt.bias_to_vtcm',
+		'inputs' : [
+			(0x127e0000001e,0),
+		],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,8,1,64],
+			},
+		],
+	},
+	0x000011b800000023: {
+		'operation':'q::ConvLayer.opt.bias_to_vtcm',
+		'inputs' : [
+			(0x127f00000023,0),
+		],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,8,1,64],
+			},
+		],
+	},
+	0x000011bb00000028: {
+		'operation':'q::ConvLayer.opt.bias_to_vtcm',
+		'inputs' : [
+			(0x128000000028,0),
+		],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,8,1,64],
+			},
+		],
+	},
+	0x000011be0000002d: {
+		'operation':'q::ConvLayer.opt.bias_to_vtcm',
+		'inputs' : [
+			(0x12810000002d,0),
+		],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,8,1,64],
+			},
+		],
+	},
+	0x000011c100000032: {
+		'operation':'q::ConvLayer.opt.bias_to_vtcm',
+		'inputs' : [
+			(0x128200000032,0),
+		],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,8,1,64],
+			},
+		],
+	},
+	0x000011c400000037: {
+		'operation':'q::ConvLayer.opt.bias_to_vtcm',
+		'inputs' : [
+			(0x128300000037,0),
+		],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,8,1,64],
+			},
+		],
+	},
+	0x000011c70000003c: {
+		'operation':'q::ConvLayer.opt.bias_to_vtcm',
+		'inputs' : [
+			(0x12840000003c,0),
+		],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,8,1,64],
+			},
+		],
+	},
+	0x000011d100000019: {
+		'operation':'q::Reshape',
+		'inputs' : [
+			(0x111100000002,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x000011d40000001e: {
+		'operation':'q::Reshape',
+		'inputs' : [
+			(0x111200000002,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x000011d700000023: {
+		'operation':'q::Reshape',
+		'inputs' : [
+			(0x111300000002,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x000011da00000028: {
+		'operation':'q::Reshape',
+		'inputs' : [
+			(0x111400000002,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x000011dd0000002d: {
+		'operation':'q::Reshape',
+		'inputs' : [
+			(0x111500000002,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x000011e000000032: {
+		'operation':'q::Reshape',
+		'inputs' : [
+			(0x111600000002,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x000011e300000037: {
+		'operation':'q::Reshape',
+		'inputs' : [
+			(0x111700000002,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x000011e60000003c: {
+		'operation':'q::Reshape',
+		'inputs' : [
+			(0x111800000002,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x000011fb00000019: {
+		'operation':'q::ConvLayer_s1.opt',
+		'inputs' : [
+			(0x121100000019,0),
+			(0x124100000019,0),
+			(0x11b200000019,0),
+			(0x100200000008,0),
+			(0x126300000019,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x000011fe0000001e: {
+		'operation':'q::ConvLayer_s1.opt',
+		'inputs' : [
+			(0x12130000001e,0),
+			(0x12420000001e,0),
+			(0x11b50000001e,0),
+			(0x100200000008,0),
+			(0x126300000019,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x0000120100000023: {
+		'operation':'q::ConvLayer_s1.opt',
+		'inputs' : [
+			(0x121500000023,0),
+			(0x124300000023,0),
+			(0x11b800000023,0),
+			(0x100200000008,0),
+			(0x126300000019,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x0000120400000028: {
+		'operation':'q::ConvLayer_s1.opt',
+		'inputs' : [
+			(0x121700000028,0),
+			(0x124400000028,0),
+			(0x11bb00000028,0),
+			(0x100200000008,0),
+			(0x126300000019,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x000012070000002d: {
+		'operation':'q::ConvLayer_s1.opt',
+		'inputs' : [
+			(0x12190000002d,0),
+			(0x12450000002d,0),
+			(0x11be0000002d,0),
+			(0x100200000008,0),
+			(0x126300000019,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x0000120a00000032: {
+		'operation':'q::ConvLayer_s1.opt',
+		'inputs' : [
+			(0x121b00000032,0),
+			(0x124600000032,0),
+			(0x11c100000032,0),
+			(0x100200000008,0),
+			(0x126300000019,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x0000120d00000037: {
+		'operation':'q::ConvLayer_s1.opt',
+		'inputs' : [
+			(0x121d00000037,0),
+			(0x124700000037,0),
+			(0x11c400000037,0),
+			(0x100200000008,0),
+			(0x126300000019,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x000012100000003c: {
+		'operation':'q::ConvLayer_s1.opt',
+		'inputs' : [
+			(0x121f0000003c,0),
+			(0x12480000003c,0),
+			(0x11c70000003c,0),
+			(0x100200000008,0),
+			(0x126300000019,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x0000121100000019: {
+		'operation':'q::ForceFormat_Crouton',
+		'inputs' : [
+			(0x11d100000019,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x000012130000001e: {
+		'operation':'q::ForceFormat_Crouton',
+		'inputs' : [
+			(0x11d40000001e,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x0000121500000023: {
+		'operation':'q::ForceFormat_Crouton',
+		'inputs' : [
+			(0x11d700000023,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x0000121700000028: {
+		'operation':'q::ForceFormat_Crouton',
+		'inputs' : [
+			(0x11da00000028,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x000012190000002d: {
+		'operation':'q::ForceFormat_Crouton',
+		'inputs' : [
+			(0x11dd0000002d,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x0000121b00000032: {
+		'operation':'q::ForceFormat_Crouton',
+		'inputs' : [
+			(0x11e000000032,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x0000121d00000037: {
+		'operation':'q::ForceFormat_Crouton',
+		'inputs' : [
+			(0x11e300000037,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x0000121f0000003c: {
+		'operation':'q::ForceFormat_Crouton',
+		'inputs' : [
+			(0x11e60000003c,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x0000122200000003: {
+		'operation':'q::*OutputSlice',
+		'inputs' : [
+			(0x123200000003,0),
+			(0x100399fb24bb,0),
+			(0x100382d28377,0),
+			(0x100382d28377,0),
+		],
+		'outputs' : [
+		],
+	},
+	0x0000122400000003: {
+		'operation':'q::*OutputSlice',
+		'inputs' : [
+			(0x123400000003,0),
+			(0x100399fb24bb,0),
+			(0x100382d28377,0),
+			(0x100382d28378,0),
+		],
+		'outputs' : [
+		],
+	},
+	0x0000122600000003: {
+		'operation':'q::*OutputSlice',
+		'inputs' : [
+			(0x123600000003,0),
+			(0x100399fb24bb,0),
+			(0x100382d28377,0),
+			(0x100382d28379,0),
+		],
+		'outputs' : [
+		],
+	},
+	0x0000122800000003: {
+		'operation':'q::*OutputSlice',
+		'inputs' : [
+			(0x123800000003,0),
+			(0x100399fb24bb,0),
+			(0x100382d28377,0),
+			(0x100382d2837a,0),
+		],
+		'outputs' : [
+		],
+	},
+	0x0000122a00000003: {
+		'operation':'q::*OutputSlice',
+		'inputs' : [
+			(0x123a00000003,0),
+			(0x100399fb24bb,0),
+			(0x100382d28377,0),
+			(0x100382d2837b,0),
+		],
+		'outputs' : [
+		],
+	},
+	0x0000122c00000003: {
+		'operation':'q::*OutputSlice',
+		'inputs' : [
+			(0x123c00000003,0),
+			(0x100399fb24bb,0),
+			(0x100382d28377,0),
+			(0x100382d2837c,0),
+		],
+		'outputs' : [
+		],
+	},
+	0x0000122e00000003: {
+		'operation':'q::*OutputSlice',
+		'inputs' : [
+			(0x123e00000003,0),
+			(0x100399fb24bb,0),
+			(0x100382d28377,0),
+			(0x100382d2837d,0),
+		],
+		'outputs' : [
+		],
+	},
+	0x0000123000000003: {
+		'operation':'q::*OutputSlice',
+		'inputs' : [
+			(0x124000000003,0),
+			(0x100399fb24bb,0),
+			(0x100382d28377,0),
+			(0x100382d2837e,0),
+		],
+		'outputs' : [
+		],
+	},
+	0x0000123100000003: {
+		'operation':'q::ForceFormat_Flat',
+		'inputs' : [
+			(0x11fb00000019,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x0000123200000003: {
+		'operation':'q::Reshape',
+		'inputs' : [
+			(0x123100000003,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000123300000003: {
+		'operation':'q::ForceFormat_Flat',
+		'inputs' : [
+			(0x11fe0000001e,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x0000123400000003: {
+		'operation':'q::Reshape',
+		'inputs' : [
+			(0x123300000003,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000123500000003: {
+		'operation':'q::ForceFormat_Flat',
+		'inputs' : [
+			(0x120100000023,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x0000123600000003: {
+		'operation':'q::Reshape',
+		'inputs' : [
+			(0x123500000003,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000123700000003: {
+		'operation':'q::ForceFormat_Flat',
+		'inputs' : [
+			(0x120400000028,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x0000123800000003: {
+		'operation':'q::Reshape',
+		'inputs' : [
+			(0x123700000003,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000123900000003: {
+		'operation':'q::ForceFormat_Flat',
+		'inputs' : [
+			(0x12070000002d,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x0000123a00000003: {
+		'operation':'q::Reshape',
+		'inputs' : [
+			(0x123900000003,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000123b00000003: {
+		'operation':'q::ForceFormat_Flat',
+		'inputs' : [
+			(0x120a00000032,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x0000123c00000003: {
+		'operation':'q::Reshape',
+		'inputs' : [
+			(0x123b00000003,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000123d00000003: {
+		'operation':'q::ForceFormat_Flat',
+		'inputs' : [
+			(0x120d00000037,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x0000123e00000003: {
+		'operation':'q::Reshape',
+		'inputs' : [
+			(0x123d00000003,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000123f00000003: {
+		'operation':'q::ForceFormat_Flat',
+		'inputs' : [
+			(0x12100000003c,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x0000124000000003: {
+		'operation':'q::Reshape',
+		'inputs' : [
+			(0x123f00000003,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000124100000019: {
+		'operation':'q::ConvLayer.opt.weights_to_vtcm',
+		'inputs' : [
+			(0x126400000019,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x000012420000001e: {
+		'operation':'q::ConvLayer.opt.weights_to_vtcm',
+		'inputs' : [
+			(0x12650000001e,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000124300000023: {
+		'operation':'q::ConvLayer.opt.weights_to_vtcm',
+		'inputs' : [
+			(0x126600000023,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000124400000028: {
+		'operation':'q::ConvLayer.opt.weights_to_vtcm',
+		'inputs' : [
+			(0x126700000028,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x000012450000002d: {
+		'operation':'q::ConvLayer.opt.weights_to_vtcm',
+		'inputs' : [
+			(0x12680000002d,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000124600000032: {
+		'operation':'q::ConvLayer.opt.weights_to_vtcm',
+		'inputs' : [
+			(0x126900000032,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000124700000037: {
+		'operation':'q::ConvLayer.opt.weights_to_vtcm',
+		'inputs' : [
+			(0x126a00000037,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x000012480000003c: {
+		'operation':'q::ConvLayer.opt.weights_to_vtcm',
+		'inputs' : [
+			(0x126b0000003c,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000126300000019: {
+		'operation':'$Const',
+# VALUES: 1.000000, 0.000000, 
+# CONTENT HASH: da7c17a0
+		'data': "0100000000000000",
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,1,1,2],
+			},
+		],
+	},
+	0x0000126400000019: {
+		'operation':'$Const',
+# CONTENT HASH: 5b61068c
+		'datalen': 65536,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x000012650000001e: {
+		'operation':'$Const',
+# CONTENT HASH: a0057cd4
+		'datalen': 65536,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000126600000023: {
+		'operation':'$Const',
+# CONTENT HASH: 32e9cb8b
+		'datalen': 65536,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000126700000028: {
+		'operation':'$Const',
+# CONTENT HASH: ed9203b8
+		'datalen': 65536,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x000012680000002d: {
+		'operation':'$Const',
+# CONTENT HASH: f9fcd18e
+		'datalen': 65536,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000126900000032: {
+		'operation':'$Const',
+# CONTENT HASH: 2336d086
+		'datalen': 65536,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000126a00000037: {
+		'operation':'$Const',
+# CONTENT HASH: 5a5db9bc
+		'datalen': 65536,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000126b0000003c: {
+		'operation':'$Const',
+# CONTENT HASH: 93651131
+		'datalen': 65536,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000127d00000019: {
+		'operation':'$Const',
+# CONTENT HASH: 6de49072
+		'datalen': 2048,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,8,1,64],
+			},
+		],
+	},
+	0x0000127e0000001e: {
+		'operation':'$Const',
+# CONTENT HASH: 08b5b372
+		'datalen': 2048,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,8,1,64],
+			},
+		],
+	},
+	0x0000127f00000023: {
+		'operation':'$Const',
+# CONTENT HASH: cb4cdd72
+		'datalen': 2048,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,8,1,64],
+			},
+		],
+	},
+	0x0000128000000028: {
+		'operation':'$Const',
+# CONTENT HASH: 07e27772
+		'datalen': 2048,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,8,1,64],
+			},
+		],
+	},
+	0x000012810000002d: {
+		'operation':'$Const',
+# CONTENT HASH: 573c2172
+		'datalen': 2048,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,8,1,64],
+			},
+		],
+	},
+	0x0000128200000032: {
+		'operation':'$Const',
+# CONTENT HASH: 0c7cfb72
+		'datalen': 2048,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,8,1,64],
+			},
+		],
+	},
+	0x0000128300000037: {
+		'operation':'$Const',
+# CONTENT HASH: 8c62caf2
+		'datalen': 2048,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,8,1,64],
+			},
+		],
+	},
+	0x000012840000003c: {
+		'operation':'$Const',
+# CONTENT HASH: 8ffe69f2
+		'datalen': 2048,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,8,1,64],
+			},
+		],
+	},
+}
+# :::END:graph_after_optimization:::
+# :::BEGIN:dead_nodes:graph_after_optimization
+# *** use '--setopt dead_nodes 1' to collect & report dead-node info
+graph_after_optimization_remapped_ids = {
+}
+graph_after_optimization_dead_nodes = {
+# 0 items
+# id map 0 items
+}
+# :::END:dead_nodes:graph_after_optimization
+
+
+# Note: values remapped to strings at end.
+
+concrete_ops_info = { # :::BEGIN:concrete_ops_info:::atomic
+	0x100200000008: 0,
+	0x100382d28377: 1,
+	0x100382d28378: 1,
+	0x100382d28379: 1,
+	0x100382d2837a: 1,
+	0x100382d2837b: 1,
+	0x100382d2837c: 1,
+	0x100382d2837d: 1,
+	0x100382d2837e: 1,
+	0x10038ad40c8f: 1,
+	0x10038ad40c90: 1,
+	0x10038ad40c91: 1,
+	0x10038ad40c92: 1,
+	0x10038ad40c93: 1,
+	0x10038ad40c94: 1,
+	0x10038ad40c95: 1,
+	0x10038ad40c96: 1,
+	0x100399fb24bb: 1,
+	0x111100000002: 2,
+	0x111200000002: 2,
+	0x111300000002: 2,
+	0x111400000002: 2,
+	0x111500000002: 2,
+	0x111600000002: 2,
+	0x111700000002: 2,
+	0x111800000002: 2,
+	0x11b200000019: 3,
+	0x11b50000001e: 3,
+	0x11b800000023: 3,
+	0x11bb00000028: 3,
+	0x11be0000002d: 3,
+	0x11c100000032: 3,
+	0x11c400000037: 3,
+	0x11c70000003c: 3,
+	0x11d100000019: 4,
+	0x11d40000001e: 4,
+	0x11d700000023: 4,
+	0x11da00000028: 4,
+	0x11dd0000002d: 4,
+	0x11e000000032: 4,
+	0x11e300000037: 4,
+	0x11e60000003c: 4,
+	0x11fb00000019: 5,
+	0x11fe0000001e: 5,
+	0x120100000023: 5,
+	0x120400000028: 5,
+	0x12070000002d: 5,
+	0x120a00000032: 5,
+	0x120d00000037: 5,
+	0x12100000003c: 5,
+	0x121100000019: 6,
+	0x12130000001e: 6,
+	0x121500000023: 6,
+	0x121700000028: 6,
+	0x12190000002d: 6,
+	0x121b00000032: 6,
+	0x121d00000037: 6,
+	0x121f0000003c: 6,
+	0x122200000003: 7,
+	0x122400000003: 7,
+	0x122600000003: 7,
+	0x122800000003: 7,
+	0x122a00000003: 7,
+	0x122c00000003: 7,
+	0x122e00000003: 7,
+	0x123000000003: 7,
+	0x123100000003: 8,
+	0x123200000003: 4,
+	0x123300000003: 8,
+	0x123400000003: 4,
+	0x123500000003: 8,
+	0x123600000003: 4,
+	0x123700000003: 8,
+	0x123800000003: 4,
+	0x123900000003: 8,
+	0x123a00000003: 4,
+	0x123b00000003: 8,
+	0x123c00000003: 4,
+	0x123d00000003: 8,
+	0x123e00000003: 4,
+	0x123f00000003: 8,
+	0x124000000003: 4,
+	0x124100000019: 9,
+	0x12420000001e: 9,
+	0x124300000023: 9,
+	0x124400000028: 9,
+	0x12450000002d: 9,
+	0x124600000032: 9,
+	0x124700000037: 9,
+	0x12480000003c: 9,
+	0x126300000019: 0,
+	0x126400000019: 0,
+	0x12650000001e: 0,
+	0x126600000023: 0,
+	0x126700000028: 0,
+	0x12680000002d: 0,
+	0x126900000032: 0,
+	0x126a00000037: 0,
+	0x126b0000003c: 0,
+	0x127d00000019: 0,
+	0x127e0000001e: 0,
+	0x127f00000023: 0,
+	0x128000000028: 0,
+	0x12810000002d: 0,
+	0x128200000032: 0,
+	0x128300000037: 0,
+	0x12840000003c: 0,
+}
+
+concrete_ops_info_key = [ # key for concrete_ops_info
+	"N4hnnx14ConstWrapperOpE",
+	"N4hnnx14ShapeWrapperOpE",
+	"N4hnnx9TypicalOpIXadL_ZL25Input_ContiguousSlice_dmaI14ConcreteTensorIN5Tdefs14QuantUint8_TCMEES2_INS3_10QuantUint8EELj4EEiRT_RK11TensorShapeILj4EERKSA_IXT1_EESG_SD_SG_SD_N3gHN2gXEEEEE",
+	"N4hnnx9TypicalOpIXadL_ZL16data_prepare_dmaI14ConcreteTensorIN5Tdefs9Int32_TCMEES2_INS3_5Int32EELb1EEiRT_RKT0_N3gHN2gXEEEEE",
+	"11PlacementOpIN4hnnx9TypicalOpIXadL_Z15reshape_inplaceI14ConcreteTensorIN5Tdefs14QuantUint8_TCMEEE11GraphStatusRT_RKS8_EEEEXadL_Z21reshape_inplace_allocISC_ES7_R5GraphS9_EEE",
+  #[5]
+	"N4hnnx21TypicalOpWithCompilerIXadL_Z20conv_layer_quant_v73I14ConcreteTensorIN5Tdefs17QUint8Crouton_TCMEES2_INS3_16shflSWeights_TCMEES5_EiRT_RKT1_RKT0_RKS2_INS3_9Int32_TCMEERK6TensorRKS2_INS3_5Int32EEEE11conv_paramsEE",
+	"N4hnnx9TypicalOpIXadL_ZL12flat2croutonI14ConcreteTensorIN5Tdefs17QUint8Crouton_TCMEES2_INS3_14QuantUint8_TCMEEEiRT_RKT0_EEEE",
+	"N4hnnx9TypicalOpIXadL_Z25output_slice_via_dma_implI14ConcreteTensorIN5Tdefs14QuantUint8_TCMEEEiRKT_RK11TensorShapeILj4EESC_SC_N3gHN2gXEEEEE",
+	"N4hnnx9TypicalOpIXadL_ZL15crouton_flattenI14ConcreteTensorIN5Tdefs14QuantUint8_TCMEES2_INS3_17QUint8Crouton_TCMEEEiRT_RKT0_EEEE",
+	"N4hnnx9TypicalOpIXadL_ZL16data_prepare_dmaI14ConcreteTensorIN5Tdefs16shflSWeights_TCMEES2_INS3_12shflSWeightsEELb1EEiRT_RKT0_N3gHN2gXEEEEE",
+]
+
+for k,v in concrete_ops_info.items():
+    concrete_ops_info[k] = concrete_ops_info_key[v]
+
+# :::END:concrete_ops_info:::
+
+runlist1 = [
+]
+runlist = runlist1
+
+
+bandwidth_information = [
+{"opid" : 0x0000111100000002 , "dram_read": 65536 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 65536, "is_dma": 1},
+{"opid" : 0x0000111200000002 , "dram_read": 65536 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 65536, "is_dma": 1},
+{"opid" : 0x0000111300000002 , "dram_read": 65536 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 65536, "is_dma": 1},
+{"opid" : 0x0000111400000002 , "dram_read": 65536 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 65536, "is_dma": 1},
+{"opid" : 0x0000111500000002 , "dram_read": 65536 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 65536, "is_dma": 1},
+{"opid" : 0x0000111600000002 , "dram_read": 65536 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 65536, "is_dma": 1},
+{"opid" : 0x0000111700000002 , "dram_read": 65536 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 65536, "is_dma": 1},
+{"opid" : 0x0000111800000002 , "dram_read": 65536 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 65536, "is_dma": 1},
+{"opid" : 0x0000121100000019 , "dram_read": 0 , "dram_write": 0 , "vtcm_read": 65536 , "vtcm_write": 65536, "is_dma": 0},
+{"opid" : 0x000012130000001e , "dram_read": 0 , "dram_write": 0 , "vtcm_read": 65536 , "vtcm_write": 65536, "is_dma": 0},
+{"opid" : 0x0000121500000023 , "dram_read": 0 , "dram_write": 0 , "vtcm_read": 65536 , "vtcm_write": 65536, "is_dma": 0},
+{"opid" : 0x0000121700000028 , "dram_read": 0 , "dram_write": 0 , "vtcm_read": 65536 , "vtcm_write": 65536, "is_dma": 0},
+{"opid" : 0x000012190000002d , "dram_read": 0 , "dram_write": 0 , "vtcm_read": 65536 , "vtcm_write": 65536, "is_dma": 0},
+{"opid" : 0x0000121b00000032 , "dram_read": 0 , "dram_write": 0 , "vtcm_read": 65536 , "vtcm_write": 65536, "is_dma": 0},
+{"opid" : 0x0000121d00000037 , "dram_read": 0 , "dram_write": 0 , "vtcm_read": 65536 , "vtcm_write": 65536, "is_dma": 0},
+{"opid" : 0x000011b200000019 , "dram_read": 2048 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 2048, "is_dma": 1},
+{"opid" : 0x0000124100000019 , "dram_read": 65536 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 65536, "is_dma": 1},
+{"opid" : 0x0000121f0000003c , "dram_read": 0 , "dram_write": 0 , "vtcm_read": 65536 , "vtcm_write": 65536, "is_dma": 0},
+{"opid" : 0x000011b50000001e , "dram_read": 2048 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 2048, "is_dma": 1},
+{"opid" : 0x000012420000001e , "dram_read": 65536 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 65536, "is_dma": 1},
+{"opid" : 0x000011b800000023 , "dram_read": 2048 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 2048, "is_dma": 1},
+{"opid" : 0x0000124300000023 , "dram_read": 65536 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 65536, "is_dma": 1},
+{"opid" : 0x000011bb00000028 , "dram_read": 2048 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 2048, "is_dma": 1},
+{"opid" : 0x0000124400000028 , "dram_read": 65536 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 65536, "is_dma": 1},
+{"opid" : 0x000011fb00000019 , "dram_read": 0 , "dram_write": 0 , "vtcm_read": 133120 , "vtcm_write": 65536, "is_dma": 0},
+{"opid" : 0x0000123100000003 , "dram_read": 0 , "dram_write": 0 , "vtcm_read": 65536 , "vtcm_write": 65536, "is_dma": 0},
+{"opid" : 0x000011be0000002d , "dram_read": 2048 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 2048, "is_dma": 1},
+{"opid" : 0x000012450000002d , "dram_read": 65536 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 65536, "is_dma": 1},
+{"opid" : 0x000011c100000032 , "dram_read": 2048 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 2048, "is_dma": 1},
+{"opid" : 0x0000124600000032 , "dram_read": 65536 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 65536, "is_dma": 1},
+{"opid" : 0x000011fe0000001e , "dram_read": 0 , "dram_write": 0 , "vtcm_read": 133120 , "vtcm_write": 65536, "is_dma": 0},
+{"opid" : 0x0000123300000003 , "dram_read": 0 , "dram_write": 0 , "vtcm_read": 65536 , "vtcm_write": 65536, "is_dma": 0},
+{"opid" : 0x000011c400000037 , "dram_read": 2048 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 2048, "is_dma": 1},
+{"opid" : 0x0000124700000037 , "dram_read": 65536 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 65536, "is_dma": 1},
+{"opid" : 0x000011c70000003c , "dram_read": 2048 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 2048, "is_dma": 1},
+{"opid" : 0x000012480000003c , "dram_read": 65536 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 65536, "is_dma": 1},
+{"opid" : 0x0000120100000023 , "dram_read": 0 , "dram_write": 0 , "vtcm_read": 133120 , "vtcm_write": 65536, "is_dma": 0},
+{"opid" : 0x0000123500000003 , "dram_read": 0 , "dram_write": 0 , "vtcm_read": 65536 , "vtcm_write": 65536, "is_dma": 0},
+{"opid" : 0x0000120400000028 , "dram_read": 0 , "dram_write": 0 , "vtcm_read": 133120 , "vtcm_write": 65536, "is_dma": 0},
+{"opid" : 0x0000123700000003 , "dram_read": 0 , "dram_write": 0 , "vtcm_read": 65536 , "vtcm_write": 65536, "is_dma": 0},
+{"opid" : 0x000012070000002d , "dram_read": 0 , "dram_write": 0 , "vtcm_read": 133120 , "vtcm_write": 65536, "is_dma": 0},
+{"opid" : 0x0000123900000003 , "dram_read": 0 , "dram_write": 0 , "vtcm_read": 65536 , "vtcm_write": 65536, "is_dma": 0},
+{"opid" : 0x0000122200000003 , "dram_read": 0 , "dram_write": 65536 , "vtcm_read": 65536 , "vtcm_write": 0, "is_dma": 1},
+{"opid" : 0x0000120a00000032 , "dram_read": 0 , "dram_write": 0 , "vtcm_read": 133120 , "vtcm_write": 65536, "is_dma": 0},
+{"opid" : 0x0000123b00000003 , "dram_read": 0 , "dram_write": 0 , "vtcm_read": 65536 , "vtcm_write": 65536, "is_dma": 0},
+{"opid" : 0x0000122400000003 , "dram_read": 0 , "dram_write": 65536 , "vtcm_read": 65536 , "vtcm_write": 0, "is_dma": 1},
+{"opid" : 0x0000120d00000037 , "dram_read": 0 , "dram_write": 0 , "vtcm_read": 133120 , "vtcm_write": 65536, "is_dma": 0},
+{"opid" : 0x0000123d00000003 , "dram_read": 0 , "dram_write": 0 , "vtcm_read": 65536 , "vtcm_write": 65536, "is_dma": 0},
+{"opid" : 0x0000122600000003 , "dram_read": 0 , "dram_write": 65536 , "vtcm_read": 65536 , "vtcm_write": 0, "is_dma": 1},
+{"opid" : 0x000012100000003c , "dram_read": 0 , "dram_write": 0 , "vtcm_read": 133120 , "vtcm_write": 65536, "is_dma": 0},
+{"opid" : 0x0000123f00000003 , "dram_read": 0 , "dram_write": 0 , "vtcm_read": 65536 , "vtcm_write": 65536, "is_dma": 0},
+{"opid" : 0x0000122800000003 , "dram_read": 0 , "dram_write": 65536 , "vtcm_read": 65536 , "vtcm_write": 0, "is_dma": 1},
+{"opid" : 0x0000122a00000003 , "dram_read": 0 , "dram_write": 65536 , "vtcm_read": 65536 , "vtcm_write": 0, "is_dma": 1},
+{"opid" : 0x0000122c00000003 , "dram_read": 0 , "dram_write": 65536 , "vtcm_read": 65536 , "vtcm_write": 0, "is_dma": 1},
+{"opid" : 0x0000122e00000003 , "dram_read": 0 , "dram_write": 65536 , "vtcm_read": 65536 , "vtcm_write": 0, "is_dma": 1},
+{"opid" : 0x0000123000000003 , "dram_read": 0 , "dram_write": 65536 , "vtcm_read": 65536 , "vtcm_write": 0, "is_dma": 1},
+]
+
+
+
+num_sfcd_words = {
+}
+
+graph_res_flags0 = { # :::BEGIN:graph_flag0:::
+	'graph': {
+		0x100200000008: {'flags' : ()},
+		0x100382d28377: {'flags' : ()},
+		0x100382d28378: {'flags' : ()},
+		0x100382d28379: {'flags' : ()},
+		0x100382d2837a: {'flags' : ()},
+		0x100382d2837b: {'flags' : ()},
+		0x100382d2837c: {'flags' : ()},
+		0x100382d2837d: {'flags' : ()},
+		0x100382d2837e: {'flags' : ()},
+		0x10038ad40c8f: {'flags' : ()},
+		0x10038ad40c90: {'flags' : ()},
+		0x10038ad40c91: {'flags' : ()},
+		0x10038ad40c92: {'flags' : ()},
+		0x10038ad40c93: {'flags' : ()},
+		0x10038ad40c94: {'flags' : ()},
+		0x10038ad40c95: {'flags' : ()},
+		0x10038ad40c96: {'flags' : ()},
+		0x100399fb24bb: {'flags' : ()},
+		0x111100000002: {
+			'flags': ('uses_dma',),
+		},
+		0x111200000002: {
+			'flags': ('uses_dma',),
+		},
+		0x111300000002: {
+			'flags': ('uses_dma',),
+		},
+		0x111400000002: {
+			'flags': ('uses_dma',),
+		},
+		0x111500000002: {
+			'flags': ('uses_dma',),
+		},
+		0x111600000002: {
+			'flags': ('uses_dma',),
+		},
+		0x111700000002: {
+			'flags': ('uses_dma',),
+		},
+		0x111800000002: {
+			'flags': ('uses_dma',),
+		},
+		0x11b200000019: {
+			'flags': ('uses_dma',),
+		},
+		0x11b50000001e: {
+			'flags': ('uses_dma',),
+		},
+		0x11b800000023: {
+			'flags': ('uses_dma',),
+		},
+		0x11bb00000028: {
+			'flags': ('uses_dma',),
+		},
+		0x11be0000002d: {
+			'flags': ('uses_dma',),
+		},
+		0x11c100000032: {
+			'flags': ('uses_dma',),
+		},
+		0x11c400000037: {
+			'flags': ('uses_dma',),
+		},
+		0x11c70000003c: {
+			'flags': ('uses_dma',),
+		},
+		0x11d100000019: {
+			'flags': ('null_exec',),
+		},
+		0x11da00000028: {
+			'flags': ('null_exec',),
+		},
+		0x11e300000037: {
+			'flags': ('null_exec',),
+		},
+		0x11e60000003c: {
+			'flags': ('null_exec',),
+		},
+		0x11fb00000019: {
+			'flags': ('uses_hmx',),
+		},
+		0x11fe0000001e: {
+			'flags': ('uses_hmx',),
+		},
+		0x120100000023: {
+			'flags': ('uses_hmx',),
+		},
+		0x120400000028: {
+			'flags': ('uses_hmx',),
+		},
+		0x12070000002d: {
+			'flags': ('uses_hmx',),
+		},
+		0x120a00000032: {
+			'flags': ('uses_hmx',),
+		},
+		0x120d00000037: {
+			'flags': ('uses_hmx',),
+		},
+		0x12100000003c: {
+			'flags': ('uses_hmx',),
+		},
+		0x121100000019: {
+			'flags': ('uses_hvx',),
+		},
+		0x12130000001e: {
+			'flags': ('uses_hvx',),
+		},
+		0x121500000023: {
+			'flags': ('uses_hvx',),
+		},
+		0x121700000028: {
+			'flags': ('uses_hvx',),
+		},
+		0x12190000002d: {
+			'flags': ('uses_hvx',),
+		},
+		0x121b00000032: {
+			'flags': ('uses_hvx',),
+		},
+		0x121d00000037: {
+			'flags': ('uses_hvx',),
+		},
+		0x121f0000003c: {
+			'flags': ('uses_hvx',),
+		},
+		0x122200000003: {
+			'flags': ('uses_dma',),
+		},
+		0x122400000003: {
+			'flags': ('uses_dma',),
+		},
+		0x122600000003: {
+			'flags': ('uses_dma',),
+		},
+		0x122800000003: {
+			'flags': ('uses_dma',),
+		},
+		0x122a00000003: {
+			'flags': ('uses_dma',),
+		},
+		0x122c00000003: {
+			'flags': ('uses_dma',),
+		},
+		0x122e00000003: {
+			'flags': ('uses_dma',),
+		},
+		0x123000000003: {
+			'flags': ('uses_dma',),
+		},
+		0x123100000003: {
+			'flags': ('uses_hvx',),
+		},
+		0x123200000003: {
+			'flags': ('null_exec',),
+		},
+		0x123300000003: {
+			'flags': ('uses_hvx',),
+		},
+		0x123500000003: {
+			'flags': ('uses_hvx',),
+		},
+		0x123600000003: {
+			'flags': ('null_exec',),
+		},
+		0x123700000003: {
+			'flags': ('uses_hvx',),
+		},
+		0x123900000003: {
+			'flags': ('uses_hvx',),
+		},
+		0x123a00000003: {
+			'flags': ('null_exec',),
+		},
+		0x123b00000003: {
+			'flags': ('uses_hvx',),
+		},
+		0x123d00000003: {
+			'flags': ('uses_hvx',),
+		},
+		0x123e00000003: {
+			'flags': ('null_exec',),
+		},
+		0x123f00000003: {
+			'flags': ('uses_hvx',),
+		},
+		0x124100000019: {
+			'flags': ('uses_dma',),
+		},
+		0x12420000001e: {
+			'flags': ('uses_dma',),
+		},
+		0x124300000023: {
+			'flags': ('uses_dma',),
+		},
+		0x124400000028: {
+			'flags': ('uses_dma',),
+		},
+		0x12450000002d: {
+			'flags': ('uses_dma',),
+		},
+		0x124600000032: {
+			'flags': ('uses_dma',),
+		},
+		0x124700000037: {
+			'flags': ('uses_dma',),
+		},
+		0x12480000003c: {
+			'flags': ('uses_dma',),
+		},
+		0x126300000019: {'flags' : ()},
+		0x126400000019: {'flags' : ()},
+		0x12650000001e: {'flags' : ()},
+		0x126600000023: {'flags' : ()},
+		0x126700000028: {'flags' : ()},
+		0x12680000002d: {'flags' : ()},
+		0x126900000032: {'flags' : ()},
+		0x126a00000037: {'flags' : ()},
+		0x126b0000003c: {'flags' : ()},
+		0x127d00000019: {'flags' : ()},
+		0x127e0000001e: {'flags' : ()},
+		0x127f00000023: {'flags' : ()},
+		0x128000000028: {'flags' : ()},
+		0x12810000002d: {'flags' : ()},
+		0x128200000032: {'flags' : ()},
+		0x128300000037: {'flags' : ()},
+		0x12840000003c: {'flags' : ()},
+		0x128600000002: {'flags' : ()},
+		0x128700000002: {'flags' : ()},
+		0x128800000002: {'flags' : ()},
+		0x128900000002: {'flags' : ()},
+		0x128a00000002: {'flags' : ()},
+		0x128c00000002: {'flags' : ()},
+		0x128e00000002: {'flags' : ()},
+		0x129000000002: {'flags' : ()},
+		0x129300000019: {'flags' : ()},
+		0x12960000001e: {'flags' : ()},
+		0x129900000023: {'flags' : ()},
+		0x129c00000028: {'flags' : ()},
+		0x129f0000002d: {'flags' : ()},
+		0x12a100000032: {'flags' : ()},
+		0x12a300000037: {'flags' : ()},
+		0x12a50000003c: {'flags' : ()},
+		0x12b100000003: {'flags' : ()},
+		0x12b200000003: {'flags' : ()},
+		0x12b300000003: {'flags' : ()},
+		0x12b400000003: {'flags' : ()},
+		0x12b500000003: {'flags' : ()},
+		0x12b600000000: {
+			'flags': ('sync',),
+		},
+		0x12b700000002: {'flags' : ()},
+		0x12b800000002: {'flags' : ()},
+		0x12b900000002: {'flags' : ()},
+		0x12ba00000002: {'flags' : ()},
+		0x12bb00000002: {'flags' : ()},
+		0x12bc00000002: {'flags' : ()},
+		0x12bd00000002: {'flags' : ()},
+		0x12be00000002: {'flags' : ()},
+		0x12bf00000019: {'flags' : ()},
+		0x12c00000001e: {'flags' : ()},
+		0x12c100000023: {'flags' : ()},
+		0x12c200000028: {'flags' : ()},
+		0x12c30000002d: {'flags' : ()},
+		0x12c400000032: {'flags' : ()},
+		0x12c500000037: {'flags' : ()},
+		0x12c60000003c: {'flags' : ()},
+		0x12c700000003: {'flags' : ()},
+		0x12c800000003: {'flags' : ()},
+		0x12c900000003: {'flags' : ()},
+		0x12ca00000003: {'flags' : ()},
+		0x12cb00000003: {'flags' : ()},
+	}
+}
+# :::END:graph_flag0:::
+
+# Note: values remapped to strings at end.
+
+op_docstrings = { # :::BEGIN:op_docstrings:::atomic
+	0x11b200000019: 0,
+	0x11b50000001e: 0,
+	0x11b800000023: 0,
+	0x11bb00000028: 0,
+	0x11be0000002d: 0,
+	0x11c100000032: 0,
+	0x11c400000037: 0,
+	0x11c70000003c: 0,
+	0x11fb00000019: 1,
+	0x11fe0000001e: 1,
+	0x120100000023: 1,
+	0x120400000028: 1,
+	0x12070000002d: 1,
+	0x120a00000032: 1,
+	0x120d00000037: 1,
+	0x12100000003c: 1,
+	0x128600000002: 2,
+	0x128700000002: 2,
+	0x128800000002: 2,
+	0x128900000002: 2,
+	0x128a00000002: 2,
+	0x128c00000002: 2,
+	0x128e00000002: 2,
+	0x129000000002: 2,
+	0x129300000019: 2,
+	0x12960000001e: 2,
+	0x129900000023: 2,
+	0x129c00000028: 2,
+	0x129f0000002d: 2,
+	0x12a100000032: 2,
+	0x12a300000037: 2,
+	0x12a50000003c: 2,
+	0x12b100000003: 2,
+	0x12b200000003: 2,
+	0x12b300000003: 2,
+	0x12b400000003: 2,
+	0x12b500000003: 2,
+	0x12b700000002: 3,
+	0x12b800000002: 3,
+	0x12b900000002: 3,
+	0x12ba00000002: 3,
+	0x12bb00000002: 3,
+	0x12bc00000002: 3,
+	0x12bd00000002: 3,
+	0x12be00000002: 3,
+	0x12bf00000019: 3,
+	0x12c00000001e: 3,
+	0x12c100000023: 3,
+	0x12c200000028: 3,
+	0x12c30000002d: 3,
+	0x12c400000032: 3,
+	0x12c500000037: 3,
+	0x12c60000003c: 3,
+	0x12c700000003: 3,
+	0x12c800000003: 3,
+	0x12c900000003: 3,
+	0x12ca00000003: 3,
+	0x12cb00000003: 3,
+}
+op_docstrings_key = [ # key for op_docstrings
+	"Memory movement operation transfering a bias input for conv into VTCM memory",
+	"Conv2d with strides=(1,1) but there's an extra CTRL input that controls whether we do a depthwise/grouped conv or use the 4/8/16bit kernels.",
+	"Waits for a previously started DMA to complete before proceeding",
+	"Records a previous DMA operation's completion tag in a table, so that DmaCheckpointWait can wait for it. Some Ops, such as SpillOp and FillOp, can record their own tag, and don't need this.",
+]
+
+for k,v in op_docstrings.items():
+    op_docstrings[k] = op_docstrings_key[v]
+
+# :::END:op_docstrings:::
+
+runlist2 = [
+	0x100382d28377,
+	0x100399fb24bb,
+	0x10038ad40c8f,
+	0x111100000002,
+	0x12b700000002,
+	0x10038ad40c90,
+	0x111200000002,
+	0x12b800000002,
+	0x10038ad40c91,
+	0x111300000002,
+	0x12b900000002,
+	0x10038ad40c92,
+	0x111400000002,
+	0x12ba00000002,
+	0x10038ad40c93,
+	0x111500000002,
+	0x12bb00000002,
+	0x10038ad40c94,
+	0x111600000002,
+	0x12bc00000002,
+	0x10038ad40c95,
+	0x111700000002,
+	0x12bd00000002,
+	0x10038ad40c96,
+	0x111800000002,
+	0x12be00000002,
+	0x128600000002,
+	0x11d100000019,
+	0x128700000002,
+	0x128800000002,
+	0x128900000002,
+	0x11da00000028,
+	0x128a00000002,
+	0x128c00000002,
+	0x128e00000002,
+	0x11e300000037,
+	0x127d00000019,
+	0x11b200000019,
+	0x126400000019,
+	0x124100000019,
+	0x12bf00000019,
+	0x129000000002,
+	0x11e60000003c,
+	0x127e0000001e,
+	0x11b50000001e,
+	0x12650000001e,
+	0x12420000001e,
+	0x12c00000001e,
+	0x127f00000023,
+	0x11b800000023,
+	0x126600000023,
+	0x124300000023,
+	0x12c100000023,
+	0x128000000028,
+	0x11bb00000028,
+	0x126700000028,
+	0x124400000028,
+	0x12c200000028,
+	0x129300000019,
+	0x100200000008,
+	0x126300000019,
+	0x11fb00000019,
+	0x12810000002d,
+	0x11be0000002d,
+	0x12680000002d,
+	0x12450000002d,
+	0x12c30000002d,
+	0x128200000032,
+	0x11c100000032,
+	0x126900000032,
+	0x124600000032,
+	0x12c400000032,
+	0x12960000001e,
+	0x11fe0000001e,
+	0x128300000037,
+	0x11c400000037,
+	0x126a00000037,
+	0x124700000037,
+	0x12c500000037,
+	0x12840000003c,
+	0x11c70000003c,
+	0x126b0000003c,
+	0x12480000003c,
+	0x12c60000003c,
+	0x129900000023,
+	0x120100000023,
+	0x129c00000028,
+	0x120400000028,
+	0x129f0000002d,
+	0x12070000002d,
+	0x123200000003,
+	0x122200000003,
+	0x12a100000032,
+	0x120a00000032,
+	0x100382d28378,
+	0x122400000003,
+	0x12a300000037,
+	0x120d00000037,
+	0x123600000003,
+	0x100382d28379,
+	0x122600000003,
+	0x12a50000003c,
+	0x12100000003c,
+	0x100382d2837a,
+	0x122800000003,
+	0x12c700000003,
+	0x12b100000003,
+	0x123a00000003,
+	0x100382d2837b,
+	0x122a00000003,
+	0x12c800000003,
+	0x12b200000003,
+	0x100382d2837c,
+	0x122c00000003,
+	0x12c900000003,
+	0x12b300000003,
+	0x123e00000003,
+	0x100382d2837d,
+	0x122e00000003,
+	0x12ca00000003,
+	0x12b400000003,
+	0x100382d2837e,
+	0x123000000003,
+	0x12cb00000003,
+	0x12b500000003,
+	0x12b600000000,
+]
+runlist_vec = [
+	0x121100000019,
+	0x12130000001e,
+	0x121500000023,
+	0x121700000028,
+	0x12190000002d,
+	0x121b00000032,
+	0x121d00000037,
+	0x121f0000003c,
+	0x123100000003,
+	0x123300000003,
+	0x123500000003,
+	0x123700000003,
+	0x123900000003,
+	0x123b00000003,
+	0x123d00000003,
+	0x123f00000003,
+]
+runlist_mtx = [
+]
+runlist_elt = [
+]
+
+checkpoints = []
+
+
+checkpoints.append({
+  0x100382d28377 : [ -1 , -1 ],	# Gate cnt = 0
+  0x100399fb24bb : [ -1 , -1 ],	# Gate cnt = 0
+  0x10038ad40c8f : [ -1 , -1 ],	# Gate cnt = 0
+  0x111100000002 : [ 0 , -1 ],	# Gate cnt = 0
+  0x12b700000002 : [ 0 , 0 ],	# Gate cnt = 0
+  0x10038ad40c90 : [ -1 , -1 ],	# Gate cnt = 0
+  0x111200000002 : [ 0 , -1 ],	# Gate cnt = 0
+  0x12b800000002 : [ 0 , 0 ],	# Gate cnt = 0
+  0x10038ad40c91 : [ -1 , -1 ],	# Gate cnt = 0
+  0x111300000002 : [ 0 , -1 ],	# Gate cnt = 0
+  0x12b900000002 : [ 0 , 0 ],	# Gate cnt = 0
+  0x10038ad40c92 : [ -1 , -1 ],	# Gate cnt = 0
+  0x111400000002 : [ 0 , -1 ],	# Gate cnt = 0
+  0x12ba00000002 : [ 0 , 0 ],	# Gate cnt = 0
+  0x10038ad40c93 : [ -1 , -1 ],	# Gate cnt = 0
+  0x111500000002 : [ 0 , -1 ],	# Gate cnt = 0
+  0x12bb00000002 : [ 0 , 0 ],	# Gate cnt = 0
+  0x10038ad40c94 : [ -1 , -1 ],	# Gate cnt = 0
+  0x111600000002 : [ 0 , -1 ],	# Gate cnt = 0
+  0x12bc00000002 : [ 0 , 0 ],	# Gate cnt = 0
+  0x10038ad40c95 : [ -1 , -1 ],	# Gate cnt = 0
+  0x111700000002 : [ 0 , -1 ],	# Gate cnt = 0
+  0x12bd00000002 : [ 0 , 0 ],	# Gate cnt = 0
+  0x10038ad40c96 : [ -1 , -1 ],	# Gate cnt = 0
+  0x111800000002 : [ 0 , -1 ],	# Gate cnt = 0
+  0x12be00000002 : [ 0 , 0 ],	# Gate cnt = 0
+  0x128600000002 : [ 0 , 2 ],	# Gate cnt = 0
+  0x11d100000019 : [ -1 , -1 ],	# Gate cnt = 0
+  0x128700000002 : [ 0 , 3 ],	# Gate cnt = 0
+  0x128800000002 : [ 0 , 4 ],	# Gate cnt = 0
+  0x128900000002 : [ 0 , 5 ],	# Gate cnt = 0
+  0x11da00000028 : [ -1 , -1 ],	# Gate cnt = 0
+  0x128a00000002 : [ 0 , 6 ],	# Gate cnt = 0
+  0x128c00000002 : [ 0 , 7 ],	# Gate cnt = 0
+  0x128e00000002 : [ 0 , 8 ],	# Gate cnt = 0
+  0x11e300000037 : [ -1 , -1 ],	# Gate cnt = 0
+  0x127d00000019 : [ -1 , -1 ],	# Gate cnt = 0
+  0x11b200000019 : [ 0 , -1 ],	# Gate cnt = 0
+  0x126400000019 : [ -1 , -1 ],	# Gate cnt = 0
+  0x124100000019 : [ 0 , -1 ],	# Gate cnt = 0
+  0x12bf00000019 : [ 0 , 0 ],	# Gate cnt = 0
+  0x129000000002 : [ 0 , 9 ],	# Gate cnt = 0
+  0x11e60000003c : [ -1 , -1 ],	# Gate cnt = 0
+  0x127e0000001e : [ -1 , -1 ],	# Gate cnt = 0
+  0x11b50000001e : [ 0 , -1 ],	# Gate cnt = 0
+  0x12650000001e : [ -1 , -1 ],	# Gate cnt = 0
+  0x12420000001e : [ 0 , -1 ],	# Gate cnt = 0
+  0x12c00000001e : [ 0 , 0 ],	# Gate cnt = 0
+  0x127f00000023 : [ -1 , -1 ],	# Gate cnt = 0
+  0x11b800000023 : [ 0 , -1 ],	# Gate cnt = 0
+  0x126600000023 : [ -1 , -1 ],	# Gate cnt = 0
+  0x124300000023 : [ 0 , -1 ],	# Gate cnt = 0
+  0x12c100000023 : [ 0 , 0 ],	# Gate cnt = 0
+  0x128000000028 : [ -1 , -1 ],	# Gate cnt = 0
+  0x11bb00000028 : [ 0 , -1 ],	# Gate cnt = 0
+  0x126700000028 : [ -1 , -1 ],	# Gate cnt = 0
+  0x124400000028 : [ 0 , -1 ],	# Gate cnt = 0
+  0x12c200000028 : [ 0 , 0 ],	# Gate cnt = 0
+  0x129300000019 : [ 0 , -1 ],	# Gate cnt = 0
+  0x100200000008 : [ -1 , -1 ],	# Gate cnt = 0
+  0x126300000019 : [ -1 , -1 ],	# Gate cnt = 0
+  0x11fb00000019 : [ 10 , 11 ],	# Gate cnt = 1
+  0x12810000002d : [ -1 , -1 ],	# Gate cnt = 0
+  0x11be0000002d : [ 0 , -1 ],	# Gate cnt = 0
+  0x12680000002d : [ -1 , -1 ],	# Gate cnt = 0
+  0x12450000002d : [ 0 , -1 ],	# Gate cnt = 0
+  0x12c30000002d : [ 0 , 0 ],	# Gate cnt = 0
+  0x128200000032 : [ -1 , -1 ],	# Gate cnt = 0
+  0x11c100000032 : [ 0 , -1 ],	# Gate cnt = 0
+  0x126900000032 : [ -1 , -1 ],	# Gate cnt = 0
+  0x124600000032 : [ 0 , -1 ],	# Gate cnt = 0
+  0x12c400000032 : [ 0 , 0 ],	# Gate cnt = 0
+  0x12960000001e : [ 0 , -1 ],	# Gate cnt = 0
+  0x11fe0000001e : [ 12 , 13 ],	# Gate cnt = 1
+  0x128300000037 : [ -1 , -1 ],	# Gate cnt = 0
+  0x11c400000037 : [ 0 , -1 ],	# Gate cnt = 0
+  0x126a00000037 : [ -1 , -1 ],	# Gate cnt = 0
+  0x124700000037 : [ 0 , -1 ],	# Gate cnt = 0
+  0x12c500000037 : [ 0 , 0 ],	# Gate cnt = 0
+  0x12840000003c : [ -1 , -1 ],	# Gate cnt = 0
+  0x11c70000003c : [ 0 , -1 ],	# Gate cnt = 0
+  0x126b0000003c : [ -1 , -1 ],	# Gate cnt = 0
+  0x12480000003c : [ 0 , -1 ],	# Gate cnt = 0
+  0x12c60000003c : [ 0 , 0 ],	# Gate cnt = 0
+  0x129900000023 : [ 0 , -1 ],	# Gate cnt = 0
+  0x120100000023 : [ 14 , 15 ],	# Gate cnt = 1
+  0x129c00000028 : [ 0 , -1 ],	# Gate cnt = 0
+  0x120400000028 : [ 16 , 17 ],	# Gate cnt = 1
+  0x129f0000002d : [ 0 , -1 ],	# Gate cnt = 0
+  0x12070000002d : [ 18 , 19 ],	# Gate cnt = 1
+  0x123200000003 : [ -1 , -1 ],	# Gate cnt = 0
+  0x122200000003 : [ 20 , -1 ],	# Gate cnt = 1
+  0x12a100000032 : [ 0 , -1 ],	# Gate cnt = 0
+  0x120a00000032 : [ 21 , 22 ],	# Gate cnt = 1
+  0x100382d28378 : [ -1 , -1 ],	# Gate cnt = 0
+  0x122400000003 : [ 23 , -1 ],	# Gate cnt = 1
+  0x12a300000037 : [ 0 , -1 ],	# Gate cnt = 0
+  0x120d00000037 : [ 24 , 25 ],	# Gate cnt = 1
+  0x123600000003 : [ -1 , -1 ],	# Gate cnt = 0
+  0x100382d28379 : [ -1 , -1 ],	# Gate cnt = 0
+  0x122600000003 : [ 26 , -1 ],	# Gate cnt = 1
+  0x12a50000003c : [ 0 , -1 ],	# Gate cnt = 0
+  0x12100000003c : [ 27 , 28 ],	# Gate cnt = 1
+  0x100382d2837a : [ -1 , -1 ],	# Gate cnt = 0
+  0x122800000003 : [ 29 , -1 ],	# Gate cnt = 1
+  0x12c700000003 : [ 0 , 0 ],	# Gate cnt = 0
+  0x12b100000003 : [ 0 , -1 ],	# Gate cnt = 0
+  0x123a00000003 : [ -1 , -1 ],	# Gate cnt = 0
+  0x100382d2837b : [ -1 , -1 ],	# Gate cnt = 0
+  0x122a00000003 : [ 30 , -1 ],	# Gate cnt = 1
+  0x12c800000003 : [ 0 , 0 ],	# Gate cnt = 0
+  0x12b200000003 : [ 0 , -1 ],	# Gate cnt = 0
+  0x100382d2837c : [ -1 , -1 ],	# Gate cnt = 0
+  0x122c00000003 : [ 31 , -1 ],	# Gate cnt = 1
+  0x12c900000003 : [ 0 , 0 ],	# Gate cnt = 0
+  0x12b300000003 : [ 0 , -1 ],	# Gate cnt = 0
+  0x123e00000003 : [ -1 , -1 ],	# Gate cnt = 0
+  0x100382d2837d : [ -1 , -1 ],	# Gate cnt = 0
+  0x122e00000003 : [ 32 , -1 ],	# Gate cnt = 1
+  0x12ca00000003 : [ 0 , 0 ],	# Gate cnt = 0
+  0x12b400000003 : [ 0 , -1 ],	# Gate cnt = 0
+  0x100382d2837e : [ -1 , -1 ],	# Gate cnt = 0
+  0x123000000003 : [ 33 , -1 ],	# Gate cnt = 1
+  0x12cb00000003 : [ 0 , 0 ],	# Gate cnt = 0
+  0x12b500000003 : [ 0 , -1 ],	# Gate cnt = 0
+  0x12b600000000 : [ 0 , -1 ],	# Gate cnt = 0
+  # vector list
+  0x121100000019 : [ 2 , 10 ],	# Gate cnt = 1
+  0x12130000001e : [ 3 , 12 ],	# Gate cnt = 1
+  0x121500000023 : [ 4 , 14 ],	# Gate cnt = 1
+  0x121700000028 : [ 5 , 16 ],	# Gate cnt = 1
+  0x12190000002d : [ 6 , 18 ],	# Gate cnt = 1
+  0x121b00000032 : [ 7 , 21 ],	# Gate cnt = 1
+  0x121d00000037 : [ 8 , 24 ],	# Gate cnt = 1
+  0x121f0000003c : [ 9 , 27 ],	# Gate cnt = 1
+  0x123100000003 : [ 11 , 20 ],	# Gate cnt = 1
+  0x123300000003 : [ 13 , 23 ],	# Gate cnt = 1
+  0x123500000003 : [ 15 , 26 ],	# Gate cnt = 1
+  0x123700000003 : [ 17 , 29 ],	# Gate cnt = 1
+  0x123900000003 : [ 19 , 30 ],	# Gate cnt = 1
+  0x123b00000003 : [ 22 , 31 ],	# Gate cnt = 1
+  0x123d00000003 : [ 25 , 32 ],	# Gate cnt = 1
+  0x123f00000003 : [ 28 , 33 ],	# Gate cnt = 1
+  # matrix list
+  # eltwise list
+})
+
+
+special_mlp_features = { # :::BEGIN:special_mlp_features:::
+}
+# :::END:special_mlp_features:::
+qnn_name_translations = {
+0x0000000000000010: 'MatMul_0_pre_reshape',
+0x0000000000000011: 'MatMul_1_pre_reshape',
+0x0000000000000012: 'MatMul_2_pre_reshape',
+0x0000000000000013: 'MatMul_3_pre_reshape',
+0x0000000000000014: 'MatMul_4_pre_reshape',
+0x0000000000000015: 'MatMul_5_pre_reshape',
+0x0000000000000016: 'MatMul_6_pre_reshape',
+0x0000000000000017: 'MatMul_7_pre_reshape',
+0x0000000000000019: 'MatMul_0',
+0x000000000000001c: 'MatMul_0_post_reshape',
+0x000000000000001e: 'MatMul_1',
+0x0000000000000021: 'MatMul_1_post_reshape',
+0x0000000000000023: 'MatMul_2',
+0x0000000000000026: 'MatMul_2_post_reshape',
+0x0000000000000028: 'MatMul_3',
+0x000000000000002b: 'MatMul_3_post_reshape',
+0x000000000000002d: 'MatMul_4',
+0x0000000000000030: 'MatMul_4_post_reshape',
+0x0000000000000032: 'MatMul_5',
+0x0000000000000035: 'MatMul_5_post_reshape',
+0x0000000000000037: 'MatMul_6',
+0x000000000000003a: 'MatMul_6_post_reshape',
+0x000000000000003c: 'MatMul_7',
+0x000000000000003f: 'MatMul_7_post_reshape',
+}
+qnn_graph_name = "model"
+##### Python dump of GraphDeps data
+try: opdesc
+except Exception: from opinfo_util import opdesc,memgroup,interval_set
+memgroup_map = { #Number of groups = 48
+ 'mg00001': memgroup(bytes=65536, is_tcm=True, gen_op = '#1',
+      connected_ops = ('#26','#73','#78',),
+          blocks = interval_set(1,[0x1E]),
+  ),
+ 'mg00002': memgroup(bytes=65536, is_tcm=True, gen_op = '#2',
+      connected_ops = ('#28','#74','#80',),
+          blocks = interval_set(1,[0x1F]),
+  ),
+ 'mg00003': memgroup(bytes=65536, is_tcm=True, gen_op = '#3',
+      connected_ops = ('#30','#75','#82',),
+          blocks = interval_set(1,[0x20]),
+  ),
+ 'mg00004': memgroup(bytes=65536, is_tcm=True, gen_op = '#4',
+      connected_ops = ('#32','#76','#84',),
+          blocks = interval_set(1,[0x21]),
+  ),
+ 'mg00005': memgroup(bytes=65536, is_tcm=True, gen_op = '#5',
+      connected_ops = ('#34','#77','#87',),
+          blocks = interval_set(1,[0x22]),
+  ),
+ 'mg00006': memgroup(bytes=65536, is_tcm=True, gen_op = '#6',
+      connected_ops = ('#36','#79','#90',),
+          blocks = interval_set(1,[0x23]),
+  ),
+ 'mg00007': memgroup(bytes=65536, is_tcm=True, gen_op = '#7',
+      connected_ops = ('#38','#81','#93',),
+          blocks = interval_set(1,[0x24]),
+  ),
+ 'mg00008': memgroup(bytes=65536, is_tcm=True, gen_op = '#8',
+      connected_ops = ('#40','#83','#96',),
+          blocks = interval_set(1,[0x25]),
+  ),
+ 'mg00009': memgroup(bytes=2048, is_tcm=True, gen_op = '#9',
+      connected_ops = ('#41','#85',),
+          blocks = interval_set(1,[0x26]),
+  ),
+ 'mg00010': memgroup(bytes=2048, is_tcm=True, gen_op = '#10',
+      connected_ops = ('#42','#88',),
+          blocks = interval_set(1,[0x27]),
+  ),
+ 'mg00011': memgroup(bytes=2048, is_tcm=True, gen_op = '#11',
+      connected_ops = ('#43','#91',),
+          blocks = interval_set(1,[0x28]),
+  ),
+ 'mg00012': memgroup(bytes=2048, is_tcm=True, gen_op = '#12',
+      connected_ops = ('#44','#94',),
+          blocks = interval_set(1,[0x29]),
+  ),
+ 'mg00013': memgroup(bytes=2048, is_tcm=True, gen_op = '#13',
+      connected_ops = ('#45','#97',),
+          blocks = interval_set(1,[0x2A]),
+  ),
+ 'mg00014': memgroup(bytes=2048, is_tcm=True, gen_op = '#14',
+      connected_ops = ('#46','#99',),
+          blocks = interval_set(1,[0x2B]),
+  ),
+ 'mg00015': memgroup(bytes=2048, is_tcm=True, gen_op = '#15',
+      connected_ops = ('#47','#101',),
+          blocks = interval_set(1,[0x2C]),
+  ),
+ 'mg00016': memgroup(bytes=2048, is_tcm=True, gen_op = '#16',
+      connected_ops = ('#48','#103',),
+          blocks = interval_set(1,[0x2D]),
+  ),
+ 'mg00017': memgroup(bytes=65536, is_tcm=True, gen_op = '#17',
+      connected_ops = ('#41','#86',),
+          blocks = interval_set(1,[0x2E]),
+  ),
+ 'mg00018': memgroup(bytes=65536, is_tcm=True, gen_op = '#18',
+      connected_ops = ('#42','#89',),
+          blocks = interval_set(1,[0x2F]),
+  ),
+ 'mg00019': memgroup(bytes=65536, is_tcm=True, gen_op = '#19',
+      connected_ops = ('#43','#92',),
+          blocks = interval_set(1,[0x30]),
+  ),
+ 'mg00020': memgroup(bytes=65536, is_tcm=True, gen_op = '#20',
+      connected_ops = ('#44','#95',),
+          blocks = interval_set(1,[0x31]),
+  ),
+ 'mg00021': memgroup(bytes=65536, is_tcm=True, gen_op = '#21',
+      connected_ops = ('#45','#98',),
+          blocks = interval_set(1,[0x32]),
+  ),
+ 'mg00022': memgroup(bytes=65536, is_tcm=True, gen_op = '#22',
+      connected_ops = ('#46','#100',),
+          blocks = interval_set(1,[0x33]),
+  ),
+ 'mg00023': memgroup(bytes=65536, is_tcm=True, gen_op = '#23',
+      connected_ops = ('#47','#102',),
+          blocks = interval_set(1,[0x34]),
+  ),
+ 'mg00024': memgroup(bytes=65536, is_tcm=True, gen_op = '#24',
+      connected_ops = ('#48','#104',),
+          blocks = interval_set(1,[0x35]),
+  ),
+ 'mg00025': memgroup(bytes=65536, is_tcm=True, gen_op = '#26',
+      connected_ops = ('#41','#78',),
+          blocks = interval_set(32,[(0x36,0x56)]),
+  ),
+ 'mg00026': memgroup(bytes=65536, is_tcm=True, gen_op = '#28',
+      connected_ops = ('#42','#80',),
+          blocks = interval_set(32,[(0x56,0x76)]),
+  ),
+ 'mg00027': memgroup(bytes=65536, is_tcm=True, gen_op = '#30',
+      connected_ops = ('#43','#82',),
+          blocks = interval_set(32,[(0x76,0x96)]),
+  ),
+ 'mg00028': memgroup(bytes=65536, is_tcm=True, gen_op = '#32',
+      connected_ops = ('#44','#84',),
+          blocks = interval_set(32,[(0x96,0xB6)]),
+  ),
+ 'mg00029': memgroup(bytes=65536, is_tcm=True, gen_op = '#34',
+      connected_ops = ('#45','#87',),
+          blocks = interval_set(32,[(0xB6,0xD6)]),
+  ),
+ 'mg00030': memgroup(bytes=65536, is_tcm=True, gen_op = '#36',
+      connected_ops = ('#46','#90',),
+          blocks = interval_set(32,[(0xD6,0xF6)]),
+  ),
+ 'mg00031': memgroup(bytes=65536, is_tcm=True, gen_op = '#38',
+      connected_ops = ('#47','#93',),
+          blocks = interval_set(32,[(0xF6,0x116)]),
+  ),
+ 'mg00032': memgroup(bytes=65536, is_tcm=True, gen_op = '#40',
+      connected_ops = ('#48','#96',),
+          blocks = interval_set(32,[(0x116,0x136)]),
+  ),
+ 'mg00033': memgroup(bytes=65536, is_tcm=True, gen_op = '#41',
+      connected_ops = ('#49','#105',),
+          blocks = interval_set(32,[(0x136,0x156)]),
+  ),
+ 'mg00034': memgroup(bytes=65536, is_tcm=True, gen_op = '#42',
+      connected_ops = ('#50','#106',),
+          blocks = interval_set(32,[(0x156,0x176)]),
+  ),
+ 'mg00035': memgroup(bytes=65536, is_tcm=True, gen_op = '#43',
+      connected_ops = ('#51','#107',),
+          blocks = interval_set(32,[(0x176,0x196)]),
+  ),
+ 'mg00036': memgroup(bytes=65536, is_tcm=True, gen_op = '#44',
+      connected_ops = ('#52','#108',),
+          blocks = interval_set(32,[(0x196,0x1B6)]),
+  ),
+ 'mg00037': memgroup(bytes=65536, is_tcm=True, gen_op = '#45',
+      connected_ops = ('#53','#109',),
+          blocks = interval_set(32,[(0x1B6,0x1D6)]),
+  ),
+ 'mg00038': memgroup(bytes=65536, is_tcm=True, gen_op = '#46',
+      connected_ops = ('#54','#110',),
+          blocks = interval_set(32,[(0x1D6,0x1F6)]),
+  ),
+ 'mg00039': memgroup(bytes=65536, is_tcm=True, gen_op = '#47',
+      connected_ops = ('#55','#111',),
+          blocks = interval_set(32,[(0x1F6,0x216)]),
+  ),
+ 'mg00040': memgroup(bytes=65536, is_tcm=True, gen_op = '#48',
+      connected_ops = ('#56','#112',),
+          blocks = interval_set(32,[(0x216,0x236)]),
+  ),
+ 'mg00041': memgroup(bytes=65536, is_tcm=True, gen_op = '#49',
+      connected_ops = ('#58','#105','#113',),
+          blocks = interval_set(1,[0x236]),
+  ),
+ 'mg00042': memgroup(bytes=65536, is_tcm=True, gen_op = '#50',
+      connected_ops = ('#60','#106','#114',),
+          blocks = interval_set(1,[0x237]),
+  ),
+ 'mg00043': memgroup(bytes=65536, is_tcm=True, gen_op = '#51',
+      connected_ops = ('#62','#107','#115',),
+          blocks = interval_set(1,[0x238]),
+  ),
+ 'mg00044': memgroup(bytes=65536, is_tcm=True, gen_op = '#52',
+      connected_ops = ('#64','#108','#116',),
+          blocks = interval_set(1,[0x239]),
+  ),
+ 'mg00045': memgroup(bytes=65536, is_tcm=True, gen_op = '#53',
+      connected_ops = ('#66','#109','#117',),
+          blocks = interval_set(1,[0x23A]),
+  ),
+ 'mg00046': memgroup(bytes=65536, is_tcm=True, gen_op = '#54',
+      connected_ops = ('#68','#110','#118',),
+          blocks = interval_set(1,[0x23B]),
+  ),
+ 'mg00047': memgroup(bytes=65536, is_tcm=True, gen_op = '#55',
+      connected_ops = ('#70','#111','#119',),
+          blocks = interval_set(1,[0x23C]),
+  ),
+ 'mg00048': memgroup(bytes=65536, is_tcm=True, gen_op = '#56',
+      connected_ops = ('#72','#112','#120',),
+          blocks = interval_set(1,[0x23D]),
+  ),
+}
+# ---- > total 2637824 bytes in 544 blocks, in 48 groups
+
+#Number of OpDesc = 121
+#Length of runlist = 105
+
+#Total of 121 OpDesc slots
+opdesc_map ={
+  # @[0]:
+  '#1': opdesc( 0x111100000002, "q::*InputSlice", ptr=0x614e0d3d7ac0, runlist_pos = 0,
+      flags=('any_tcm','is_volatile','is_fork',), op_flags=('FOR_DMA','MOVE_EARLY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 9, # slack = 0
+      csts_out = ('#73',),
+      memgrps_out = ('mg00001',),
+      dma_checkpoint=8,
+  ),
+  # @[1]:
+  '#2': opdesc( 0x111200000002, "q::*InputSlice", ptr=0x614e0d3cc790, runlist_pos = 1,
+      flags=('any_tcm','is_volatile','is_fork',), op_flags=('FOR_DMA','MOVE_EARLY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 9, # slack = 0
+      csts_out = ('#74',),
+      memgrps_out = ('mg00002',),
+      dma_checkpoint=7,
+  ),
+  # @[2]:
+  '#3': opdesc( 0x111300000002, "q::*InputSlice", ptr=0x614e0d3d6d60, runlist_pos = 2,
+      flags=('any_tcm','is_volatile','is_fork',), op_flags=('FOR_DMA','MOVE_EARLY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 9, # slack = 0
+      csts_out = ('#75',),
+      memgrps_out = ('mg00003',),
+      dma_checkpoint=6,
+  ),
+  # @[3]:
+  '#4': opdesc( 0x111400000002, "q::*InputSlice", ptr=0x614e0d3d38b0, runlist_pos = 3,
+      flags=('any_tcm','is_volatile','is_fork',), op_flags=('FOR_DMA','MOVE_EARLY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 9, # slack = 0
+      csts_out = ('#76',),
+      memgrps_out = ('mg00004',),
+      dma_checkpoint=5,
+  ),
+  # @[4]:
+  '#5': opdesc( 0x111500000002, "q::*InputSlice", ptr=0x614e0d3d7470, runlist_pos = 4,
+      flags=('any_tcm','is_volatile','is_fork',), op_flags=('FOR_DMA','MOVE_EARLY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 9, # slack = 0
+      csts_out = ('#77',),
+      memgrps_out = ('mg00005',),
+      dma_checkpoint=4,
+  ),
+  # @[5]:
+  '#6': opdesc( 0x111600000002, "q::*InputSlice", ptr=0x614e0d3dafc0, runlist_pos = 5,
+      flags=('any_tcm','is_volatile','is_fork',), op_flags=('FOR_DMA','MOVE_EARLY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 9, # slack = 0
+      csts_out = ('#79',),
+      memgrps_out = ('mg00006',),
+      dma_checkpoint=3,
+  ),
+  # @[6]:
+  '#7': opdesc( 0x111700000002, "q::*InputSlice", ptr=0x614e0d3d67a0, runlist_pos = 6,
+      flags=('any_tcm','is_volatile','is_fork',), op_flags=('FOR_DMA','MOVE_EARLY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 9, # slack = 0
+      csts_out = ('#81',),
+      memgrps_out = ('mg00007',),
+      dma_checkpoint=2,
+  ),
+  # @[7]:
+  '#8': opdesc( 0x111800000002, "q::*InputSlice", ptr=0x614e0d362450, runlist_pos = 7,
+      flags=('any_tcm','is_volatile','is_fork',), op_flags=('FOR_DMA','MOVE_EARLY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 9, # slack = 0
+      csts_out = ('#83',),
+      memgrps_out = ('mg00008',),
+      dma_checkpoint=1,
+  ),
+  # @[8]:
+  '#73': opdesc( 0x128600000002, "q::*InputSlice", ptr=0x614e0d41cff0, runlist_pos = 8,
+      category='join', flags=('any_tcm',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 8, # slack = 0
+      csts_in = ('#1',),
+      csts_out = ('#26',),
+      memgrps_in = ('mg00001',),
+  ),
+  # @[9]:
+  '#26': opdesc( 0x121100000019, "q::ForceFormat_Crouton", ptr=0x614e0d3aec10, runlist_pos = 9,
+      flags=('any_tcm','is_fork',), op_flags=('FOR_HVX','MOVE_EARLY',), n_out=1,
+      in_dist = 3, out_dist = 7, # slack = 0
+      csts_in = ('#73',),
+      csts_out = ('#78',),
+      memgrps_in = ('mg00001',),
+      memgrps_out = ('mg00025',),
+  ),
+  # @[10]:
+  '#74': opdesc( 0x128700000002, "q::*InputSlice", ptr=0x614e0d41cfd0, runlist_pos = 10,
+      category='join', flags=('any_tcm',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 8, # slack = 0
+      csts_in = ('#2',),
+      csts_out = ('#28',),
+      memgrps_in = ('mg00002',),
+  ),
+  # @[11]:
+  '#28': opdesc( 0x12130000001e, "q::ForceFormat_Crouton", ptr=0x614e0d362da0, runlist_pos = 11,
+      flags=('any_tcm','is_fork',), op_flags=('FOR_HVX','MOVE_EARLY',), n_out=1,
+      in_dist = 3, out_dist = 7, # slack = 0
+      csts_in = ('#74',),
+      csts_out = ('#80',),
+      memgrps_in = ('mg00002',),
+      memgrps_out = ('mg00026',),
+  ),
+  # @[12]:
+  '#75': opdesc( 0x128800000002, "q::*InputSlice", ptr=0x614e0d427320, runlist_pos = 12,
+      category='join', flags=('any_tcm',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 8, # slack = 0
+      csts_in = ('#3',),
+      csts_out = ('#30',),
+      memgrps_in = ('mg00003',),
+  ),
+  # @[13]:
+  '#30': opdesc( 0x121500000023, "q::ForceFormat_Crouton", ptr=0x614e0d385d80, runlist_pos = 13,
+      flags=('any_tcm','is_fork',), op_flags=('FOR_HVX','MOVE_EARLY',), n_out=1,
+      in_dist = 3, out_dist = 7, # slack = 0
+      csts_in = ('#75',),
+      csts_out = ('#82',),
+      memgrps_in = ('mg00003',),
+      memgrps_out = ('mg00027',),
+  ),
+  # @[14]:
+  '#76': opdesc( 0x128900000002, "q::*InputSlice", ptr=0x614e0d4118a0, runlist_pos = 14,
+      category='join', flags=('any_tcm',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 8, # slack = 0
+      csts_in = ('#4',),
+      csts_out = ('#32',),
+      memgrps_in = ('mg00004',),
+  ),
+  # @[15]:
+  '#32': opdesc( 0x121700000028, "q::ForceFormat_Crouton", ptr=0x614e0d374a40, runlist_pos = 15,
+      flags=('any_tcm','is_fork',), op_flags=('FOR_HVX','MOVE_EARLY',), n_out=1,
+      in_dist = 3, out_dist = 7, # slack = 0
+      csts_in = ('#76',),
+      csts_out = ('#84',),
+      memgrps_in = ('mg00004',),
+      memgrps_out = ('mg00028',),
+  ),
+  # @[16]:
+  '#77': opdesc( 0x128a00000002, "q::*InputSlice", ptr=0x614e0d4284f0, runlist_pos = 16,
+      category='join', flags=('any_tcm',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 8, # slack = 0
+      csts_in = ('#5',),
+      csts_out = ('#34',),
+      memgrps_in = ('mg00005',),
+  ),
+  # @[17]:
+  '#34': opdesc( 0x12190000002d, "q::ForceFormat_Crouton", ptr=0x614e0d301c40, runlist_pos = 17,
+      flags=('any_tcm','is_fork',), op_flags=('FOR_HVX','MOVE_EARLY',), n_out=1,
+      in_dist = 3, out_dist = 7, # slack = 0
+      csts_in = ('#77',),
+      csts_out = ('#87',),
+      memgrps_in = ('mg00005',),
+      memgrps_out = ('mg00029',),
+  ),
+  # @[18]:
+  '#79': opdesc( 0x128c00000002, "q::*InputSlice", ptr=0x614e0d41d7d0, runlist_pos = 18,
+      category='join', flags=('any_tcm',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 8, # slack = 0
+      csts_in = ('#6',),
+      csts_out = ('#36',),
+      memgrps_in = ('mg00006',),
+  ),
+  # @[19]:
+  '#36': opdesc( 0x121b00000032, "q::ForceFormat_Crouton", ptr=0x614e0d3018b0, runlist_pos = 19,
+      flags=('any_tcm','is_fork',), op_flags=('FOR_HVX','MOVE_EARLY',), n_out=1,
+      in_dist = 3, out_dist = 7, # slack = 0
+      csts_in = ('#79',),
+      csts_out = ('#90',),
+      memgrps_in = ('mg00006',),
+      memgrps_out = ('mg00030',),
+  ),
+  # @[20]:
+  '#78': opdesc( 0x128b00000019, "q::ForceFormat_Crouton", ptr=0x0, runlist_pos = 20,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_HVX','MOVE_LATE',), n_out=0,
+      in_dist = 4, out_dist = 6, # slack = 0
+      csts_in = ('#26',),
+      csts_out = ('#41',),
+      memgrps_in = ('mg00001','mg00025',),
+  ),
+  # @[21]:
+  '#81': opdesc( 0x128e00000002, "q::*InputSlice", ptr=0x614e0d41d7f0, runlist_pos = 21,
+      category='join', flags=('any_tcm',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 8, # slack = 0
+      csts_in = ('#7',),
+      csts_out = ('#38',),
+      memgrps_in = ('mg00007',),
+  ),
+  # @[22]:
+  '#38': opdesc( 0x121d00000037, "q::ForceFormat_Crouton", ptr=0x614e0d32c750, runlist_pos = 22,
+      flags=('any_tcm','is_fork',), op_flags=('FOR_HVX','MOVE_EARLY',), n_out=1,
+      in_dist = 3, out_dist = 7, # slack = 0
+      csts_in = ('#81',),
+      csts_out = ('#93',),
+      memgrps_in = ('mg00007',),
+      memgrps_out = ('mg00031',),
+  ),
+  # @[23]:
+  '#80': opdesc( 0x128d0000001e, "q::ForceFormat_Crouton", ptr=0x0, runlist_pos = 23,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_HVX','MOVE_LATE',), n_out=0,
+      in_dist = 4, out_dist = 6, # slack = 0
+      csts_in = ('#28',),
+      csts_out = ('#42',),
+      memgrps_in = ('mg00002','mg00026',),
+  ),
+  # @[24]:
+  '#9': opdesc( 0x11b200000019, "q::ConvLayer.opt.bias_to_vtcm", ptr=0x614e0d398f40, runlist_pos = 24,
+      flags=('any_tcm','is_fork','const_fill_eligible',), op_flags=('INHIBIT_CONST_PROP','FOR_DMA','MOVE_EARLY','IS_COPY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 7, # slack = 2
+      csts_out = ('#85',),
+      memgrps_out = ('mg00009',),
+  ),
+  # @[25]:
+  '#17': opdesc( 0x124100000019, "q::ConvLayer.opt.weights_to_vtcm", ptr=0x614e0d3027a0, runlist_pos = 25,
+      flags=('any_tcm','is_fork','const_fill_eligible',), op_flags=('INHIBIT_CONST_PROP','FOR_DMA','MOVE_EARLY','IS_COPY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 7, # slack = 2
+      csts_out = ('#86',),
+      memgrps_out = ('mg00017',),
+      dma_checkpoint=2,
+  ),
+  # @[26]:
+  '#83': opdesc( 0x129000000002, "q::*InputSlice", ptr=0x614e0d40a690, runlist_pos = 26,
+      category='join', flags=('any_tcm',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 8, # slack = 0
+      csts_in = ('#8',),
+      csts_out = ('#40',),
+      memgrps_in = ('mg00008',),
+  ),
+  # @[27]:
+  '#40': opdesc( 0x121f0000003c, "q::ForceFormat_Crouton", ptr=0x614e0d3b5a50, runlist_pos = 27,
+      flags=('any_tcm','is_fork',), op_flags=('FOR_HVX','MOVE_EARLY',), n_out=1,
+      in_dist = 3, out_dist = 7, # slack = 0
+      csts_in = ('#83',),
+      csts_out = ('#96',),
+      memgrps_in = ('mg00008',),
+      memgrps_out = ('mg00032',),
+  ),
+  # @[28]:
+  '#82': opdesc( 0x128f00000023, "q::ForceFormat_Crouton", ptr=0x0, runlist_pos = 28,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_HVX','MOVE_LATE',), n_out=0,
+      in_dist = 4, out_dist = 6, # slack = 0
+      csts_in = ('#30',),
+      csts_out = ('#43',),
+      memgrps_in = ('mg00003','mg00027',),
+  ),
+  # @[29]:
+  '#10': opdesc( 0x11b50000001e, "q::ConvLayer.opt.bias_to_vtcm", ptr=0x614e0d3d61e0, runlist_pos = 29,
+      flags=('any_tcm','is_fork','const_fill_eligible',), op_flags=('INHIBIT_CONST_PROP','FOR_DMA','MOVE_EARLY','IS_COPY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 7, # slack = 2
+      csts_out = ('#88',),
+      memgrps_out = ('mg00010',),
+  ),
+  # @[30]:
+  '#18': opdesc( 0x12420000001e, "q::ConvLayer.opt.weights_to_vtcm", ptr=0x614e0d307c80, runlist_pos = 30,
+      flags=('any_tcm','is_fork','const_fill_eligible',), op_flags=('INHIBIT_CONST_PROP','FOR_DMA','MOVE_EARLY','IS_COPY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 7, # slack = 2
+      csts_out = ('#89',),
+      memgrps_out = ('mg00018',),
+      dma_checkpoint=1,
+  ),
+  # @[31]:
+  '#84': opdesc( 0x129100000028, "q::ForceFormat_Crouton", ptr=0x0, runlist_pos = 31,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_HVX','MOVE_LATE',), n_out=0,
+      in_dist = 4, out_dist = 6, # slack = 0
+      csts_in = ('#32',),
+      csts_out = ('#44',),
+      memgrps_in = ('mg00004','mg00028',),
+  ),
+  # @[32]:
+  '#11': opdesc( 0x11b800000023, "q::ConvLayer.opt.bias_to_vtcm", ptr=0x614e0d3b5ca0, runlist_pos = 32,
+      flags=('any_tcm','is_fork','const_fill_eligible',), op_flags=('INHIBIT_CONST_PROP','FOR_DMA','MOVE_EARLY','IS_COPY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 7, # slack = 2
+      csts_out = ('#91',),
+      memgrps_out = ('mg00011',),
+  ),
+  # @[33]:
+  '#19': opdesc( 0x124300000023, "q::ConvLayer.opt.weights_to_vtcm", ptr=0x614e0d3e1b30, runlist_pos = 33,
+      flags=('any_tcm','is_fork','const_fill_eligible',), op_flags=('INHIBIT_CONST_PROP','FOR_DMA','MOVE_EARLY','IS_COPY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 7, # slack = 2
+      csts_out = ('#92',),
+      memgrps_out = ('mg00019',),
+      dma_checkpoint=6,
+  ),
+  # @[34]:
+  '#12': opdesc( 0x11bb00000028, "q::ConvLayer.opt.bias_to_vtcm", ptr=0x614e0d3afe20, runlist_pos = 34,
+      flags=('any_tcm','is_fork','const_fill_eligible',), op_flags=('INHIBIT_CONST_PROP','FOR_DMA','MOVE_EARLY','IS_COPY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 7, # slack = 2
+      csts_out = ('#94',),
+      memgrps_out = ('mg00012',),
+  ),
+  # @[35]:
+  '#20': opdesc( 0x124400000028, "q::ConvLayer.opt.weights_to_vtcm", ptr=0x614e0d3d48f0, runlist_pos = 35,
+      flags=('any_tcm','is_fork','const_fill_eligible',), op_flags=('INHIBIT_CONST_PROP','FOR_DMA','MOVE_EARLY','IS_COPY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 7, # slack = 2
+      csts_out = ('#95',),
+      memgrps_out = ('mg00020',),
+      dma_checkpoint=5,
+  ),
+  # @[36]:
+  '#85': opdesc( 0x129200000019, "q::ConvLayer.opt.bias_to_vtcm", ptr=0x0, runlist_pos = 36,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 6, # slack = 2
+      csts_in = ('#9',),
+      csts_out = ('#41',),
+      memgrps_in = ('mg00009',),
+  ),
+  # @[37]:
+  '#86': opdesc( 0x129300000019, "q::ConvLayer.opt.weights_to_vtcm", ptr=0x614e0d40ba60, runlist_pos = 37,
+      category='join', flags=('any_tcm',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 6, # slack = 2
+      csts_in = ('#17',),
+      csts_out = ('#41',),
+      memgrps_in = ('mg00017',),
+  ),
+  # @[38]:
+  '#41': opdesc( 0x11fb00000019, "q::ConvLayer_s1.opt", ptr=0x614e0d264a90, runlist_pos = 38,
+      flags=('any_tcm',), op_flags=('RESOURCE_HMX',), has_const_in=True,  n_out=1,
+      in_dist = 5, out_dist = 5, # slack = 0
+      csts_in = ('#78','#85','#86',),
+      csts_out = ('#49',),
+      memgrps_in = ('mg00009','mg00017','mg00025',),
+      memgrps_out = ('mg00033',),
+  ),
+  # @[39]:
+  '#49': opdesc( 0x123100000003, "q::ForceFormat_Flat", ptr=0x614e0d3dea30, runlist_pos = 39,
+      flags=('any_tcm','is_fork',), op_flags=('FOR_HVX','MOVE_EARLY',), n_out=1,
+      in_dist = 6, out_dist = 4, # slack = 0
+      csts_in = ('#41',),
+      csts_out = ('#105',),
+      memgrps_in = ('mg00033',),
+      memgrps_out = ('mg00041',),
+  ),
+  # @[40]:
+  '#13': opdesc( 0x11be0000002d, "q::ConvLayer.opt.bias_to_vtcm", ptr=0x614e0d3b1110, runlist_pos = 40,
+      flags=('any_tcm','is_fork','const_fill_eligible',), op_flags=('INHIBIT_CONST_PROP','FOR_DMA','MOVE_EARLY','IS_COPY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 7, # slack = 2
+      csts_out = ('#97',),
+      memgrps_out = ('mg00013',),
+  ),
+  # @[41]:
+  '#21': opdesc( 0x12450000002d, "q::ConvLayer.opt.weights_to_vtcm", ptr=0x614e0d3dfe50, runlist_pos = 41,
+      flags=('any_tcm','is_fork','const_fill_eligible',), op_flags=('INHIBIT_CONST_PROP','FOR_DMA','MOVE_EARLY','IS_COPY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 7, # slack = 2
+      csts_out = ('#98',),
+      memgrps_out = ('mg00021',),
+      dma_checkpoint=4,
+  ),
+  # @[42]:
+  '#14': opdesc( 0x11c100000032, "q::ConvLayer.opt.bias_to_vtcm", ptr=0x614e0d3cd3b0, runlist_pos = 42,
+      flags=('any_tcm','is_fork','const_fill_eligible',), op_flags=('INHIBIT_CONST_PROP','FOR_DMA','MOVE_EARLY','IS_COPY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 7, # slack = 2
+      csts_out = ('#99',),
+      memgrps_out = ('mg00014',),
+  ),
+  # @[43]:
+  '#22': opdesc( 0x124600000032, "q::ConvLayer.opt.weights_to_vtcm", ptr=0x614e0d3dfeb0, runlist_pos = 43,
+      flags=('any_tcm','is_fork','const_fill_eligible',), op_flags=('INHIBIT_CONST_PROP','FOR_DMA','MOVE_EARLY','IS_COPY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 7, # slack = 2
+      csts_out = ('#100',),
+      memgrps_out = ('mg00022',),
+      dma_checkpoint=3,
+  ),
+  # @[44]:
+  '#88': opdesc( 0x12950000001e, "q::ConvLayer.opt.bias_to_vtcm", ptr=0x0, runlist_pos = 44,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 6, # slack = 2
+      csts_in = ('#10',),
+      csts_out = ('#42',),
+      memgrps_in = ('mg00010',),
+  ),
+  # @[45]:
+  '#89': opdesc( 0x12960000001e, "q::ConvLayer.opt.weights_to_vtcm", ptr=0x614e0d397e60, runlist_pos = 45,
+      category='join', flags=('any_tcm',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 6, # slack = 2
+      csts_in = ('#18',),
+      csts_out = ('#42',),
+      memgrps_in = ('mg00018',),
+  ),
+  # @[46]:
+  '#42': opdesc( 0x11fe0000001e, "q::ConvLayer_s1.opt", ptr=0x614e0d3df0d0, runlist_pos = 46,
+      flags=('any_tcm',), op_flags=('RESOURCE_HMX',), has_const_in=True,  n_out=1,
+      in_dist = 5, out_dist = 5, # slack = 0
+      csts_in = ('#80','#88','#89',),
+      csts_out = ('#50',),
+      memgrps_in = ('mg00010','mg00018','mg00026',),
+      memgrps_out = ('mg00034',),
+  ),
+  # @[47]:
+  '#50': opdesc( 0x123300000003, "q::ForceFormat_Flat", ptr=0x614e0d374d20, runlist_pos = 47,
+      flags=('any_tcm','is_fork',), op_flags=('FOR_HVX','MOVE_EARLY',), n_out=1,
+      in_dist = 6, out_dist = 4, # slack = 0
+      csts_in = ('#42',),
+      csts_out = ('#106',),
+      memgrps_in = ('mg00034',),
+      memgrps_out = ('mg00042',),
+  ),
+  # @[48]:
+  '#15': opdesc( 0x11c400000037, "q::ConvLayer.opt.bias_to_vtcm", ptr=0x614e0d3cc4c0, runlist_pos = 48,
+      flags=('any_tcm','is_fork','const_fill_eligible',), op_flags=('INHIBIT_CONST_PROP','FOR_DMA','MOVE_EARLY','IS_COPY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 7, # slack = 2
+      csts_out = ('#101',),
+      memgrps_out = ('mg00015',),
+  ),
+  # @[49]:
+  '#23': opdesc( 0x124700000037, "q::ConvLayer.opt.weights_to_vtcm", ptr=0x614e0d3d0530, runlist_pos = 49,
+      flags=('any_tcm','is_fork','const_fill_eligible',), op_flags=('INHIBIT_CONST_PROP','FOR_DMA','MOVE_EARLY','IS_COPY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 7, # slack = 2
+      csts_out = ('#102',),
+      memgrps_out = ('mg00023',),
+      dma_checkpoint=2,
+  ),
+  # @[50]:
+  '#16': opdesc( 0x11c70000003c, "q::ConvLayer.opt.bias_to_vtcm", ptr=0x614e0d304440, runlist_pos = 50,
+      flags=('any_tcm','is_fork','const_fill_eligible',), op_flags=('INHIBIT_CONST_PROP','FOR_DMA','MOVE_EARLY','IS_COPY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 7, # slack = 2
+      csts_out = ('#103',),
+      memgrps_out = ('mg00016',),
+  ),
+  # @[51]:
+  '#24': opdesc( 0x12480000003c, "q::ConvLayer.opt.weights_to_vtcm", ptr=0x614e0d3d0be0, runlist_pos = 51,
+      flags=('any_tcm','is_fork','const_fill_eligible',), op_flags=('INHIBIT_CONST_PROP','FOR_DMA','MOVE_EARLY','IS_COPY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 7, # slack = 2
+      csts_out = ('#104',),
+      memgrps_out = ('mg00024',),
+      dma_checkpoint=1,
+  ),
+  # @[52]:
+  '#91': opdesc( 0x129800000023, "q::ConvLayer.opt.bias_to_vtcm", ptr=0x0, runlist_pos = 52,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 6, # slack = 2
+      csts_in = ('#11',),
+      csts_out = ('#43',),
+      memgrps_in = ('mg00011',),
+  ),
+  # @[53]:
+  '#92': opdesc( 0x129900000023, "q::ConvLayer.opt.weights_to_vtcm", ptr=0x614e0d32c660, runlist_pos = 53,
+      category='join', flags=('any_tcm',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 6, # slack = 2
+      csts_in = ('#19',),
+      csts_out = ('#43',),
+      memgrps_in = ('mg00019',),
+  ),
+  # @[54]:
+  '#43': opdesc( 0x120100000023, "q::ConvLayer_s1.opt", ptr=0x614e0d3d3f30, runlist_pos = 54,
+      flags=('any_tcm',), op_flags=('RESOURCE_HMX',), has_const_in=True,  n_out=1,
+      in_dist = 5, out_dist = 5, # slack = 0
+      csts_in = ('#82','#91','#92',),
+      csts_out = ('#51',),
+      memgrps_in = ('mg00011','mg00019','mg00027',),
+      memgrps_out = ('mg00035',),
+  ),
+  # @[55]:
+  '#51': opdesc( 0x123500000003, "q::ForceFormat_Flat", ptr=0x614e0d374160, runlist_pos = 55,
+      flags=('any_tcm','is_fork',), op_flags=('FOR_HVX','MOVE_EARLY',), n_out=1,
+      in_dist = 6, out_dist = 4, # slack = 0
+      csts_in = ('#43',),
+      csts_out = ('#107',),
+      memgrps_in = ('mg00035',),
+      memgrps_out = ('mg00043',),
+  ),
+  # @[56]:
+  '#94': opdesc( 0x129b00000028, "q::ConvLayer.opt.bias_to_vtcm", ptr=0x0, runlist_pos = 56,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 6, # slack = 2
+      csts_in = ('#12',),
+      csts_out = ('#44',),
+      memgrps_in = ('mg00012',),
+  ),
+  # @[57]:
+  '#95': opdesc( 0x129c00000028, "q::ConvLayer.opt.weights_to_vtcm", ptr=0x614e0d397c70, runlist_pos = 57,
+      category='join', flags=('any_tcm',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 6, # slack = 2
+      csts_in = ('#20',),
+      csts_out = ('#44',),
+      memgrps_in = ('mg00020',),
+  ),
+  # @[58]:
+  '#44': opdesc( 0x120400000028, "q::ConvLayer_s1.opt", ptr=0x614e0d3b4e00, runlist_pos = 58,
+      flags=('any_tcm',), op_flags=('RESOURCE_HMX',), has_const_in=True,  n_out=1,
+      in_dist = 5, out_dist = 5, # slack = 0
+      csts_in = ('#84','#94','#95',),
+      csts_out = ('#52',),
+      memgrps_in = ('mg00012','mg00020','mg00028',),
+      memgrps_out = ('mg00036',),
+  ),
+  # @[59]:
+  '#52': opdesc( 0x123700000003, "q::ForceFormat_Flat", ptr=0x614e0d3dd620, runlist_pos = 59,
+      flags=('any_tcm','is_fork',), op_flags=('FOR_HVX','MOVE_EARLY',), n_out=1,
+      in_dist = 6, out_dist = 4, # slack = 0
+      csts_in = ('#44',),
+      csts_out = ('#108',),
+      memgrps_in = ('mg00036',),
+      memgrps_out = ('mg00044',),
+  ),
+  # @[60]:
+  '#87': opdesc( 0x12940000002d, "q::ForceFormat_Crouton", ptr=0x0, runlist_pos = 60,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_HVX','MOVE_LATE',), n_out=0,
+      in_dist = 4, out_dist = 6, # slack = 0
+      csts_in = ('#34',),
+      csts_out = ('#45',),
+      memgrps_in = ('mg00005','mg00029',),
+  ),
+  # @[61]:
+  '#97': opdesc( 0x129e0000002d, "q::ConvLayer.opt.bias_to_vtcm", ptr=0x0, runlist_pos = 61,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 6, # slack = 2
+      csts_in = ('#13',),
+      csts_out = ('#45',),
+      memgrps_in = ('mg00013',),
+  ),
+  # @[62]:
+  '#98': opdesc( 0x129f0000002d, "q::ConvLayer.opt.weights_to_vtcm", ptr=0x614e0d40b680, runlist_pos = 62,
+      category='join', flags=('any_tcm',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 6, # slack = 2
+      csts_in = ('#21',),
+      csts_out = ('#45',),
+      memgrps_in = ('mg00021',),
+  ),
+  # @[63]:
+  '#45': opdesc( 0x12070000002d, "q::ConvLayer_s1.opt", ptr=0x614e0d3d4250, runlist_pos = 63,
+      flags=('any_tcm',), op_flags=('RESOURCE_HMX',), has_const_in=True,  n_out=1,
+      in_dist = 5, out_dist = 5, # slack = 0
+      csts_in = ('#87','#97','#98',),
+      csts_out = ('#53',),
+      memgrps_in = ('mg00013','mg00021','mg00029',),
+      memgrps_out = ('mg00037',),
+  ),
+  # @[64]:
+  '#53': opdesc( 0x123900000003, "q::ForceFormat_Flat", ptr=0x614e0d3d7a10, runlist_pos = 64,
+      flags=('any_tcm','is_fork',), op_flags=('FOR_HVX','MOVE_EARLY',), n_out=1,
+      in_dist = 6, out_dist = 4, # slack = 0
+      csts_in = ('#45',),
+      csts_out = ('#109',),
+      memgrps_in = ('mg00037',),
+      memgrps_out = ('mg00045',),
+  ),
+  # @[65]:
+  '#105': opdesc( 0x12a600000003, "q::ForceFormat_Flat", ptr=0x0, runlist_pos = 65,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_HVX','MOVE_LATE',), n_out=0,
+      in_dist = 7, out_dist = 3, # slack = 0
+      csts_in = ('#49',),
+      csts_out = ('#58',),
+      memgrps_in = ('mg00033','mg00041',),
+  ),
+  # @[66]:
+  '#58': opdesc( 0x122200000003, "q::*OutputSlice", ptr=0x614e0d3dfb70, runlist_pos = 66,
+      flags=('any_tcm','is_volatile','is_fork',), op_flags=('FOR_DMA','MOVE_EARLY',), has_const_in=True,  n_out=0,
+      in_dist = 8, out_dist = 2, # slack = 0
+      csts_in = ('#105',),
+      csts_out = ('#113',),
+      memgrps_in = ('mg00041',),
+  ),
+  # @[67]:
+  '#90': opdesc( 0x129700000032, "q::ForceFormat_Crouton", ptr=0x0, runlist_pos = 67,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_HVX','MOVE_LATE',), n_out=0,
+      in_dist = 4, out_dist = 6, # slack = 0
+      csts_in = ('#36',),
+      csts_out = ('#46',),
+      memgrps_in = ('mg00006','mg00030',),
+  ),
+  # @[68]:
+  '#99': opdesc( 0x12a000000032, "q::ConvLayer.opt.bias_to_vtcm", ptr=0x0, runlist_pos = 68,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 6, # slack = 2
+      csts_in = ('#14',),
+      csts_out = ('#46',),
+      memgrps_in = ('mg00014',),
+  ),
+  # @[69]:
+  '#100': opdesc( 0x12a100000032, "q::ConvLayer.opt.weights_to_vtcm", ptr=0x614e0d40aa60, runlist_pos = 69,
+      category='join', flags=('any_tcm',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 6, # slack = 2
+      csts_in = ('#22',),
+      csts_out = ('#46',),
+      memgrps_in = ('mg00022',),
+  ),
+  # @[70]:
+  '#46': opdesc( 0x120a00000032, "q::ConvLayer_s1.opt", ptr=0x614e0d374b00, runlist_pos = 70,
+      flags=('any_tcm',), op_flags=('RESOURCE_HMX',), has_const_in=True,  n_out=1,
+      in_dist = 5, out_dist = 5, # slack = 0
+      csts_in = ('#90','#99','#100',),
+      csts_out = ('#54',),
+      memgrps_in = ('mg00014','mg00022','mg00030',),
+      memgrps_out = ('mg00038',),
+  ),
+  # @[71]:
+  '#54': opdesc( 0x123b00000003, "q::ForceFormat_Flat", ptr=0x614e0d3cc730, runlist_pos = 71,
+      flags=('any_tcm','is_fork',), op_flags=('FOR_HVX','MOVE_EARLY',), n_out=1,
+      in_dist = 6, out_dist = 4, # slack = 0
+      csts_in = ('#46',),
+      csts_out = ('#110',),
+      memgrps_in = ('mg00038',),
+      memgrps_out = ('mg00046',),
+  ),
+  # @[72]:
+  '#106': opdesc( 0x12a700000003, "q::ForceFormat_Flat", ptr=0x0, runlist_pos = 72,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_HVX','MOVE_LATE',), n_out=0,
+      in_dist = 7, out_dist = 3, # slack = 0
+      csts_in = ('#50',),
+      csts_out = ('#60',),
+      memgrps_in = ('mg00034','mg00042',),
+  ),
+  # @[73]:
+  '#60': opdesc( 0x122400000003, "q::*OutputSlice", ptr=0x614e0d3dfbe0, runlist_pos = 73,
+      flags=('any_tcm','is_volatile','is_fork',), op_flags=('FOR_DMA','MOVE_EARLY',), has_const_in=True,  n_out=0,
+      in_dist = 8, out_dist = 2, # slack = 0
+      csts_in = ('#106',),
+      csts_out = ('#114',),
+      memgrps_in = ('mg00042',),
+  ),
+  # @[74]:
+  '#93': opdesc( 0x129a00000037, "q::ForceFormat_Crouton", ptr=0x0, runlist_pos = 74,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_HVX','MOVE_LATE',), n_out=0,
+      in_dist = 4, out_dist = 6, # slack = 0
+      csts_in = ('#38',),
+      csts_out = ('#47',),
+      memgrps_in = ('mg00007','mg00031',),
+  ),
+  # @[75]:
+  '#101': opdesc( 0x12a200000037, "q::ConvLayer.opt.bias_to_vtcm", ptr=0x0, runlist_pos = 75,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 6, # slack = 2
+      csts_in = ('#15',),
+      csts_out = ('#47',),
+      memgrps_in = ('mg00015',),
+  ),
+  # @[76]:
+  '#102': opdesc( 0x12a300000037, "q::ConvLayer.opt.weights_to_vtcm", ptr=0x614e0d40b170, runlist_pos = 76,
+      category='join', flags=('any_tcm',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 6, # slack = 2
+      csts_in = ('#23',),
+      csts_out = ('#47',),
+      memgrps_in = ('mg00023',),
+  ),
+  # @[77]:
+  '#47': opdesc( 0x120d00000037, "q::ConvLayer_s1.opt", ptr=0x614e0d3cdb30, runlist_pos = 77,
+      flags=('any_tcm',), op_flags=('RESOURCE_HMX',), has_const_in=True,  n_out=1,
+      in_dist = 5, out_dist = 5, # slack = 0
+      csts_in = ('#93','#101','#102',),
+      csts_out = ('#55',),
+      memgrps_in = ('mg00015','mg00023','mg00031',),
+      memgrps_out = ('mg00039',),
+  ),
+  # @[78]:
+  '#55': opdesc( 0x123d00000003, "q::ForceFormat_Flat", ptr=0x614e0d3d5880, runlist_pos = 78,
+      flags=('any_tcm','is_fork',), op_flags=('FOR_HVX','MOVE_EARLY',), n_out=1,
+      in_dist = 6, out_dist = 4, # slack = 0
+      csts_in = ('#47',),
+      csts_out = ('#111',),
+      memgrps_in = ('mg00039',),
+      memgrps_out = ('mg00047',),
+  ),
+  # @[79]:
+  '#107': opdesc( 0x12a800000003, "q::ForceFormat_Flat", ptr=0x0, runlist_pos = 79,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_HVX','MOVE_LATE',), n_out=0,
+      in_dist = 7, out_dist = 3, # slack = 0
+      csts_in = ('#51',),
+      csts_out = ('#62',),
+      memgrps_in = ('mg00035','mg00043',),
+  ),
+  # @[80]:
+  '#62': opdesc( 0x122600000003, "q::*OutputSlice", ptr=0x614e0d3dd160, runlist_pos = 80,
+      flags=('any_tcm','is_volatile','is_fork',), op_flags=('FOR_DMA','MOVE_EARLY',), has_const_in=True,  n_out=0,
+      in_dist = 8, out_dist = 2, # slack = 0
+      csts_in = ('#107',),
+      csts_out = ('#115',),
+      memgrps_in = ('mg00043',),
+  ),
+  # @[81]:
+  '#96': opdesc( 0x129d0000003c, "q::ForceFormat_Crouton", ptr=0x0, runlist_pos = 81,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_HVX','MOVE_LATE',), n_out=0,
+      in_dist = 4, out_dist = 6, # slack = 0
+      csts_in = ('#40',),
+      csts_out = ('#48',),
+      memgrps_in = ('mg00008','mg00032',),
+  ),
+  # @[82]:
+  '#103': opdesc( 0x12a40000003c, "q::ConvLayer.opt.bias_to_vtcm", ptr=0x0, runlist_pos = 82,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 6, # slack = 2
+      csts_in = ('#16',),
+      csts_out = ('#48',),
+      memgrps_in = ('mg00016',),
+  ),
+  # @[83]:
+  '#104': opdesc( 0x12a50000003c, "q::ConvLayer.opt.weights_to_vtcm", ptr=0x614e0d4065f0, runlist_pos = 83,
+      category='join', flags=('any_tcm',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 6, # slack = 2
+      csts_in = ('#24',),
+      csts_out = ('#48',),
+      memgrps_in = ('mg00024',),
+  ),
+  # @[84]:
+  '#48': opdesc( 0x12100000003c, "q::ConvLayer_s1.opt", ptr=0x614e0d3d6c40, runlist_pos = 84,
+      flags=('any_tcm',), op_flags=('RESOURCE_HMX',), has_const_in=True,  n_out=1,
+      in_dist = 5, out_dist = 5, # slack = 0
+      csts_in = ('#96','#103','#104',),
+      csts_out = ('#56',),
+      memgrps_in = ('mg00016','mg00024','mg00032',),
+      memgrps_out = ('mg00040',),
+  ),
+  # @[85]:
+  '#56': opdesc( 0x123f00000003, "q::ForceFormat_Flat", ptr=0x614e0d3d58e0, runlist_pos = 85,
+      flags=('any_tcm','is_fork',), op_flags=('FOR_HVX','MOVE_EARLY',), n_out=1,
+      in_dist = 6, out_dist = 4, # slack = 0
+      csts_in = ('#48',),
+      csts_out = ('#112',),
+      memgrps_in = ('mg00040',),
+      memgrps_out = ('mg00048',),
+  ),
+  # @[86]:
+  '#108': opdesc( 0x12a900000003, "q::ForceFormat_Flat", ptr=0x0, runlist_pos = 86,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_HVX','MOVE_LATE',), n_out=0,
+      in_dist = 7, out_dist = 3, # slack = 0
+      csts_in = ('#52',),
+      csts_out = ('#64',),
+      memgrps_in = ('mg00036','mg00044',),
+  ),
+  # @[87]:
+  '#64': opdesc( 0x122800000003, "q::*OutputSlice", ptr=0x614e0d3cf1f0, runlist_pos = 87,
+      flags=('any_tcm','is_volatile','is_fork',), op_flags=('FOR_DMA','MOVE_EARLY',), has_const_in=True,  n_out=0,
+      in_dist = 8, out_dist = 2, # slack = 0
+      csts_in = ('#108',),
+      csts_out = ('#116',),
+      memgrps_in = ('mg00044',),
+      dma_checkpoint=1,
+  ),
+  # @[88]:
+  '#113': opdesc( 0x12ae00000003, "q::*OutputSlice", ptr=0x0, runlist_pos = 88,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 9, out_dist = 1, # slack = 0
+      csts_in = ('#58',),
+      memgrps_in = ('mg00041',),
+  ),
+  # @[89]:
+  '#114': opdesc( 0x12af00000003, "q::*OutputSlice", ptr=0x0, runlist_pos = 89,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 9, out_dist = 1, # slack = 0
+      csts_in = ('#60',),
+      memgrps_in = ('mg00042',),
+  ),
+  # @[90]:
+  '#115': opdesc( 0x12b000000003, "q::*OutputSlice", ptr=0x0, runlist_pos = 90,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 9, out_dist = 1, # slack = 0
+      csts_in = ('#62',),
+      memgrps_in = ('mg00043',),
+  ),
+  # @[91]:
+  '#116': opdesc( 0x12b100000003, "q::*OutputSlice", ptr=0x614e0d419680, runlist_pos = 91,
+      category='join', flags=('any_tcm',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 9, out_dist = 1, # slack = 0
+      csts_in = ('#64',),
+      memgrps_in = ('mg00044',),
+  ),
+  # @[92]:
+  '#109': opdesc( 0x12aa00000003, "q::ForceFormat_Flat", ptr=0x0, runlist_pos = 92,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_HVX','MOVE_LATE',), n_out=0,
+      in_dist = 7, out_dist = 3, # slack = 0
+      csts_in = ('#53',),
+      csts_out = ('#66',),
+      memgrps_in = ('mg00037','mg00045',),
+  ),
+  # @[93]:
+  '#66': opdesc( 0x122a00000003, "q::*OutputSlice", ptr=0x614e0d3cf260, runlist_pos = 93,
+      flags=('any_tcm','is_volatile','is_fork',), op_flags=('FOR_DMA','MOVE_EARLY',), has_const_in=True,  n_out=0,
+      in_dist = 8, out_dist = 2, # slack = 0
+      csts_in = ('#109',),
+      csts_out = ('#117',),
+      memgrps_in = ('mg00045',),
+      dma_checkpoint=1,
+  ),
+  # @[94]:
+  '#117': opdesc( 0x12b200000003, "q::*OutputSlice", ptr=0x614e0d419800, runlist_pos = 94,
+      category='join', flags=('any_tcm',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 9, out_dist = 1, # slack = 0
+      csts_in = ('#66',),
+      memgrps_in = ('mg00045',),
+  ),
+  # @[95]:
+  '#110': opdesc( 0x12ab00000003, "q::ForceFormat_Flat", ptr=0x0, runlist_pos = 95,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_HVX','MOVE_LATE',), n_out=0,
+      in_dist = 7, out_dist = 3, # slack = 0
+      csts_in = ('#54',),
+      csts_out = ('#68',),
+      memgrps_in = ('mg00038','mg00046',),
+  ),
+  # @[96]:
+  '#68': opdesc( 0x122c00000003, "q::*OutputSlice", ptr=0x614e0d3d9650, runlist_pos = 96,
+      flags=('any_tcm','is_volatile','is_fork',), op_flags=('FOR_DMA','MOVE_EARLY',), has_const_in=True,  n_out=0,
+      in_dist = 8, out_dist = 2, # slack = 0
+      csts_in = ('#110',),
+      csts_out = ('#118',),
+      memgrps_in = ('mg00046',),
+      dma_checkpoint=1,
+  ),
+  # @[97]:
+  '#118': opdesc( 0x12b300000003, "q::*OutputSlice", ptr=0x614e0d419840, runlist_pos = 97,
+      category='join', flags=('any_tcm',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 9, out_dist = 1, # slack = 0
+      csts_in = ('#68',),
+      memgrps_in = ('mg00046',),
+  ),
+  # @[98]:
+  '#111': opdesc( 0x12ac00000003, "q::ForceFormat_Flat", ptr=0x0, runlist_pos = 98,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_HVX','MOVE_LATE',), n_out=0,
+      in_dist = 7, out_dist = 3, # slack = 0
+      csts_in = ('#55',),
+      csts_out = ('#70',),
+      memgrps_in = ('mg00039','mg00047',),
+  ),
+  # @[99]:
+  '#70': opdesc( 0x122e00000003, "q::*OutputSlice", ptr=0x614e0d3d96c0, runlist_pos = 99,
+      flags=('any_tcm','is_volatile','is_fork',), op_flags=('FOR_DMA','MOVE_EARLY',), has_const_in=True,  n_out=0,
+      in_dist = 8, out_dist = 2, # slack = 0
+      csts_in = ('#111',),
+      csts_out = ('#119',),
+      memgrps_in = ('mg00047',),
+      dma_checkpoint=1,
+  ),
+  # @[100]:
+  '#119': opdesc( 0x12b400000003, "q::*OutputSlice", ptr=0x614e0d40b4d0, runlist_pos = 100,
+      category='join', flags=('any_tcm',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 9, out_dist = 1, # slack = 0
+      csts_in = ('#70',),
+      memgrps_in = ('mg00047',),
+  ),
+  # @[101]:
+  '#112': opdesc( 0x12ad00000003, "q::ForceFormat_Flat", ptr=0x0, runlist_pos = 101,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_HVX','MOVE_LATE',), n_out=0,
+      in_dist = 7, out_dist = 3, # slack = 0
+      csts_in = ('#56',),
+      csts_out = ('#72',),
+      memgrps_in = ('mg00040','mg00048',),
+  ),
+  # @[102]:
+  '#72': opdesc( 0x123000000003, "q::*OutputSlice", ptr=0x614e0d3dcfd0, runlist_pos = 102,
+      flags=('any_tcm','is_volatile','is_fork',), op_flags=('FOR_DMA','MOVE_EARLY',), has_const_in=True,  n_out=0,
+      in_dist = 8, out_dist = 2, # slack = 0
+      csts_in = ('#112',),
+      csts_out = ('#120',),
+      memgrps_in = ('mg00048',),
+      dma_checkpoint=1,
+  ),
+  # @[103]:
+  '#120': opdesc( 0x12b500000003, "q::*OutputSlice", ptr=0x614e0d40b440, runlist_pos = 103,
+      category='join', flags=('any_tcm',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 9, out_dist = 1, # slack = 0
+      csts_in = ('#72',),
+      memgrps_in = ('mg00048',),
+  ),
+  # @[104]:
+  '#121': opdesc( 0x12b600000000, "@Sync", ptr=0x614e0d40ad30, runlist_pos = 104,
+      flags=(), n_out=0,
+      in_dist = 1, out_dist = 1, # slack = 8
+  ),
+
+  #--- ops not in runlist ---
+  '#25': opdesc( 0x11d100000019, "q::Reshape", ptr=0x614e0d3ceb80,
+      category='dummy', flags=('is_dummy_op',), op_flags=('NULL_EXEC',), n_out=1,
+      in_dist = 1, out_dist = 1, # slack = 8
+  ),
+  '#27': opdesc( 0x11d40000001e, "q::Reshape", ptr=0x614e0d3b82a0,
+      category='dummy', flags=('is_dummy_op',), op_flags=('NULL_EXEC',), n_out=1,
+      in_dist = 1, out_dist = 1, # slack = 8
+  ),
+  '#29': opdesc( 0x11d700000023, "q::Reshape", ptr=0x614e0d3ddc80,
+      category='dummy', flags=('is_dummy_op',), op_flags=('NULL_EXEC',), n_out=1,
+      in_dist = 1, out_dist = 1, # slack = 8
+  ),
+  '#31': opdesc( 0x11da00000028, "q::Reshape", ptr=0x614e0d403bf0,
+      category='dummy', flags=('is_dummy_op',), op_flags=('NULL_EXEC',), n_out=1,
+      in_dist = 1, out_dist = 1, # slack = 8
+  ),
+  '#33': opdesc( 0x11dd0000002d, "q::Reshape", ptr=0x614e0d403d20,
+      category='dummy', flags=('is_dummy_op',), op_flags=('NULL_EXEC',), n_out=1,
+      in_dist = 1, out_dist = 1, # slack = 8
+  ),
+  '#35': opdesc( 0x11e000000032, "q::Reshape", ptr=0x614e0d300090,
+      category='dummy', flags=('is_dummy_op',), op_flags=('NULL_EXEC',), n_out=1,
+      in_dist = 1, out_dist = 1, # slack = 8
+  ),
+  '#37': opdesc( 0x11e300000037, "q::Reshape", ptr=0x614e0d3a9b00,
+      category='dummy', flags=('is_dummy_op',), op_flags=('NULL_EXEC',), n_out=1,
+      in_dist = 1, out_dist = 1, # slack = 8
+  ),
+  '#39': opdesc( 0x11e60000003c, "q::Reshape", ptr=0x614e0d403f60,
+      category='dummy', flags=('is_dummy_op',), op_flags=('NULL_EXEC',), n_out=1,
+      in_dist = 1, out_dist = 1, # slack = 8
+  ),
+  '#57': opdesc( 0x123200000003, "q::Reshape", ptr=0x614e0d40a290,
+      category='dummy', flags=('is_dummy_op',), op_flags=('NULL_EXEC',), n_out=1,
+      in_dist = 1, out_dist = 1, # slack = 8
+  ),
+  '#59': opdesc( 0x123400000003, "q::Reshape", ptr=0x614e0d40a310,
+      category='dummy', flags=('is_dummy_op',), op_flags=('NULL_EXEC',), n_out=1,
+      in_dist = 1, out_dist = 1, # slack = 8
+  ),
+  '#61': opdesc( 0x123600000003, "q::Reshape", ptr=0x614e0d40a390,
+      category='dummy', flags=('is_dummy_op',), op_flags=('NULL_EXEC',), n_out=1,
+      in_dist = 1, out_dist = 1, # slack = 8
+  ),
+  '#63': opdesc( 0x123800000003, "q::Reshape", ptr=0x614e0d40a410,
+      category='dummy', flags=('is_dummy_op',), op_flags=('NULL_EXEC',), n_out=1,
+      in_dist = 1, out_dist = 1, # slack = 8
+  ),
+  '#65': opdesc( 0x123a00000003, "q::Reshape", ptr=0x614e0d40a490,
+      category='dummy', flags=('is_dummy_op',), op_flags=('NULL_EXEC',), n_out=1,
+      in_dist = 1, out_dist = 1, # slack = 8
+  ),
+  '#67': opdesc( 0x123c00000003, "q::Reshape", ptr=0x614e0d40a570,
+      category='dummy', flags=('is_dummy_op',), op_flags=('NULL_EXEC',), n_out=1,
+      in_dist = 1, out_dist = 1, # slack = 8
+  ),
+  '#69': opdesc( 0x123e00000003, "q::Reshape", ptr=0x614e0d40a650,
+      category='dummy', flags=('is_dummy_op',), op_flags=('NULL_EXEC',), n_out=1,
+      in_dist = 1, out_dist = 1, # slack = 8
+  ),
+  '#71': opdesc( 0x124000000003, "q::Reshape", ptr=0x614e0d40a730,
+      category='dummy', flags=('is_dummy_op',), op_flags=('NULL_EXEC',), n_out=1,
+      in_dist = 1, out_dist = 1, # slack = 8
+  ),
+} # end of opdesc
+metrics_state='exact'
+max_dist=9
+tcm_block_info = {
+    30: (0x274000, 0x10000),
+    31: (0x264000, 0x10000),
+    32: (0x254000, 0x10000),
+    33: (0x244000, 0x10000),
+    34: (0x1b2000, 0x10000),
+    35: (0x181800, 0x10000),
+    36: (0x141000, 0x10000),
+    37: (0x100800, 0x10000),
+    38: (0x233800, 0x800),
+    39: (0x213000, 0x800),
+    40: (0x1f2800, 0x800),
+    41: (0x1d2000, 0x800),
+    42: (0x1a1800, 0x800),
+    43: (0x171000, 0x800),
+    44: (0x130800, 0x800),
+    45: (0xf0000, 0x800),
+    46: (0x234000, 0x10000),
+    47: (0x213800, 0x10000),
+    48: (0x1f3000, 0x10000),
+    49: (0x1d2800, 0x10000),
+    50: (0x1a2000, 0x10000),
+    51: (0x171800, 0x10000),
+    52: (0x131000, 0x10000),
+    53: (0xf0800, 0x10000),
+    54: (0x223800, 0x800),
+    55: (0x224000, 0x800),
+    56: (0x224800, 0x800),
+    57: (0x225000, 0x800),
+    58: (0x225800, 0x800),
+    59: (0x226000, 0x800),
+    60: (0x226800, 0x800),
+    61: (0x227000, 0x800),
+    62: (0x227800, 0x800),
+    63: (0x228000, 0x800),
+    64: (0x228800, 0x800),
+    65: (0x229000, 0x800),
+    66: (0x229800, 0x800),
+    67: (0x22a000, 0x800),
+    68: (0x22a800, 0x800),
+    69: (0x22b000, 0x800),
+    70: (0x22b800, 0x800),
+    71: (0x22c000, 0x800),
+    72: (0x22c800, 0x800),
+    73: (0x22d000, 0x800),
+    74: (0x22d800, 0x800),
+    75: (0x22e000, 0x800),
+    76: (0x22e800, 0x800),
+    77: (0x22f000, 0x800),
+    78: (0x22f800, 0x800),
+    79: (0x230000, 0x800),
+    80: (0x230800, 0x800),
+    81: (0x231000, 0x800),
+    82: (0x231800, 0x800),
+    83: (0x232000, 0x800),
+    84: (0x232800, 0x800),
+    85: (0x233000, 0x800),
+    86: (0x203000, 0x800),
+    87: (0x203800, 0x800),
+    88: (0x204000, 0x800),
+    89: (0x204800, 0x800),
+    90: (0x205000, 0x800),
+    91: (0x205800, 0x800),
+    92: (0x206000, 0x800),
+    93: (0x206800, 0x800),
+    94: (0x207000, 0x800),
+    95: (0x207800, 0x800),
+    96: (0x208000, 0x800),
+    97: (0x208800, 0x800),
+    98: (0x209000, 0x800),
+    99: (0x209800, 0x800),
+    100: (0x20a000, 0x800),
+    101: (0x20a800, 0x800),
+    102: (0x20b000, 0x800),
+    103: (0x20b800, 0x800),
+    104: (0x20c000, 0x800),
+    105: (0x20c800, 0x800),
+    106: (0x20d000, 0x800),
+    107: (0x20d800, 0x800),
+    108: (0x20e000, 0x800),
+    109: (0x20e800, 0x800),
+    110: (0x20f000, 0x800),
+    111: (0x20f800, 0x800),
+    112: (0x210000, 0x800),
+    113: (0x210800, 0x800),
+    114: (0x211000, 0x800),
+    115: (0x211800, 0x800),
+    116: (0x212000, 0x800),
+    117: (0x212800, 0x800),
+    118: (0x1e2800, 0x800),
+    119: (0x1e3000, 0x800),
+    120: (0x1e3800, 0x800),
+    121: (0x1e4000, 0x800),
+    122: (0x1e4800, 0x800),
+    123: (0x1e5000, 0x800),
+    124: (0x1e5800, 0x800),
+    125: (0x1e6000, 0x800),
+    126: (0x1e6800, 0x800),
+    127: (0x1e7000, 0x800),
+    128: (0x1e7800, 0x800),
+    129: (0x1e8000, 0x800),
+    130: (0x1e8800, 0x800),
+    131: (0x1e9000, 0x800),
+    132: (0x1e9800, 0x800),
+    133: (0x1ea000, 0x800),
+    134: (0x1ea800, 0x800),
+    135: (0x1eb000, 0x800),
+    136: (0x1eb800, 0x800),
+    137: (0x1ec000, 0x800),
+    138: (0x1ec800, 0x800),
+    139: (0x1ed000, 0x800),
+    140: (0x1ed800, 0x800),
+    141: (0x1ee000, 0x800),
+    142: (0x1ee800, 0x800),
+    143: (0x1ef000, 0x800),
+    144: (0x1ef800, 0x800),
+    145: (0x1f0000, 0x800),
+    146: (0x1f0800, 0x800),
+    147: (0x1f1000, 0x800),
+    148: (0x1f1800, 0x800),
+    149: (0x1f2000, 0x800),
+    150: (0x1c2000, 0x800),
+    151: (0x1c2800, 0x800),
+    152: (0x1c3000, 0x800),
+    153: (0x1c3800, 0x800),
+    154: (0x1c4000, 0x800),
+    155: (0x1c4800, 0x800),
+    156: (0x1c5000, 0x800),
+    157: (0x1c5800, 0x800),
+    158: (0x1c6000, 0x800),
+    159: (0x1c6800, 0x800),
+    160: (0x1c7000, 0x800),
+    161: (0x1c7800, 0x800),
+    162: (0x1c8000, 0x800),
+    163: (0x1c8800, 0x800),
+    164: (0x1c9000, 0x800),
+    165: (0x1c9800, 0x800),
+    166: (0x1ca000, 0x800),
+    167: (0x1ca800, 0x800),
+    168: (0x1cb000, 0x800),
+    169: (0x1cb800, 0x800),
+    170: (0x1cc000, 0x800),
+    171: (0x1cc800, 0x800),
+    172: (0x1cd000, 0x800),
+    173: (0x1cd800, 0x800),
+    174: (0x1ce000, 0x800),
+    175: (0x1ce800, 0x800),
+    176: (0x1cf000, 0x800),
+    177: (0x1cf800, 0x800),
+    178: (0x1d0000, 0x800),
+    179: (0x1d0800, 0x800),
+    180: (0x1d1000, 0x800),
+    181: (0x1d1800, 0x800),
+    182: (0x191800, 0x800),
+    183: (0x192000, 0x800),
+    184: (0x192800, 0x800),
+    185: (0x193000, 0x800),
+    186: (0x193800, 0x800),
+    187: (0x194000, 0x800),
+    188: (0x194800, 0x800),
+    189: (0x195000, 0x800),
+    190: (0x195800, 0x800),
+    191: (0x196000, 0x800),
+    192: (0x196800, 0x800),
+    193: (0x197000, 0x800),
+    194: (0x197800, 0x800),
+    195: (0x198000, 0x800),
+    196: (0x198800, 0x800),
+    197: (0x199000, 0x800),
+    198: (0x199800, 0x800),
+    199: (0x19a000, 0x800),
+    200: (0x19a800, 0x800),
+    201: (0x19b000, 0x800),
+    202: (0x19b800, 0x800),
+    203: (0x19c000, 0x800),
+    204: (0x19c800, 0x800),
+    205: (0x19d000, 0x800),
+    206: (0x19d800, 0x800),
+    207: (0x19e000, 0x800),
+    208: (0x19e800, 0x800),
+    209: (0x19f000, 0x800),
+    210: (0x19f800, 0x800),
+    211: (0x1a0000, 0x800),
+    212: (0x1a0800, 0x800),
+    213: (0x1a1000, 0x800),
+    214: (0x161000, 0x800),
+    215: (0x161800, 0x800),
+    216: (0x162000, 0x800),
+    217: (0x162800, 0x800),
+    218: (0x163000, 0x800),
+    219: (0x163800, 0x800),
+    220: (0x164000, 0x800),
+    221: (0x164800, 0x800),
+    222: (0x165000, 0x800),
+    223: (0x165800, 0x800),
+    224: (0x166000, 0x800),
+    225: (0x166800, 0x800),
+    226: (0x167000, 0x800),
+    227: (0x167800, 0x800),
+    228: (0x168000, 0x800),
+    229: (0x168800, 0x800),
+    230: (0x169000, 0x800),
+    231: (0x169800, 0x800),
+    232: (0x16a000, 0x800),
+    233: (0x16a800, 0x800),
+    234: (0x16b000, 0x800),
+    235: (0x16b800, 0x800),
+    236: (0x16c000, 0x800),
+    237: (0x16c800, 0x800),
+    238: (0x16d000, 0x800),
+    239: (0x16d800, 0x800),
+    240: (0x16e000, 0x800),
+    241: (0x16e800, 0x800),
+    242: (0x16f000, 0x800),
+    243: (0x16f800, 0x800),
+    244: (0x170000, 0x800),
+    245: (0x170800, 0x800),
+    246: (0x120800, 0x800),
+    247: (0x121000, 0x800),
+    248: (0x121800, 0x800),
+    249: (0x122000, 0x800),
+    250: (0x122800, 0x800),
+    251: (0x123000, 0x800),
+    252: (0x123800, 0x800),
+    253: (0x124000, 0x800),
+    254: (0x124800, 0x800),
+    255: (0x125000, 0x800),
+    256: (0x125800, 0x800),
+    257: (0x126000, 0x800),
+    258: (0x126800, 0x800),
+    259: (0x127000, 0x800),
+    260: (0x127800, 0x800),
+    261: (0x128000, 0x800),
+    262: (0x128800, 0x800),
+    263: (0x129000, 0x800),
+    264: (0x129800, 0x800),
+    265: (0x12a000, 0x800),
+    266: (0x12a800, 0x800),
+    267: (0x12b000, 0x800),
+    268: (0x12b800, 0x800),
+    269: (0x12c000, 0x800),
+    270: (0x12c800, 0x800),
+    271: (0x12d000, 0x800),
+    272: (0x12d800, 0x800),
+    273: (0x12e000, 0x800),
+    274: (0x12e800, 0x800),
+    275: (0x12f000, 0x800),
+    276: (0x12f800, 0x800),
+    277: (0x130000, 0x800),
+    278: (0xe0000, 0x800),
+    279: (0xe0800, 0x800),
+    280: (0xe1000, 0x800),
+    281: (0xe1800, 0x800),
+    282: (0xe2000, 0x800),
+    283: (0xe2800, 0x800),
+    284: (0xe3000, 0x800),
+    285: (0xe3800, 0x800),
+    286: (0xe4000, 0x800),
+    287: (0xe4800, 0x800),
+    288: (0xe5000, 0x800),
+    289: (0xe5800, 0x800),
+    290: (0xe6000, 0x800),
+    291: (0xe6800, 0x800),
+    292: (0xe7000, 0x800),
+    293: (0xe7800, 0x800),
+    294: (0xe8000, 0x800),
+    295: (0xe8800, 0x800),
+    296: (0xe9000, 0x800),
+    297: (0xe9800, 0x800),
+    298: (0xea000, 0x800),
+    299: (0xea800, 0x800),
+    300: (0xeb000, 0x800),
+    301: (0xeb800, 0x800),
+    302: (0xec000, 0x800),
+    303: (0xec800, 0x800),
+    304: (0xed000, 0x800),
+    305: (0xed800, 0x800),
+    306: (0xee000, 0x800),
+    307: (0xee800, 0x800),
+    308: (0xef000, 0x800),
+    309: (0xef800, 0x800),
+    310: (0x151000, 0x800),
+    311: (0x151800, 0x800),
+    312: (0x152000, 0x800),
+    313: (0x152800, 0x800),
+    314: (0x153000, 0x800),
+    315: (0x153800, 0x800),
+    316: (0x154000, 0x800),
+    317: (0x154800, 0x800),
+    318: (0x155000, 0x800),
+    319: (0x155800, 0x800),
+    320: (0x156000, 0x800),
+    321: (0x156800, 0x800),
+    322: (0x157000, 0x800),
+    323: (0x157800, 0x800),
+    324: (0x158000, 0x800),
+    325: (0x158800, 0x800),
+    326: (0x159000, 0x800),
+    327: (0x159800, 0x800),
+    328: (0x15a000, 0x800),
+    329: (0x15a800, 0x800),
+    330: (0x15b000, 0x800),
+    331: (0x15b800, 0x800),
+    332: (0x15c000, 0x800),
+    333: (0x15c800, 0x800),
+    334: (0x15d000, 0x800),
+    335: (0x15d800, 0x800),
+    336: (0x15e000, 0x800),
+    337: (0x15e800, 0x800),
+    338: (0x15f000, 0x800),
+    339: (0x15f800, 0x800),
+    340: (0x160000, 0x800),
+    341: (0x160800, 0x800),
+    342: (0x110800, 0x800),
+    343: (0x111000, 0x800),
+    344: (0x111800, 0x800),
+    345: (0x112000, 0x800),
+    346: (0x112800, 0x800),
+    347: (0x113000, 0x800),
+    348: (0x113800, 0x800),
+    349: (0x114000, 0x800),
+    350: (0x114800, 0x800),
+    351: (0x115000, 0x800),
+    352: (0x115800, 0x800),
+    353: (0x116000, 0x800),
+    354: (0x116800, 0x800),
+    355: (0x117000, 0x800),
+    356: (0x117800, 0x800),
+    357: (0x118000, 0x800),
+    358: (0x118800, 0x800),
+    359: (0x119000, 0x800),
+    360: (0x119800, 0x800),
+    361: (0x11a000, 0x800),
+    362: (0x11a800, 0x800),
+    363: (0x11b000, 0x800),
+    364: (0x11b800, 0x800),
+    365: (0x11c000, 0x800),
+    366: (0x11c800, 0x800),
+    367: (0x11d000, 0x800),
+    368: (0x11d800, 0x800),
+    369: (0x11e000, 0x800),
+    370: (0x11e800, 0x800),
+    371: (0x11f000, 0x800),
+    372: (0x11f800, 0x800),
+    373: (0x120000, 0x800),
+    374: (0xd0000, 0x800),
+    375: (0xd0800, 0x800),
+    376: (0xd1000, 0x800),
+    377: (0xd1800, 0x800),
+    378: (0xd2000, 0x800),
+    379: (0xd2800, 0x800),
+    380: (0xd3000, 0x800),
+    381: (0xd3800, 0x800),
+    382: (0xd4000, 0x800),
+    383: (0xd4800, 0x800),
+    384: (0xd5000, 0x800),
+    385: (0xd5800, 0x800),
+    386: (0xd6000, 0x800),
+    387: (0xd6800, 0x800),
+    388: (0xd7000, 0x800),
+    389: (0xd7800, 0x800),
+    390: (0xd8000, 0x800),
+    391: (0xd8800, 0x800),
+    392: (0xd9000, 0x800),
+    393: (0xd9800, 0x800),
+    394: (0xda000, 0x800),
+    395: (0xda800, 0x800),
+    396: (0xdb000, 0x800),
+    397: (0xdb800, 0x800),
+    398: (0xdc000, 0x800),
+    399: (0xdc800, 0x800),
+    400: (0xdd000, 0x800),
+    401: (0xdd800, 0x800),
+    402: (0xde000, 0x800),
+    403: (0xde800, 0x800),
+    404: (0xdf000, 0x800),
+    405: (0xdf800, 0x800),
+    406: (0xb0000, 0x800),
+    407: (0xb0800, 0x800),
+    408: (0xb1000, 0x800),
+    409: (0xb1800, 0x800),
+    410: (0xb2000, 0x800),
+    411: (0xb2800, 0x800),
+    412: (0xb3000, 0x800),
+    413: (0xb3800, 0x800),
+    414: (0xb4000, 0x800),
+    415: (0xb4800, 0x800),
+    416: (0xb5000, 0x800),
+    417: (0xb5800, 0x800),
+    418: (0xb6000, 0x800),
+    419: (0xb6800, 0x800),
+    420: (0xb7000, 0x800),
+    421: (0xb7800, 0x800),
+    422: (0xb8000, 0x800),
+    423: (0xb8800, 0x800),
+    424: (0xb9000, 0x800),
+    425: (0xb9800, 0x800),
+    426: (0xba000, 0x800),
+    427: (0xba800, 0x800),
+    428: (0xbb000, 0x800),
+    429: (0xbb800, 0x800),
+    430: (0xbc000, 0x800),
+    431: (0xbc800, 0x800),
+    432: (0xbd000, 0x800),
+    433: (0xbd800, 0x800),
+    434: (0xbe000, 0x800),
+    435: (0xbe800, 0x800),
+    436: (0xbf000, 0x800),
+    437: (0xbf800, 0x800),
+    438: (0x90000, 0x800),
+    439: (0x90800, 0x800),
+    440: (0x91000, 0x800),
+    441: (0x91800, 0x800),
+    442: (0x92000, 0x800),
+    443: (0x92800, 0x800),
+    444: (0x93000, 0x800),
+    445: (0x93800, 0x800),
+    446: (0x94000, 0x800),
+    447: (0x94800, 0x800),
+    448: (0x95000, 0x800),
+    449: (0x95800, 0x800),
+    450: (0x96000, 0x800),
+    451: (0x96800, 0x800),
+    452: (0x97000, 0x800),
+    453: (0x97800, 0x800),
+    454: (0x98000, 0x800),
+    455: (0x98800, 0x800),
+    456: (0x99000, 0x800),
+    457: (0x99800, 0x800),
+    458: (0x9a000, 0x800),
+    459: (0x9a800, 0x800),
+    460: (0x9b000, 0x800),
+    461: (0x9b800, 0x800),
+    462: (0x9c000, 0x800),
+    463: (0x9c800, 0x800),
+    464: (0x9d000, 0x800),
+    465: (0x9d800, 0x800),
+    466: (0x9e000, 0x800),
+    467: (0x9e800, 0x800),
+    468: (0x9f000, 0x800),
+    469: (0x9f800, 0x800),
+    470: (0x60000, 0x800),
+    471: (0x60800, 0x800),
+    472: (0x61000, 0x800),
+    473: (0x61800, 0x800),
+    474: (0x62000, 0x800),
+    475: (0x62800, 0x800),
+    476: (0x63000, 0x800),
+    477: (0x63800, 0x800),
+    478: (0x64000, 0x800),
+    479: (0x64800, 0x800),
+    480: (0x65000, 0x800),
+    481: (0x65800, 0x800),
+    482: (0x66000, 0x800),
+    483: (0x66800, 0x800),
+    484: (0x67000, 0x800),
+    485: (0x67800, 0x800),
+    486: (0x68000, 0x800),
+    487: (0x68800, 0x800),
+    488: (0x69000, 0x800),
+    489: (0x69800, 0x800),
+    490: (0x6a000, 0x800),
+    491: (0x6a800, 0x800),
+    492: (0x6b000, 0x800),
+    493: (0x6b800, 0x800),
+    494: (0x6c000, 0x800),
+    495: (0x6c800, 0x800),
+    496: (0x6d000, 0x800),
+    497: (0x6d800, 0x800),
+    498: (0x6e000, 0x800),
+    499: (0x6e800, 0x800),
+    500: (0x6f000, 0x800),
+    501: (0x6f800, 0x800),
+    502: (0x30000, 0x800),
+    503: (0x30800, 0x800),
+    504: (0x31000, 0x800),
+    505: (0x31800, 0x800),
+    506: (0x32000, 0x800),
+    507: (0x32800, 0x800),
+    508: (0x33000, 0x800),
+    509: (0x33800, 0x800),
+    510: (0x34000, 0x800),
+    511: (0x34800, 0x800),
+    512: (0x35000, 0x800),
+    513: (0x35800, 0x800),
+    514: (0x36000, 0x800),
+    515: (0x36800, 0x800),
+    516: (0x37000, 0x800),
+    517: (0x37800, 0x800),
+    518: (0x38000, 0x800),
+    519: (0x38800, 0x800),
+    520: (0x39000, 0x800),
+    521: (0x39800, 0x800),
+    522: (0x3a000, 0x800),
+    523: (0x3a800, 0x800),
+    524: (0x3b000, 0x800),
+    525: (0x3b800, 0x800),
+    526: (0x3c000, 0x800),
+    527: (0x3c800, 0x800),
+    528: (0x3d000, 0x800),
+    529: (0x3d800, 0x800),
+    530: (0x3e000, 0x800),
+    531: (0x3e800, 0x800),
+    532: (0x3f000, 0x800),
+    533: (0x3f800, 0x800),
+    534: (0x10000, 0x800),
+    535: (0x10800, 0x800),
+    536: (0x11000, 0x800),
+    537: (0x11800, 0x800),
+    538: (0x12000, 0x800),
+    539: (0x12800, 0x800),
+    540: (0x13000, 0x800),
+    541: (0x13800, 0x800),
+    542: (0x14000, 0x800),
+    543: (0x14800, 0x800),
+    544: (0x15000, 0x800),
+    545: (0x15800, 0x800),
+    546: (0x16000, 0x800),
+    547: (0x16800, 0x800),
+    548: (0x17000, 0x800),
+    549: (0x17800, 0x800),
+    550: (0x18000, 0x800),
+    551: (0x18800, 0x800),
+    552: (0x19000, 0x800),
+    553: (0x19800, 0x800),
+    554: (0x1a000, 0x800),
+    555: (0x1a800, 0x800),
+    556: (0x1b000, 0x800),
+    557: (0x1b800, 0x800),
+    558: (0x1c000, 0x800),
+    559: (0x1c800, 0x800),
+    560: (0x1d000, 0x800),
+    561: (0x1d800, 0x800),
+    562: (0x1e000, 0x800),
+    563: (0x1e800, 0x800),
+    564: (0x1f000, 0x800),
+    565: (0x1f800, 0x800),
+    566: (0xc0000, 0x10000),
+    567: (0xa0000, 0x10000),
+    568: (0x80000, 0x10000),
+    569: (0x70000, 0x10000),
+    570: (0x50000, 0x10000),
+    571: (0x40000, 0x10000),
+    572: (0x20000, 0x10000),
+    573: (0x0, 0x10000),
+} # end of block_info
+
+#####  End of OpInfoRegisry dump
+

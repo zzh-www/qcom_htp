@@ -1,0 +1,3694 @@
+{
+ "header": {
+      "header_version": {
+          "major": 1,
+         "minor": 0,
+          "patch": 0
+      },
+       "version": {
+           "major": 1,
+           "minor": 0,
+           "patch": 0
+       },
+      "artifact_type": "HTP_GRAPH"
+   },
+  "model.cpp": "htp_graph",
+  "graph": {
+    "tensors": {
+      "0x0000100200000008": {
+        "id": 0,
+        "type": 4,
+        "data_type": 50,
+        "dims": [1]
+
+      },
+      "0x0000100382d28377": {
+        "id": 1,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          0,
+          0,
+          0,
+          0
+        ]
+
+      },
+      "0x0000100382d28378": {
+        "id": 2,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          0,
+          0,
+          0,
+          1
+        ]
+
+      },
+      "0x0000100382d28379": {
+        "id": 3,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          0,
+          0,
+          0,
+          2
+        ]
+
+      },
+      "0x0000100382d2837a": {
+        "id": 4,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          0,
+          0,
+          0,
+          3
+        ]
+
+      },
+      "0x0000100382d2837b": {
+        "id": 5,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          0,
+          0,
+          0,
+          4
+        ]
+
+      },
+      "0x0000100382d2837c": {
+        "id": 6,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          0,
+          0,
+          0,
+          5
+        ]
+
+      },
+      "0x0000100382d2837d": {
+        "id": 7,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          0,
+          0,
+          0,
+          6
+        ]
+
+      },
+      "0x0000100382d2837e": {
+        "id": 8,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          0,
+          0,
+          0,
+          7
+        ]
+
+      },
+      "0x000010038ad40c8f": {
+        "id": 9,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          0,
+          0,
+          8,
+          0
+        ]
+
+      },
+      "0x000010038ad40c90": {
+        "id": 10,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          0,
+          0,
+          8,
+          1
+        ]
+
+      },
+      "0x000010038ad40c91": {
+        "id": 11,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          0,
+          0,
+          8,
+          2
+        ]
+
+      },
+      "0x000010038ad40c92": {
+        "id": 12,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          0,
+          0,
+          8,
+          3
+        ]
+
+      },
+      "0x000010038ad40c93": {
+        "id": 13,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          0,
+          0,
+          8,
+          4
+        ]
+
+      },
+      "0x000010038ad40c94": {
+        "id": 14,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          0,
+          0,
+          8,
+          5
+        ]
+
+      },
+      "0x000010038ad40c95": {
+        "id": 15,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          0,
+          0,
+          8,
+          6
+        ]
+
+      },
+      "0x000010038ad40c96": {
+        "id": 16,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          0,
+          0,
+          8,
+          7
+        ]
+
+      },
+      "0x0000100399fb24bb": {
+        "id": 17,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000111100000002": {
+        "id": 18,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000111200000002": {
+        "id": 19,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000111300000002": {
+        "id": 20,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000111400000002": {
+        "id": 21,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000111500000002": {
+        "id": 22,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000111600000002": {
+        "id": 23,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000111700000002": {
+        "id": 24,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000111800000002": {
+        "id": 25,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x000011b200000019": {
+        "id": 26,
+        "type": 3,
+        "data_type": 50,
+        "dims": [
+          1,
+          8,
+          1,
+          64
+        ]
+
+      },
+      "0x000011b50000001e": {
+        "id": 27,
+        "type": 3,
+        "data_type": 50,
+        "dims": [
+          1,
+          8,
+          1,
+          64
+        ]
+
+      },
+      "0x000011b800000023": {
+        "id": 28,
+        "type": 3,
+        "data_type": 50,
+        "dims": [
+          1,
+          8,
+          1,
+          64
+        ]
+
+      },
+      "0x000011bb00000028": {
+        "id": 29,
+        "type": 3,
+        "data_type": 50,
+        "dims": [
+          1,
+          8,
+          1,
+          64
+        ]
+
+      },
+      "0x000011be0000002d": {
+        "id": 30,
+        "type": 3,
+        "data_type": 50,
+        "dims": [
+          1,
+          8,
+          1,
+          64
+        ]
+
+      },
+      "0x000011c100000032": {
+        "id": 31,
+        "type": 3,
+        "data_type": 50,
+        "dims": [
+          1,
+          8,
+          1,
+          64
+        ]
+
+      },
+      "0x000011c400000037": {
+        "id": 32,
+        "type": 3,
+        "data_type": 50,
+        "dims": [
+          1,
+          8,
+          1,
+          64
+        ]
+
+      },
+      "0x000011c70000003c": {
+        "id": 33,
+        "type": 3,
+        "data_type": 50,
+        "dims": [
+          1,
+          8,
+          1,
+          64
+        ]
+
+      },
+      "0x000011d100000019": {
+        "id": 34,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x000011d40000001e": {
+        "id": 35,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x000011d700000023": {
+        "id": 36,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x000011da00000028": {
+        "id": 37,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x000011dd0000002d": {
+        "id": 38,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x000011e000000032": {
+        "id": 39,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x000011e300000037": {
+        "id": 40,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x000011e60000003c": {
+        "id": 41,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x000011fb00000019": {
+        "id": 42,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x000011fe0000001e": {
+        "id": 43,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x0000120100000023": {
+        "id": 44,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x0000120400000028": {
+        "id": 45,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x000012070000002d": {
+        "id": 46,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x0000120a00000032": {
+        "id": 47,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x0000120d00000037": {
+        "id": 48,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x000012100000003c": {
+        "id": 49,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x0000121100000019": {
+        "id": 50,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x000012130000001e": {
+        "id": 51,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x0000121500000023": {
+        "id": 52,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x0000121700000028": {
+        "id": 53,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x000012190000002d": {
+        "id": 54,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x0000121b00000032": {
+        "id": 55,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x0000121d00000037": {
+        "id": 56,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x0000121f0000003c": {
+        "id": 57,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x0000123100000003": {
+        "id": 58,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x0000123200000003": {
+        "id": 59,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000123300000003": {
+        "id": 60,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x0000123400000003": {
+        "id": 61,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000123500000003": {
+        "id": 62,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x0000123600000003": {
+        "id": 63,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000123700000003": {
+        "id": 64,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x0000123800000003": {
+        "id": 65,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000123900000003": {
+        "id": 66,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x0000123a00000003": {
+        "id": 67,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000123b00000003": {
+        "id": 68,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x0000123c00000003": {
+        "id": 69,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000123d00000003": {
+        "id": 70,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x0000123e00000003": {
+        "id": 71,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000123f00000003": {
+        "id": 72,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x0000124000000003": {
+        "id": 73,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000124100000019": {
+        "id": 74,
+        "type": 3,
+        "data_type": 776,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x000012420000001e": {
+        "id": 75,
+        "type": 3,
+        "data_type": 776,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000124300000023": {
+        "id": 76,
+        "type": 3,
+        "data_type": 776,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000124400000028": {
+        "id": 77,
+        "type": 3,
+        "data_type": 776,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x000012450000002d": {
+        "id": 78,
+        "type": 3,
+        "data_type": 776,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000124600000032": {
+        "id": 79,
+        "type": 3,
+        "data_type": 776,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000124700000037": {
+        "id": 80,
+        "type": 3,
+        "data_type": 776,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x000012480000003c": {
+        "id": 81,
+        "type": 3,
+        "data_type": 776,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000126300000019": {
+        "id": 82,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          1,
+          1,
+          1,
+          2
+        ]
+
+      },
+      "0x0000126400000019": {
+        "id": 83,
+        "type": 4,
+        "data_type": 776,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x000012650000001e": {
+        "id": 84,
+        "type": 4,
+        "data_type": 776,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000126600000023": {
+        "id": 85,
+        "type": 4,
+        "data_type": 776,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000126700000028": {
+        "id": 86,
+        "type": 4,
+        "data_type": 776,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x000012680000002d": {
+        "id": 87,
+        "type": 4,
+        "data_type": 776,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000126900000032": {
+        "id": 88,
+        "type": 4,
+        "data_type": 776,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000126a00000037": {
+        "id": 89,
+        "type": 4,
+        "data_type": 776,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000126b0000003c": {
+        "id": 90,
+        "type": 4,
+        "data_type": 776,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000127d00000019": {
+        "id": 91,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          1,
+          8,
+          1,
+          64
+        ]
+
+      },
+      "0x0000127e0000001e": {
+        "id": 92,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          1,
+          8,
+          1,
+          64
+        ]
+
+      },
+      "0x0000127f00000023": {
+        "id": 93,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          1,
+          8,
+          1,
+          64
+        ]
+
+      },
+      "0x0000128000000028": {
+        "id": 94,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          1,
+          8,
+          1,
+          64
+        ]
+
+      },
+      "0x000012810000002d": {
+        "id": 95,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          1,
+          8,
+          1,
+          64
+        ]
+
+      },
+      "0x0000128200000032": {
+        "id": 96,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          1,
+          8,
+          1,
+          64
+        ]
+
+      },
+      "0x0000128300000037": {
+        "id": 97,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          1,
+          8,
+          1,
+          64
+        ]
+
+      },
+      "0x000012840000003c": {
+        "id": 98,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          1,
+          8,
+          1,
+          64
+        ]
+
+      }
+    },
+    "nodes": {
+      "0x0000111100000002": {
+        "type": "q::*InputSlice", 
+        "grouping": "Input", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "Input"
+             },
+            "qnn_op_name": {
+              "1544": "Input"
+             },
+            "mem_dram_read": {
+              "100": 65536
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x0000100382d28377",
+          "0x0000100382d28377",
+          "0x0000100399fb24bb",
+          "0x000010038ad40c8f",
+          "0x0000100399fb24bb",
+          "0x0000100399fb24bb"
+        ],
+        "output_names": ["0x0000111100000002"]
+      },
+      "0x0000111200000002": {
+        "type": "q::*InputSlice", 
+        "grouping": "Input", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "Input"
+             },
+            "qnn_op_name": {
+              "1544": "Input"
+             },
+            "mem_dram_read": {
+              "100": 65536
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x0000100382d28377",
+          "0x0000100382d28377",
+          "0x0000100399fb24bb",
+          "0x000010038ad40c90",
+          "0x0000100399fb24bb",
+          "0x0000100399fb24bb"
+        ],
+        "output_names": ["0x0000111200000002"]
+      },
+      "0x0000111300000002": {
+        "type": "q::*InputSlice", 
+        "grouping": "Input", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "Input"
+             },
+            "qnn_op_name": {
+              "1544": "Input"
+             },
+            "mem_dram_read": {
+              "100": 65536
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x0000100382d28377",
+          "0x0000100382d28377",
+          "0x0000100399fb24bb",
+          "0x000010038ad40c91",
+          "0x0000100399fb24bb",
+          "0x0000100399fb24bb"
+        ],
+        "output_names": ["0x0000111300000002"]
+      },
+      "0x0000111400000002": {
+        "type": "q::*InputSlice", 
+        "grouping": "Input", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "Input"
+             },
+            "qnn_op_name": {
+              "1544": "Input"
+             },
+            "mem_dram_read": {
+              "100": 65536
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x0000100382d28377",
+          "0x0000100382d28377",
+          "0x0000100399fb24bb",
+          "0x000010038ad40c92",
+          "0x0000100399fb24bb",
+          "0x0000100399fb24bb"
+        ],
+        "output_names": ["0x0000111400000002"]
+      },
+      "0x0000111500000002": {
+        "type": "q::*InputSlice", 
+        "grouping": "Input", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "Input"
+             },
+            "qnn_op_name": {
+              "1544": "Input"
+             },
+            "mem_dram_read": {
+              "100": 65536
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x0000100382d28377",
+          "0x0000100382d28377",
+          "0x0000100399fb24bb",
+          "0x000010038ad40c93",
+          "0x0000100399fb24bb",
+          "0x0000100399fb24bb"
+        ],
+        "output_names": ["0x0000111500000002"]
+      },
+      "0x0000111600000002": {
+        "type": "q::*InputSlice", 
+        "grouping": "Input", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "Input"
+             },
+            "qnn_op_name": {
+              "1544": "Input"
+             },
+            "mem_dram_read": {
+              "100": 65536
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x0000100382d28377",
+          "0x0000100382d28377",
+          "0x0000100399fb24bb",
+          "0x000010038ad40c94",
+          "0x0000100399fb24bb",
+          "0x0000100399fb24bb"
+        ],
+        "output_names": ["0x0000111600000002"]
+      },
+      "0x0000111700000002": {
+        "type": "q::*InputSlice", 
+        "grouping": "Input", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "Input"
+             },
+            "qnn_op_name": {
+              "1544": "Input"
+             },
+            "mem_dram_read": {
+              "100": 65536
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x0000100382d28377",
+          "0x0000100382d28377",
+          "0x0000100399fb24bb",
+          "0x000010038ad40c95",
+          "0x0000100399fb24bb",
+          "0x0000100399fb24bb"
+        ],
+        "output_names": ["0x0000111700000002"]
+      },
+      "0x0000111800000002": {
+        "type": "q::*InputSlice", 
+        "grouping": "Input", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "Input"
+             },
+            "qnn_op_name": {
+              "1544": "Input"
+             },
+            "mem_dram_read": {
+              "100": 65536
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x0000100382d28377",
+          "0x0000100382d28377",
+          "0x0000100399fb24bb",
+          "0x000010038ad40c96",
+          "0x0000100399fb24bb",
+          "0x0000100399fb24bb"
+        ],
+        "output_names": ["0x0000111800000002"]
+      },
+      "0x000011b200000019": {
+        "type": "q::ConvLayer.opt.bias_to_vtcm", 
+        "grouping": "MatMul_0", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 1
+             },
+            "output_zero_offset": {
+              "50": 0
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_0"
+             },
+            "mem_dram_read": {
+              "100": 2048
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 2048
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x0000127d00000019"
+        ],
+        "output_names": ["0x000011b200000019"]
+      },
+      "0x000011b50000001e": {
+        "type": "q::ConvLayer.opt.bias_to_vtcm", 
+        "grouping": "MatMul_1", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 1
+             },
+            "output_zero_offset": {
+              "50": 0
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_1"
+             },
+            "mem_dram_read": {
+              "100": 2048
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 2048
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x0000127e0000001e"
+        ],
+        "output_names": ["0x000011b50000001e"]
+      },
+      "0x000011b800000023": {
+        "type": "q::ConvLayer.opt.bias_to_vtcm", 
+        "grouping": "MatMul_2", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 1
+             },
+            "output_zero_offset": {
+              "50": 0
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_2"
+             },
+            "mem_dram_read": {
+              "100": 2048
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 2048
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x0000127f00000023"
+        ],
+        "output_names": ["0x000011b800000023"]
+      },
+      "0x000011bb00000028": {
+        "type": "q::ConvLayer.opt.bias_to_vtcm", 
+        "grouping": "MatMul_3", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 1
+             },
+            "output_zero_offset": {
+              "50": 0
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_3"
+             },
+            "mem_dram_read": {
+              "100": 2048
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 2048
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x0000128000000028"
+        ],
+        "output_names": ["0x000011bb00000028"]
+      },
+      "0x000011be0000002d": {
+        "type": "q::ConvLayer.opt.bias_to_vtcm", 
+        "grouping": "MatMul_4", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 1
+             },
+            "output_zero_offset": {
+              "50": 0
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_4"
+             },
+            "mem_dram_read": {
+              "100": 2048
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 2048
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x000012810000002d"
+        ],
+        "output_names": ["0x000011be0000002d"]
+      },
+      "0x000011c100000032": {
+        "type": "q::ConvLayer.opt.bias_to_vtcm", 
+        "grouping": "MatMul_5", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 1
+             },
+            "output_zero_offset": {
+              "50": 0
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_5"
+             },
+            "mem_dram_read": {
+              "100": 2048
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 2048
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x0000128200000032"
+        ],
+        "output_names": ["0x000011c100000032"]
+      },
+      "0x000011c400000037": {
+        "type": "q::ConvLayer.opt.bias_to_vtcm", 
+        "grouping": "MatMul_6", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 1
+             },
+            "output_zero_offset": {
+              "50": 0
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_6"
+             },
+            "mem_dram_read": {
+              "100": 2048
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 2048
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x0000128300000037"
+        ],
+        "output_names": ["0x000011c400000037"]
+      },
+      "0x000011c70000003c": {
+        "type": "q::ConvLayer.opt.bias_to_vtcm", 
+        "grouping": "MatMul_7", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 1
+             },
+            "output_zero_offset": {
+              "50": 0
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_7"
+             },
+            "mem_dram_read": {
+              "100": 2048
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 2048
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x000012840000003c"
+        ],
+        "output_names": ["0x000011c70000003c"]
+      },
+      "0x000011d100000019": {
+        "type": "q::Reshape", 
+        "grouping": "MatMul_0", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_0"
+             },
+            "op_flags": {
+              "1544": "null_exec"
+             }
+        },
+        "input_names": [
+          "0x0000111100000002"
+        ],
+        "output_names": ["0x000011d100000019"]
+      },
+      "0x000011d40000001e": {
+        "type": "q::Reshape", 
+        "grouping": "MatMul_1", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_1"
+             }
+        },
+        "input_names": [
+          "0x0000111200000002"
+        ],
+        "output_names": ["0x000011d40000001e"]
+      },
+      "0x000011d700000023": {
+        "type": "q::Reshape", 
+        "grouping": "MatMul_2", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_2"
+             }
+        },
+        "input_names": [
+          "0x0000111300000002"
+        ],
+        "output_names": ["0x000011d700000023"]
+      },
+      "0x000011da00000028": {
+        "type": "q::Reshape", 
+        "grouping": "MatMul_3", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_3"
+             },
+            "op_flags": {
+              "1544": "null_exec"
+             }
+        },
+        "input_names": [
+          "0x0000111400000002"
+        ],
+        "output_names": ["0x000011da00000028"]
+      },
+      "0x000011dd0000002d": {
+        "type": "q::Reshape", 
+        "grouping": "MatMul_4", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_4"
+             }
+        },
+        "input_names": [
+          "0x0000111500000002"
+        ],
+        "output_names": ["0x000011dd0000002d"]
+      },
+      "0x000011e000000032": {
+        "type": "q::Reshape", 
+        "grouping": "MatMul_5", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_5"
+             }
+        },
+        "input_names": [
+          "0x0000111600000002"
+        ],
+        "output_names": ["0x000011e000000032"]
+      },
+      "0x000011e300000037": {
+        "type": "q::Reshape", 
+        "grouping": "MatMul_6", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_6"
+             },
+            "op_flags": {
+              "1544": "null_exec"
+             }
+        },
+        "input_names": [
+          "0x0000111700000002"
+        ],
+        "output_names": ["0x000011e300000037"]
+      },
+      "0x000011e60000003c": {
+        "type": "q::Reshape", 
+        "grouping": "MatMul_7", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_7"
+             },
+            "op_flags": {
+              "1544": "null_exec"
+             }
+        },
+        "input_names": [
+          "0x0000111800000002"
+        ],
+        "output_names": ["0x000011e60000003c"]
+      },
+      "0x000011fb00000019": {
+        "type": "q::ConvLayer_s1.opt", 
+        "grouping": "MatMul_0", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_0"
+             },
+            "mem_dram_read": {
+              "100": 0
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 133120
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "uses_hmx"
+             }
+        },
+        "input_names": [
+          "0x0000121100000019",
+          "0x0000124100000019",
+          "0x000011b200000019",
+          "0x0000100200000008",
+          "0x0000126300000019"
+        ],
+        "output_names": ["0x000011fb00000019"]
+      },
+      "0x000011fe0000001e": {
+        "type": "q::ConvLayer_s1.opt", 
+        "grouping": "MatMul_1", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_1"
+             },
+            "mem_dram_read": {
+              "100": 0
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 133120
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "uses_hmx"
+             }
+        },
+        "input_names": [
+          "0x000012130000001e",
+          "0x000012420000001e",
+          "0x000011b50000001e",
+          "0x0000100200000008",
+          "0x0000126300000019"
+        ],
+        "output_names": ["0x000011fe0000001e"]
+      },
+      "0x0000120100000023": {
+        "type": "q::ConvLayer_s1.opt", 
+        "grouping": "MatMul_2", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_2"
+             },
+            "mem_dram_read": {
+              "100": 0
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 133120
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "uses_hmx"
+             }
+        },
+        "input_names": [
+          "0x0000121500000023",
+          "0x0000124300000023",
+          "0x000011b800000023",
+          "0x0000100200000008",
+          "0x0000126300000019"
+        ],
+        "output_names": ["0x0000120100000023"]
+      },
+      "0x0000120400000028": {
+        "type": "q::ConvLayer_s1.opt", 
+        "grouping": "MatMul_3", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_3"
+             },
+            "mem_dram_read": {
+              "100": 0
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 133120
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "uses_hmx"
+             }
+        },
+        "input_names": [
+          "0x0000121700000028",
+          "0x0000124400000028",
+          "0x000011bb00000028",
+          "0x0000100200000008",
+          "0x0000126300000019"
+        ],
+        "output_names": ["0x0000120400000028"]
+      },
+      "0x000012070000002d": {
+        "type": "q::ConvLayer_s1.opt", 
+        "grouping": "MatMul_4", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_4"
+             },
+            "mem_dram_read": {
+              "100": 0
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 133120
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "uses_hmx"
+             }
+        },
+        "input_names": [
+          "0x000012190000002d",
+          "0x000012450000002d",
+          "0x000011be0000002d",
+          "0x0000100200000008",
+          "0x0000126300000019"
+        ],
+        "output_names": ["0x000012070000002d"]
+      },
+      "0x0000120a00000032": {
+        "type": "q::ConvLayer_s1.opt", 
+        "grouping": "MatMul_5", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_5"
+             },
+            "mem_dram_read": {
+              "100": 0
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 133120
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "uses_hmx"
+             }
+        },
+        "input_names": [
+          "0x0000121b00000032",
+          "0x0000124600000032",
+          "0x000011c100000032",
+          "0x0000100200000008",
+          "0x0000126300000019"
+        ],
+        "output_names": ["0x0000120a00000032"]
+      },
+      "0x0000120d00000037": {
+        "type": "q::ConvLayer_s1.opt", 
+        "grouping": "MatMul_6", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_6"
+             },
+            "mem_dram_read": {
+              "100": 0
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 133120
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "uses_hmx"
+             }
+        },
+        "input_names": [
+          "0x0000121d00000037",
+          "0x0000124700000037",
+          "0x000011c400000037",
+          "0x0000100200000008",
+          "0x0000126300000019"
+        ],
+        "output_names": ["0x0000120d00000037"]
+      },
+      "0x000012100000003c": {
+        "type": "q::ConvLayer_s1.opt", 
+        "grouping": "MatMul_7", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_7"
+             },
+            "mem_dram_read": {
+              "100": 0
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 133120
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "uses_hmx"
+             }
+        },
+        "input_names": [
+          "0x0000121f0000003c",
+          "0x000012480000003c",
+          "0x000011c70000003c",
+          "0x0000100200000008",
+          "0x0000126300000019"
+        ],
+        "output_names": ["0x000012100000003c"]
+      },
+      "0x0000121100000019": {
+        "type": "q::ForceFormat_Crouton", 
+        "grouping": "MatMul_0", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_0"
+             },
+            "mem_dram_read": {
+              "100": 0
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 65536
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "uses_hvx"
+             }
+        },
+        "input_names": [
+          "0x000011d100000019"
+        ],
+        "output_names": ["0x0000121100000019"]
+      },
+      "0x000012130000001e": {
+        "type": "q::ForceFormat_Crouton", 
+        "grouping": "MatMul_1", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_1"
+             },
+            "mem_dram_read": {
+              "100": 0
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 65536
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "uses_hvx"
+             }
+        },
+        "input_names": [
+          "0x000011d40000001e"
+        ],
+        "output_names": ["0x000012130000001e"]
+      },
+      "0x0000121500000023": {
+        "type": "q::ForceFormat_Crouton", 
+        "grouping": "MatMul_2", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_2"
+             },
+            "mem_dram_read": {
+              "100": 0
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 65536
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "uses_hvx"
+             }
+        },
+        "input_names": [
+          "0x000011d700000023"
+        ],
+        "output_names": ["0x0000121500000023"]
+      },
+      "0x0000121700000028": {
+        "type": "q::ForceFormat_Crouton", 
+        "grouping": "MatMul_3", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_3"
+             },
+            "mem_dram_read": {
+              "100": 0
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 65536
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "uses_hvx"
+             }
+        },
+        "input_names": [
+          "0x000011da00000028"
+        ],
+        "output_names": ["0x0000121700000028"]
+      },
+      "0x000012190000002d": {
+        "type": "q::ForceFormat_Crouton", 
+        "grouping": "MatMul_4", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_4"
+             },
+            "mem_dram_read": {
+              "100": 0
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 65536
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "uses_hvx"
+             }
+        },
+        "input_names": [
+          "0x000011dd0000002d"
+        ],
+        "output_names": ["0x000012190000002d"]
+      },
+      "0x0000121b00000032": {
+        "type": "q::ForceFormat_Crouton", 
+        "grouping": "MatMul_5", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_5"
+             },
+            "mem_dram_read": {
+              "100": 0
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 65536
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "uses_hvx"
+             }
+        },
+        "input_names": [
+          "0x000011e000000032"
+        ],
+        "output_names": ["0x0000121b00000032"]
+      },
+      "0x0000121d00000037": {
+        "type": "q::ForceFormat_Crouton", 
+        "grouping": "MatMul_6", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_6"
+             },
+            "mem_dram_read": {
+              "100": 0
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 65536
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "uses_hvx"
+             }
+        },
+        "input_names": [
+          "0x000011e300000037"
+        ],
+        "output_names": ["0x0000121d00000037"]
+      },
+      "0x0000121f0000003c": {
+        "type": "q::ForceFormat_Crouton", 
+        "grouping": "MatMul_7", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_7"
+             },
+            "mem_dram_read": {
+              "100": 0
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 65536
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "uses_hvx"
+             }
+        },
+        "input_names": [
+          "0x000011e60000003c"
+        ],
+        "output_names": ["0x0000121f0000003c"]
+      },
+      "0x0000123100000003": {
+        "type": "q::ForceFormat_Flat", 
+        "grouping": "Output", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "Output"
+             },
+            "qnn_op_name": {
+              "1544": "Output"
+             },
+            "mem_dram_read": {
+              "100": 0
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 65536
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "uses_hvx"
+             }
+        },
+        "input_names": [
+          "0x000011fb00000019"
+        ],
+        "output_names": ["0x0000123100000003"]
+      },
+      "0x0000123200000003": {
+        "type": "q::Reshape", 
+        "grouping": "Output", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "Output"
+             },
+            "qnn_op_name": {
+              "1544": "Output"
+             },
+            "op_flags": {
+              "1544": "null_exec"
+             }
+        },
+        "input_names": [
+          "0x0000123100000003"
+        ],
+        "output_names": ["0x0000123200000003"]
+      },
+      "0x0000123300000003": {
+        "type": "q::ForceFormat_Flat", 
+        "grouping": "Output", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "Output"
+             },
+            "qnn_op_name": {
+              "1544": "Output"
+             },
+            "mem_dram_read": {
+              "100": 0
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 65536
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "uses_hvx"
+             }
+        },
+        "input_names": [
+          "0x000011fe0000001e"
+        ],
+        "output_names": ["0x0000123300000003"]
+      },
+      "0x0000123400000003": {
+        "type": "q::Reshape", 
+        "grouping": "Output", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "Output"
+             },
+            "qnn_op_name": {
+              "1544": "Output"
+             }
+        },
+        "input_names": [
+          "0x0000123300000003"
+        ],
+        "output_names": ["0x0000123400000003"]
+      },
+      "0x0000123500000003": {
+        "type": "q::ForceFormat_Flat", 
+        "grouping": "Output", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "Output"
+             },
+            "qnn_op_name": {
+              "1544": "Output"
+             },
+            "mem_dram_read": {
+              "100": 0
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 65536
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "uses_hvx"
+             }
+        },
+        "input_names": [
+          "0x0000120100000023"
+        ],
+        "output_names": ["0x0000123500000003"]
+      },
+      "0x0000123600000003": {
+        "type": "q::Reshape", 
+        "grouping": "Output", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "Output"
+             },
+            "qnn_op_name": {
+              "1544": "Output"
+             },
+            "op_flags": {
+              "1544": "null_exec"
+             }
+        },
+        "input_names": [
+          "0x0000123500000003"
+        ],
+        "output_names": ["0x0000123600000003"]
+      },
+      "0x0000123700000003": {
+        "type": "q::ForceFormat_Flat", 
+        "grouping": "Output", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "Output"
+             },
+            "qnn_op_name": {
+              "1544": "Output"
+             },
+            "mem_dram_read": {
+              "100": 0
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 65536
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "uses_hvx"
+             }
+        },
+        "input_names": [
+          "0x0000120400000028"
+        ],
+        "output_names": ["0x0000123700000003"]
+      },
+      "0x0000123800000003": {
+        "type": "q::Reshape", 
+        "grouping": "Output", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "Output"
+             },
+            "qnn_op_name": {
+              "1544": "Output"
+             }
+        },
+        "input_names": [
+          "0x0000123700000003"
+        ],
+        "output_names": ["0x0000123800000003"]
+      },
+      "0x0000123900000003": {
+        "type": "q::ForceFormat_Flat", 
+        "grouping": "Output", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "Output"
+             },
+            "qnn_op_name": {
+              "1544": "Output"
+             },
+            "mem_dram_read": {
+              "100": 0
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 65536
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "uses_hvx"
+             }
+        },
+        "input_names": [
+          "0x000012070000002d"
+        ],
+        "output_names": ["0x0000123900000003"]
+      },
+      "0x0000123a00000003": {
+        "type": "q::Reshape", 
+        "grouping": "Output", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "Output"
+             },
+            "qnn_op_name": {
+              "1544": "Output"
+             },
+            "op_flags": {
+              "1544": "null_exec"
+             }
+        },
+        "input_names": [
+          "0x0000123900000003"
+        ],
+        "output_names": ["0x0000123a00000003"]
+      },
+      "0x0000123b00000003": {
+        "type": "q::ForceFormat_Flat", 
+        "grouping": "Output", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "Output"
+             },
+            "qnn_op_name": {
+              "1544": "Output"
+             },
+            "mem_dram_read": {
+              "100": 0
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 65536
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "uses_hvx"
+             }
+        },
+        "input_names": [
+          "0x0000120a00000032"
+        ],
+        "output_names": ["0x0000123b00000003"]
+      },
+      "0x0000123c00000003": {
+        "type": "q::Reshape", 
+        "grouping": "Output", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "Output"
+             },
+            "qnn_op_name": {
+              "1544": "Output"
+             }
+        },
+        "input_names": [
+          "0x0000123b00000003"
+        ],
+        "output_names": ["0x0000123c00000003"]
+      },
+      "0x0000123d00000003": {
+        "type": "q::ForceFormat_Flat", 
+        "grouping": "Output", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "Output"
+             },
+            "qnn_op_name": {
+              "1544": "Output"
+             },
+            "mem_dram_read": {
+              "100": 0
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 65536
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "uses_hvx"
+             }
+        },
+        "input_names": [
+          "0x0000120d00000037"
+        ],
+        "output_names": ["0x0000123d00000003"]
+      },
+      "0x0000123e00000003": {
+        "type": "q::Reshape", 
+        "grouping": "Output", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "Output"
+             },
+            "qnn_op_name": {
+              "1544": "Output"
+             },
+            "op_flags": {
+              "1544": "null_exec"
+             }
+        },
+        "input_names": [
+          "0x0000123d00000003"
+        ],
+        "output_names": ["0x0000123e00000003"]
+      },
+      "0x0000123f00000003": {
+        "type": "q::ForceFormat_Flat", 
+        "grouping": "Output", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "Output"
+             },
+            "qnn_op_name": {
+              "1544": "Output"
+             },
+            "mem_dram_read": {
+              "100": 0
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 65536
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "uses_hvx"
+             }
+        },
+        "input_names": [
+          "0x000012100000003c"
+        ],
+        "output_names": ["0x0000123f00000003"]
+      },
+      "0x0000124000000003": {
+        "type": "q::Reshape", 
+        "grouping": "Output", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "Output"
+             },
+            "qnn_op_name": {
+              "1544": "Output"
+             }
+        },
+        "input_names": [
+          "0x0000123f00000003"
+        ],
+        "output_names": ["0x0000124000000003"]
+      },
+      "0x0000124100000019": {
+        "type": "q::ConvLayer.opt.weights_to_vtcm", 
+        "grouping": "MatMul_0", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 0
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_0"
+             },
+            "mem_dram_read": {
+              "100": 65536
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x0000126400000019"
+        ],
+        "output_names": ["0x0000124100000019"]
+      },
+      "0x000012420000001e": {
+        "type": "q::ConvLayer.opt.weights_to_vtcm", 
+        "grouping": "MatMul_1", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 0
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_1"
+             },
+            "mem_dram_read": {
+              "100": 65536
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x000012650000001e"
+        ],
+        "output_names": ["0x000012420000001e"]
+      },
+      "0x0000124300000023": {
+        "type": "q::ConvLayer.opt.weights_to_vtcm", 
+        "grouping": "MatMul_2", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 0
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_2"
+             },
+            "mem_dram_read": {
+              "100": 65536
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x0000126600000023"
+        ],
+        "output_names": ["0x0000124300000023"]
+      },
+      "0x0000124400000028": {
+        "type": "q::ConvLayer.opt.weights_to_vtcm", 
+        "grouping": "MatMul_3", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 0
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_3"
+             },
+            "mem_dram_read": {
+              "100": 65536
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x0000126700000028"
+        ],
+        "output_names": ["0x0000124400000028"]
+      },
+      "0x000012450000002d": {
+        "type": "q::ConvLayer.opt.weights_to_vtcm", 
+        "grouping": "MatMul_4", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 0
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_4"
+             },
+            "mem_dram_read": {
+              "100": 65536
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x000012680000002d"
+        ],
+        "output_names": ["0x000012450000002d"]
+      },
+      "0x0000124600000032": {
+        "type": "q::ConvLayer.opt.weights_to_vtcm", 
+        "grouping": "MatMul_5", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 0
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_5"
+             },
+            "mem_dram_read": {
+              "100": 65536
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x0000126900000032"
+        ],
+        "output_names": ["0x0000124600000032"]
+      },
+      "0x0000124700000037": {
+        "type": "q::ConvLayer.opt.weights_to_vtcm", 
+        "grouping": "MatMul_6", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 0
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_6"
+             },
+            "mem_dram_read": {
+              "100": 65536
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x0000126a00000037"
+        ],
+        "output_names": ["0x0000124700000037"]
+      },
+      "0x000012480000003c": {
+        "type": "q::ConvLayer.opt.weights_to_vtcm", 
+        "grouping": "MatMul_7", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 0
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_7"
+             },
+            "mem_dram_read": {
+              "100": 65536
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x0000126b0000003c"
+        ],
+        "output_names": ["0x000012480000003c"]
+      }
+    }
+  },
+  "op_types": [
+    "q::*InputSlice",
+    "q::ConvLayer.opt.bias_to_vtcm",
+    "q::ConvLayer.opt.weights_to_vtcm",
+    "q::ConvLayer_s1.opt",
+    "q::ForceFormat_Crouton",
+    "q::ForceFormat_Flat",
+    "q::Reshape"
+  ]
+}

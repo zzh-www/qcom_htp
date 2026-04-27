@@ -1,0 +1,42 @@
+2026-04-28 00:41:31,459 - 278 - INFO - INFO_INITIALIZATION_SUCCESS: 
+2026-04-28 00:41:31,503 - 283 - WARNING - Unable to register converter supported Operation [Gelu:Version 20] with your Onnx installation. Converter will bail if Model contains this Op.
+2026-04-28 00:41:31,505 - 283 - WARNING - Unable to register converter supported Operation [GroupNormalization:Version 18] with your Onnx installation. Converter will bail if Model contains this Op.
+2026-04-28 00:41:31,505 - 283 - WARNING - Unable to register converter supported Operation [GroupNormalization:Version 21] with your Onnx installation. Converter will bail if Model contains this Op.
+2026-04-28 00:41:31,507 - 283 - WARNING - Unable to register converter supported Operation [Inverse:Version 1] with your Onnx installation. Converter will bail if Model contains this Op.
+2026-04-28 00:41:31,510 - 283 - WARNING - Unable to register converter supported Operation [RMSNormalization:Version 23] with your Onnx installation. Converter will bail if Model contains this Op.
+2026-04-28 00:41:31,513 - 283 - WARNING - Unable to register converter supported Operation [RotaryEmbedding:Version 23] with your Onnx installation. Converter will bail if Model contains this Op.
+2026-04-28 00:41:31,587 - 283 - WARNING - --desired_input_shape and -d are deprecated. Use --source_model_input_shape or -s for achieving this functionality
+2026-04-28 00:41:31,587 - 278 - INFO - Validating user provided custom IO
+2026-04-28 00:41:31,587 - 283 - WARNING - NONTRIVIAL input layout is deprecated, provided for buffers: ['act_raw', 'act_raw_1', 'act_raw_2', 'act_raw_3', 'act_raw_4', 'act_raw_5', 'act_raw_6', 'act_raw_7']
+2026-04-28 00:41:31,587 - 283 - WARNING - NONTRIVIAL input layout is deprecated, provided for buffers: ['out_0', 'out_1', 'out_2', 'out_3', 'out_4', 'out_5', 'out_6', 'out_7', 'act_raw', 'out_0', 'act_raw_1', 'out_1', 'act_raw_2', 'out_2', 'act_raw_3', 'out_3', 'act_raw_4', 'out_4', 'act_raw_5', 'out_5', 'act_raw_6', 'out_6', 'act_raw_7', 'out_7']
+2026-04-28 00:41:31,587 - 283 - WARNING - NONTRIVIAL input layout is deprecated, provided for buffers: ['act_raw', 'out_0', 'act_raw_1', 'out_1', 'act_raw_2', 'out_2', 'act_raw_3', 'out_3', 'act_raw_4', 'out_4', 'act_raw_5', 'out_5', 'act_raw_6', 'out_6', 'act_raw_7', 'out_7']
+2026-04-28 00:41:31,588 - 278 - INFO - Processing user provided quantization encodings: 
+2026-04-28 00:41:31,588 - 278 - INFO - Input shape info 
+2026-04-28 00:41:31,588 - 283 - WARNING - Can't simplify the model when custom ops, quantization overrides or dynamic input shapes are specified, converting without simplification.
+2026-04-28 00:41:31,636 - 283 - WARNING - ONNX_CUSTOM_OP_INFER_SHAPES: Could not infer shapes for all model tensors. This may cause issues during conversion
+2026-04-28 00:41:31,636 - 283 - WARNING - ONNX_CUSTOM_OP_INFER_SHAPES: Could not infer shapes for all model tensors. This may cause issues during conversion
+2026-04-28 00:41:31,637 - 283 - WARNING - ONNX_CUSTOM_OP_INFER_SHAPES: Could not infer shapes for all model tensors. This may cause issues during conversion
+2026-04-28 00:41:31,637 - 283 - WARNING - ONNX_CUSTOM_OP_INFER_SHAPES: Could not infer shapes for all model tensors. This may cause issues during conversion
+2026-04-28 00:41:31,638 - 283 - WARNING - ONNX_CUSTOM_OP_INFER_SHAPES: Could not infer shapes for all model tensors. This may cause issues during conversion
+2026-04-28 00:41:31,638 - 283 - WARNING - ONNX_CUSTOM_OP_INFER_SHAPES: Could not infer shapes for all model tensors. This may cause issues during conversion
+2026-04-28 00:41:31,638 - 283 - WARNING - ONNX_CUSTOM_OP_INFER_SHAPES: Could not infer shapes for all model tensors. This may cause issues during conversion
+2026-04-28 00:41:31,639 - 283 - WARNING - ONNX_CUSTOM_OP_INFER_SHAPES: Could not infer shapes for all model tensors. This may cause issues during conversion
+2026-04-28 00:41:31,639 - 283 - WARNING - Custom Op: TcmDramCopy was defined in the config but was not found in the model
+2026-04-28 00:41:31,639 - 283 - WARNING - Custom Op: CroutonPackSpike was defined in the config but was not found in the model
+2026-04-28 00:41:31,639 - 283 - WARNING - Custom Op: MatMulV8 was defined in the config but was not found in the model
+2026-04-28 00:41:31,639 - 283 - WARNING - Custom Op: PackActivationU8RowMajor was defined in the config but was not found in the model
+2026-04-28 00:41:31,639 - 283 - WARNING - Custom Op: PackActCrouton was defined in the config but was not found in the model
+2026-04-28 00:41:31,639 - 283 - WARNING - Custom Op: UntileToRowMajor was defined in the config but was not found in the model
+2026-04-28 00:41:31,639 - 283 - WARNING - Custom Op: PackWeightToHmxTileV3 was defined in the config but was not found in the model
+2026-04-28 00:41:31,640 - 283 - WARNING - WARNING_OPSET_VERSION: Warning multiple opset versions specified, using highest.
+2026-04-28 00:41:31,640 - 283 - WARNING - Skipping Native checker in Defer Loading and ONNX Simplification not invoked
+2026-04-28 00:41:31,661 - 283 - WARNING - Unused Input nodes found: []
+2026-04-28 00:41:31,665 - 278 - INFO - Processed 33 quantization encodings
+2026-04-28 00:41:31,735 - 278 - INFO - INFO_INITIALIZATION_SUCCESS: 
+reEvalMacsParams: Re-evaluated graph statistics after IrOptimizer optimization passes:
+reEvalMacsParams: Total MACs: 0
+reEvalMacsParams: Total Params Count: 0
+[ WARNING ] Invalid override provided. Tensor act_raw is not Quantizable since it is of Datatype QNN_DATATYPE_UINT_8 in the source model, ignoring override[ WARNING ] Invalid override provided. Tensor act_raw_1 is not Quantizable since it is of Datatype QNN_DATATYPE_UINT_8 in the source model, ignoring override[ WARNING ] Invalid override provided. Tensor act_raw_2 is not Quantizable since it is of Datatype QNN_DATATYPE_UINT_8 in the source model, ignoring override[ WARNING ] Invalid override provided. Tensor act_raw_3 is not Quantizable since it is of Datatype QNN_DATATYPE_UINT_8 in the source model, ignoring override[ WARNING ] Invalid override provided. Tensor act_raw_4 is not Quantizable since it is of Datatype QNN_DATATYPE_UINT_8 in the source model, ignoring override[ WARNING ] Invalid override provided. Tensor act_raw_5 is not Quantizable since it is of Datatype QNN_DATATYPE_UINT_8 in the source model, ignoring override[ WARNING ] Invalid override provided. Tensor act_raw_6 is not Quantizable since it is of Datatype QNN_DATATYPE_UINT_8 in the source model, ignoring override[ WARNING ] Invalid override provided. Tensor act_raw_7 is not Quantizable since it is of Datatype QNN_DATATYPE_UINT_8 in the source model, ignoring override[ WARNING ] Invalid override provided. Tensor bias is not Quantizable since it is of Datatype QNN_DATATYPE_INT_32 in the source model, ignoring overrideIrQuantizer: Param Quantizer should be set to symmetric for 32 bit biases. Will ignore param quantizer option: tf for biases
+2026-04-28 00:41:31,750 - 278 - INFO - INFO_CONVERSION_SUCCESS: Conversion completed successfully
+2026-04-28 00:41:31,751 - 278 - INFO - INFO_WRITE_SUCCESS: 
+[ WARNING ] Current input dlc file is fully quantized! Nothing need to do.

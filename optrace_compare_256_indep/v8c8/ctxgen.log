@@ -1,0 +1,31 @@
+qnn-context-binary-generator pid:292848
+LIBNATIVE: No alternate configuration present in libnative_tls.conf or from LIBNATIVE_CONFIG environment variable - using default thread-local behavior.
+ <W> Initializing HtpProvider
+Starting stage: Graph Preparation Initializing
+Completed stage: Graph Preparation Initializing (635 us)
+Starting stage: Graph Optimizations
+Completed stage: Graph Optimizations (2197 us)
+Starting stage: Post Graph Optimization
+Completed stage: Post Graph Optimization (1968 us)
+Starting stage: Graph Sequencing for Target
+Completed stage: Graph Sequencing for Target (7403 us)
+Starting stage: VTCM Allocation
+Completed stage: VTCM Allocation (128 us)
+Starting stage: Parallelization Optimization
+Completed stage: Parallelization Optimization (19 us)
+Starting stage: Finalizing Graph Sequence
+
+====== DDR bandwidth summary ======
+spill_bytes=0
+fill_bytes=0
+write_total_bytes=524288
+read_total_bytes=591872
+
+Completed stage: Finalizing Graph Sequence (399 us)
+Starting stage: Completion
+Completed stage: Completion (12 us)
+[1/4]	Processing Schematic Files: /home/zzh/work/qcom_htp/example/hmx_matmul_phase3/standard_flow/phaseB_v8/v8c8_schematic.bin / 1.94 ms
+[2/4]	Resolving tensor<->op dependencies - 0.15 ms
+[3/4]	Rendering Output JSON \ 3.02 ms
+[4/4]	Rendering Output JSON - Graph Before | 1.47 ms
+Complete!

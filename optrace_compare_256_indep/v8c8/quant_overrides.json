@@ -1,0 +1,193 @@
+{
+  "activation_encodings": {
+    "act_raw": [
+      {
+        "bitwidth": 8,
+        "dtype": "int",
+        "is_symmetric": "False",
+        "scale": 1.0,
+        "offset": 0,
+        "min": 0.0,
+        "max": 255.0
+      }
+    ],
+    "out_0": [
+      {
+        "bitwidth": 8,
+        "dtype": "int",
+        "is_symmetric": "False",
+        "scale": 1.0,
+        "offset": 0,
+        "min": 0.0,
+        "max": 255.0
+      }
+    ],
+    "act_raw_1": [
+      {
+        "bitwidth": 8,
+        "dtype": "int",
+        "is_symmetric": "False",
+        "scale": 1.0,
+        "offset": 0,
+        "min": 0.0,
+        "max": 255.0
+      }
+    ],
+    "out_1": [
+      {
+        "bitwidth": 8,
+        "dtype": "int",
+        "is_symmetric": "False",
+        "scale": 1.0,
+        "offset": 0,
+        "min": 0.0,
+        "max": 255.0
+      }
+    ],
+    "act_raw_2": [
+      {
+        "bitwidth": 8,
+        "dtype": "int",
+        "is_symmetric": "False",
+        "scale": 1.0,
+        "offset": 0,
+        "min": 0.0,
+        "max": 255.0
+      }
+    ],
+    "out_2": [
+      {
+        "bitwidth": 8,
+        "dtype": "int",
+        "is_symmetric": "False",
+        "scale": 1.0,
+        "offset": 0,
+        "min": 0.0,
+        "max": 255.0
+      }
+    ],
+    "act_raw_3": [
+      {
+        "bitwidth": 8,
+        "dtype": "int",
+        "is_symmetric": "False",
+        "scale": 1.0,
+        "offset": 0,
+        "min": 0.0,
+        "max": 255.0
+      }
+    ],
+    "out_3": [
+      {
+        "bitwidth": 8,
+        "dtype": "int",
+        "is_symmetric": "False",
+        "scale": 1.0,
+        "offset": 0,
+        "min": 0.0,
+        "max": 255.0
+      }
+    ],
+    "act_raw_4": [
+      {
+        "bitwidth": 8,
+        "dtype": "int",
+        "is_symmetric": "False",
+        "scale": 1.0,
+        "offset": 0,
+        "min": 0.0,
+        "max": 255.0
+      }
+    ],
+    "out_4": [
+      {
+        "bitwidth": 8,
+        "dtype": "int",
+        "is_symmetric": "False",
+        "scale": 1.0,
+        "offset": 0,
+        "min": 0.0,
+        "max": 255.0
+      }
+    ],
+    "act_raw_5": [
+      {
+        "bitwidth": 8,
+        "dtype": "int",
+        "is_symmetric": "False",
+        "scale": 1.0,
+        "offset": 0,
+        "min": 0.0,
+        "max": 255.0
+      }
+    ],
+    "out_5": [
+      {
+        "bitwidth": 8,
+        "dtype": "int",
+        "is_symmetric": "False",
+        "scale": 1.0,
+        "offset": 0,
+        "min": 0.0,
+        "max": 255.0
+      }
+    ],
+    "act_raw_6": [
+      {
+        "bitwidth": 8,
+        "dtype": "int",
+        "is_symmetric": "False",
+        "scale": 1.0,
+        "offset": 0,
+        "min": 0.0,
+        "max": 255.0
+      }
+    ],
+    "out_6": [
+      {
+        "bitwidth": 8,
+        "dtype": "int",
+        "is_symmetric": "False",
+        "scale": 1.0,
+        "offset": 0,
+        "min": 0.0,
+        "max": 255.0
+      }
+    ],
+    "act_raw_7": [
+      {
+        "bitwidth": 8,
+        "dtype": "int",
+        "is_symmetric": "False",
+        "scale": 1.0,
+        "offset": 0,
+        "min": 0.0,
+        "max": 255.0
+      }
+    ],
+    "out_7": [
+      {
+        "bitwidth": 8,
+        "dtype": "int",
+        "is_symmetric": "False",
+        "scale": 1.0,
+        "offset": 0,
+        "min": 0.0,
+        "max": 255.0
+      }
+    ]
+  },
+  "param_encodings": {
+    "bias": [
+      {
+        "bitwidth": 32,
+        "dtype": "int",
+        "is_symmetric": "True",
+        "scale": 1.0,
+        "offset": 0,
+        "min": -2147483648.0,
+        "max": 2147483647.0
+      }
+    ]
+  }
+}

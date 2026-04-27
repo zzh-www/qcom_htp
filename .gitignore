@@ -56,6 +56,10 @@ example/hmx_matmul_phase3/standard_flow/phaseB_v8/input_list_*.txt
 # but the per-shape s256_w8a8/ etc. directories with 100s of MB are not).
 example/hmx_matmul_phase3/standard_flow/phaseA_native/s*_w8a8/
 example/hmx_matmul_phase3/standard_flow/phaseA_native/m*_w8a8/
+example/hmx_matmul_phase3/standard_flow/phaseA_native/s*_chain*/
+example/hmx_matmul_phase3/standard_flow/phaseA_native/s*_indep*/
+example/hmx_matmul_phase3/standard_flow/phaseA_native/s*_independent*/
+example/hmx_matmul_phase3/standard_flow/phaseA_native/quant_overrides.json
 example/hmx_matmul_phase3/standard_flow/phaseA_native/baseline_*/
 example/hmx_matmul_phase3/standard_flow/phaseA_native/runtime_inputs_*/
 example/hmx_matmul_phase3/standard_flow/phaseA_native/inputs_fp32/
