@@ -1,4 +1,16 @@
-# V8C8 matmul — 复刻路径完成 (Step 1+2)，1.28× wall vs native (2026-04-27 night)
+# V8C8 matmul — Step 1+2 完成；新发现：HMX kernel 5× gap 根因 = DSP-driven (2026-04-28)
+
+> **重大更新 (2026-04-28)**: chrometrace 单事件级测量 (`optrace_compare_256_indep/`)
+> 揭示 V8C8 BbbKMajor 与 native ConvLayer_s1.opt 在**纯 HMX kernel cyc**上差
+> **5.3×** (V8C8 ~8000 vs native ~1500 per 256³ matmul)。之前 profile_text
+> 的 1.23× 是 wall-time bucket 包了 HVX 并行时间的误导。
+>
+> **cyc/packet 一样**, HMX 物理速度同。**差距全在 DSP-issued packet 数**
+> (V8C8 ~1950 vs native ~350 = 5.6×)。Native HMX kernel 是 descriptor-driven
+> autonomous, V8C8 是 DSP-driven。完整记录: `project_v8c8_dsp_vs_descriptor_kernel_2026-04-28.md`。
+>
+> **新优先路径**: Path A = dlsym `hmx_convbbb1x1_stride1` + 自实现
+> `set_hmx_params_conv1x1` descriptor builder。详见 §"Future direction" 末尾。
 
 > **Status**: BbbKMajor 内核已经在 native `q::ConvLayer_s1.opt` 的
 > **MatMul_0 group cyc 1.04× （基本持平）**. Steady-state (iter 3) 256³:
@@ -145,11 +157,58 @@ native 自己在该 shape 也不切分 — 收益不确定。
 | 2 | wt N-outer (byte alignment) | 0 | medium | ✓ done (55915cb) — handoff 中 1.5 cyc/MAC 是误判 |
 | 3 | precompute hook | NOT VIABLE | — | ✗ dropped (架构不兼容) |
 | 4 | build_tile callback | UNCERTAIN | high | ⏸ deferred (反向 native 256³ 单 op 形态) |
+| **5** | **dlsym hmx_convbbb1x1_stride1 + 自实现 descriptor builder** | **预期 -6.5K cyc / matmul (5×)** | high | **NEW MAIN PATH (2026-04-28)** |
 
-**复刻路径已完成 = 当前合理终态。** 256³ wall 23 µs / 1.28× vs native；
-bbb 内核与 native MatMul_0 group cyc 平价；wt VTCM 字节布局与 native
-byte-1:1。剩余 +9K cyc 全在 QNN 编译器对 HTP primitive 的内部调度
-特权 — custom op 拿不到。
+**Step 1+2 复刻路径完成。**但 chrometrace 单事件级测量（2026-04-28）揭示 V8C8
+BbbKMajor 与 native ConvLayer_s1.opt 在**纯 HMX kernel cyc** 上差 **5.3×**
+(不是 profile_text 的 1.23×)。根因: V8C8 是 DSP-driven (软件 loop0 显式发
+~1950 packet 给 HMX), native 是 descriptor-driven autonomous (graph_finalize
+烤 0x40 byte descriptor, runtime ~350 packet)。完整记录:
+`Agent/.../project_v8c8_dsp_vs_descriptor_kernel_2026-04-28.md`。
+
+## Step 5 — 切到 descriptor-driven autonomous HMX (NEW MAIN PATH)
+
+### 目标
+
+V8C8 BbbKMajor steady-state HMX kernel cyc: 8,000 → 1,500 (5.3× 提速)。
+256³ wall: 65 µs → ~25 µs (达到 native parity)。
+
+### 路径
+
+**Path A** (RECOMMENDED): dlsym 调 native `hmx_convbbb1x1_stride1` + 在
+SkelOp 里自构 descriptor。
+
+**已有基础设施**:
+- `Agent/qnn_re/set_hmx_params_conv1x1.S` — 完整 disasm
+- `Agent/qnn_re/hmx_convbbb1x1_stride1_full.S` — kernel disasm
+- `project_dlsym_call_proven_2026-04-26.md` — dlsym 已验证可调通该函数 (1024-MAC test)
+- `Agent/v8c8_alignment_phase2_BREAKTHROUGH_2026-04-27.md` — Crouton_8 框架已通
+
+**剩余工作**:
+1. 完整反逆 `set_hmx_params_conv1x1(out, arg1..5)` 的 5 个参数语义
+   (5 个 packed-flag uint32, 编码 K/N/M/output_stride/mode_flags)
+2. 在 SkelOp 里 per-call 算出 descriptor (shape-derived, 可缓存到栈)
+3. dlsym `hmx_convbbb1x1_stride1`, 用我们的 descriptor + Crouton_8 act/wt/bias
+   VTCM 地址调用
+4. 调通 256³ bit-exact + 512/1024
+5. 测 chrometrace 单事件 dur 应降到 ~1,500 cyc 与 native 一致
+
+**风险**:
+- VTCM stride / wt byte layout 必须严格匹配 native kernel 的期望 (1024-MAC
+  spike 跑通过, 但 256³ 全 sweep 会暴露其他对齐约束)
+- descriptor 字段语义反逆有风险, 错一个字段 HMX 直接 fault
+
+**Path B** (备选): 自己模仿 native 写 mxdescriptor 配置, 不调 native 函数。
+风险更高 (整个 HMX 启动序列要复现), 不推荐为首选。
+
+**Path C** (兜底): 不动架构, 减软件开销 (移除 prebake、密集化 hardware loop)。
+预期省 ~12% (~1K cyc), 不接近 5× gap。可作为 Path A 受阻时的 fallback。
+
+### 完成 Step 5 后剩余 gap
+
+Step 5 把纯 HMX kernel cyc 拉到 native parity (1,500 cyc/matmul) 后, V8C8 vs
+native wall 应近 1.0× (剩余只是少量 DMA / Output 的 noise)。Step 4 (build_tile)
+的 VTCM 切片 + HVX/HMX overlap 在 256³ 上不再必要 (native 自己也不切)。
 
 ## Per-shape 现状 (MT_OUTER default, 2026-04-27 night)
 
@@ -186,15 +245,18 @@ $QNN_SDK_ROOT/bin/x86_64-linux-clang/qnn-profile-viewer \
 awk '/Number of HVX threads used : 4  count/{n++} n==3' phase1_validation/v8c8_test/profile.txt
 ```
 
-## Reference (Agent/)
+## Reference (Agent/ + memory)
 
-- `SESSION_2026-04-27_handoff_v8c8_alignment_status.md` — 前期 alignment audit
-- `v8c8_step3_crouton8_output_2026-04-27.md` — Crouton_8 输出
-- `v8_c8_kernel_perf_hwloop_2026-04-27.md` — hw loop0 + pre-baked ptrs
-- `qnn_re/weights_to_vtcm_RE_2026-04-27.md` — wt DMA 字节布局
-- `qnn_re/bias_to_vtcm_decoded_2026-04-27.md` — bias DMA 字节布局
-- `qnn_re/hmx_convbbb1x1_stride1_full.S` — native HMX kernel disasm
-- `qnn_re/set_hmx_params_conv1x1.S` — native descriptor builder disasm
+- `~/.claude/.../project_v8c8_dsp_vs_descriptor_kernel_2026-04-28.md` — 5× gap 根因 + Step 5 路径
+- `~/.claude/.../reference_op_profiling_methodology.md` — N-instance independent profiling 方法
+- `optrace_compare_256_indep/` — V8C8 vs native chrometrace 单事件级数据 bundle
+- `Agent/qnn_re/set_hmx_params_conv1x1.S` — Step 5 必读: descriptor builder disasm
+- `Agent/qnn_re/hmx_convbbb1x1_stride1_full.S` — Step 5 必读: HMX kernel disasm
+- `Agent/dlsym_spike_PASS_2026-04-25.md` — Step 5 基础: dlsym 已验证
+- `Agent/v8c8_alignment_phase2_BREAKTHROUGH_2026-04-27.md` — Crouton_8 框架进展
+- `Agent/SESSION_2026-04-27_handoff_v8c8_alignment_status.md` — 前期 alignment audit
+- `Agent/qnn_re/weights_to_vtcm_RE_2026-04-27.md` — wt DMA 字节布局
+- `Agent/qnn_re/bias_to_vtcm_decoded_2026-04-27.md` — bias DMA 字节布局
 
 ## Recent commits
 
