@@ -634,10 +634,21 @@ static uint32_t hmx_matmul_v9_kernel(
             }
 
             /* Per-(mt, nt) tile call. M_t × N_t calls per matmul.
-             * Tried per-mt (loop1=N_t): kernel does NOT walk bias internally per
-             * loop1 iter, so all nt would use bias_n=0 → wrong output for nt>0.
-             * Future opt: pre-fold bias such that one bias works for all nt
-             * (only feasible if scale/baseline are uniform — not our case). */
+             * Tried per-mt (loop1=N_t) with out_y_stride_words=64: kernel
+             * crashes (out_y_stride is for output Y-row advance, not bias walk).
+             * Tried per-mt (loop1=N_t, out_y_stride=0): bit-exact breaks for
+             * nt>0 because kernel reads `bias = mxmem2(r3)` ONCE in preamble.
+             * Each nt has different effective_int32 fold so all nt>0 produce
+             * wrong output. Conclusion: bias is genuinely per-call invariant
+             * for hmx_convbbb1x1_stride1 — single-call covering N tiles needs
+             * a different mechanism (HMX state config beyond mask_desc, OR
+             * wt-fold trick to make all nt share bias).
+             *
+             * Per-tile call has ~1.8K cyc/call dlsym overhead, making
+             * V9_USE_NATIVE_KERNEL ~1.6× slower than V9_KERNEL_HMX inline at
+             * 256³ (4× at 1024³). This is the descriptor-driven SHAPE working
+             * but without the M-fan-out / batching speedup. Step 5.4 perf goal
+             * (5.3× speedup) requires further RE work. */
             for (uint32_t nt = 0; nt < N_t; nt++) {
                 int32_t out_tbl[2] __attribute__((aligned(16)));
                 out_tbl[0] = (int32_t)(uintptr_t)(
