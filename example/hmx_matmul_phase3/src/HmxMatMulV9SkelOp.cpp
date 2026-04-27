@@ -124,7 +124,7 @@ static uint32_t hmx_matmul_v9_kernel(
      *   block_rows < 32 (S ∈ {32,64}): 2 or 4 blocks per HMX tile → repack to scratch
      *
      * Layouts:
-     *   wt[1, K_t, N_t, 1024]    K-tile-outer, native pre-pack (host-side)
+     *   wt[1, N_t, K_t, 1024]    N-tile-outer, native pre-pack (host-side, Step 2)
      *   bias[2N] int32           native-fold layout (256 B per N-tile)
      *   out[1, M_t, N_t, 1024]   tile-layout, sat.ub direct write
      */
@@ -192,7 +192,7 @@ static uint32_t hmx_matmul_v9_kernel(
                                 uint32_t kt = k >> 5, kr = k & 31;
                                 uint32_t nt2 = n >> 5, nc2 = n & 31;
                                 uint32_t dst = (kr / 4) * 128 + nc2 * 4 + (kr % 4);
-                                int8_t   w = (int8_t)wt_pack[(kt * N_t + nt2) * 1024 + dst];
+                                int8_t   w = (int8_t)wt_pack[(nt2 * K_t + kt) * 1024 + dst];
                                 acc += (int32_t)a * (int32_t)w;
                             }
                             if (acc < 0) acc = 0; else if (acc > 255) acc = 255;
@@ -209,13 +209,23 @@ static uint32_t hmx_matmul_v9_kernel(
         }
 
         /* Pre-bake act_ptrs[M_t][K_t] and wt_ptrs[N_t][K_t] into stack arrays.
-         * V8 prod uses Hexagon hw loop0 + dual-memw post-inc, but its inputs
-         * were contiguous tile-arrays so it could post-inc the wt ptr by a
-         * small immediate. Our V9 wt is K-tile-outer / N-tile-inner (native
-         * byte-1:1 layout), so the per-kt stride for fixed nt is N_t*1024
-         * bytes — too large for immediate post-inc. Solution: pre-bake the
-         * ptrs into int32 stack arrays so the inner loop only memw's ptrs.
-         * Stack budget: max 32*32 ptrs = 4 KB each. Fits at all shapes. */
+         * Per-mt act tiles come from disjoint VTCM blocks (Crouton_8 block_table
+         * lookups). For wt under the N-outer layout `[1, N_t, K_t, 1024]`
+         * (Step 2 — matches native q::ConvLayer.opt.weights_to_vtcm@FB.fB.
+         * end-state byte ordering) the K-tiles for fixed nt are 1024 B apart.
+         *
+         * Note on inline r8 += 0x400 post-inc (Step 2B attempt, abandoned):
+         * native disasm shows a 4-packet body where `r8 = add(r8, 0x400)` and
+         * `weight.b = mxmem(r8, r25)` are in DIFFERENT packets. We tried
+         * fusing them into a 3-packet body (1 ALU + 2 mxmem in one packet);
+         * the assembler accepts it but Hexagon V75 HMX hardware faults at
+         * runtime — modifying the address register in the same packet as
+         * the HMX load is not allowed. The 4-packet prebake body below
+         * (2 cyc/MAC) matches native's 4-packet split-MAC body (also
+         * 2 cyc/MAC) — no perf delta from a 3-packet form (which is
+         * impossible on this silicon).
+         *
+         * Stack: 2 × M_t × K_t × 4 B, max 8 KB at S=1024. */
         int32_t act_ptrs_all[32 * 32] __attribute__((aligned(16)));  /* M_t × K_t */
         int32_t wt_ptrs_all[32 * 32]  __attribute__((aligned(16)));  /* N_t × K_t */
 
@@ -231,8 +241,9 @@ static uint32_t hmx_matmul_v9_kernel(
         }
         for (uint32_t nt = 0; nt < N_t; nt++) {
             for (uint32_t kt = 0; kt < K_t; kt++) {
+                /* N-outer wt addressing: tile (nt, kt) at (nt*K_t + kt)*1024 */
                 wt_ptrs_all[nt * K_t + kt] = (int32_t)(uintptr_t)(
-                    wt_pack + (kt * N_t + nt) * 1024);
+                    wt_pack + (nt * K_t + kt) * 1024);
             }
         }
 
@@ -263,23 +274,16 @@ static uint32_t hmx_matmul_v9_kernel(
             for (uint32_t nt = 0; nt < N_t; nt++) {
                 const uint8_t *bias_n  = bias_bytes + nt * 256;
                 const int32_t *wt_ptrs = &wt_ptrs_all[nt * K_t];
-                /* bias = native fold (256 B / N-tile): low 128 B = 32 ×
-                 * (fp16 scale, fp16 baseline) for sat.ub; high 128 B = 32 ×
-                 * int32 effective_bias = -ACT_ZP × Σ_k W[k,c] + bias_q[c]
-                 * (initial acc fold). mxmem2 consumes both halves. */
                 asm volatile("bias = mxmem2(%0)" :: "r"(bias_n) : "memory");
                 uint8_t *out_tile = (uint8_t *)out_blocks[bi_o_row + nt] + off_o;
 
-                /* Hexagon hw loop0 with dual-MAC unroll.
-                 *   r1 walks act_ptrs (int32 array, post-inc 8 = 2 ptrs/iter)
-                 *   r3 walks wt_ptrs  (same)
-                 *   loop0 trip = K_t / 2; one iter consumes 2 K-tiles.
-                 * Body (4 packets / 2 MAC = 2 cyc/MAC body):
-                 *   { r6  = memw(r1++#8); r8  = memw(r3++#8) }
-                 *   { r23 = memw(r1+#-4); r9  = memw(r3+#-4) }
-                 *   { activation.ub = mxmem(r6, r24):cm; weight.b = mxmem(r8, r25) }
-                 *   { activation.ub = mxmem(r23,r24):cm; weight.b = mxmem(r9, r25) } :endloop0
-                 * K_t is power-of-2 ≥ 4 here (S ≥ 128, K_t ∈ {4,8,16,32}). */
+                /* 4-packet body / 2 MAC = 2 cyc/MAC. Matches native silicon
+                 * ceiling — see Step 2 note above for why a 3-packet form
+                 * is not possible on this hardware.
+                 *   { r6  = memw(r1++#8); r8  = memw(r3++#8) }                ; load 2 act + 2 wt ptrs
+                 *   { r23 = memw(r1+#-4); r9  = memw(r3+#-4) }                ; (in 2 packets, max 2 mem/pkt)
+                 *   { activation.ub = mxmem(r6,r24):cm; weight.b = mxmem(r8,r25) }   ; MAC 1
+                 *   { activation.ub = mxmem(r23,r24):cm; weight.b = mxmem(r9,r25) }:endloop0   ; MAC 2 + endloop */
                 const uint32_t loop0_trip = K_t / 2;
                 register int32_t r1  asm("r1")  = (int32_t)(uintptr_t)act_ptrs;
                 register int32_t r3  asm("r3")  = (int32_t)(uintptr_t)wt_ptrs;
@@ -299,10 +303,6 @@ static uint32_t hmx_matmul_v9_kernel(
                     : "+r"(r1), "+r"(r3)
                     : "r"(loop0_trip), "r"(r24), "r"(r25)
                     : "r6", "r8", "r9", "r23", "lc0", "sa0", "memory");
-
-                /* sat.ub: writes 1 KiB to out_tile, clears acc, applies fp16
-                 * pair scaling: out = saturate_u8(top9(baseline) +
-                 * floor(acc × scale_fp16 / 512)). */
                 asm volatile("mxmem(%0, %1):after:cm:sat.ub = acc"
                              :: "r"(out_tile), "r"((int32_t)HMX_RT_WT) : "memory");
             }
@@ -349,7 +349,7 @@ static uint32_t hmx_matmul_v9_kernel(
         if (S == 0) return QHPI_Success;
 
         const uint32_t M = S, K = S, N = S;
-        const uint32_t M_t = M / 32, N_t = N / 32;
+        const uint32_t M_t = M / 32, N_t = N / 32, K_t = K / 32;
         const uint32_t block_rows = (M / 4) < 64 ? (M / 4) : 64;
         const uint32_t k_chunks   = K / 32;
 
@@ -368,7 +368,7 @@ static uint32_t hmx_matmul_v9_kernel(
             uint32_t _kt = (k) >> 5, _kr = (k) & 31;                          \
             uint32_t _nt = (n) >> 5, _nc = (n) & 31;                          \
             uint32_t _dst = (_kr / 4) * 128 + _nc * 4 + (_kr % 4);            \
-            (int32_t)(int8_t)wt_pack[(_kt * N_t + _nt) * 1024 + _dst];        \
+            (int32_t)(int8_t)wt_pack[(_nt * K_t + _kt) * 1024 + _dst];        \
         })
 
         /* Native bias layout helpers — bias_bytes[n_tile][256B] */
