@@ -40,8 +40,8 @@ mkdir -p "$OUT_HTP" "$OUT_ARM"
 
 echo "=== Building Phase3 OpPackage V8 path (arch=$ARCH) ==="
 
-KERNEL_SRCS=(pack_act_rm_hvx pack_wt_v3_hvx tcm_dram_copy_hvx untile_to_rowmajor_hvx)
-V8_SRCS=(HmxMatMulPhase3Interface.cpp HmxMatMulV8Op.cpp)
+KERNEL_SRCS=(pack_act_rm_hvx pack_wt_v3_hvx tcm_dram_copy_hvx untile_to_rowmajor_hvx crouton_pack_spike_hvx pack_act_crouton_skel)
+V8_SRCS=(HmxMatMulPhase3Interface.cpp HmxMatMulV8Op.cpp HmxMatMulV9SkelOp.cpp)
 
 # ---- Hexagon (runtime HTP) ----
 echo "--- hexagon-$ARCH ---"
@@ -59,6 +59,7 @@ HEX_FLAGS=(
     -Wno-unused-command-line-argument -fvisibility=default
     '-DQNN_API=__attribute__((visibility("default")))'
     '-D__QAIC_HEADER_EXPORT=__attribute__((visibility("default")))'
+    ${EXTRA_DEFS:-}
 )
 KERNEL_OBJS=()
 for src in "${KERNEL_SRCS[@]}"; do

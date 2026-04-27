@@ -28,23 +28,11 @@
 #define THIS_PKG_NAME_STR STRINGIZE(THIS_PKG_NAME)
 
 static inline void pack_one_rm_tile(
-    uint8_t       *tile,     /* 1 KiB destination, aligned 128 */
-    const uint8_t *a_base,   /* &act[m_tile*32][k_tile*32] */
+    uint8_t       *tile,
+    const uint8_t *a_base,
     uint32_t       K_full)
 {
-    /* Copy 32 rows × 32 bytes to tile (1 KiB contiguous).
-     * Pack 4 source rows (32 B each) into one 128 B HVX vector; do 8
-     * aligned vmem stores to tile. Source rows are 32-byte aligned
-     * because K is a multiple of 32 and K_full = K (a_base at 32-byte
-     * stride offsets). */
 #if defined(__hexagon__)
-    /* Read 32 B from row via scalar u64×4, assemble into a 128 B vec
-     * via intrinsic. Simpler: do 8 iterations × 4 rows; each iteration
-     * reads 4×32 B with `memcpy(tile+kg*128, ..., 128)` one row at a
-     * time via u64 stores.
-     * Proven fast: 4 × u64 loads + 4 × u64 stores per row, 32 rows,
-     * everything on HVX-adjacent hardware. Compiler inlines u64 moves
-     * into 2-cycle scalar loops. */
     for (int r = 0; r < 32; r += 4) {
         const uint64_t *s0 = (const uint64_t *)&a_base[(r + 0) * K_full];
         const uint64_t *s1 = (const uint64_t *)&a_base[(r + 1) * K_full];
@@ -63,51 +51,86 @@ static inline void pack_one_rm_tile(
 }
 
 void pack_act_rm_hvx_kernel_body(
-    const uint8_t *a,     /* [M, K] row-major */
-    uint8_t       *out,   /* [M/32, K/32, 1024] flat */
+    const uint8_t *a,
+    uint8_t       *out,
     int M, int K,
     uint32_t mt_start, uint32_t mt_end)
 {
     const int K_tiles = K / 32;
     (void)M;
 #if defined(__hexagon__)
-    /* HVX-packed path: for each (mt, r_group of 4 rows, kt) produce one
-     * 128 B vector [row0 32B | row1 32B | row2 32B | row3 32B] and store
-     * with one aligned vmem to tile[kt][r_group*32]. 4 vmemu loads + 4
-     * vmux masks + 3 vror shifts + 3 vor combines + 1 vmem store per
-     * output vector.  ~12 HVX ops × 8 r-groups × K_tiles per mt. */
-    const HVX_VectorPred p32 = Q6_Q_vsetq_R(32);
-    const HVX_Vector     vz  = Q6_V_vzero();
-    for (uint32_t mt = mt_start; mt < mt_end; mt++) {
-        uint8_t *tiles_base = out + (mt * K_tiles) * 1024;
-        const uint8_t *a_m = &a[mt * 32 * K];
-        for (int r0 = 0; r0 < 32; r0 += 4) {
-            const uint8_t *s0 = &a_m[(r0 + 0) * K];
-            const uint8_t *s1 = &a_m[(r0 + 1) * K];
-            const uint8_t *s2 = &a_m[(r0 + 2) * K];
-            const uint8_t *s3 = &a_m[(r0 + 3) * K];
+    if ((K % 128) == 0) {
+        /* Fast path: 2-pass vshuff with single-bit Rt (32, then 64), the
+         * same topology used by pack_wt_v3. Per row-major 4-row × 128-col
+         * chunk, produces 4 output vectors (one per 32-col K-tile lane),
+         * each 128 B = 4 rows × 32 cols already in row-major layout. 4
+         * vmemu loads + 4 vshuff + 4 aligned vmem stores per 4 K-tiles
+         * (≈3 HVX ops/tile vs old vmux+vror+vor's 12 ops/tile → ~4×
+         * fewer ops for the same output).
+         *
+         *   Pass 1: vshuff(V1=row1, V0=row0, Rt=32) → P01.lo, P01.hi
+         *           vshuff(V3=row3, V2=row2, Rt=32) → P23.lo, P23.hi
+         *     P01.lo = [r0_0..31, r1_0..31, r0_64..95, r1_64..95]
+         *     P01.hi = [r0_32..63, r1_32..63, r0_96..127, r1_96..127]
+         *     P23.lo similar but for r2/r3
+         *   Pass 2: vshuff(P23.lo, P01.lo, Rt=64) → T02
+         *           vshuff(P23.hi, P01.hi, Rt=64) → T13
+         *     T02.lo = [r0_0..31, r1_0..31, r2_0..31, r3_0..31]   ← K-tile 0 (cols 0..31)
+         *     T13.lo = [r0_32..63, r1_32..63, r2_32..63, r3_32..63]  ← K-tile 1 (cols 32..63)
+         *     T02.hi = [r0_64..95, r1_64..95, r2_64..95, r3_64..95]  ← K-tile 2 (cols 64..95)
+         *     T13.hi = [r0_96..127, r1_96..127, r2_96..127, r3_96..127] ← K-tile 3 (cols 96..127) */
+        for (uint32_t mt = mt_start; mt < mt_end; mt++) {
+            const uint8_t *a_m = &a[mt * 32 * K];
+            uint8_t *tiles_base = out + (mt * K_tiles) * 1024;
+            for (int r0 = 0; r0 < 32; r0 += 4) {
+                const int h_in_mt = r0 / 4;   /* 0..7 within mt */
+                const uint8_t *s0 = &a_m[(r0 + 0) * K];
+                const uint8_t *s1 = &a_m[(r0 + 1) * K];
+                const uint8_t *s2 = &a_m[(r0 + 2) * K];
+                const uint8_t *s3 = &a_m[(r0 + 3) * K];
+                for (int kk = 0; kk < K; kk += 128) {
+                    HVX_Vector V0, V1, V2, V3;
+                    memcpy(&V0, &s0[kk], sizeof(HVX_Vector));
+                    memcpy(&V1, &s1[kk], sizeof(HVX_Vector));
+                    memcpy(&V2, &s2[kk], sizeof(HVX_Vector));
+                    memcpy(&V3, &s3[kk], sizeof(HVX_Vector));
+
+                    HVX_VectorPair P01 = Q6_W_vshuff_VVR(V1, V0, 32);
+                    HVX_VectorPair P23 = Q6_W_vshuff_VVR(V3, V2, 32);
+
+                    HVX_Vector p01lo = Q6_V_lo_W(P01);
+                    HVX_Vector p01hi = Q6_V_hi_W(P01);
+                    HVX_Vector p23lo = Q6_V_lo_W(P23);
+                    HVX_Vector p23hi = Q6_V_hi_W(P23);
+
+                    HVX_VectorPair T02 = Q6_W_vshuff_VVR(p23lo, p01lo, 64);
+                    HVX_VectorPair T13 = Q6_W_vshuff_VVR(p23hi, p01hi, 64);
+
+                    HVX_Vector t02lo = Q6_V_lo_W(T02);  /* K-tile g_base+0 */
+                    HVX_Vector t02hi = Q6_V_hi_W(T02);  /* K-tile g_base+2 */
+                    HVX_Vector t13lo = Q6_V_lo_W(T13);  /* K-tile g_base+1 */
+                    HVX_Vector t13hi = Q6_V_hi_W(T13);  /* K-tile g_base+3 */
+
+                    const int g_base = kk / 32;
+                    uint8_t *t0 = tiles_base + (g_base + 0) * 1024 + h_in_mt * 128;
+                    uint8_t *t1 = tiles_base + (g_base + 1) * 1024 + h_in_mt * 128;
+                    uint8_t *t2 = tiles_base + (g_base + 2) * 1024 + h_in_mt * 128;
+                    uint8_t *t3 = tiles_base + (g_base + 3) * 1024 + h_in_mt * 128;
+                    *((HVX_Vector *)t0) = t02lo;
+                    *((HVX_Vector *)t1) = t13lo;
+                    *((HVX_Vector *)t2) = t02hi;
+                    *((HVX_Vector *)t3) = t13hi;
+                }
+            }
+        }
+    } else {
+        /* Slow fallback for K not multiple of 128. */
+        for (uint32_t mt = mt_start; mt < mt_end; mt++) {
             for (int kt = 0; kt < K_tiles; kt++) {
-                HVX_Vector v0, v1, v2, v3;
-                memcpy(&v0, &s0[kt * 32], sizeof(HVX_Vector));  /* vmemu */
-                memcpy(&v1, &s1[kt * 32], sizeof(HVX_Vector));
-                memcpy(&v2, &s2[kt * 32], sizeof(HVX_Vector));
-                memcpy(&v3, &s3[kt * 32], sizeof(HVX_Vector));
-                /* Zero all but first 32 B of each vector. */
-                v0 = Q6_V_vmux_QVV(p32, v0, vz);
-                v1 = Q6_V_vmux_QVV(p32, v1, vz);
-                v2 = Q6_V_vmux_QVV(p32, v2, vz);
-                v3 = Q6_V_vmux_QVV(p32, v3, vz);
-                /* Rotate each into its destination slot.  vror right by R
-                 * means byte at position (i) moves to position (i-R) mod 128.
-                 * To put v1's first 32 B at bytes 32..63, we rotate RIGHT by
-                 * (128-32)=96, so position 0 → position 32. */
-                HVX_Vector v1p = Q6_V_vror_VR(v1, 96);
-                HVX_Vector v2p = Q6_V_vror_VR(v2, 64);
-                HVX_Vector v3p = Q6_V_vror_VR(v3, 32);
-                HVX_Vector combined =
-                    Q6_V_vor_VV(Q6_V_vor_VV(v0, v1p),
-                                Q6_V_vor_VV(v2p, v3p));
-                *((HVX_Vector *)&tiles_base[kt * 1024 + r0 * 32]) = combined;
+                uint8_t *tile = out + (mt * K_tiles + kt) * 1024;
+                for (int r = 0; r < 32; r++)
+                    memcpy(&tile[r * 32],
+                           &a[(mt * 32 + r) * K + kt * 32], 32);
             }
         }
     }
@@ -159,10 +182,7 @@ static QHPI_Kernel_v1 sg_kernels[] = {
         THIS_PKG_NAME_STR "::pack_act_rm_hvx",
         pack_act_rm_kernel,
         QHPI_RESOURCE_HVX,
-        /* source_destructive */ false,
-        /* multithreaded       */ true,
-        /* variable_inputs     */ false,
-        /* variable_outputs    */ false,
+        false, true, false, false,
         1, sig_inputs,
         1, sig_outputs,
         nullptr, 0, 0, nullptr, nullptr, nullptr,

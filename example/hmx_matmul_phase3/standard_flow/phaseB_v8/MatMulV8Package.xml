@@ -116,6 +116,136 @@
         </OpDef>
 
         <!-- ============================================================
+             BbbKMajor — V10/Route1 matmul, native-aligned 3-input form.
+             in[0]: u8  act    [1, M/32, 32, K]      Crouton_8 via QNN
+             in[1]: u8  wt     [1, K/32, N/32, 1024] pre-packed native layout
+             in[2]: i32 bias   [N]                   raw int32 STATIC
+                              (QNN inserts q::ConvLayer.opt.bias_to_vtcm)
+             out:   u8        [1, M/32, 32, N]      Crouton_8 (Step 3)
+                              QNN auto-inserts q::ForceFormat_Flat
+                              + framework Output → user row-major DDR
+             ============================================================ -->
+        <OpDef>
+            <Name>BbbKMajor</Name>
+            <Description><Content>K-major Crouton matmul, native-aligned 3-input (act+wt+bias).</Content></Description>
+            <Input>
+                <Name>in[0]</Name>
+                <Mandatory>true</Mandatory>
+                <Datatype>BACKEND_SPECIFIC</Datatype>
+                <Shape><Rank>4D</Rank>
+                <Layout>NONTRIVIAL</Layout><Text>[1, M/32, 32, K]</Text></Shape>
+            </Input>
+            <Input>
+                <Name>in[1]</Name>
+                <Mandatory>true</Mandatory>
+                <Datatype>BACKEND_SPECIFIC</Datatype>
+                <Shape><Rank>4D</Rank>
+                <Layout>NONTRIVIAL</Layout><Text>[1, K/32, N/32, 1024]</Text></Shape>
+            </Input>
+            <Input>
+                <Name>in[2]</Name>
+                <Mandatory>true</Mandatory>
+                <Datatype>BACKEND_SPECIFIC</Datatype>
+                <Shape><Rank>1D</Rank>
+                <Layout>NONTRIVIAL</Layout><Text>[N]</Text></Shape>
+            </Input>
+            <Output>
+                <Name>out[0]</Name>
+                <Mandatory>true</Mandatory>
+                <Datatype>BACKEND_SPECIFIC</Datatype>
+                <Shape><Rank>4D</Rank>
+                <Layout>NONTRIVIAL</Layout><Text>[1, M/32, 32, N]</Text></Shape>
+            </Output>
+            <SupportedBackend>HTP</SupportedBackend>
+        </OpDef>
+
+        <!-- ============================================================
+             PackActCrouton — V10 Route 1 production activation pack.
+             Wraps libQnnHtpV75Skel.so::convert_to_crouton_b.
+             in[0]: u8 [1,1,M,K]   M%4==0, K%128==0
+             out[0]: u8 [1, K/32, M/32, 1024]   Crouton blocks contiguous
+             ============================================================ -->
+        <OpDef>
+            <Name>PackActCrouton</Name>
+            <Description><Content>HVX Crouton-byte activation pack via QNN skel export.</Content></Description>
+            <Input>
+                <Name>in[0]</Name>
+                <Mandatory>true</Mandatory>
+                <Datatype>BACKEND_SPECIFIC</Datatype>
+                <Shape><Rank>4D</Rank>
+                <Layout>NONTRIVIAL</Layout><Text>[1,1,M,K]</Text></Shape>
+            </Input>
+            <Output>
+                <Name>out[0]</Name>
+                <Mandatory>true</Mandatory>
+                <Datatype>BACKEND_SPECIFIC</Datatype>
+                <Shape><Rank>4D</Rank>
+                <Layout>NONTRIVIAL</Layout><Text>[1, K/32, M/32, 1024]</Text></Shape>
+            </Output>
+            <SupportedBackend>HTP</SupportedBackend>
+        </OpDef>
+
+        <!-- ============================================================
+             CroutonPackSpike — Phase 1 dlsym test op.
+             Calls libQnnHtpV75Skel.so::convert_to_crouton_b on a fixed
+             32×128 u8 input, compares against C reference, returns stats.
+             in[0]: u8 [1,1,32,128]
+             out[0]: u8 [1,1,4,1024]   skel-call output (4 Crouton blocks)
+             out[1]: u8 [1,1,1,4]      [skel_done, ref_done, n_diffs, max_diff]
+             ============================================================ -->
+        <OpDef>
+            <Name>CroutonPackSpike</Name>
+            <Description><Content>Phase 1 spike op — dlsym test.</Content></Description>
+            <Input>
+                <Name>in[0]</Name>
+                <Mandatory>true</Mandatory>
+                <Datatype>BACKEND_SPECIFIC</Datatype>
+                <Shape><Rank>4D</Rank>
+                <Layout>NONTRIVIAL</Layout><Text>[1,1,32,128]</Text></Shape>
+            </Input>
+            <Output>
+                <Name>out[0]</Name>
+                <Mandatory>true</Mandatory>
+                <Datatype>BACKEND_SPECIFIC</Datatype>
+                <Shape><Rank>4D</Rank>
+                <Layout>NONTRIVIAL</Layout><Text>[1,1,4,1024]</Text></Shape>
+            </Output>
+            <Output>
+                <Name>out[1]</Name>
+                <Mandatory>true</Mandatory>
+                <Datatype>BACKEND_SPECIFIC</Datatype>
+                <Shape><Rank>4D</Rank>
+                <Layout>NONTRIVIAL</Layout><Text>[1,1,1,4]</Text></Shape>
+            </Output>
+            <SupportedBackend>HTP</SupportedBackend>
+        </OpDef>
+
+        <!-- ============================================================
+             UntileToRowMajor — VTCM tile-layout → DDR row-major output
+             in:  [1, M_t, N_t, 1024]  u8
+             out: [1, 1, M_t*32, N_t*32]  u8 row-major
+             ============================================================ -->
+        <OpDef>
+            <Name>UntileToRowMajor</Name>
+            <Description><Content>Tile-layout VTCM → row-major DDR output.</Content></Description>
+            <Input>
+                <Name>in[0]</Name>
+                <Mandatory>true</Mandatory>
+                <Datatype>BACKEND_SPECIFIC</Datatype>
+                <Shape><Rank>4D</Rank>
+                <Layout>NONTRIVIAL</Layout><Text>[1, M_t, N_t, 1024]</Text></Shape>
+            </Input>
+            <Output>
+                <Name>out[0]</Name>
+                <Mandatory>true</Mandatory>
+                <Datatype>BACKEND_SPECIFIC</Datatype>
+                <Shape><Rank>4D</Rank>
+                <Layout>NONTRIVIAL</Layout><Text>[1, 1, M_t*32, N_t*32]</Text></Shape>
+            </Output>
+            <SupportedBackend>HTP</SupportedBackend>
+        </OpDef>
+
+        <!-- ============================================================
              TcmDramCopy — bulk HVX vmem VTCM→DDR pass-through (same shape)
              ============================================================ -->
         <OpDef>
@@ -145,6 +275,10 @@
             <OpName>PackWeightToHmxTileV3</OpName>
             <OpName>MatMulV8</OpName>
             <OpName>TcmDramCopy</OpName>
+            <OpName>CroutonPackSpike</OpName>
+            <OpName>PackActCrouton</OpName>
+            <OpName>BbbKMajor</OpName>
+            <OpName>UntileToRowMajor</OpName>
         </SupportedOps>
 
         <SupplementalOpDef>
@@ -169,6 +303,29 @@
             <Name>TcmDramCopy</Name>
             <Input><Name>in[0]</Name><Datatype>QNN_DATATYPE_UINT_8</Datatype><Datatype>QNN_DATATYPE_UFIXED_POINT_8</Datatype></Input>
             <Output><Name>out[0]</Name><Datatype>QNN_DATATYPE_UINT_8</Datatype><Datatype>QNN_DATATYPE_UFIXED_POINT_8</Datatype></Output>
+        </SupplementalOpDef>
+        <SupplementalOpDef>
+            <Name>BbbKMajor</Name>
+            <Input><Name>in[0]</Name><Datatype>QNN_DATATYPE_UINT_8</Datatype><Datatype>QNN_DATATYPE_UFIXED_POINT_8</Datatype></Input>
+            <Input><Name>in[1]</Name><Datatype>QNN_DATATYPE_UINT_8</Datatype><Datatype>QNN_DATATYPE_UFIXED_POINT_8</Datatype></Input>
+            <Input><Name>in[2]</Name><Datatype>QNN_DATATYPE_INT_32</Datatype><Datatype>QNN_DATATYPE_SFIXED_POINT_32</Datatype></Input>
+            <Output><Name>out[0]</Name><Datatype>QNN_DATATYPE_UINT_8</Datatype><Datatype>QNN_DATATYPE_UFIXED_POINT_8</Datatype></Output>
+        </SupplementalOpDef>
+        <SupplementalOpDef>
+            <Name>UntileToRowMajor</Name>
+            <Input><Name>in[0]</Name><Datatype>QNN_DATATYPE_UINT_8</Datatype><Datatype>QNN_DATATYPE_UFIXED_POINT_8</Datatype></Input>
+            <Output><Name>out[0]</Name><Datatype>QNN_DATATYPE_UINT_8</Datatype><Datatype>QNN_DATATYPE_UFIXED_POINT_8</Datatype></Output>
+        </SupplementalOpDef>
+        <SupplementalOpDef>
+            <Name>PackActCrouton</Name>
+            <Input><Name>in[0]</Name><Datatype>QNN_DATATYPE_UINT_8</Datatype><Datatype>QNN_DATATYPE_UFIXED_POINT_8</Datatype></Input>
+            <Output><Name>out[0]</Name><Datatype>QNN_DATATYPE_UINT_8</Datatype><Datatype>QNN_DATATYPE_UFIXED_POINT_8</Datatype></Output>
+        </SupplementalOpDef>
+        <SupplementalOpDef>
+            <Name>CroutonPackSpike</Name>
+            <Input><Name>in[0]</Name><Datatype>QNN_DATATYPE_UINT_8</Datatype><Datatype>QNN_DATATYPE_UFIXED_POINT_8</Datatype></Input>
+            <Output><Name>out[0]</Name><Datatype>QNN_DATATYPE_UINT_8</Datatype><Datatype>QNN_DATATYPE_UFIXED_POINT_8</Datatype></Output>
+            <Output><Name>out[1]</Name><Datatype>QNN_DATATYPE_UINT_8</Datatype><Datatype>QNN_DATATYPE_UFIXED_POINT_8</Datatype></Output>
         </SupplementalOpDef>
     </SupplementalOpDefList>
 

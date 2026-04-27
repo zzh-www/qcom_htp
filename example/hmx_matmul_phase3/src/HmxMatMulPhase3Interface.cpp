@@ -20,22 +20,31 @@
 #define THIS_PKG_NAME_STR STRINGIZE(THIS_PKG_NAME)
 
 extern "C" void register_hmx_matmul_v8_op();
+extern "C" void register_hmx_matmul_v9_op();
 extern "C" {
 void register_pack_act_rm_op();
 void register_pack_wt_v3_op();
 void register_untile_to_rowmajor_op();
 void register_tcm_dram_copy_op();
+void register_crouton_pack_spike_op();
+void register_pack_act_crouton_op();
 }
 
-static constexpr auto sg_packageName     = THIS_PKG_NAME_STR;
-static constexpr auto sg_opNameV8        = "MatMulV8";
-static constexpr auto sg_opNamePackActRM = "PackActivationU8RowMajor";
-static constexpr auto sg_opNamePackWtV3  = "PackWeightToHmxTileV3";
-static constexpr auto sg_opNameTcmDram   = "TcmDramCopy";
-static constexpr auto sg_opNameUntile    = "UntileToRowMajor";
-static std::array<const char *, 5> sg_opNames{{
-    sg_opNameV8, sg_opNamePackActRM, sg_opNamePackWtV3,
-    sg_opNameTcmDram, sg_opNameUntile,
+static constexpr auto sg_packageName         = THIS_PKG_NAME_STR;
+static constexpr auto sg_opNameV8            = "MatMulV8";
+static constexpr auto sg_opNameV9            = "BbbKMajor";
+static constexpr auto sg_opNameV9Kernel      = "BbbKMajor_kernel";
+static constexpr auto sg_opNamePackActRM     = "PackActivationU8RowMajor";
+static constexpr auto sg_opNamePackWtV3      = "PackWeightToHmxTileV3";
+static constexpr auto sg_opNameTcmDram       = "TcmDramCopy";
+static constexpr auto sg_opNameUntile        = "UntileToRowMajor";
+static constexpr auto sg_opNameCroutonSpike  = "CroutonPackSpike";
+static constexpr auto sg_opNamePackActCrouton = "PackActCrouton";
+static std::array<const char *, 9> sg_opNames{{
+    sg_opNameV8, sg_opNameV9, sg_opNameV9Kernel,
+    sg_opNamePackActRM, sg_opNamePackWtV3,
+    sg_opNameTcmDram, sg_opNameUntile, sg_opNameCroutonSpike,
+    sg_opNamePackActCrouton,
 }};
 
 static Qnn_ApiVersion_t sg_sdkApiVersion = QNN_HTP_API_VERSION_INIT;
@@ -78,10 +87,14 @@ static Qnn_ErrorHandle_t pkgValidateOpConfig(Qnn_OpConfig_t opConfig) {
         return QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
     const std::string tn = opConfig.v1.typeName;
     bool match = (tn == sg_opNameV8)
+              || (tn == sg_opNameV9)
+              || (tn == sg_opNameV9Kernel)
               || (tn == sg_opNamePackActRM)
               || (tn == sg_opNamePackWtV3)
               || (tn == sg_opNameTcmDram)
-              || (tn == sg_opNameUntile);
+              || (tn == sg_opNameUntile)
+              || (tn == sg_opNameCroutonSpike)
+              || (tn == sg_opNamePackActCrouton);
     if (!match) return QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
     return QNN_SUCCESS;
 }
@@ -142,10 +155,13 @@ Qnn_ErrorHandle_t HmxMatMulPhase3InterfaceProvider(QnnOpPackage_Interface_t *int
 
 const char *qhpi_init() {
     register_hmx_matmul_v8_op();
+    register_hmx_matmul_v9_op();
     register_pack_act_rm_op();
     register_pack_wt_v3_op();
     register_untile_to_rowmajor_op();
     register_tcm_dram_copy_op();
+    register_crouton_pack_spike_op();
+    register_pack_act_crouton_op();
     return THIS_PKG_NAME_STR;
 }
 

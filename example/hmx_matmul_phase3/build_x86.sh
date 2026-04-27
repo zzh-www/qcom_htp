@@ -52,10 +52,11 @@ FLAGS=(
     -Wno-unused-command-line-argument -Wno-invalid-offsetof
     -Wno-unused-variable -Wno-unused-parameter -Wno-unused-but-set-variable
     '-DQNN_API=__attribute__((visibility("default")))'
+    ${EXTRA_DEFS:-}
 )
 
 KERNEL_OBJS=()
-for src in pack_act_rm_hvx pack_wt_v3_hvx tcm_dram_copy_hvx untile_to_rowmajor_hvx; do
+for src in pack_act_rm_hvx pack_wt_v3_hvx tcm_dram_copy_hvx untile_to_rowmajor_hvx crouton_pack_spike_hvx pack_act_crouton_skel; do
     obj="$OUT/${src}.o"
     "$CXX" -std=c++17 "${FLAGS[@]}" -x c++ \
         -c "$SCRIPT_DIR/kernel/${src}.c" -o "$obj"
@@ -69,6 +70,7 @@ done
     -o "$OUT/libQnnHmxMatMulPhase3.so" \
     "$SCRIPT_DIR/src/HmxMatMulPhase3Interface.cpp" \
     "$SCRIPT_DIR/src/HmxMatMulV8Op.cpp" \
+    "$SCRIPT_DIR/src/HmxMatMulV9SkelOp.cpp" \
     "${KERNEL_OBJS[@]}" \
     -Wl,--whole-archive -L "$X86_LIBNATIVE/lib" -lnative -Wl,--no-whole-archive \
     -lpthread

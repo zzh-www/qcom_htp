@@ -28,27 +28,54 @@ from onnx import helper, TensorProto, numpy_helper
 DOMAIN = "hmx"
 
 
-def plan_matmul_graph(M, K, N, vtcm_mb=8):
+def plan_matmul_graph(M, K, N, vtcm_mb=8, n_tile_override=None, m_tile_override=None):
     """Shape → tile plan. Mirrors QNN's internal MatMul planner per
     observed 32³/128³/256³/512³/4096³ chrometrace behavior.
 
-    Keeps ~40% of VTCM free as margin for compiler-inserted staging
-    (InputSlice, weights_to_vtcm, @Spill/@Fill, etc).
-    """
-    M_TILE = 256  # QNN固定 8 spatial tiles × 32 rows each
-    if M < M_TILE:
-        M_TILE = ((M + 31) // 32) * 32  # round up to 32
+    Keeps ~40% of VTCM free as margin for compiler-inserted staging.
+    `n_tile_override` / `m_tile_override` let callers pin tile sizes for perf
+    tuning (e.g. M_TILE=512 at 512³ to skip slice_act).
 
-    workspace = int(0.6 * vtcm_mb * 1024 * 1024)
-    # working set per MatMulV8 instance ≈ packed_act(M_TILE*K) +
-    #     packed_wt(K*N_TILE) + out_tile(M_TILE*N_TILE) bytes
-    # solve: M_TILE·K + K·N_TILE + M_TILE·N_TILE ≤ workspace
-    # N_TILE ≤ (workspace - M_TILE·K) / (K + M_TILE)
-    if K + M_TILE > 0:
-        n_tile_max = (workspace - M_TILE * K) // (K + M_TILE)
+    Sweep 2026-04-26 (t256 vs t128, V8/native iter2 wall):
+        256³ : 38/39  vs 28us   (256 marginally better)
+        512³ : 85/94  vs 64us   (256 better, t128 +11%)
+        1024³: 363/378 vs 585us (256 ≈ t128, both faster than native)
+        2048³: 2411/2492 vs 2786us (256 better, both faster than native)
+        4096³: 79963/17531 vs 13240us (**t128 4.5× faster!**)
+    Conclusion: tile=128 at K≥4096 to avoid VTCM thrashing
+    (V8 t256 4096³ fill/spill = 7×; t128 = 18× but smaller absolute
+    spill, total wall drops 4.5×). For K<4096 keep tile=256.
+    """
+    if m_tile_override is not None:
+        M_TILE = ((m_tile_override + 31) // 32) * 32
     else:
-        n_tile_max = 256
-    N_TILE = max(32, min(256, (n_tile_max // 32) * 32))
+        # Adaptive default: smaller tiles at K>=4096 to keep VTCM-cached
+        # tile reuse high enough that compiler-inserted @Spill/@Fill doesn't
+        # explode (validated at 4096³).
+        if K >= 4096 or N >= 4096 or M >= 4096:
+            M_TILE = 128
+        else:
+            M_TILE = 256
+        if M < M_TILE:
+            M_TILE = ((M + 31) // 32) * 32  # round up to 32
+
+    if n_tile_override is not None:
+        N_TILE = n_tile_override
+        if N_TILE % 32 != 0:
+            N_TILE = ((N_TILE + 31) // 32) * 32
+    else:
+        # Pin N_TILE to the same band as M_TILE — empirically the dominant
+        # axis for VTCM scheduling is symmetric tiling.
+        if K >= 4096 or N >= 4096 or M >= 4096:
+            N_TILE_target = 128
+        else:
+            N_TILE_target = 256
+        workspace = int(0.6 * vtcm_mb * 1024 * 1024)
+        if K + M_TILE > 0:
+            n_tile_max = (workspace - M_TILE * K) // (K + M_TILE)
+        else:
+            n_tile_max = N_TILE_target
+        N_TILE = max(32, min(N_TILE_target, (n_tile_max // 32) * 32))
 
     if N < N_TILE:
         N_TILE = ((N + 31) // 32) * 32
@@ -91,6 +118,11 @@ def main():
     p.add_argument("--K", type=int, default=512)
     p.add_argument("--N", type=int, default=512)
     p.add_argument("--vtcm-mb", type=int, default=8)
+    p.add_argument("--n-tile", type=int, default=None, help="Override N_TILE (default: auto from VTCM budget)")
+    p.add_argument("--m-tile", type=int, default=None,
+                   help="Override M_TILE (default: 256). NOTE: M_TILE > 256 currently "
+                        "breaks correctness (output ~bias-only) at 512³. Lever for future "
+                        "investigation if 512³ slice_act overhead becomes critical.")
     p.add_argument("--seed", type=int, default=0xB17E)
     p.add_argument("-o", "--out", default=None, help="ONNX output path (default v8_model.onnx)")
     args = p.parse_args()
@@ -100,7 +132,9 @@ def main():
     np.random.seed(args.seed)
     assert M % 32 == 0 and K % 32 == 0 and N % 32 == 0, "M/K/N must be /32"
 
-    plan = plan_matmul_graph(M, K, N, args.vtcm_mb)
+    plan = plan_matmul_graph(M, K, N, args.vtcm_mb,
+                             n_tile_override=args.n_tile,
+                             m_tile_override=args.m_tile)
     M_TILE, N_TILE = plan["M_TILE"], plan["N_TILE"]
     M_ROUNDS, N_ROUNDS = plan["M_ROUNDS"], plan["N_ROUNDS"]
     K_T = K // 32
@@ -178,9 +212,10 @@ def main():
         slice_initializers += [s, e, a]
 
     # Pack activation per M_ROUND (MT=true → auto multi-HVX) ------------------
+    PACK_ACT_OP = os.environ.get("V8_PACK_ACT_OP", "PackActivationU8RowMajor")
     for mr in range(M_ROUNDS):
         nodes.append(helper.make_node(
-            "PackActivationU8RowMajor",
+            PACK_ACT_OP,
             inputs=[f"act_M{mr}"],
             outputs=[f"packed_act_M{mr}"],
             name=f"pack_act_M{mr}",

@@ -100,6 +100,82 @@ EXPORT_API Qnn_ErrorHandle_t MatMulV8DataTypeInference(Qnn_OpConfig_t *op) {
     return QNN_SUCCESS;
 }
 
+/* ---------- CroutonPackSpike ---------- fixed: in [1,1,32,128] →
+   out0 [1,1,4,1024] (Crouton blocks), out1 [1,1,1,4] (stats). */
+EXPORT_API Qnn_ErrorHandle_t CroutonPackSpikeShapeInference(Qnn_OpConfig_t *op) {
+    if (op->v1.numOfInputs < 1 || op->v1.numOfOutputs < 2)
+        return QNN_OP_PACKAGE_ERROR_INVALID_INFO;
+    uint32_t *o0 = tensor_dims(&op->v1.outputTensors[0]);
+    uint32_t *o1 = tensor_dims(&op->v1.outputTensors[1]);
+    o0[0] = 1; o0[1] = 1; o0[2] = 4;    o0[3] = 1024;
+    o1[0] = 1; o1[1] = 1; o1[2] = 1;    o1[3] = 4;
+    return QNN_SUCCESS;
+}
+EXPORT_API Qnn_ErrorHandle_t CroutonPackSpikeDataTypeInference(Qnn_OpConfig_t *op) {
+    set_tensor_dtype(&op->v1.outputTensors[0], QNN_DATATYPE_UFIXED_POINT_8);
+    set_tensor_dtype(&op->v1.outputTensors[1], QNN_DATATYPE_UFIXED_POINT_8);
+    return QNN_SUCCESS;
+}
+
+/* ---------- BbbKMajor (3-input native-aligned) ----------
+   in[0] = [1, M/32, 32, K]    act    (Crouton_8 via QNN auto-insert)
+   in[1] = [1, K/32, N/32,1024] wt    (pre-packed native ConvLayer layout)
+   in[2] = [N]                  bias  (raw int32 STATIC)
+   out   = [1, M/32, N/32, 1024] tile-layout                              */
+EXPORT_API Qnn_ErrorHandle_t BbbKMajorShapeInference(Qnn_OpConfig_t *op) {
+    if (op->v1.numOfInputs < 3 || op->v1.numOfOutputs < 1)
+        return QNN_OP_PACKAGE_ERROR_INVALID_INFO;
+    uint32_t *a = tensor_dims(&op->v1.inputTensors[0]);
+    uint32_t *w = tensor_dims(&op->v1.inputTensors[1]);
+    uint32_t *o = tensor_dims(&op->v1.outputTensors[0]);
+    if (tensor_rank(&op->v1.inputTensors[0]) != 4 ||
+        tensor_rank(&op->v1.inputTensors[1]) != 4) return QNN_OP_PACKAGE_ERROR_INVALID_INFO;
+    /* a[1]=M_t, w[2]=N_t. o = [1, M_t, N_t, 1024]. */
+    o[0] = 1; o[1] = a[1]; o[2] = w[2]; o[3] = 1024;
+    return QNN_SUCCESS;
+}
+EXPORT_API Qnn_ErrorHandle_t BbbKMajorDataTypeInference(Qnn_OpConfig_t *op) {
+    set_tensor_dtype(&op->v1.outputTensors[0], QNN_DATATYPE_UFIXED_POINT_8);
+    return QNN_SUCCESS;
+}
+
+/* ---------- PackActCrouton ----------
+   in[0]  = [1, 1, M, K]  →  out[0] = [1, K/32, M/32, 1024]
+   (shape with last-dim 1024 to match V8 conventions for QNN optimizer;
+    constraints: M%32==0, K%128==0) */
+EXPORT_API Qnn_ErrorHandle_t PackActCroutonShapeInference(Qnn_OpConfig_t *op) {
+    if (op->v1.numOfInputs < 1 || op->v1.numOfOutputs < 1)
+        return QNN_OP_PACKAGE_ERROR_INVALID_INFO;
+    uint32_t *in  = tensor_dims(&op->v1.inputTensors[0]);
+    uint32_t *out = tensor_dims(&op->v1.outputTensors[0]);
+    if (tensor_rank(&op->v1.inputTensors[0]) != 4) return QNN_OP_PACKAGE_ERROR_INVALID_INFO;
+    uint32_t M = in[2], K = in[3];
+    if (M % 32 || K % 128) return QNN_OP_PACKAGE_ERROR_INVALID_INFO;
+    out[0] = 1; out[1] = K / 32; out[2] = M / 32; out[3] = 1024;
+    return QNN_SUCCESS;
+}
+EXPORT_API Qnn_ErrorHandle_t PackActCroutonDataTypeInference(Qnn_OpConfig_t *op) {
+    set_tensor_dtype(&op->v1.outputTensors[0], QNN_DATATYPE_UFIXED_POINT_8);
+    return QNN_SUCCESS;
+}
+
+/* ---------- UntileToRowMajor ----------
+   in[0]  = [1, M_t, N_t, 1024]   tile-layout
+   out[0] = [1, 1, M_t*32, N_t*32] row-major */
+EXPORT_API Qnn_ErrorHandle_t UntileToRowMajorShapeInference(Qnn_OpConfig_t *op) {
+    if (op->v1.numOfInputs < 1 || op->v1.numOfOutputs < 1)
+        return QNN_OP_PACKAGE_ERROR_INVALID_INFO;
+    uint32_t *in  = tensor_dims(&op->v1.inputTensors[0]);
+    uint32_t *out = tensor_dims(&op->v1.outputTensors[0]);
+    if (tensor_rank(&op->v1.inputTensors[0]) != 4) return QNN_OP_PACKAGE_ERROR_INVALID_INFO;
+    out[0] = 1; out[1] = 1; out[2] = in[1] * 32; out[3] = in[2] * 32;
+    return QNN_SUCCESS;
+}
+EXPORT_API Qnn_ErrorHandle_t UntileToRowMajorDataTypeInference(Qnn_OpConfig_t *op) {
+    set_tensor_dtype(&op->v1.outputTensors[0], QNN_DATATYPE_UFIXED_POINT_8);
+    return QNN_SUCCESS;
+}
+
 /* ---------- TcmDramCopy ---------- in[0] and out[0] identical shape. */
 EXPORT_API Qnn_ErrorHandle_t TcmDramCopyShapeInference(Qnn_OpConfig_t *op) {
     if (op->v1.numOfInputs < 1 || op->v1.numOfOutputs < 1)
@@ -119,10 +195,18 @@ Qnn_ErrorHandle_t (*PackActivationU8RowMajorOutputInfoInferencePtr)(Qnn_OpConfig
 Qnn_ErrorHandle_t (*PackWeightToHmxTileV3OutputInfoInferencePtr)(Qnn_OpConfig_t *)   = &PackWeightToHmxTileV3ShapeInference;
 Qnn_ErrorHandle_t (*MatMulV8OutputInfoInferencePtr)(Qnn_OpConfig_t *)               = &MatMulV8ShapeInference;
 Qnn_ErrorHandle_t (*TcmDramCopyOutputInfoInferencePtr)(Qnn_OpConfig_t *)            = &TcmDramCopyShapeInference;
+Qnn_ErrorHandle_t (*UntileToRowMajorOutputInfoInferencePtr)(Qnn_OpConfig_t *)       = &UntileToRowMajorShapeInference;
+Qnn_ErrorHandle_t (*CroutonPackSpikeOutputInfoInferencePtr)(Qnn_OpConfig_t *)       = &CroutonPackSpikeShapeInference;
+Qnn_ErrorHandle_t (*PackActCroutonOutputInfoInferencePtr)(Qnn_OpConfig_t *)         = &PackActCroutonShapeInference;
+Qnn_ErrorHandle_t (*BbbKMajorOutputInfoInferencePtr)(Qnn_OpConfig_t *)               = &BbbKMajorShapeInference;
 
 Qnn_ErrorHandle_t (*PackActivationU8RowMajorDataTypeInferencePtr)(Qnn_OpConfig_t *) = &PackActivationU8RowMajorDataTypeInference;
 Qnn_ErrorHandle_t (*PackWeightToHmxTileV3DataTypeInferencePtr)(Qnn_OpConfig_t *)    = &PackWeightToHmxTileV3DataTypeInference;
 Qnn_ErrorHandle_t (*MatMulV8DataTypeInferencePtr)(Qnn_OpConfig_t *)                 = &MatMulV8DataTypeInference;
 Qnn_ErrorHandle_t (*TcmDramCopyDataTypeInferencePtr)(Qnn_OpConfig_t *)              = &TcmDramCopyDataTypeInference;
+Qnn_ErrorHandle_t (*UntileToRowMajorDataTypeInferencePtr)(Qnn_OpConfig_t *)         = &UntileToRowMajorDataTypeInference;
+Qnn_ErrorHandle_t (*CroutonPackSpikeDataTypeInferencePtr)(Qnn_OpConfig_t *)         = &CroutonPackSpikeDataTypeInference;
+Qnn_ErrorHandle_t (*PackActCroutonDataTypeInferencePtr)(Qnn_OpConfig_t *)           = &PackActCroutonDataTypeInference;
+Qnn_ErrorHandle_t (*BbbKMajorDataTypeInferencePtr)(Qnn_OpConfig_t *)                 = &BbbKMajorDataTypeInference;
 
 } // extern "C"
