@@ -99,36 +99,43 @@ def main():
     bias_fold_i32 = bias_fold_bytes.reshape(-1).view(np.int32).copy()  # (2N,) int32
     bias_init = numpy_helper.from_array(bias_fold_i32, name="bias")
 
-    # ── ONNX graph (Step 3 — Crouton_8 output, no UntileToRowMajor) ──
-    # BbbKMajor output is now [1, M/32, 32, N] (logical Crouton_8).
-    # Reshape collapses to user-facing [1, M, N]. QNN compiler should
-    # auto-insert q::ForceFormat_Flat between BbbKMajor and Reshape so
-    # the user tensor lands as flat row-major in DDR via the framework
-    # Output op (replaces our hand-rolled UntileToRowMajor).
+    # ── ONNX graph (apples-to-apples with native QNN MatMul) ─────────
+    # User-facing input/output shape match native: [1, 1, M, K] / [1, 1, M, N].
+    # We Reshape to [1, M/32, 32, K] before BbbKMajor (QNN treats this
+    # as null_exec — pure metadata). Mirrors native's q::Reshape
+    # null_exec sandwich around q::ConvLayer_s1.opt.
     act_in = helper.make_tensor_value_info(
-        "act_raw", TensorProto.UINT8, [1, M // 32, 32, K])
-    out_info = helper.make_tensor_value_info("out", TensorProto.UINT8, [1, M, N])
+        "act_raw", TensorProto.UINT8, [1, 1, M, K])
+    out_info = helper.make_tensor_value_info("out", TensorProto.UINT8, [1, 1, M, N])
 
+    in_reshape_dims = numpy_helper.from_array(
+        np.array([1, M // 32, 32, K], dtype=np.int64), name="in_reshape_dims")
+    in_reshape_node = helper.make_node(
+        "Reshape",
+        inputs=["act_raw", "in_reshape_dims"],
+        outputs=["act_4d"],
+        name="reshape_in_to_4d",
+    )
     bbb_node = helper.make_node(
         "BbbKMajor",
-        inputs=["act_raw", "wt_packed", "bias"],
+        inputs=["act_4d", "wt_packed", "bias"],
         outputs=["mm_c8"],
         name="bbb_M0_N0",
         domain=DOMAIN,
     )
     out_reshape_dims = numpy_helper.from_array(
-        np.array([1, M, N], dtype=np.int64), name="out_reshape_dims")
-    reshape_node = helper.make_node(
+        np.array([1, 1, M, N], dtype=np.int64), name="out_reshape_dims")
+    reshape_out_node = helper.make_node(
         "Reshape",
         inputs=["mm_c8", "out_reshape_dims"],
         outputs=["out"],
-        name="reshape_out_to_3d",
+        name="reshape_out_to_4d",
     )
 
     graph = helper.make_graph(
-        [bbb_node, reshape_node], name="v8c8_test",
+        [in_reshape_node, bbb_node, reshape_out_node], name="v8c8_test",
         inputs=[act_in], outputs=[out_info],
-        initializer=[wt_init, bias_init, out_reshape_dims],
+        initializer=[wt_init, bias_init, in_reshape_dims, out_reshape_dims],
     )
     model = helper.make_model(graph,
         producer_name=f"v8c8_{M}x{K}x{N}",
