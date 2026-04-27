@@ -1,4 +1,4 @@
-# V8C8 matmul — Step 1+2 done, 1.28× wall / wt byte-1:1 native (2026-04-27 night, post-Step-2)
+# V8C8 matmul — 复刻路径完成 (Step 1+2)，1.28× wall vs native (2026-04-27 night)
 
 > **Status**: BbbKMajor 内核已经在 native `q::ConvLayer_s1.opt` 的
 > **MatMul_0 group cyc 1.04× （基本持平）**. Steady-state (iter 3) 256³:
@@ -100,44 +100,56 @@ Pkt 5: weight r8 :endloop0
 顺序复刻达成（这是 Step 2 真正的 deliverable）。256³ wall 26 µs →
 23 µs (≈1.28× → 1.22× vs native, 主要是 Output 段的 run-to-run noise)。
 
-### Step 3 — `do_precomputation_function`
+### Step 3 — `do_precomputation_function` (NOT VIABLE)
 
-Native 在 `set_hmx_params_conv1x1` 把 0x40 字节 descriptor 烤进
-ctx-binary（graph_finalize 时一次过）。我们每次 call 都 prebake
-act_ptrs/wt_ptrs (2 × 32 × 32 × 4 B = 8 KB) + 重设 HMX 状态。
-QHPI 提供 `QHPI_Precompute_Function`，可把 shape-only-dependent 数据
-烤进 `precomputed_data`, runtime kernel 仅读取。
+读 `qhpi.h:817-857` spec 实证：
+- `QHPI_Plugin_Function function` 与 `QHPI_Plugin_Precomputed_Function
+  function_with_precomputed_data` **互斥**（line 854: "When set, @c
+  function must be NULL"）
+- precompute 路径 runtime 函数签名 `(handle, precomputed_data)`
+  **不接收 inputs/outputs** — 没法访问 act block_table
 
-**预期收益**: 1-2K cyc/call。
+我们的 V8C8 kernel 必须 per-call 读 Crouton_8 act block_table（act
+每次推理变），**precompute 路径架构上走不通**。Native 能用是因为
+ConvLayer_s1.opt 是 QNN 内部 HTP primitive 不走 QHPI v1，特权高。
 
-**Open question**: precompute 上下文里能否拿到 STATIC tensor `raw_data`?
-如果只能拿 wt_ptrs 那样 shape-derived 信息（不能读 wt 字节）, 收益减半。
-读 `qhpi.h:639-658` spec; 不清楚就写 probe。
+**Status**: NOT VIABLE — dropped。
 
-### Step 4 — `QHPI_BuildTileOfOp` (build_tile callback)
+### Step 4 — `QHPI_BuildTileOfOp` (DEFERRED, 不属复刻)
 
-Native 把 bias_to_vtcm + ForceFormat_Crouton + weights_to_vtcm +
-ConvLayer_s1.opt fuse 在一个 `MatMul_0` group 下，QNN scheduler 把 HVX
-(ForceFormat) 与 HMX (matmul) 并发调度（不同物理单元）。我们目前是
-custom op, opaque to QNN, ForceFormat 串行跑在 Input 段。
+User memory 实测 `project_native_256_isolation_2026-04-26.md`:
+> 256³ u8×i8 MatMul = exactly 1 ConvLayer_s1.opt (no graph scheduling).
 
-实现 `build_tile` 把 BbbKMajor 按 N 切成 N_t sub-op。每个 sub-op + 其
-周围的 DMA/format 就 pipeline-able。要写 `qhpi_op_slice` + `qhpi_op_create`
-在 prepare time 构造 sub-graph。
+**Native 256³ 也是单个 ConvLayer_s1.opt 不切 tile。我们当前 V8C8 256³
+也是单个 BbbKMajor — 结构已与 native 一致。** Step 4 实施 build_tile
+会让 QNN 把 BbbKMajor 切成多个 sub-op，反而**偏离** native 在该 shape
+的真实形态。是"超越"native 而非"复刻"。
 
-**预期收益**: 3-5K cyc。最大单票，最高难度。
+实施代价：
+- Kernel 必须从假设方阵改成支持非方阵 (M≠K≠N)
+- `qhpi_tensor_shape()` 在 ≥64³ 返回 rank=0，要新 shape 推导路径
+- SDK 无 build_tile 参考实现（grep .so/.h/examples 全空）
+- 写完整 slice 逻辑 + qhpi_op_create + 处理 wt 字节布局与 logical-slice
+  不匹配
 
-**先决条件**: Step 2/3 完成且 bit-exact 验证仍通过。
+预期收益：handoff 估 3-5K cyc at 256³，但 256³ VTCM 充足无切分必要，
+native 自己在该 shape 也不切分 — 收益不确定。
+
+**Status**: DEFERRED — 复刻路径完成，需要时可作为下一步独立优化。
 
 ## ROI 表
 
-| Step | what | 预期 cyc 节省 (256³) | effort | 风险 | 状态 |
-|---|---|---|---|---|---|
-| 2 | wt N-outer (byte alignment, 无 cyc 收益) | 0 | medium | — | ✓ done (55915cb) |
-| 3 | precompute hook | 1-2K | medium | qhpi.h spec 不清楚 | next |
-| 4 | build_tile callback | 3-5K | high | 复杂度高, payoff 不确定 | last |
+| Step | what | 实测 cyc | effort | 状态 |
+|---|---|---|---|---|
+| 1 | mt-outer iter 杀 +3K bank conflict | -3K (256³) | medium | ✓ done (fba391b) |
+| 2 | wt N-outer (byte alignment) | 0 | medium | ✓ done (55915cb) — handoff 中 1.5 cyc/MAC 是误判 |
+| 3 | precompute hook | NOT VIABLE | — | ✗ dropped (架构不兼容) |
+| 4 | build_tile callback | UNCERTAIN | high | ⏸ deferred (反向 native 256³ 单 op 形态) |
 
-完成 3+4 预期: 1.28× wall → ~1.10×。
+**复刻路径已完成 = 当前合理终态。** 256³ wall 23 µs / 1.28× vs native；
+bbb 内核与 native MatMul_0 group cyc 平价；wt VTCM 字节布局与 native
+byte-1:1。剩余 +9K cyc 全在 QNN 编译器对 HTP primitive 的内部调度
+特权 — custom op 拿不到。
 
 ## Per-shape 现状 (MT_OUTER default, 2026-04-27 night)
 
