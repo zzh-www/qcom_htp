@@ -59,7 +59,12 @@ def main():
                 for c in range(32):
                     dst = (r // 4) * 128 + c * 4 + (r % 4)
                     wt_packed[0, kt, nt, dst] = wRaw_KN[kt * 32 + r, nt * 32 + c]
-    wt_init = numpy_helper.from_array(wt_packed.view(np.uint8), name="wt_packed")
+    # Reshape declared dims to [1, 1, K, N] u8q to match native ConvLayer_s1.opt's
+    # in[1] wt = [1, 1, 256, 256]. Bytes stay in our pre-pack layout (same 65 K B
+    # contents); QNN's weights_to_vtcm DMA copies verbatim either way, only the
+    # shape label changes.
+    wt_init = numpy_helper.from_array(
+        wt_packed.view(np.uint8).reshape(1, 1, K, N), name="wt_packed")
 
     # ── Bias: NATIVE bias_to_vtcm layout, host-pre-folded.
     #
@@ -96,7 +101,12 @@ def main():
             bias_fold_bytes[nt, 128 + 4*c : 128 + 4*c + 4] = \
                 np.array([int(effective_int32[n_abs])], np.int32).view(np.uint8)
 
-    bias_fold_i32 = bias_fold_bytes.reshape(-1).view(np.int32).copy()  # (2N,) int32
+    # Bias dims [1, N_t, 1, 64] i32 to match native ConvLayer_s1.opt's
+    # in[2] bias = [1, 8, 1, 64] (N_t=8 tiles × 64 int32 per tile). Same total
+    # bytes (2N int32 = N_t × 64), just factorised the same way as native.
+    # bias_fold_bytes is (n_tiles, 256) bytes; view as int32 → (n_tiles, 64),
+    # then reshape to (1, n_tiles, 1, 64).
+    bias_fold_i32 = bias_fold_bytes.view(np.int32).reshape(1, n_tiles, 1, 64).copy()
     bias_init = numpy_helper.from_array(bias_fold_i32, name="bias")
 
     # ── ONNX graph (apples-to-apples with native QNN MatMul) ─────────
@@ -123,6 +133,11 @@ def main():
         name="bbb_M0_N0",
         domain=DOMAIN,
     )
+    # Explicit value_info for mm_c8 so qairt-converter takes [1, M/32, 32, N]
+    # as the ONNX output shape (= native ConvLayer_s1.opt's [1, 8, 32, 256])
+    # rather than auto-factorising into [1, M_t, N_t, 1024] tile-array.
+    mm_c8_info = helper.make_tensor_value_info(
+        "mm_c8", TensorProto.UINT8, [1, M // 32, 32, N])
     out_reshape_dims = numpy_helper.from_array(
         np.array([1, 1, M, N], dtype=np.int64), name="out_reshape_dims")
     reshape_out_node = helper.make_node(
@@ -136,6 +151,7 @@ def main():
         [in_reshape_node, bbb_node, reshape_out_node], name="v8c8_test",
         inputs=[act_in], outputs=[out_info],
         initializer=[wt_init, bias_init, in_reshape_dims, out_reshape_dims],
+        value_info=[mm_c8_info],
     )
     model = helper.make_model(graph,
         producer_name=f"v8c8_{M}x{K}x{N}",

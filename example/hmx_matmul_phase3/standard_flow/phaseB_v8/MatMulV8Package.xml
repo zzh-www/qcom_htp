@@ -140,14 +140,14 @@
                 <Mandatory>true</Mandatory>
                 <Datatype>BACKEND_SPECIFIC</Datatype>
                 <Shape><Rank>4D</Rank>
-                <Layout>NONTRIVIAL</Layout><Text>[1, K/32, N/32, 1024]</Text></Shape>
+                <Layout>NONTRIVIAL</Layout><Text>[1, 1, K, N]</Text></Shape>
             </Input>
             <Input>
                 <Name>in[2]</Name>
                 <Mandatory>true</Mandatory>
                 <Datatype>BACKEND_SPECIFIC</Datatype>
-                <Shape><Rank>1D</Rank>
-                <Layout>NONTRIVIAL</Layout><Text>[N]</Text></Shape>
+                <Shape><Rank>4D</Rank>
+                <Layout>NONTRIVIAL</Layout><Text>[1, N/32, 1, 64]</Text></Shape>
             </Input>
             <Output>
                 <Name>out[0]</Name>
