@@ -618,14 +618,12 @@ static uint32_t hmx_matmul_v9_kernel(
         }
         const hmx_conv_mask_desc_t *md = (const hmx_conv_mask_desc_t *)mask_buf;
 
-        /* Per-(mt, nt) tile call. */
+        /* Per-(mt, nt) tile call. The bit-exact configuration. */
         for (uint32_t mt = 0; mt < M_t; mt++) {
             const uint32_t rg = mt / mt_per_block;
             const uint32_t mt_in_block = mt % mt_per_block;
 
-            /* Pre-bake act tile addresses for this mt across all K-tiles.
-             * Each act tile (mt, kt) lives at:
-             *   act_blocks[rg * k_chunks + kt] + mt_in_block * 1024 */
+            /* Pre-bake act tile addresses for this mt across all K-tiles. */
             int32_t act_tbl[32 * 2] __attribute__((aligned(16)));
             for (uint32_t kt = 0; kt < K_t; kt++) {
                 act_tbl[kt] = (int32_t)(uintptr_t)(
