@@ -1,4 +1,4 @@
-# V8C8 matmul — kernel at native parity, 1.45× cyc / 1.28× wall (2026-04-27 night, post-Step-1)
+# V8C8 matmul — Step 1+2 done, 1.28× wall / wt byte-1:1 native (2026-04-27 night, post-Step-2)
 
 > **Status**: BbbKMajor 内核已经在 native `q::ConvLayer_s1.opt` 的
 > **MatMul_0 group cyc 1.04× （基本持平）**. Steady-state (iter 3) 256³:
@@ -17,9 +17,10 @@
 | user input/output shape | `[1, 1, S, S]` u8 ↔ `[1, 1, S, S]` u8 | same | ✓ |
 | in[0] act dim       | `[1, 8, 32, 256]` u8q | same | ✓ |
 | in[1] wt dim        | `[1, 1, S, S]` u8q | `[1, 1, S, S]` i8q | ✓ shape |
+| wt VTCM byte order  | `[1, N_t, K_t, 1024]` (Step 2) | `[1, N_t, K_t, 1024]` | ✓ byte-1:1 |
 | in[2] bias dim      | `[1, 8, 1, 64]` i32 | same | ✓ |
 | out[0] dim          | `[1, 8, 32, 256]` u8q (Crouton_8) | same | ✓ |
-| HMX MAC body        | 2 cyc / MAC body (4 packets) | 1.5 cyc / MAC body (3 packets, inline post-inc) | △ Step 2 |
+| HMX MAC body        | 2 cyc / MAC body (4 packets) | 2 cyc / MAC body (4 packets, native too) | ✓ at silicon ceiling |
 | HMX iter order      | mt-outer / nt-inner (no bank conflict) | (presumed same — empirical 1.04× cyc match) | ✓ |
 | HMX descriptor      | rebuild every call | baked at graph_finalize | ✗ Step 3 |
 | Pipeline w/ HVX     | serial (Input → bbb → Output) | fused MatMul_0 (HVX/HMX overlap) | ✗ Step 4 |
@@ -74,32 +75,30 @@ N_t 个 nt-sweep（256³ 时 ~640 cyc）, cache line 完全 settle 后再写。
 
 ## 剩余路径 (ROI-ordered) — 全部 "复刻" 路径，无 workaround
 
-### Step 2 — wt 改 N-outer + inline `r8 += 0x400` 3-packet body
+### Step 2 — wt N-outer layout (DONE, commit 55915cb)
 
-Native wt VTCM 布局是 `[1, N_t, K_t, 1024]` N-tile-outer。adjacent kt
-间距 1024 → fits Hexagon immediate post-inc：
-```asm
-{ r8 = add(r8, #0x400);
-  activation.ub = mxmem(r6, r24):cm;
-  weight.b      = mxmem(r8, r25) }   ; 3-packet / 2-MAC = 1.5 cyc/MAC
+wt VTCM 字节序现在与 native q::ConvLayer.opt.weights_to_vtcm 完全一致
+(`[1, N_t, K_t, 1024]`，tile (nt, kt) at `(nt*K_t + kt)*1024`)。
+
+**关键负面发现**: 原计划把 `r8 = add(r8, 0x400)` 与 `weight.b =
+mxmem(r8, r25)` 塞同一 packet (3-packet body / 1.5 cyc/MAC)。
+**Hexagon V75 HMX 硬件不允许这个组合** — assembler 接受，runtime
+SIGSEGV。
+
+Native 实测 disasm (0x2ea830-0x2ea848) 也是 4-packet body：
 ```
-我们当前 wt 是 K-tile-outer (`[1, K_t, N_t, 1024]`)，per-kt 间距 N_t × 1024
-= 8 KB at 256³ 太大不能 immediate post-inc，必须 memw 从 pre-baked
-array 取 (4-packet / 2-MAC body)。
+Pkt 1: cmp + r26-=2 + memw r6 + memw r23
+Pkt 2: r8 = add + 0xfd094718 + activation r6
+Pkt 3: weight r8
+Pkt 4: 0xe2198028 (likely r8 += 0x400) + activation r23
+Pkt 5: weight r8 :endloop0
+```
+4-packet/2-MAC = 2 cyc/MAC body — **与我们一致**。handoff 中的
+"3-packet/1.5 cyc/MAC" 是 disasm 误判。
 
-**预期收益**: 256³ ~256 cyc; 大 shape 按比例（1024³ 可能 1-2K cyc）。
-
-**做法**:
-1. `gen_v8c8_test.py` 改 `wt_packed` 形状 `[1, K_t, N_t, 1024]` → `[1, N_t, K_t, 1024]`。
-2. 验证 `q::ConvLayer.opt.weights_to_vtcm@FB.fB.` verbatim DMA 在新布局下
-   仍 byte-1:1（应该会，因为是 verbatim 拷贝）。
-3. `HmxMatMulV9SkelOp.cpp` kernel 内层 4-packet body 改 3-packet inline 版。
-4. 重测 256/512/1024³ bit-exact + perf。
-
-**注意**: kernel 必须同步改寻址。当前 `wt_ptrs_all[nt*K_t+kt] = wt_pack +
-(kt*N_t+nt)*1024`. 改后 = `wt_pack + (nt*K_t+kt)*1024`. 同时 inner loop
-的 wt 步长从 stride-load 改成 immediate post-inc, 可以省 wt_ptrs prebake
-（per-nt 起始地址直接算）。
+**实测**: bbb 内核 cyc 没变（预期，inner asm 未改）；wt VTCM byte
+顺序复刻达成（这是 Step 2 真正的 deliverable）。256³ wall 26 µs →
+23 µs (≈1.28× → 1.22× vs native, 主要是 Output 段的 run-to-run noise)。
 
 ### Step 3 — `do_precomputation_function`
 
@@ -132,13 +131,13 @@ custom op, opaque to QNN, ForceFormat 串行跑在 Input 段。
 
 ## ROI 表
 
-| Step | what | 预期 cyc 节省 (256³) | effort | 风险 |
-|---|---|---|---|---|
-| 2 | wt N-outer + 3-packet body | ~256 | medium | 重新验证 weights_to_vtcm DMA |
-| 3 | precompute hook | 1-2K | medium | qhpi.h spec 不清楚 |
-| 4 | build_tile callback | 3-5K | high | 复杂度高, payoff 不确定 |
+| Step | what | 预期 cyc 节省 (256³) | effort | 风险 | 状态 |
+|---|---|---|---|---|---|
+| 2 | wt N-outer (byte alignment, 无 cyc 收益) | 0 | medium | — | ✓ done (55915cb) |
+| 3 | precompute hook | 1-2K | medium | qhpi.h spec 不清楚 | next |
+| 4 | build_tile callback | 3-5K | high | 复杂度高, payoff 不确定 | last |
 
-完成 2+3+4 预期: 1.28× wall → ~1.10×。
+完成 3+4 预期: 1.28× wall → ~1.10×。
 
 ## Per-shape 现状 (MT_OUTER default, 2026-04-27 night)
 
@@ -188,6 +187,8 @@ awk '/Number of HVX threads used : 4  count/{n++} n==3' phase1_validation/v8c8_t
 ## Recent commits
 
 ```
+55915cb V8C8 Step 2: wt VTCM layout = native N-outer (复刻 alignment, no asm change)
+7f685ad NEXT_STEPS: Step 1 done — kernel at native MatMul_0 group parity (1.04×)
 fba391b V9_KERNEL_HMX: swap to mt-outer/nt-inner — kills +3K bank conflict (Step 1)
 49f7aa7 NEXT_STEPS + handoff doc: V8C8 256³ kernel I/O fully aligned, 1.50× wall residual
 cef7e01 gen_v8c8_test.py: align BbbKMajor I/O shapes with ConvLayer_s1.opt
