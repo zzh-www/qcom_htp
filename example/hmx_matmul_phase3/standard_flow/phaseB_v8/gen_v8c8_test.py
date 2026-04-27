@@ -38,6 +38,9 @@ def main():
     p.add_argument("--K", type=int, default=256)
     p.add_argument("--N", type=int, default=256)
     p.add_argument("--seed", type=int, default=0xB17E)
+    p.add_argument("--mode", default="default", choices=["default", "layout_test"],
+                   help="layout_test = crafted inputs to make output[m,n] = m & 0xF "
+                        "(detects Crouton_8 row-mapping bugs hidden by saturation)")
     p.add_argument("-o", "--out", default="v8c8_test.onnx")
     args = p.parse_args()
 
@@ -48,14 +51,25 @@ def main():
     HERE = os.path.dirname(os.path.abspath(__file__))
     K_t, N_t = K // 32, N // 32
 
-    # ── Weight: [1, N_t, K_t, 1024] N-tile-outer / K-tile-inner native
-    #    layout (Step 2 — matches native q::ConvLayer.opt.weights_to_vtcm
-    #    end-state). Within each tile, byte layout is the same 4-row-group:
-    #    dst = (r//4)*128 + c*4 + (r%4). QNN's weights_to_vtcm@FB.fB. is
-    #    verbatim byte-copy DMA, so swapping the outer two dims here is
-    #    invisible to QNN — only the SkelOp kernel addressing changes.
-    wRaw_KN = np.array([((i * 13) % 15) - 7 for i in range(K * N)],
-                       dtype=np.int8).reshape(K, N)
+    if args.mode == "layout_test":
+        # Crafted inputs — non-saturating, output[m, n] depends on m only:
+        #   wt[k, n] = 1 if k == 0 else 0
+        #   act[m, k] = 128 + (m & 0xF) if k == 0 else 128
+        #   bias_q = 0
+        # → acc[m, n] = (act[m, 0] - 128) * wt[0, n] = (m & 0xF) * 1 = m & 0xF
+        # → output[m, n] = saturate(m & 0xF) = m & 0xF (in [0, 15])
+        # If V9_KERNEL_HMX byte mapping is wrong, device row r will not equal r & 0xF.
+        wRaw_KN = np.zeros((K, N), dtype=np.int8)
+        wRaw_KN[0, :] = 1
+    else:
+        # ── Weight: [1, N_t, K_t, 1024] N-tile-outer / K-tile-inner native
+        #    layout (Step 2 — matches native q::ConvLayer.opt.weights_to_vtcm
+        #    end-state). Within each tile, byte layout is the same 4-row-group:
+        #    dst = (r//4)*128 + c*4 + (r%4). QNN's weights_to_vtcm@FB.fB. is
+        #    verbatim byte-copy DMA, so swapping the outer two dims here is
+        #    invisible to QNN — only the SkelOp kernel addressing changes.
+        wRaw_KN = np.array([((i * 13) % 15) - 7 for i in range(K * N)],
+                           dtype=np.int8).reshape(K, N)
     wt_packed = np.zeros((1, N_t, K_t, 1024), dtype=np.int8)
     for nt in range(N_t):
         for kt in range(K_t):
@@ -82,7 +96,10 @@ def main():
     #   bytes 0..127   : 32 × (fp16 scale, fp16 baseline)   per-channel
     #   bytes 128..255 : 32 × int32 effective_bias[c]
     #     effective[c] = -ACT_ZP × Σ_k W[k,c] + bias_q[c]
-    bias_q_int32   = np.arange(1, N + 1, dtype=np.int32)
+    if args.mode == "layout_test":
+        bias_q_int32 = np.zeros(N, dtype=np.int32)
+    else:
+        bias_q_int32   = np.arange(1, N + 1, dtype=np.int32)
     sum_w          = wRaw_KN.astype(np.int32).sum(axis=0)
     effective_int32 = (-ACT_ZP) * sum_w + bias_q_int32              # (N,)
 
@@ -184,7 +201,14 @@ def main():
     # Generate runtime act for device
     u8_dir = os.path.join(HERE, "runtime_inputs_u8")
     os.makedirs(u8_dir, exist_ok=True)
-    aRaw_flat = np.array([(i * 37) & 0xFF for i in range(M * K)], dtype=np.uint8)
+    if args.mode == "layout_test":
+        # act[m, k] = 128 + (m & 0xF) if k == 0 else 128
+        aRaw_2d = np.full((M, K), 128, dtype=np.uint8)
+        for m in range(M):
+            aRaw_2d[m, 0] = 128 + (m & 0xF)
+        aRaw_flat = aRaw_2d.flatten()
+    else:
+        aRaw_flat = np.array([(i * 37) & 0xFF for i in range(M * K)], dtype=np.uint8)
     aRaw = aRaw_flat.reshape(1, 1, M, K)
     aRaw.tofile(os.path.join(u8_dir, "act_v8c8.raw"))
 

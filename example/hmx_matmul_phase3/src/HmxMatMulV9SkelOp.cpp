@@ -570,6 +570,88 @@ static uint32_t hmx_matmul_v9_kernel(
         out_buf[63] = 0x5A;
     }
     return QHPI_Success;
+#elif defined(V9_USE_NATIVE_KERNEL)
+    /* Step 5.2 — descriptor-driven HMX kernel via dlsym to libQnnHtpV75Skel.so::
+     * hmx_convbbb1x1_stride1 (= q::ConvLayer_s1.opt body for u8×i8 1×1 conv).
+     *
+     * Per-(mt, nt) tile call: 1 output tile via K_t MACs.
+     *   out_desc.n_tiles_pow2 = 1  (loop1 = 1 sat.ub drain)
+     *   act_desc.n_act_pairs = K_t (loop0 walks K_t/2 pairs, 2 MACs each)
+     *   k_total_bytes = 32         (single outer K-iter — all K covered by loop0)
+     *
+     * Mask descriptor: built once via dlsym set_hmx_params_conv1x1(0x700,0,0,0,0)
+     * per Step 5.1 probe characterization (Agent/qnn_re/set_hmx_params_conv1x1_probe_2026-04-28.md):
+     *   +0x04 out_rt_mask  = 0x700  (sat.ub Rt — native, NOT V8's 0x3FF)
+     *   +0x0c act_rt_base  = 0x71F  (:cm Rt — matches V8's HMX_RT_ACT_CM)
+     *   +0x18 alt_rt       = 0x3FF  (last-K Rt_wt — matches V8's HMX_RT_WT)
+     */
+    {
+        void **act_blocks = qhpi_tensor_block_table(inputs[0]);
+        const uint8_t *wt_pack    = (const uint8_t *)qhpi_tensor_raw_data(inputs[1]);
+        const uint8_t *bias_bytes = (const uint8_t *)qhpi_tensor_raw_data(inputs[2]);
+        void **out_blocks = qhpi_tensor_block_table(outputs[0]);
+        if (!act_blocks || !wt_pack || !bias_bytes || !out_blocks) return QHPI_Success;
+
+        uint32_t blocks = qhpi_tensor_block_table_length(inputs[0]);
+        uint32_t S = 0;
+        if (blocks == 4)         S = 32;
+        else if (blocks == 8)    S = 64;
+        else if (blocks == 16)   S = 128;
+        else if (blocks == 32)   S = 256;
+        else if (blocks == 128)  S = 512;
+        else if (blocks == 512)  S = 1024;
+        if (S == 0) return QHPI_Success;
+
+        const uint32_t M = S, K = S, N = S;
+        const uint32_t M_t = M / 32, N_t = N / 32, K_t = K / 32;
+        const uint32_t block_rows = (M / 4) < 64 ? (M / 4) : 64;
+        const uint32_t mt_per_block = block_rows / 32;
+        const uint32_t k_chunks = K_t;  /* same as input K-tile count */
+
+        /* Build mask_desc once (kernel-static — Rt masks don't depend on (mt,nt,kt)). */
+        static uint32_t mask_buf[16] __attribute__((aligned(16)));
+        static int mask_initialized = 0;
+        if (!mask_initialized) {
+            for (uint32_t i = 0; i < 16; i++) mask_buf[i] = 0;
+            set_hmx_params_conv1x1(mask_buf, 0x700, 0, 0, 0, 0);
+            mask_initialized = 1;
+        }
+        const hmx_conv_mask_desc_t *md = (const hmx_conv_mask_desc_t *)mask_buf;
+
+        /* Per-(mt, nt) tile call. */
+        for (uint32_t mt = 0; mt < M_t; mt++) {
+            const uint32_t rg = mt / mt_per_block;
+            const uint32_t mt_in_block = mt % mt_per_block;
+
+            /* Pre-bake act tile addresses for this mt across all K-tiles.
+             * Each act tile (mt, kt) lives at:
+             *   act_blocks[rg * k_chunks + kt] + mt_in_block * 1024 */
+            int32_t act_tbl[32 * 2] __attribute__((aligned(16)));
+            for (uint32_t kt = 0; kt < K_t; kt++) {
+                act_tbl[kt] = (int32_t)(uintptr_t)(
+                    (const uint8_t *)act_blocks[rg * k_chunks + kt]
+                    + mt_in_block * 1024);
+            }
+
+            /* Per-(mt, nt) tile call. M_t × N_t calls per matmul.
+             * Tried per-mt (loop1=N_t): kernel does NOT walk bias internally per
+             * loop1 iter, so all nt would use bias_n=0 → wrong output for nt>0.
+             * Future opt: pre-fold bias such that one bias works for all nt
+             * (only feasible if scale/baseline are uniform — not our case). */
+            for (uint32_t nt = 0; nt < N_t; nt++) {
+                int32_t out_tbl[2] __attribute__((aligned(16)));
+                out_tbl[0] = (int32_t)(uintptr_t)(
+                    (uint8_t *)out_blocks[rg * (N / 32) + nt]
+                    + mt_in_block * 1024);
+                const uint8_t *wt_for_n = wt_pack + (nt * K_t) * 1024;
+                const uint8_t *bias_n   = bias_bytes + nt * 256;
+                hmx_conv_out_desc_t od = { out_tbl, 1, 0, 1, 32, 32 };
+                hmx_conv_act_desc_t ad = { act_tbl, K_t, 0 };
+                hmx_convbbb1x1_stride1(&od, &ad, wt_for_n, bias_n, md);
+            }
+        }
+    }
+    return QHPI_Success;
 #elif defined(V9_PARAMS_PROBE)
     /* Step 5.1 — characterize set_hmx_params_conv1x1 args.
      *
