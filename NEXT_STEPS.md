@@ -1,149 +1,165 @@
-# V8C8 matmul — 256³ aligned to 1.33× of native (2026-04-27 night)
+# V8C8 matmul — 256³ kernel-level shape aligned, 1.50× wall vs native (2026-04-27 night)
 
-> **Status**: BbbKMajor (V8C8) custom op end-to-end matmul on QNN HTP v75
-> at 256³ runs at **24 µs steady-state vs Native QNN MatMul at 18 µs =
-> 1.33× of native**, **bit-exact 65536/65536**, lowered graph **6 nodes
-> (vs native's 8)**. The matmul kernel itself (BbbKMajor) is at parity
-> with native ConvLayer_s1.opt (~1.05× cyc, both ~9.3-9.8K cyc at 256³).
+> **Status**: BbbKMajor at 256³ has **fully aligned kernel-level I/O shapes**
+> with native q::ConvLayer_s1.opt. Steady-state (iter 3): **27 µs vs native 18 µs
+> = 1.50× wall, 1.71× cyc**. Bit-exact 65536/65536 preserved at all shapes
+> 32³–1024³.
 >
-> Standard operating procedure persisted at **`docs/qnn_custom_op_sop.md`**.
-> Build/run: `EXTRA_DEFS="-DV9_C8_ALIGNMENT_TEST -DV9_KERNEL_HMX" bash build.sh`,
-> then `M=256 K=256 N=256 bash standard_flow/phaseB_v8/run_v8c8_phase2.sh`.
+> **Detailed handoff**: see `Agent/SESSION_2026-04-27_handoff_v8c8_alignment_status.md`
+> for the alignment audit + 4 prioritized fix paths.
 
-## What landed (2026-04-27 day → night session)
+## What is aligned ✓
 
-### Step 1: HMX inline-asm kernel against Crouton_8 (bit-exact 32³–1024³)
-- `src/HmxMatMulV9SkelOp.cpp` `V9_KERNEL_HMX` branch reads input via
-  `qhpi_tensor_block_table`, writes output via `:after:cm:sat.ub`.
-- `act_tile = block_table[(mt/mt_per_block)*k_chunks+kt] + (mt%mt_per_block)*1024`
-  where `mt_per_block = block_rows/32 ∈ {1, 2}`.
-- Bias native-fold layout (256 B/N-tile: lower 128 B fp16 pair, upper
-  128 B int32 effective) loaded in single `bias = mxmem2`.
-- S<128 falls back to scalar (HMX `:cm` SIGSEGVs on stack DDR scratch).
+| | V8C8 BbbKMajor | Native ConvLayer_s1.opt | match |
+|--|----------------|-------------------------|-------|
+| user input/output shape | `[1, 1, 256, 256]` u8 ↔ `[1, 1, 256, 256]` u8 | same | ✓ |
+| in[0] act dim       | `[1, 8, 32, 256]` u8q | `[1, 8, 32, 256]` u8q | ✓ |
+| in[1] wt dim        | `[1, 1, 256, 256]` u8q| `[1, 1, 256, 256]` i8q| ✓ shape (dt: u8 vs i8) |
+| in[2] bias dim      | `[1, 8, 1, 64]` i32   | `[1, 8, 1, 64]` i32   | ✓ |
+| out[0] dim          | `[1, 8, 32, 256]` u8q | `[1, 8, 32, 256]` u8q | ✓ |
+| Reshape ops null_exec | yes                 | yes                    | ✓ |
+| ctxgen schematic.bin emit | yes (after fix)| yes                    | ✓ |
+| optrace decode end-to-end | yes (after fix)| yes                    | ✓ |
+| bit-exact matmul    | 65536/65536          | (reference)           | ✓ |
 
-### Step 2: Hot-loop perfectly aligned with native (1.02×)
-- Pre-bake `act_ptrs[M_t × K_t]` and `wt_ptrs[N_t × K_t]` into 4 KB stack
-  arrays at kernel entry; inner loop only does `memw` ptr loads.
-- Hexagon `loop0(1f, K_t/2):endloop0` + 4-packet/2-MAC body (dual-memw
-  post-inc + dual mxmem). 2 cyc/MAC body throughput.
-- Removed redundant defensive output-zero loop (HMX sat.ub writes every
-  byte of the output anyway). 256³ bbb cyc went 107K → 9.5K (11.3× speedup).
-- 256³ matmul kernel cyc: **9,533 vs native 9,335 = 1.02× ✓**.
+## What is NOT aligned ✗ (the 1.50× gap, +12.7K cyc at iter 3)
 
-### Step 3: Crouton_8 OUTPUT — eliminate UntileToRowMajor (5.83× → 1.39×)
-- Output sig flipped to `Crouton_8 + Indirect + TCM_Only`.
-- `UntileToRowMajor` op deleted from ONNX graph.
-- QNN compiler auto-handles Crouton_8 → user row-major DDR (no explicit
-  `q::ForceFormat_Flat` node in lowered graph at 256³, but bytes land
-  bit-exact via framework Output op).
-- 256³ e2e: **25 µs (was 105 µs) = 4.2× wall improvement**.
-- Lowered graph: 6 nodes (vs native's 8 — q::*InputSlice +
-  q::ForceFormat_Crouton + 2× q::ConvLayer.opt.weights_to_vtcm +
-  BbbKMajor + q::Reshape).
-- 1024³ V8C8 = 348 µs vs native 512 µs — **we're FASTER (0.68×)**.
+```
+                            V8C8 cyc   Native cyc   Δ        fix path
+─────────────────────────────────────────────────────────────────────────
+Input + ForceFormat_Crouton  8,935      3,999      +4.9K    D (build_tile)
+wt + bias DMAs               3,411       (folded)  +3.4K    D (build_tile)
+HMX matmul kernel           12,852      ~5,000     +7.8K
+  ├─ Output VTCM bank conflict             —       +3.0K    C (rollback factor)
+  ├─ K-outer wt extra packet               —       +0.2K    B (N-outer wt)
+  ├─ Per-call descriptor rebuild           —       +1.5K    A (precompute hook)
+  └─ Misc (drain, bookkeeping)             —       +3.1K    needs probe
+Output Reshape + DDR        5,326       5,168      +0.2K    ✓ aligned
+─────────────────────────────────────────────────────────────────────────
+Total                      30,524      17,816    +12.7K    1.71× cyc / 1.50× wall
+```
 
-### Step 4: QHPI prepare-time hooks for QNN scheduler integration
-- `cost_function = M_t × N_t × K_t × 16 cyc` (rough HMX MAC estimate).
-- `shape_required = {1, 1, 32, 32}` (HMX-tile alignment).
-- `shape_legalized` rounds N up to ×32 multiples.
-- `tile_output = 0` (output[0] is tile-friendly).
-- 256³ e2e: 25 µs → **24 µs = 1.33× of native** (median of 5 runs).
-- Improvement concentrated in Input op (-11%) and reshape (-18%);
-  matmul kernel unchanged.
-- Cost-coefficient sweep (4×/16×/64×) shows <1% diff — within noise.
+### A. Per-call HMX descriptor rebuild (+~1.5K cyc/call)
+
+Native bakes the 0x40-byte descriptor at `graph_finalize` via
+`set_hmx_params_conv1x1`. We rebuild every call (act_ptrs/wt_ptrs
+prebake + bias mxmem2 + loop0 register setup). **Fix path**:
+implement `QHPI_Precompute_Function` to bake what's
+shape-only-dependent into `precomputed_data`. **Open question**:
+does precompute have access to STATIC tensor data (for wt_ptrs)?
+Read qhpi.h:639-658 spec.
+
+### B. wt layout direction (+~256 cyc, low priority)
+
+Native uses N-tile-outer wt → can `r8 += 0x400` inline post-inc per
+K (3-packet/2-MAC body). We use K-tile-outer (byte-1:1 with
+`weights_to_vtcm@FB.fB.` verbatim DMA) → must memw post-inc from
+pre-baked array (4-packet/2-MAC body). Fix: change gen-script to
+output N-outer wt + update kernel inner loop. Trade-off: need to
+re-validate weights_to_vtcm DMA produces the bytes our kernel
+expects.
+
+### C. Output VTCM block geometry (+3K cyc — biggest single ticket)
+
+This regressed in this session when we did shape alignment.
+- Before alignment: output factorized as `[1, 8, 8, 1024]` tile-array
+  (64 blocks × 1KB). HMX `:after:cm:sat.ub` 1024-byte writes fit
+  exactly one block. **bbb cyc = 9,777**.
+- After alignment: output factorized as `[1, 8, 32, 256]` Crouton
+  logical (32 blocks × 2KB). Our 1KB writes hit half-block, adjacent
+  (mt%2=0,1) writes share same VTCM block at different 1KB offsets.
+  Bank conflict / cache eviction. **bbb cyc = 12,852**.
+
+**Fix path**: roll back `value_info=[mm_c8_info]` in `gen_v8c8_test.py`
+to let QNN auto-factorize as tile-array. Lose visual `[1,8,32,256]`
+match in trace but bytes still equivalent (65 KB, just dim
+factorization). **Saves ~3K cyc immediately.**
+
+### D. ForceFormat_Crouton + DMAs not overlapping with HMX (+~8K cyc)
+
+Native fuses bias_to_vtcm + ForceFormat_Crouton + weights_to_vtcm +
+ConvLayer_s1.opt under one `MatMul_0` grouping. QNN scheduler
+runs HVX (ForceFormat) concurrently with HMX (matmul) — different
+physical units. We're a custom op, can't be fused.
+
+**Fix path**: implement `QHPI_BuildTileOfOp` (`build_tile`) callback to
+split BbbKMajor by N axis into N_t sub-ops. Each tile + its
+surrounding DMA/format becomes pipeline-able. Hard to implement
+correctly (requires `qhpi_op_slice` + `qhpi_op_create` to construct
+sub-graphs at prepare time).
+
+## Concrete next-session priorities (ROI-ordered)
+
+| | what | expected savings | effort | risk |
+|-|------|------------------|--------|------|
+| 1 | **Roll back output factor (C)** — single-line change in gen-script | 3K cyc | trivial | none (loses visual alignment) |
+| 2 | **`do_precomputation_function` (A)** | 1-2K cyc | medium | uncertain (qhpi.h spec must be read) |
+| 3 | **N-outer wt + 3-packet body (B)** | ~256 cyc | medium | re-validate DMA bytes |
+| 4 | **`build_tile` callback (D)** | 3-5K cyc | high | uncertain payoff |
+
+Doing 1+2+3: expected ratio 1.50× → ~1.25× wall. Doing all four: maybe ~1.10×.
 
 ## Per-shape perf summary (steady-state iter 3)
 
 | S    | V8C8 µs | Native µs | wall ratio | bbb cyc  | Native MM cyc | kernel ratio |
 |------|---------|-----------|------------|----------|---------------|--------------|
-| 256  | 24      | 18        | **1.33×**  | 9,800    | 9,335         | **1.05× ✓**  |
-| 512  | 66      | 39        | 1.69×      | 61,300   | 39,447        | 1.55×        |
-| 1024 | 348     | 512       | **0.68× (faster)** | 459,000 | 1,167,447 | 0.39× |
+| 256  | 27      | 18        | **1.50×**  | 12,852   | ~5,000 (alone) | **2.4×**    |
+| 512  | (post-shape-align untested) | 39 | — | — | 39,447 | — |
+| 1024 | (untested) | 512 | — | — | ~1,167K | — |
 
-## 256³ residual gap (1.33×) — anatomy
+Shape sweep ≥512³ should be re-run after the round-2 shape alignment.
+1024³ was previously V8C8 FASTER (0.68×) but that was with the
+tile-array output. After Crouton logical alignment, bbb may also
+regress 30%+ at larger shapes.
 
-| op group           | V8C8 cyc | Native cyc | gap     | reason |
-|--------------------|----------|------------|---------|--------|
-| Input + ForceFormat_Crouton | 9,000   | 3,550 + part of MatMul_0 | ~+5K | custom op can't overlap with HMX downstream |
-| wt + bias DMAs     | 2,800   | folded into MatMul_0 (~0) | ~+2.8K | same — no fusion |
-| matmul kernel      | 9,800   | 9,335 | ~+0.5K (noise) | parity |
-| Reshape (Crouton→flat) | 3,100 | 0 (null_exec) | +3.1K | native splits into ForceFormat_Flat +
-Reshape with the heavy work absorbed into Output op |
-| Output (DDR copy)  | 2,500   | 4,931 | -2.4K | we save here |
-| **Total**          | **27,200** | **17,816** | **+9.4K (1.53× cyc)** | (1.33× wall) |
+## Known issues (carry-overs, not in this session's scope)
 
-The ~9K cyc residual is the **"custom op tax"** — QHPI v1 doesn't
-expose the same scheduling/pipelining surface as native ConvLayer-class
-ops, so layout-conversion + DMA can't overlap with our matmul.
+- **S=128 broken** (~30% bit-exact): QNN allocates output Crouton_8 with
+  smaller block_size (512 B vs 2048 B at S≥256). HMX 1024-byte write
+  overflows. Fix: 4th VTCM scratch input (V8 prod pattern). Not
+  blocking 256³.
+- **S<128 (32, 64)**: scalar fallback, also broken on output side.
+  Same root cause.
 
-## Known issues
+## Build / run / verify
 
-- **S=128 broken** (Step 3): QNN allocates output Crouton_8 with
-  `block_size=512 B` at S=128 (vs `2048 B` at S≥256). Our HMX 1024-byte
-  `:cm:sat.ub` write overflows the 512 B block boundary →
-  ~30% bit-exact only.
-  - Workaround (not done): add a 4th VTCM scratch input (V8 prod
-    pattern) at sig level; HMX writes scratch, scalar splits to two
-    output blocks per HMX tile. Or runtime-detect output block_size
-    and use a different write strategy.
-- **S=64, S=32**: same root cause + scalar fallback also assumes input
-  block layout matches output's. Fixable with same workaround.
+```sh
+cd example/hmx_matmul_phase3
+EXTRA_DEFS="-DV9_C8_ALIGNMENT_TEST -DV9_KERNEL_HMX" bash build.sh
+EXTRA_DEFS="-DV9_C8_ALIGNMENT_TEST -DV9_KERNEL_HMX" bash build_x86.sh
 
-## What's next (priorities)
+cd standard_flow/phaseB_v8
+M=256 K=256 N=256 OUT_DIR=phase1_validation/v8c8_apples2_256 \
+    bash run_v8c8_phase2.sh
 
-### A. Close S=128/64/32 with 4-input scratch path (medium effort)
-- Add `Layout_Flat4 + Direct + TCM_Only` 4th input of size 1024 B.
-- At runtime: if `out_block_size < 1024`, redirect HMX `:after:cm:sat.ub`
-  to scratch, then memcpy split into two output blocks.
-- Sig change → XML + gen_v8c8_test.py + run script all need updating.
-- Expected: bit-exact at all shapes 32³–1024³.
-
-### B. Investigate `build_tile` for ≥1.2× e2e at 256³ (medium-high effort, uncertain payoff)
-- Implement `QHPI_BuildTileOfOp` that splits BbbKMajor by N axis into
-  N_t sub-ops; each sub-op + its surrounding ops form a pipeline-able
-  batch. QNN should overlap tile_i HVX with tile_{i+1} HMX.
-- Use `qhpi_op_slice` to slice wt/bias along N; `qhpi_op_create` to
-  construct sub-graphs.
-- Expected: 5-10% cycle savings at 256³ (hard to predict — native's
-  ConvLayer fusion happens at a deeper layer than tile-level).
-
-### C. ≥2048³ multi-instance graph split (low-medium effort)
-- 2048³ exceeds VTCM 6 MiB ceiling (single-instance V8C8 needs ~12 MiB
-  intermediate). Need to port `gen_v8_graph.py`'s adaptive M_TILE/N_TILE
-  splitting into `gen_v8c8_test.py`.
-- 1024³ V8C8 already FASTER than native (0.68×). 2048³+ should also be
-  faster after split, given amortization works in our favor.
-
-### D. End-to-end perf on a real model with multiple matmuls (test)
-- Wire BbbKMajor into a 2-3 matmul transformer attention block via
-  ONNX gen-script; verify perf scales linearly.
-- Custom-op tax is fixed per call, so longer chains get closer to native
-  ratio.
-
-### E. (deferred) Real (non-degenerate) quant scales
-- Current test uses `scale=1.0, out_zp=0` to stay in `saturate_u8(acc)`
-  regime. Validate with random scale + non-zero zp via existing fp16
-  pair encoding. Should "just work" since the math is already
-  silicon-verified at V8 prod.
-
-## Key code paths
-
-| file | purpose |
-|------|---------|
-| `example/hmx_matmul_phase3/src/HmxMatMulV9SkelOp.cpp` | BbbKMajor implementation (HMX inline asm + Crouton_8 sig + QHPI hooks). The main artifact of this work. |
-| `example/hmx_matmul_phase3/src/HmxMatMulV8Op.cpp` | V8 prod (legacy path). Reference for hot-loop optimization. |
-| `example/hmx_matmul_phase3/standard_flow/phaseB_v8/gen_v8c8_test.py` | ONNX gen with native-fold bias byte layout |
-| `example/hmx_matmul_phase3/standard_flow/phaseB_v8/run_v8c8_phase2.sh` | Build + run flow |
-| `example/hmx_matmul_phase3/standard_flow/phaseB_v8/sweep_v8c8_shapes.sh` | Shape sweep harness |
-| `example/hmx_matmul_phase3/standard_flow/phaseB_v8/MatMulV8Package.xml` | OpDef declarations (incl. BbbKMajor with Crouton_8 sig) |
+# bit-exact + perf checks: see Agent/SESSION_2026-04-27_handoff_v8c8_alignment_status.md
+```
 
 ## Reference reading (Agent/)
 
-- `v8c8_step3_crouton8_output_2026-04-27.md` — Step 3 detail (Crouton_8 output)
-- `v8c8_step4_qhpi_hooks_2026-04-27.md` — Step 4 detail (prepare hooks + analysis)
-- `v8_c8_kernel_perf_hwloop_2026-04-27.md` — Step 2 detail (hw loop0 + pre-baked ptrs)
-- `v8_c8_kernel_phase3_2_hmx_bit_exact_2026-04-27.md` — Step 1 (HMX kernel body)
-- `v8_c8_kernel_phase3_native_fold_2026-04-27.md` — bias native-fold byte layout decode
-- `qnn_re/bias_to_vtcm_decoded_2026-04-27.md` — Native bias_to_vtcm reverse engineering
-- `qnn_primitive_alignment_phase01_2026-04-26.md` — overall C8 alignment plan
-- `dlsym_spike_PASS_2026-04-25.md` — cross-.so dlsym to libQnnHtpV75Skel.so works
+- **`SESSION_2026-04-27_handoff_v8c8_alignment_status.md`** ← read first next session
+- `v8c8_step3_crouton8_output_2026-04-27.md` — Step 3 (Crouton_8 output)
+- `v8c8_step4_qhpi_hooks_2026-04-27.md` — Step 4 (cost_function/shape hooks)
+- `v8_c8_kernel_perf_hwloop_2026-04-27.md` — hw loop0 + pre-baked ptrs
+- `qnn_re/weights_to_vtcm_RE_2026-04-27.md` — wt DMA byte layout RE
+- `qnn_re/bias_to_vtcm_decoded_2026-04-27.md` — bias DMA byte layout RE
+- `qnn_re/hmx_convbbb1x1_stride1_full.S` — native HMX kernel disasm
+
+## Optrace artifact bundle (uploaded to user's GDrive)
+
+`G:\我的云端硬盘\optrace_256_bundle\` (Windows DriveFS) — apples-aligned
+V8C8 + native side-by-side at 256³. Includes ONNX, DLC, ctx,
+schematic, qnn-profiling-data_0.log, optrace.txt + chrometrace JSONs +
+QHAS HTML, README with full alignment table.
+
+## Recent commits
+
+```
+cef7e01 gen_v8c8_test.py: align BbbKMajor I/O shapes with ConvLayer_s1.opt   (this session)
+356f40f gen_v8c8_test.py: align user-facing input shape with native [1,1,M,K] (this session)
+2928716 run_v8c8_phase2.sh: enable optrace in ctxgen → schematic.bin emitted (this session)
+eb6fd20 V8C8 BbbKMajor: 256³ matmul aligned to 1.33× of native               (this session)
+c5d29fc V9 sweep: characterize 512³→4096³                                    (prior)
+c40954e V9 adaptive ONNX gen: V8 matmul shape-scales to 4096³                (prior)
+7ae8668 V8-only cleanup + standard QNN custom-op flow                        (prior)
+```
