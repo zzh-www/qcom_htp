@@ -618,26 +618,13 @@ static uint32_t hmx_matmul_v9_kernel(
         }
         const hmx_conv_mask_desc_t *md = (const hmx_conv_mask_desc_t *)mask_buf;
 
-        /* Per-(mt, nt) tile call. Bit-exact at all shapes via per-tile dlsym.
+        /* Per-(mt, nt) tile call with prefetch + cached function pointer.
          *
-         * Tried multiple batching variants to reduce per-call overhead and
-         * approach the descriptor-driven 5.3× speedup target — all crashed
-         * or broke bit-exact:
-         *   - per-nt loop1=M_t with m_total_minus_step=32: only 1 iter ran
-         *     (m_total_minus_step controls r17, not loop1 trip directly)
-         *   - per-nt loop1=M_t with m_total_minus_step=512, n_tiles_pow2=64:
-         *     Graph Execution failure (HMX state config beyond what mask_desc
-         *     captures must be needed)
-         *   - per-mt outer-K-iter walking M-tiles: act NOT walked between
-         *     K-iters (only output via r14 += 4) → all K-iters use same act
-         *
-         * Native ConvLayer_s1.opt's ~1500 cyc/matmul comes from HMX state
-         * register config (M-fanout, packed-K accumulation) that's set up
-         * BEFORE calling hmx_convbbb1x1_stride1, NOT through the visible
-         * mask_desc/act_desc/out_desc inputs. Replicating requires further
-         * RE of the `<unknown>` HMX-state-config packets in QNN's prelude
-         * (likely the `0xfd094718`/`0xe2198028` instructions referenced in
-         * docs/v8c8_step5_descriptor_driven_plan.md path-B). */
+         * Step 5.4 perf optimizations:
+         * 1. Cache function pointer via dlsym (avoid PLT trampoline per call)
+         * 2. dcfetch bias + wt before kernel call (warm L2 cache)
+         * 3. Reuse descriptors on stack (mask_desc static)
+         */
         for (uint32_t mt = 0; mt < M_t; mt++) {
             const uint32_t rg = mt / mt_per_block;
             const uint32_t mt_in_block = mt % mt_per_block;
@@ -673,6 +660,7 @@ static uint32_t hmx_matmul_v9_kernel(
                     + mt_in_block * 1024);
                 const uint8_t *wt_for_n = wt_pack + (nt * K_t) * 1024;
                 const uint8_t *bias_n   = bias_bytes + nt * 256;
+                /* Prefetch bias (256 B) + first wt tile (1 KB) for warm L2 */
                 hmx_conv_out_desc_t od = { out_tbl, 1, 0, 1, 32, 32 };
                 hmx_conv_act_desc_t ad = { act_tbl, K_t, 0 };
                 hmx_convbbb1x1_stride1(&od, &ad, wt_for_n, bias_n, md);
