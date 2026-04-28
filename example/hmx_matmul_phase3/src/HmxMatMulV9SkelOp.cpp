@@ -618,13 +618,70 @@ static uint32_t hmx_matmul_v9_kernel(
         }
         const hmx_conv_mask_desc_t *md = (const hmx_conv_mask_desc_t *)mask_buf;
 
-        /* Per-(mt, nt) tile call with prefetch + cached function pointer.
+#if defined(V9_NATIVE_PER_NT_V2)
+        /* Failed batching attempt — see commit history + memory entry. */
+#elif defined(V9_NATIVE_SINGLE_CALL)
+        /* Single-call descriptor-driven matmul. ONE kernel call covers entire
+         * matmul (M_t × N_t × K_t MACs). Discovery via full HMX disasm of
+         * hmx_convbbb1x1_stride1 (Agent/qnn_re/hmx_convbbb1x1_stride1_FULL.S
+         * with --mattr=+hvxv75,+hmx,+hvx-length128b decoded `<unknown>`):
          *
-         * Step 5.4 perf optimizations:
-         * 1. Cache function pointer via dlsym (avoid PLT trampoline per call)
-         * 2. dcfetch bias + wt before kernel call (warm L2 cache)
-         * 3. Reuse descriptors on stack (mask_desc static)
+         * Outer K-iter at 2ea800:
+         *   r3 += 0x100;  r13 -= 0x20;  r17 = r12;  bias = mxmem2(r3)
+         *   → bias auto-walks 256 B per K-iter (matches N-tile bias stride!)
+         *
+         * Loop1 end at 2ea86c:
+         *   r27:26 = combine(r8, r4);  r8 = r2
+         *   → r27 captures wt end position (= r2 + K_t*0x400 after loop1 done)
+         * Outer K-iter end at 2ea888-94:
+         *   r2 = r27
+         *   → wt auto-walks K_t*1024 B per K-iter (matches [N_t, K_t, 1024] layout!)
+         *
+         * Setup for one matmul:
+         *   k_total_bytes      = N_t * 32  → N_t outer K-iters (= one per nt)
+         *   m_total_minus_step = M_t * 64  → M_t loop1 iters per K-iter
+         *   n_tiles_pow2       = M_t * 8   → HW lc1 trip = M_t after rounding
+         *   act_pairs flat     = M_t × K_t (mt outer, kt inner)
+         *   act_table_y_stride = K_t       → r15 = K_t*4 bytes per loop1 iter
+         *   n_act_pairs        = K_t       → K_t MACs per loop1 iter
+         *   out_table_stride   = N_t       → m0 = N_t*4 bytes (interleaved K-walks)
+         *   out_tbl[k + d*N_t] = out_for(mt=d, nt=k); M_t × N_t entries
+         *   wt_base            = wt_pack (kernel walks via r27 chain)
+         *   bias_base          = bias_bytes (kernel walks +0x100 per K-iter)
          */
+        int32_t act_tbl_all[64] __attribute__((aligned(64)));   /* M_t × K_t up to 8*8 */
+        int32_t out_tbl_all[64] __attribute__((aligned(64)));   /* M_t × N_t up to 8*8 */
+        for (uint32_t mt = 0; mt < M_t; mt++) {
+            const uint32_t rg = mt / mt_per_block;
+            const uint32_t mt_in_block = mt % mt_per_block;
+            for (uint32_t kt = 0; kt < K_t; kt++) {
+                act_tbl_all[mt * K_t + kt] = (int32_t)(uintptr_t)(
+                    (const uint8_t *)act_blocks[rg * k_chunks + kt]
+                    + mt_in_block * 1024);
+            }
+            for (uint32_t nt = 0; nt < N_t; nt++) {
+                /* out_tbl[k + d*N_t] indexes by (k=nt, d=mt) */
+                out_tbl_all[nt + mt * N_t] = (int32_t)(uintptr_t)(
+                    (uint8_t *)out_blocks[rg * (N / 32) + nt]
+                    + mt_in_block * 1024);
+            }
+        }
+        hmx_conv_out_desc_t od = {
+            out_tbl_all,
+            (uint32_t)N_t,         /* out_table_stride_dwords = N_t (m0 = N_t*4) */
+            0,                     /* out_y_stride_words */
+            (uint32_t)(M_t * 8),   /* n_tiles_pow2 = M_t*8 → HW trip = M_t */
+            (int32_t)(M_t * 64),   /* m_total_minus_step = M_t*64 → loop1 manual exits at M_t iters */
+            (uint32_t)(N_t * 32)   /* k_total_bytes = N_t*32 → N_t outer K-iters */
+        };
+        hmx_conv_act_desc_t ad = {
+            act_tbl_all,
+            (uint32_t)K_t,         /* n_act_pairs = K_t (K_t MACs per loop1 iter) */
+            (uint32_t)K_t          /* act_table_y_stride_words = K_t (r15 = K_t*4) */
+        };
+        hmx_convbbb1x1_stride1(&od, &ad, wt_pack, bias_bytes, md);
+#else
+        /* Per-(mt, nt) tile call (bit-exact baseline). */
         for (uint32_t mt = 0; mt < M_t; mt++) {
             const uint32_t rg = mt / mt_per_block;
             const uint32_t mt_in_block = mt % mt_per_block;
@@ -666,6 +723,7 @@ static uint32_t hmx_matmul_v9_kernel(
                 hmx_convbbb1x1_stride1(&od, &ad, wt_for_n, bias_n, md);
             }
         }
+#endif
     }
     return QHPI_Success;
 #elif defined(V9_PARAMS_PROBE)
