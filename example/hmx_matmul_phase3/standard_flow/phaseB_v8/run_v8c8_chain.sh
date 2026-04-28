@@ -165,6 +165,9 @@ mkdir -p "$OUT_DIR/device_out"
 ssh "$DEVICE" "ls qnn_run/phaseB_c8/out/Result_0/ 2>&1" | tee "$OUT_DIR/device_out/result_listing.txt"
 ssh "$DEVICE" 'cat qnn_run/phaseB_c8/out/Result_0/out.raw 2>/dev/null' \
     > "$OUT_DIR/device_out/out.raw" 2>/dev/null || true
+# Pull runtime profile log so perf_v8c8.py can decode chrometrace.
+ssh "$DEVICE" 'cat qnn_run/phaseB_c8/out/qnn-profiling-data_0.log 2>/dev/null' \
+    > "$OUT_DIR/device_out/qnn-profiling-data_0.log" 2>/dev/null || true
 if [ -s "$OUT_DIR/device_out/out.raw" ]; then
     echo "  --- decode output (fp32-dequantized rank-3 row-major) ---"
     python3 - <<'PY'

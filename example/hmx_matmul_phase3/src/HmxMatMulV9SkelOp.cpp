@@ -30,6 +30,38 @@
 #include <hvx_hexagon_protos.h>
 #endif
 
+#if defined(__hexagon__) && defined(V9_PMU_PROBE)
+/* Hexagon PMU access via QURT API. v75 PMU enum from
+ * computev75/include/qurt/qurt_consts.h. We don't include that header
+ * directly to avoid pulling all of QURT — just re-declare the symbols
+ * and constants we need. */
+extern "C" void         qurt_pmu_set(int reg_id, unsigned int reg_value);
+extern "C" unsigned int qurt_pmu_get(int reg_id);
+extern "C" void         qurt_pmu_enable(int enable);
+#define QURT_PMUCNT0    0
+#define QURT_PMUCNT1    1
+#define QURT_PMUCNT2    2
+#define QURT_PMUCNT3    3
+#define QURT_PMUCFG     4
+#define QURT_PMUEVTCFG  5
+/* PMU event opcodes from itrace example comments / itrace_dsp_events_pmu.h
+ * (low byte of itrace ID = raw PMU opcode). NB: NOT the same as the 0x80XX
+ * itrace IDs — those are itrace-internal table indices. */
+#define PMU_COMMITTED_PKT_ANY 0x03   /* total committed packets (all HW threads) */
+#define PMU_COMMITTED_PKT_BSB 0x04
+#define PMU_COMMITTED_PKT_B2B 0x07
+#define PMU_COMMITTED_PKT_SMT 0x08
+#define PMU_COMMITTED_PKT_T0  0x0a   /* thread 0 only (itrace 0x800a low byte) */
+#define PMU_COMMITTED_PKT_T1  0x0b
+#define PMU_COMMITTED_PKT_T2  0x0c
+#define PMU_AXI_WRITE_REQUEST 0x42
+#define PMU_AXI_LINE128_READ  0x3f
+#define PMU_COMMITTED_FPS     0x50
+#define PMU_COMMITTED_INSTS   0x25   /* committed instructions (not packets) */
+#define PMU_DISPATCHED_PKTS   0x2f
+#define PMU_HVX_ACTIVE        0xCC   /* HVX active — 9 bits, may not fit */
+#endif
+
 #define STRINGIZE_DETAIL(X) #X
 #define STRINGIZE(X) STRINGIZE_DETAIL(X)
 #define THIS_PKG_NAME_STR STRINGIZE(THIS_PKG_NAME)
@@ -663,6 +695,24 @@ static uint32_t hmx_matmul_v9_kernel(
         uint64_t cyc_op_start;
         asm volatile ("%0 = C15:14" : "=r"(cyc_op_start));
 #endif
+#if defined(V9_PMU_PROBE)
+        /* Configure PMU. PMUCFG=0x400 (bit 10) enables counting per docs.
+         * Setting PMUEVTCFG resets cnt0..3; assigns events to counters. */
+        qurt_pmu_enable(1);
+        qurt_pmu_set(QURT_PMUCFG, 0x400);
+        /* cnt0 = COMMITTED_PKT_ANY (all threads)
+         * cnt1 = COMMITTED_PKT_T0  (thread 0 only — should match per-op count)
+         * cnt2 = COMMITTED_INSTS   (sub-packet — counts individual instructions)
+         * cnt3 = DISPATCHED_PKTS   (dispatched, including squashed) */
+        uint32_t _evtcfg = ((uint32_t)PMU_DISPATCHED_PKTS   << 24)
+                         | ((uint32_t)PMU_COMMITTED_INSTS   << 16)
+                         | ((uint32_t)PMU_COMMITTED_PKT_T0  <<  8)
+                         | ((uint32_t)PMU_COMMITTED_PKT_ANY      );
+        qurt_pmu_set(QURT_PMUEVTCFG, _evtcfg);
+        uint32_t pkt_op_start = qurt_pmu_get(QURT_PMUCNT0);
+        uint64_t cyc_op_start_64;
+        asm volatile ("%0 = C15:14" : "=r"(cyc_op_start_64));
+#endif
         void **act_blocks = qhpi_tensor_block_table(inputs[0]);
         const uint8_t *wt_pack    = (const uint8_t *)qhpi_tensor_raw_data(inputs[1]);
         const uint8_t *bias_bytes = (const uint8_t *)qhpi_tensor_raw_data(inputs[2]);
@@ -949,6 +999,55 @@ static uint32_t hmx_matmul_v9_kernel(
             for (int b = 0; b < 4; b++) dst[ 4+b] = (uint8_t)((desc_cyc   >> (8*b)) & 0xFF);
             for (int b = 0; b < 4; b++) dst[ 8+b] = (uint8_t)((table_cyc  >> (8*b)) & 0xFF);
             for (int b = 0; b < 4; b++) dst[12+b] = (uint8_t)((setup_cyc  >> (8*b)) & 0xFF);
+        }
+#elif defined(V9_PMU_PROBE)
+        /* PMU probe: directly count COMMITTED_PKT_ANY (event 0x02) and
+         * HVX_ACTIVE cycles (event 0xCC) around the kernel call. Compare
+         * to chrometrace's reported pkts/cyc to verify metric semantics.
+         *
+         * Stash to out_buf[0..23] (6× uint32 LE):
+         *   [0..3]   pkt_kernel       (committed packets DURING kernel call)
+         *   [4..7]   cyc_kernel       (pcycle delta DURING kernel call)
+         *   [8..11]  hvx_kernel       (HVX active cycles DURING kernel call)
+         *   [12..15] pkt_op_total     (committed packets WHOLE op)
+         *   [16..19] cyc_op_total     (pcycle delta WHOLE op)
+         *   [20..23] hvx_op_total     (HVX active WHOLE op) */
+        {
+            /* Read all 4 counters before/after kernel call. */
+            uint32_t any_b  = qurt_pmu_get(QURT_PMUCNT0);
+            uint32_t t0_b   = qurt_pmu_get(QURT_PMUCNT1);
+            uint32_t inst_b = qurt_pmu_get(QURT_PMUCNT2);
+            uint32_t disp_b = qurt_pmu_get(QURT_PMUCNT3);
+            uint64_t cyc_b;
+            asm volatile ("%0 = C15:14" : "=r"(cyc_b));
+            hmx_v73_convbbb1x1deep_stride1(&od, &ad, wt_pack, bias_bytes, md, extra_param);
+            uint64_t cyc_a;
+            asm volatile ("%0 = C15:14" : "=r"(cyc_a));
+            uint32_t any_a  = qurt_pmu_get(QURT_PMUCNT0);
+            uint32_t t0_a   = qurt_pmu_get(QURT_PMUCNT1);
+            uint32_t inst_a = qurt_pmu_get(QURT_PMUCNT2);
+            uint32_t disp_a = qurt_pmu_get(QURT_PMUCNT3);
+            uint32_t any_kernel  = any_a  - any_b;
+            uint32_t t0_kernel   = t0_a   - t0_b;
+            uint32_t inst_kernel = inst_a - inst_b;
+            uint32_t disp_kernel = disp_a - disp_b;
+            uint32_t cyc_kernel  = (uint32_t)(cyc_a - cyc_b);
+            uint32_t any_op   = any_a  - pkt_op_start;
+            uint32_t t0_op    = t0_a;  /* assumes 0 at op start; adjust if needed */
+            uint32_t cyc_op   = (uint32_t)(cyc_a - cyc_op_start_64);
+            if (out_blocks[0]) {
+                uint8_t *dst = (uint8_t *)out_blocks[0];
+                #define STORE_LE(off, v) for (int b=0;b<4;b++) dst[(off)+b] = (uint8_t)(((v)>>(8*b)) & 0xFF)
+                STORE_LE( 0, any_kernel);   /* PMU committed pkts ANY (all threads) */
+                STORE_LE( 4, t0_kernel);    /* PMU committed pkts T0 (thread 0) */
+                STORE_LE( 8, inst_kernel);  /* PMU committed instructions */
+                STORE_LE(12, disp_kernel);  /* PMU dispatched packets */
+                STORE_LE(16, cyc_kernel);   /* pcycle delta — kernel only */
+                STORE_LE(20, any_op);       /* whole op ANY */
+                STORE_LE(24, t0_op);        /* whole op T0 */
+                STORE_LE(28, cyc_op);       /* whole op pcycle */
+                #undef STORE_LE
+            }
         }
 #else
         hmx_v73_convbbb1x1deep_stride1(&od, &ad, wt_pack, bias_bytes, md, extra_param);
