@@ -25,6 +25,11 @@
 #include <cstdint>
 #include <cstring>
 
+#if defined(__hexagon__)
+#include <hexagon_types.h>
+#include <hvx_hexagon_protos.h>
+#endif
+
 #define STRINGIZE_DETAIL(X) #X
 #define STRINGIZE(X) STRINGIZE_DETAIL(X)
 #define THIS_PKG_NAME_STR STRINGIZE(THIS_PKG_NAME)
@@ -72,6 +77,54 @@ extern "C" void hmx_convbbb1x1_stride1(
     const void                 *weight_base,
     const void                 *bias_base,
     const hmx_conv_mask_desc_t *mask_desc);
+
+/* hmx_v73_convbbb1x1_stride1 (0x2eadc0, 936 B) — uses `:deep:cm` activation
+ * mxmem modifier (non-v73 uses plain `:cm`). Disasm shows 6-arg signature:
+ *   r0..r4 same as non-v73 + r5 = pointer to extra_param[2]:
+ *     extra_param[0] (uint32) — marker; if == 1, take fast path with
+ *                               cvt.ub = acc(r31) + mxmem.cm = cvt drain.
+ *                               Otherwise → slow non-fast branch (still :deep:cm).
+ *     extra_param[1] (uint32) — r31 used as cvt config arg. Likely 0 / unused
+ *                               for u8 sat case (mxmem2 bias preloads acc).
+ * If extra_param[0] also has bit 5 set in mask_desc[+0x30], v73 dispatcher
+ * jumps to hmx_v73_convbbb1x1deep_stride1 (the real "deep K-fanout" body). */
+extern "C" void hmx_v73_convbbb1x1_stride1(
+    const hmx_conv_out_desc_t  *out_desc,
+    const hmx_conv_act_desc_t  *act_desc,
+    const void                 *weight_base,
+    const void                 *bias_base,
+    const hmx_conv_mask_desc_t *mask_desc,
+    const uint32_t             *extra_param);
+
+/* hmx_v73_convbbb1x1deep_stride1 (0x2ebe40, 1132 B) — REAL deep variant.
+ *   `:deep:cm` activation + `:deep` weight mxmem modifiers
+ *   2 cvt.ub drains per loop1 iter (M-fanout = 2 output tiles per pass)
+ *   Two bias = mxmem2 loads per outer iter (r3+0x101 then r3+0xff)
+ *   Wt stride r22 = (alt_rt+1)/2 * N_t = N_t * 512 bytes per K-step
+ *   extra_param[] is a per-K-iter array (r5 advances inside the loop)
+ * Reached via hmx_v73_convbbb1x1_stride1 if mask_desc[+0x30] bit 5 set,
+ * but typically called directly via own dispatch. */
+extern "C" void hmx_v73_convbbb1x1deep_stride1(
+    const hmx_conv_out_desc_t  *out_desc,
+    const hmx_conv_act_desc_t  *act_desc,
+    const void                 *weight_base,
+    const void                 *bias_base,
+    const hmx_conv_mask_desc_t *mask_desc,
+    const uint32_t             *extra_param);
+
+/* hmx_v73_convbbb1x1deep_stride1_sparsity (0x2ebb00, 820 B). Disasm
+ * (Step 3 candidate): activation MAC = `:cm` (NOT `:deep:cm`), weight
+ * MAC = `:deep`. Bias single load per outer (r3 += 0x100, like non-deep).
+ * Inner drain has small inner loop indexed by r23 (= r26 = extra_param[0]).
+ * extra_param[] consumed periodically: `r26 = memw(r5++#4); r27 = memw(r5++#4)`
+ * ABI same 6-arg as deep variant — try first with extra={1, 0, ...}. */
+extern "C" void hmx_v73_convbbb1x1deep_stride1_sparsity(
+    const hmx_conv_out_desc_t  *out_desc,
+    const hmx_conv_act_desc_t  *act_desc,
+    const void                 *weight_base,
+    const void                 *bias_base,
+    const hmx_conv_mask_desc_t *mask_desc,
+    const uint32_t             *extra_param);
 #endif
 
 #if defined(__hexagon__) && (defined(V9_DUMP_HMX_PARAMS) || defined(V9_PARAMS_PROBE) || defined(V9_USE_NATIVE_KERNEL))
@@ -586,6 +639,10 @@ static uint32_t hmx_matmul_v9_kernel(
      *   +0x18 alt_rt       = 0x3FF  (last-K Rt_wt — matches V8's HMX_RT_WT)
      */
     {
+#if defined(V9_PROBE_KERNEL_CYC)
+        uint64_t cyc_op_start;
+        asm volatile ("%0 = C15:14" : "=r"(cyc_op_start));
+#endif
         void **act_blocks = qhpi_tensor_block_table(inputs[0]);
         const uint8_t *wt_pack    = (const uint8_t *)qhpi_tensor_raw_data(inputs[1]);
         const uint8_t *bias_bytes = (const uint8_t *)qhpi_tensor_raw_data(inputs[2]);
@@ -608,15 +665,46 @@ static uint32_t hmx_matmul_v9_kernel(
         const uint32_t mt_per_block = block_rows / 32;
         const uint32_t k_chunks = K_t;  /* same as input K-tile count */
 
-        /* Build mask_desc once (kernel-static — Rt masks don't depend on (mt,nt,kt)). */
+        /* Build mask_desc once (kernel-static — Rt masks don't depend on (mt,nt,kt)).
+         *
+         * 2026-04-28 RE finding: caller sites in libHtpPrepare.so::0xd998f0 use
+         * arg1=0x700 in some blocks, 0x70b in others. The 0xb low nibble (bits
+         * 0,1,3) is the suspected "deep mode" flag — V73DEEP path needs the
+         * same mask config native uses. */
         static uint32_t mask_buf[16] __attribute__((aligned(16)));
         static int mask_initialized = 0;
         if (!mask_initialized) {
             for (uint32_t i = 0; i < 16; i++) mask_buf[i] = 0;
+#if defined(V9_NATIVE_V73DEEP)
+            /* Deep variant: from set_hmx_params_conv1x1 disasm at 0xd998f0:
+             *   mask[+0x30] = arg5  (this is the "deep" flag the v73
+             *   dispatcher checks via tstbit(r4, #5))
+             *   mask[+0x0c] (act_rt_base) also depends on arg5 bit 5:
+             *     test $0x20, %r9b ; cmove → r15d
+             *
+             * arg1 (0x700 vs 0x70b) controls bit-shuffle of mask[+0x08]
+             * and mask[+0x0c] when arg1 & 3 != 0. Deep call sites in
+             * libHtpPrepare.so use 0x70b.
+             *
+             * arg4: when arg5 bit 5 set, arg4 ≥ 8 bumps mask[+0x18] alt_rt
+             * from 0x3FF → 0x7FF, doubling wt MAC stride from 4096 to 8192.
+             * V73DEEP_ARG4 default 0 (alt_rt=0x3FF). Compile with
+             * -DV73DEEP_ARG4=8 to force alt_rt=0x7FF and see effect. */
+#ifndef V73DEEP_ARG4
+#define V73DEEP_ARG4 0
+#endif
+            set_hmx_params_conv1x1(mask_buf, 0x70b, 0, 0, V73DEEP_ARG4, 0x20);
+#else
             set_hmx_params_conv1x1(mask_buf, 0x700, 0, 0, 0, 0);
+#endif
             mask_initialized = 1;
         }
         const hmx_conv_mask_desc_t *md = (const hmx_conv_mask_desc_t *)mask_buf;
+
+#if defined(V9_PROBE_KERNEL_CYC)
+        uint64_t cyc_after_setup;
+        asm volatile ("%0 = C15:14" : "=r"(cyc_after_setup));
+#endif
 
 #if defined(V9_NATIVE_PER_NT_V2)
         /* Failed batching attempt — see commit history + memory entry. */
@@ -637,49 +725,171 @@ static uint32_t hmx_matmul_v9_kernel(
          *   r2 = r27
          *   → wt auto-walks K_t*1024 B per K-iter (matches [N_t, K_t, 1024] layout!)
          *
-         * Setup for one matmul:
-         *   k_total_bytes      = N_t * 32  → N_t outer K-iters (= one per nt)
-         *   m_total_minus_step = M_t * 64  → M_t loop1 iters per K-iter
-         *   n_tiles_pow2       = M_t * 8   → HW lc1 trip = M_t after rounding
-         *   act_pairs flat     = M_t × K_t (mt outer, kt inner)
-         *   act_table_y_stride = K_t       → r15 = K_t*4 bytes per loop1 iter
+         * Setup for one matmul (FIXED 2026-04-28: m_total_minus_step was wrong):
+         *   k_total_bytes      = N_t * 32  → N_t outer iters (= one per nt; bias
+         *                                    auto-walks +0x100 per outer = 1 N-tile)
+         *   m_total_minus_step = 8         → r17 = 8, sub r22=8 → 0, 1 K-iter
+         *                                    (was M_t*64 = 64 redundant K-iters!)
+         *   n_tiles_pow2       = M_t * 8   → r20 = M_t loop1 iters (one drain per mt)
+         *   act_pairs flat     = M_t × K_t (mt outer, kt inner) — kernel reads K_t
+         *                                    consecutive ptrs per loop1 iter, then
+         *                                    advances by K_t for next mt
+         *   act_table_y_stride = 0         → r15 = 0 (irrelevant since 1 K-iter)
          *   n_act_pairs        = K_t       → K_t MACs per loop1 iter
-         *   out_table_stride   = N_t       → m0 = N_t*4 bytes (interleaved K-walks)
-         *   out_tbl[k + d*N_t] = out_for(mt=d, nt=k); M_t × N_t entries
-         *   wt_base            = wt_pack (kernel walks via r27 chain)
-         *   bias_base          = bias_bytes (kernel walks +0x100 per K-iter)
+         *   out_table_stride   = N_t       → m0 = N_t*4 bytes; loop1 walks rows of
+         *                                    out_tbl[mt * N_t + nt] for fixed nt
+         *   out_tbl[mt*N_t+nt] = ptr for (mt,nt); outer-iter advances base by 4 (=
+         *                                    column nt+1)
+         *   wt_base            = wt_pack — kernel walks K_t*1024 per outer via
+         *                                    r27 = r8_after_loop1; matches N-outer
+         *                                    wt[nt][kt] layout (gen_v8c8_test.py)
+         *   bias_base          = bias_bytes — kernel walks +0x100 per outer (256B
+         *                                    per N-tile = native bias_to_vtcm fold)
+         *
+         * Total drains = N_t outer × 1 K-iter × M_t loop1 = M_t × N_t ✓
+         * Total MACs   = total drains × K_t = M_t × N_t × K_t ✓
          */
-        int32_t act_tbl_all[64] __attribute__((aligned(64)));   /* M_t × K_t up to 8*8 */
-        int32_t out_tbl_all[64] __attribute__((aligned(64)));   /* M_t × N_t up to 8*8 */
-        for (uint32_t mt = 0; mt < M_t; mt++) {
-            const uint32_t rg = mt / mt_per_block;
-            const uint32_t mt_in_block = mt % mt_per_block;
-            for (uint32_t kt = 0; kt < K_t; kt++) {
-                act_tbl_all[mt * K_t + kt] = (int32_t)(uintptr_t)(
-                    (const uint8_t *)act_blocks[rg * k_chunks + kt]
-                    + mt_in_block * 1024);
+        int32_t act_tbl_all[1024] __attribute__((aligned(64))); /* M_t × K_t up to 32×32 = 1024 (1024³) */
+        int32_t out_tbl_all[1024] __attribute__((aligned(64))); /* M_t × N_t up to 32×32 = 1024 (1024³) */
+        /* Lane A round 2 (2026-04-28): split by mt_per_block so the divide
+         * `M_t / mt_per_block` and inb branch go away. mt_per_block ∈ {1,2}
+         * for all our supported shapes (S ∈ [128, 1024]). The `void **`
+         * block table is pointer-sized (32-bit on Hexagon), so we can read
+         * its entries as int32_t directly with no cast pipeline.
+         *
+         * Round 1 (separate inb loop) was ~250 pkts at 256³ — compiler
+         * generated 2-packet loop body + udivsi3 call. Round 2 unrolls inb
+         * so each load fans into both writes in one packet. */
+        const int32_t *act_src_int = (const int32_t *)act_blocks;
+        const int32_t *out_src_int = (const int32_t *)out_blocks;
+#if defined(__hexagon__)
+        /* HVX fast path: when K_t * mt_blocks * sizeof(int32_t) >= 128 (= 1 vector),
+         * we batch the {ptr, ptr+1024} interleave with one vshuff per 32-ptr chunk.
+         * For 256³ exactly 32 ptrs, 1 vector each side. mt_per_block must be 2.
+         * Rt=32 in vshuff = 32-byte (= 8 int32) chunk swap pass — exactly K_t=8
+         * for 256³, so output pattern is dst[0..8]=src+0, dst[8..16]=src+1024,
+         * dst[16..24]=src+0(next chunk), dst[24..32]=src+1024(next chunk), ...
+         * which is the desired interleave by inb. */
+        if (mt_per_block == 2 && K_t == 8 && N_t == 8) {
+            HVX_Vector v_acts, v_outs;
+            std::memcpy(&v_acts, act_blocks, sizeof(HVX_Vector));
+            std::memcpy(&v_outs, out_blocks, sizeof(HVX_Vector));
+            HVX_Vector v_1024 = Q6_V_vsplat_R(1024);
+            HVX_Vector v_acts_hi = Q6_Vw_vadd_VwVw(v_acts, v_1024);
+            HVX_Vector v_outs_hi = Q6_Vw_vadd_VwVw(v_outs, v_1024);
+            HVX_VectorPair vp_acts = Q6_W_vshuff_VVR(v_acts_hi, v_acts, 32);
+            HVX_VectorPair vp_outs = Q6_W_vshuff_VVR(v_outs_hi, v_outs, 32);
+            HVX_Vector vp_acts_lo = Q6_V_lo_W(vp_acts), vp_acts_hi2 = Q6_V_hi_W(vp_acts);
+            HVX_Vector vp_outs_lo = Q6_V_lo_W(vp_outs), vp_outs_hi2 = Q6_V_hi_W(vp_outs);
+            std::memcpy(&act_tbl_all[ 0], &vp_acts_lo,  sizeof(HVX_Vector));
+            std::memcpy(&act_tbl_all[32], &vp_acts_hi2, sizeof(HVX_Vector));
+            std::memcpy(&out_tbl_all[ 0], &vp_outs_lo,  sizeof(HVX_Vector));
+            std::memcpy(&out_tbl_all[32], &vp_outs_hi2, sizeof(HVX_Vector));
+        } else
+#endif
+        if (mt_per_block == 2) {
+            const uint32_t mt_blocks = M_t >> 1;
+            for (uint32_t rg = 0; rg < mt_blocks; rg++) {
+                const int32_t *__restrict__ a_src = act_src_int + rg * K_t;
+                const int32_t *__restrict__ o_src = out_src_int + rg * N_t;
+                int32_t *__restrict__ a_dst0 = act_tbl_all + (rg << 1) * K_t;
+                int32_t *__restrict__ a_dst1 = a_dst0 + K_t;
+                int32_t *__restrict__ o_dst0 = out_tbl_all + (rg << 1) * N_t;
+                int32_t *__restrict__ o_dst1 = o_dst0 + N_t;
+                for (uint32_t kt = 0; kt < K_t; kt++) {
+                    int32_t a = a_src[kt];
+                    a_dst0[kt] = a;
+                    a_dst1[kt] = a + 1024;
+                }
+                for (uint32_t nt = 0; nt < N_t; nt++) {
+                    int32_t o = o_src[nt];
+                    o_dst0[nt] = o;
+                    o_dst1[nt] = o + 1024;
+                }
             }
-            for (uint32_t nt = 0; nt < N_t; nt++) {
-                /* out_tbl[k + d*N_t] indexes by (k=nt, d=mt) */
-                out_tbl_all[nt + mt * N_t] = (int32_t)(uintptr_t)(
-                    (uint8_t *)out_blocks[rg * (N / 32) + nt]
-                    + mt_in_block * 1024);
+        } else { /* mt_per_block == 1 */
+            for (uint32_t rg = 0; rg < M_t; rg++) {
+                const int32_t *__restrict__ a_src = act_src_int + rg * K_t;
+                const int32_t *__restrict__ o_src = out_src_int + rg * N_t;
+                int32_t *__restrict__ a_dst = act_tbl_all + rg * K_t;
+                int32_t *__restrict__ o_dst = out_tbl_all + rg * N_t;
+                for (uint32_t kt = 0; kt < K_t; kt++) a_dst[kt] = a_src[kt];
+                for (uint32_t nt = 0; nt < N_t; nt++) o_dst[nt] = o_src[nt];
             }
         }
+#if defined(V9_PROBE_KERNEL_CYC)
+        uint64_t cyc_after_table;
+        asm volatile ("%0 = C15:14" : "=r"(cyc_after_table));
+#endif
         hmx_conv_out_desc_t od = {
             out_tbl_all,
-            (uint32_t)N_t,         /* out_table_stride_dwords = N_t (m0 = N_t*4) */
-            0,                     /* out_y_stride_words */
-            (uint32_t)(M_t * 8),   /* n_tiles_pow2 = M_t*8 → HW trip = M_t */
-            (int32_t)(M_t * 64),   /* m_total_minus_step = M_t*64 → loop1 manual exits at M_t iters */
-            (uint32_t)(N_t * 32)   /* k_total_bytes = N_t*32 → N_t outer K-iters */
+            (uint32_t)N_t,         /* +0x04: out_table_stride_dwords = N_t (m0 = N_t*4) */
+            0,                     /* +0x08: out_y_stride_words */
+            (uint32_t)(M_t * 8),   /* +0x0c: n_tiles_pow2 = M_t*8 → r20 = M_t */
+            (int32_t)8,            /* +0x10: m_total_minus_step = 8 → 1 K-iter */
+            (uint32_t)(N_t * 32)   /* +0x14: k_total_bytes = N_t*32 → N_t outer iters */
         };
         hmx_conv_act_desc_t ad = {
             act_tbl_all,
-            (uint32_t)K_t,         /* n_act_pairs = K_t (K_t MACs per loop1 iter) */
-            (uint32_t)K_t          /* act_table_y_stride_words = K_t (r15 = K_t*4) */
+            (uint32_t)K_t,         /* +0x04: n_act_pairs = K_t MACs per loop1 iter */
+            0                      /* +0x08: act_table_y_stride_words = 0 (irrelevant) */
         };
+#if defined(V9_NATIVE_V73DEEP)
+        /* hmx_v73_convbbb1x1deep_stride1 — REAL deep variant: :deep on both
+         * activation+weight, 2 cvt drains per loop1 iter, N-fanout=2.
+         *
+         * 2026-04-28: ctx-binary diff RE finding (Agent/qnn_re/
+         * v73deep_wt_layout_DECODED_2026-04-28.md): native uses K-major outer
+         * `[K_t, N_t, 1024]` layout for wt (vs our V8C8 N-major
+         * `[N_t, K_t, 1024]`). Within-tile = same 4-row interleave.
+         *
+         * Caller (gen_v8c8_chain.py) MUST pack wt in K-major layout when
+         * V9_NATIVE_V73DEEP is enabled (--wt_layout=kmaj). We pass the bytes
+         * verbatim — no runtime repack (would overflow op-pkg .bss).
+         */
+        uint32_t extra_param[16] __attribute__((aligned(16))) = { 1u, 0u };
+
+#if defined(V9_NATIVE_V73DEEP_SPARSITY)
+        /* DEAD-END 2026-04-28: tested but crashes on device. Disasm shows
+         * activation MAC = `:cm` non-deep, wt `:deep`, single bias load per
+         * outer. SIGSEGV on device — sparsity variant requires sparse-format
+         * weight bytes (compressed sparse mask + values) which we can't easily
+         * provide. Per packet count analysis, this variant also has SAME loop
+         * structure as non-deep (1 drain/loop1) so wouldn't help anyway. */
+        hmx_v73_convbbb1x1deep_stride1_sparsity(&od, &ad, wt_pack, bias_bytes, md, extra_param);
+#elif defined(V9_PROBE_KERNEL_CYC)
+        /* Fine-grained pcycle probe. Stash 4× uint32 (16 B), all little-endian:
+         *   bytes  0..3  = kernel_cyc (kernel call body)
+         *   bytes  4..7  = desc_cyc   (od/ad/extra_param construction post-table)
+         *   bytes  8..11 = table_cyc  (act_tbl_all + out_tbl_all build — Lane A target)
+         *   bytes 12..15 = setup_cyc  (op-start through mask init incl. qhpi calls) */
+        uint64_t cyc_before_kernel, cyc_after_kernel;
+        asm volatile ("%0 = C15:14" : "=r"(cyc_before_kernel));
+        hmx_v73_convbbb1x1deep_stride1(&od, &ad, wt_pack, bias_bytes, md, extra_param);
+        asm volatile ("%0 = C15:14" : "=r"(cyc_after_kernel));
+        uint32_t kernel_cyc = (uint32_t)(cyc_after_kernel - cyc_before_kernel);
+        uint32_t desc_cyc   = (uint32_t)(cyc_before_kernel - cyc_after_table);
+        uint32_t table_cyc  = (uint32_t)(cyc_after_table   - cyc_after_setup);
+        uint32_t setup_cyc  = (uint32_t)(cyc_after_setup   - cyc_op_start);
+        if (out_blocks[0]) {
+            uint8_t *dst = (uint8_t *)out_blocks[0];
+            for (int b = 0; b < 4; b++) dst[ 0+b] = (uint8_t)((kernel_cyc >> (8*b)) & 0xFF);
+            for (int b = 0; b < 4; b++) dst[ 4+b] = (uint8_t)((desc_cyc   >> (8*b)) & 0xFF);
+            for (int b = 0; b < 4; b++) dst[ 8+b] = (uint8_t)((table_cyc  >> (8*b)) & 0xFF);
+            for (int b = 0; b < 4; b++) dst[12+b] = (uint8_t)((setup_cyc  >> (8*b)) & 0xFF);
+        }
+#else
+        hmx_v73_convbbb1x1deep_stride1(&od, &ad, wt_pack, bias_bytes, md, extra_param);
+#endif
+#elif defined(V9_NATIVE_V73)
+        /* hmx_v73_convbbb1x1_stride1 — `:deep:cm` activation MAC. 6th param =
+         * extra[2] = { marker=1, cvt_arg=0 }. Bit-exact + native-level cyc/pkt
+         * (3.06 cyc/pkt @ 512³). 1.17–2.27× over SINGLE_CALL. */
+        const uint32_t extra_param[2] = { 1u, 0u };
+        hmx_v73_convbbb1x1_stride1(&od, &ad, wt_pack, bias_bytes, md, extra_param);
+#else
         hmx_convbbb1x1_stride1(&od, &ad, wt_pack, bias_bytes, md);
+#endif
 #else
         /* Per-(mt, nt) tile call (bit-exact baseline). */
         for (uint32_t mt = 0; mt < M_t; mt++) {
@@ -694,22 +904,10 @@ static uint32_t hmx_matmul_v9_kernel(
                     + mt_in_block * 1024);
             }
 
-            /* Per-(mt, nt) tile call. M_t × N_t calls per matmul.
-             * Tried per-mt (loop1=N_t) with out_y_stride_words=64: kernel
-             * crashes (out_y_stride is for output Y-row advance, not bias walk).
-             * Tried per-mt (loop1=N_t, out_y_stride=0): bit-exact breaks for
-             * nt>0 because kernel reads `bias = mxmem2(r3)` ONCE in preamble.
-             * Each nt has different effective_int32 fold so all nt>0 produce
-             * wrong output. Conclusion: bias is genuinely per-call invariant
-             * for hmx_convbbb1x1_stride1 — single-call covering N tiles needs
-             * a different mechanism (HMX state config beyond mask_desc, OR
-             * wt-fold trick to make all nt share bias).
-             *
-             * Per-tile call has ~1.8K cyc/call dlsym overhead, making
-             * V9_USE_NATIVE_KERNEL ~1.6× slower than V9_KERNEL_HMX inline at
-             * 256³ (4× at 1024³). This is the descriptor-driven SHAPE working
-             * but without the M-fan-out / batching speedup. Step 5.4 perf goal
-             * (5.3× speedup) requires further RE work. */
+            /* Per-(mt, nt) tile call. Slow (~1.8K cyc dlsym overhead × M_t*N_t
+             * calls). Use V9_NATIVE_SINGLE_CALL for production (1.4× speedup
+             * over V9_KERNEL_HMX inline asm at 256³). This default branch is
+             * kept as bit-exact reference. */
             for (uint32_t nt = 0; nt < N_t; nt++) {
                 int32_t out_tbl[2] __attribute__((aligned(16)));
                 out_tbl[0] = (int32_t)(uintptr_t)(
