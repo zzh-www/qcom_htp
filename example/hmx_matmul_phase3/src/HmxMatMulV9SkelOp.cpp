@@ -912,12 +912,15 @@ static uint32_t hmx_matmul_v9_kernel(
 #elif defined(V9_KERNEL_V73_BBB_ALIGNED)
         hmx_v73_convbbb_stride1_aligned(&od, &ad, wt_pack, bias_bytes, md, extra_param);
 #elif defined(V9_KERNEL_V73DEEP_SPLIT)
-        /* DEAD-END 2026-04-28 PM: tested 4-call split (k_total_bytes=64 per call,
-         * advancing wt+bias). Resulted in dur=4380 cyc / 1790 pkts (worse than
-         * 2946/747 baseline). Kernel call overhead dominates; native achieves
-         * fewer pkts via different mechanism (likely a kernel variant with
-         * higher fan-out we haven't identified, or a different internal path).
-         * Kept for future reference. */
+        /* DEAD-END: see commit history. */
+        hmx_v73_convbbb1x1deep_stride1(&od, &ad, wt_pack, bias_bytes, md, extra_param);
+#elif defined(V9_KERNEL_V73DEEP_PER_M)
+        /* DEAD-END 2026-04-28 PM: tested per-M-tile multi-call (M_t=8 calls,
+         * each with n_tiles_pow2=8 = 1 loop1 iter). Result: dur=3676 / pkts=1466
+         * — WORSE than single-call baseline. Per-call kernel prologue/epilogue
+         * overhead dominates: each call is ~183 packets (vs estimated ~46).
+         * Multi-call only works if the kernel has a way to skip prologue
+         * across calls (which it doesn't from outside). */
         hmx_v73_convbbb1x1deep_stride1(&od, &ad, wt_pack, bias_bytes, md, extra_param);
 #elif defined(V9_KERNEL_OLD_V73DESC)
         /* OLD non-v73 kernel called with V73DEEP-style descriptor.
