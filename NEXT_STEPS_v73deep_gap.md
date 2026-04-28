@@ -94,44 +94,58 @@
 5. 实际 256³ 的 act/wt/out tensor descriptor 字段值需要从 ctx-binary 或 runtime
    probe 拿（option A 备用）
 
-### Risks
+### 已知 obstacles 和绕过方案
 
-- wrapper 入口 args 可能依赖 ConcreteTensor C++ 对象的 vtable 调用（看到 `callr r2` at 0x3d7b1c），**虚函数会让静态 trace 断**
-- caller-context 的 tensor object format 我们不知道；可能要再翻 `libHtpPrepare.so` 才能看见上层
-- 即使 RE 出 r23/r25/r26 公式，套到我们 op 里**调用同一个 kernel** 但每次 call 仍要付 ~30 pkts prologue（= 8 × 30 + 256 work = 496 pkts，比 747 好但比 346 还差）
-- 真要逼到 346 pkts，可能必须 **HMX state 在 call 之间共享** —— 这要 **patch kernel binary** 跳过 prologue（option A 范畴）
+| Obstacle | 绕过 |
+|----------|------|
+| wrapper 入口 args 依赖 ConcreteTensor 虚函数（`callr r2` at 0x3d7b1c） | trace 到 vtable 处停下，**记录 vtable slot 偏移**，然后从 ctx-binary 反向找它指向哪个 concrete impl（每个 tensor 类型一个，static dispatch 在 prepare 期已确定） |
+| caller-context tensor object format 未知 | 反汇编 `libHtpPrepare.so` 的 ConvLayer node 构造代码（在 prepare-side），那里有完整结构体写入 |
+| 即使 RE 出公式，仍要付 ~30 pkts/call prologue | **必上 Option A**：patch kernel 的 prologue 跳过（`mxclracc` + `r29 -= 0x28` + 寄存器保存 = ~8 packet，跨 call 复用） |
+| QURT 可能拒绝 mprotect .so 的 .text | 备用：直接 **dlopen 一份新副本**（mmap 自己 RWX 区域），把 kernel 字节复制过来，patch 后 dlsym 到副本。Hexagon QURT 的 `mmap(PROT_READ\|PROT_WRITE\|PROT_EXEC)` on `MAP_PRIVATE` 是允许的（FastRPC PD 受信） |
+| trampoline ABI 复杂 | 用 hexagon-clang 把 trampoline 写成 `__attribute__((naked))` C 函数，编译器帮我们处理 packet 边界；只用 caller-saved regs (r0..r7, r28..r31)，不踩 callee-saved |
 
-### 备用：Option A（runtime hook）
+## 执行顺序（不退）
 
-如果 option B trace 不通（被 vtable 阻断 / 字段语义猜不出），就上 runtime hook：
+### Phase 1: Option B static RE（半 session）
 
-1. 在 op-pkg 里 dlopen libQnnHtpV75Skel.so，dlsym `hmx_v73_convbbb1x1deep_stride1`
-2. 用 QURT API（`qurt_mem_region_attr_set`）把目标函数 .text 页改可写
-3. 写 trampoline：保存 r0..r5 + 描述符 64B + extra_param 64B 到 buffer
-4. 改 kernel 第一个 packet 跳到 trampoline
-5. 跑一个 graph：先 native q::MatMul 再我们的 op；native 的 kernel call 经过 trampoline 被 dump
-6. 我们的 op 读 buffer，把字节贴到 V73DEEP 调用点
+目标：拿到 native 在 256³ 时给 kernel 的 (r23 loop trip / r25 stride / r26 stride
+/ per-iter descriptor) 公式。即使做不到 346 pkts，也能进一步缩 gap。
 
-工作量 1-2 天。风险：QURT 可能拒绝 mprotect .so 的 .text；trampoline 在 Hexagon
-asm 里要小心 ABI（caller-saved regs / R31 链）。
+1. 反汇编 `0x3dc2a8 → 0x3dc4b0` 整个 wrapper 出 `Agent/qnn_re/wrapper_3dc2a8.S`
+2. 自下而上 trace r23/r25/r26 至寄存器源头，标注每个偏移对应哪个 tensor 字段
+3. 把追到 vtable 边界的 callr r2 也记下来（不能跳过就先标记）
+4. 把公式套进 V9_KERNEL_V73DEEP_NATIVE_LOOP 实现，测 cyc/pkts/bit-exact
+5. 测出值如果 ≤ 600 pkts，已经超过当前 747；继续 phase 2 推到 346
+6. 如果 vtable 阻断 trace，跳到 phase 2
 
-## 推荐执行顺序
+### Phase 2: Option A runtime kernel-prologue patching（1-2 天）
 
-1. **Option B static RE** — 先做（半 session）：
-   - 反汇编 `wrapper_3dc2a8.S`
-   - 找 r23/r25/r26 公式
-   - 看公式有没有"机器自己看输入算出来"的简单形式
-   - 如果有，套进 V9_KERNEL_V73DEEP_NATIVE_LOOP 实现 + 测
-   - 如果不行（vtable 拦路 / 公式依赖未知字段），转 A
-2. **Option A runtime hook** — option B 失败后做（1-2 天）
+目标：达到/逼近 native 的 346 pkts。
 
-## 备选退路
+1. 设计 trampoline：在我们 op 第一次跑时，把 kernel 入口的前 8 packet 替换成
+   "save state once → jump to body"，body 起点重定向到 prologue 之后
+2. dlopen + dlsym 拿 kernel 函数地址；用 QURT API 改 .text 页权限（首选
+   `qurt_mem_region_attr_set`；不行用 mmap 副本路线）
+3. 第一次 call 时执行完整 prologue 把 HMX state 装好；后续 N-1 次直接跳 body，
+   省下 (N-1) × ~30 packet
+4. 配合 phase 1 的 r23/r25/r26 公式，按 native 的 loop count 重复 call 同一
+   修改后入口
+5. 实测 ≤ 400 pkts 就算大胜利；300-360 pkts 视为对齐 native
 
-如果 option A/B 都黄了 / 投入产出不划算：
-- **接受 2.51× gap，转去做 ≥2048³ 多实例切片**（NEXT_STEPS Step 6 路线）
-  - 已有 V8 4096³ M_TILE=128 = 4.6× 加速的成功经验可移植
-  - 需要：把 `gen_v8_graph.py M_TILE=128` 配方 port 到 `gen_v8c8_chain.py`
-  - 256³ 单 instance 的 2.51× 在大 shape 下被多实例 overlap 摊薄
+### Phase 3: 如果 Phase 2 还差最后一截，写 V8C8 自己的 HMX inline kernel
+
+目标：bit-exact + ≤ native pkts。
+
+1. 抄 `hmx_v73_convbbb1x1deep_stride1` 0x2ebe40 的字节（约 1132 B），inline 到
+   我们 op-pkg 的 `.text`（确保自己的 .text 是可执行的，no PD trust 问题）
+2. 修 prologue：去掉 stack frame setup（我们调用 site 已经在合适 frame）
+3. 直接 jump 到我们 inlined kernel body —— 0 prologue 开销，0 dlsym 开销，
+   call 是 absolute jump
+4. multi-call 一份 body 跑 N 次 —— 一次性付 prologue，N-1 次 reset 内部 acc state
+
+成本：写 ~300 行 hexagon asm + bit-exact 调试 ~1 天，但每次 call 直接 ~30
+packet（kernel body 本身），总 N×30 ≈ 240 packets for N=8。**这是逼到 native
+346 的真正路径**。
 
 ## 测量速查（不要再凭印象）
 
