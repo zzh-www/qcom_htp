@@ -45,6 +45,9 @@ def main():
                    help="chain: out[i] = bbb(out[i-1], wt). "
                         "independent: each bbb takes a fresh model input act_i, "
                         "no data dep — apples-to-apples with native independent.")
+    p.add_argument("--wt_layout", choices=["nmaj", "kmaj"], default="nmaj",
+                   help="nmaj: [1, N_t, K_t, 1024] (V8C8 / V73 non-deep). "
+                        "kmaj: [1, K_t, N_t, 1024] (V73DEEP — native q::ConvLayer_s1.opt).")
     args = p.parse_args()
     assert args.M == args.K == args.N, "chain only works for square matmul"
 
@@ -61,15 +64,27 @@ def main():
     #    dst = (r//4)*128 + c*4 + (r%4). QNN's weights_to_vtcm@FB.fB. is
     #    verbatim byte-copy DMA, so swapping the outer two dims here is
     #    invisible to QNN — only the SkelOp kernel addressing changes.
-    wRaw_KN = np.array([((i * 13) % 15) - 7 for i in range(K * N)],
-                       dtype=np.int8).reshape(K, N)
-    wt_packed = np.zeros((1, N_t, K_t, 1024), dtype=np.int8)
-    for nt in range(N_t):
+    # Asymmetric wRaw so K-major vs N-major layouts produce DIFFERENT byte
+    # arrangements (the previous (i*13)%15 was symmetric → tests indistinguishable).
+    # Asymmetric:  wRaw[k, n] = ((k*31 + n*13) % 15) - 7
+    k_idx, n_idx = np.meshgrid(np.arange(K), np.arange(N), indexing='ij')
+    wRaw_KN = (((k_idx * 31 + n_idx * 13) % 15) - 7).astype(np.int8)
+    if args.wt_layout == "nmaj":
+        wt_packed = np.zeros((1, N_t, K_t, 1024), dtype=np.int8)
+        for nt in range(N_t):
+            for kt in range(K_t):
+                for r in range(32):
+                    for c in range(32):
+                        dst = (r // 4) * 128 + c * 4 + (r % 4)
+                        wt_packed[0, nt, kt, dst] = wRaw_KN[kt * 32 + r, nt * 32 + c]
+    else:  # kmaj — for V73DEEP: outer dim is K_t, inner dim is N_t
+        wt_packed = np.zeros((1, K_t, N_t, 1024), dtype=np.int8)
         for kt in range(K_t):
-            for r in range(32):
-                for c in range(32):
-                    dst = (r // 4) * 128 + c * 4 + (r % 4)
-                    wt_packed[0, nt, kt, dst] = wRaw_KN[kt * 32 + r, nt * 32 + c]
+            for nt in range(N_t):
+                for r in range(32):
+                    for c in range(32):
+                        dst = (r // 4) * 128 + c * 4 + (r % 4)
+                        wt_packed[0, kt, nt, dst] = wRaw_KN[kt * 32 + r, nt * 32 + c]
     # Reshape declared dims to [1, 1, K, N] u8q to match native ConvLayer_s1.opt's
     # in[1] wt = [1, 1, 256, 256]. Bytes stay in our pre-pack layout (same 65 K B
     # contents); QNN's weights_to_vtcm DMA copies verbatim either way, only the
@@ -236,7 +251,7 @@ def main():
     print(f"  shape: M={M} K={K} N={N}  ACT_ZP={ACT_ZP}")
     print(f"  graph: BbbKMajor(act,wt,bias) → UntileToRowMajor → Reshape  "
           f"(output [1, {M}, {N}] u8)")
-    print(f"  wt_packed:    {wt_packed.size} B  shape [1,{N_t},{K_t},1024]  (N-outer)")
+    print(f"  wt_packed:    {wt_packed.size} B  shape {list(wt_packed.shape)}  ({args.wt_layout})")
     print(f"  bias:         {bias_fold_i32.nbytes} B  shape [2N={2*N}] int32  "
           f"(NATIVE 256-B/N-tile fold layout, ACT_ZP={ACT_ZP})")
     print(f"    sample: bias_q[0..3]={bias_q_int32[:4].tolist()}, "

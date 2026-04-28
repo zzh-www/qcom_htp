@@ -35,9 +35,11 @@ cd "$SCRIPT_DIR"
 
 CHAIN_N="${CHAIN:-8}"
 MODE_NAME="${MODE:-chain}"
-echo "=== [1/5] gen_v8c8_chain.py --chain $CHAIN_N --mode $MODE_NAME ${M}×${K}×${N} ==="
+WT_LAYOUT="${WT_LAYOUT:-nmaj}"
+echo "=== [1/5] gen_v8c8_chain.py --chain $CHAIN_N --mode $MODE_NAME ${M}×${K}×${N} (wt_layout=$WT_LAYOUT) ==="
 python gen_v8c8_chain.py --chain "$CHAIN_N" --mode "$MODE_NAME" \
-    --M "$M" --K "$K" --N "$N" -o "$OUT_DIR/v8c8.onnx"
+    --M "$M" --K "$K" --N "$N" --wt_layout "$WT_LAYOUT" \
+    -o "$OUT_DIR/v8c8.onnx"
 
 # Build qairt-converter input/output layout flags. Independent mode has
 # multiple input/output tensors (act_raw, act_raw_1, ..., out_0, out_1, ...).
