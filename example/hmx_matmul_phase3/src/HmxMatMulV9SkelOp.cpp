@@ -30,7 +30,7 @@
 #include <hvx_hexagon_protos.h>
 #endif
 
-#if defined(__hexagon__) && defined(V9_PMU_PROBE)
+#if defined(__hexagon__) && (defined(V9_PMU_PROBE) || defined(V9_PROBE_REGIONS))
 /* Hexagon PMU access via QURT API. v75 PMU enum from
  * computev75/include/qurt/qurt_consts.h. We don't include that header
  * directly to avoid pulling all of QURT — just re-declare the symbols
@@ -944,6 +944,242 @@ static uint32_t hmx_matmul_v9_kernel(
          * verbatim — no runtime repack (would overflow op-pkg .bss).
          */
         uint32_t extra_param[16] __attribute__((aligned(16))) = { V73D_EXTRA_PARAM_0, V73D_EXTRA_PARAM_1 };
+
+#if defined(V9_DESC_DUMP)
+        /* Dump pre-call descriptors to the Crouton_8 output and skip the
+         * kernel call. After UntileToRowMajor, the values land at row r,
+         * cols 0..127 of the row-major output (r ∈ 0..4). Decode with
+         * scripts/parse_v73deep_desc_dump.py.
+         *
+         * Row layout (each 128 bytes; first u32 is a magic 0xD0DE000r):
+         *   row 0: shape header (M,N,K,M_t,N_t,K_t, wt_pack, bias_bytes) +
+         *          mask_buf[0..63]
+         *   row 1: od (out_table, stride, y_stride, n_tiles_pow2,
+         *          m_total_minus_step, k_total_bytes) + ad +
+         *          extra_param[0..15]
+         *   row 2: act_tbl_all[0..30] (the M_t×K_t pointers we built —
+         *          first 31 entries; full table is in actual ad.act_pairs)
+         *   row 3: out_tbl_all[0..30]
+         *   row 4: derived "candidate sd tile count" values per the wrapper
+         *          formula sd_tile_count = (sd[0x18]>>3)*(sd[0x1c]>>3)*(sd[0x20]>>5)
+         *          — multiple guesses for what (H,W,D) maps to (M,K,N) */
+        {
+            const uint32_t out_n_chunks = N / 32;
+            const uint32_t total_out_blocks = qhpi_tensor_block_table_length(outputs[0]);
+            const uint32_t bytes_per_block = total_out_blocks > 0 ? (uint32_t)(M * N) / total_out_blocks : 0;
+            for (uint32_t bi = 0; bi < total_out_blocks; bi++) {
+                uint8_t *blk = (uint8_t *)out_blocks[bi];
+                if (blk) for (uint32_t k = 0; k < bytes_per_block; k++) blk[k] = 0;
+            }
+
+            uint8_t row_bytes[5][128];
+            for (uint32_t i = 0; i < 5; i++)
+                for (uint32_t j = 0; j < 128; j++) row_bytes[i][j] = 0;
+
+            uint32_t *r0w = (uint32_t *)row_bytes[0];
+            r0w[0] = 0xD0DE0000u;
+            r0w[1] = M; r0w[2] = N; r0w[3] = K;
+            r0w[4] = M_t; r0w[5] = N_t; r0w[6] = K_t;
+            r0w[7] = (uint32_t)(uintptr_t)wt_pack;
+            r0w[8] = (uint32_t)(uintptr_t)bias_bytes;
+            r0w[9] = mt_per_block;
+            r0w[10] = block_rows;
+            r0w[11] = (uint32_t)(uintptr_t)act_blocks;
+            r0w[12] = (uint32_t)(uintptr_t)out_blocks;
+            for (uint32_t i = 0; i < 16; i++) r0w[16 + i] = mask_buf[i];
+
+            uint32_t *r1w = (uint32_t *)row_bytes[1];
+            r1w[0] = 0xD0DE0001u;
+            r1w[1] = (uint32_t)(uintptr_t)od.out_tile_ptr_table;
+            r1w[2] = od.out_table_stride_dwords;
+            r1w[3] = od.out_y_stride_words;
+            r1w[4] = od.n_tiles_pow2;
+            r1w[5] = (uint32_t)od.m_total_minus_step;
+            r1w[6] = od.k_total_bytes;
+            r1w[7] = (uint32_t)(uintptr_t)ad.act_ptr_pairs;
+            r1w[8] = ad.n_act_pairs;
+            r1w[9] = ad.act_table_y_stride_words;
+            for (uint32_t i = 0; i < 16; i++) r1w[10 + i] = extra_param[i];
+
+            uint32_t *r2w = (uint32_t *)row_bytes[2];
+            r2w[0] = 0xD0DE0002u;
+            const uint32_t n_act_dump = (M_t * K_t) < 31 ? (M_t * K_t) : 31;
+            for (uint32_t i = 0; i < n_act_dump; i++) r2w[1 + i] = (uint32_t)act_tbl_all[i];
+
+            uint32_t *r3w = (uint32_t *)row_bytes[3];
+            r3w[0] = 0xD0DE0003u;
+            const uint32_t n_out_dump = (M_t * N_t) < 31 ? (M_t * N_t) : 31;
+            for (uint32_t i = 0; i < n_out_dump; i++) r3w[1 + i] = (uint32_t)out_tbl_all[i];
+
+            uint32_t *r4w = (uint32_t *)row_bytes[4];
+            r4w[0] = 0xD0DE0004u;
+            r4w[1] = (uint32_t)(M_t * K_t);
+            r4w[2] = (uint32_t)(N_t * K_t);
+            r4w[3] = (uint32_t)(M_t * N_t);
+            /* Wrapper-formula candidates for sd[0x18,0x1c,0x20] semantics */
+            r4w[4] = (uint32_t)((M >> 3) * (K >> 3) * (K >> 5));   /* HWD = M,K,K */
+            r4w[5] = (uint32_t)((K >> 3) * (N >> 3) * (N >> 5));   /* HWD = K,N,N */
+            r4w[6] = (uint32_t)((M >> 3) * (1u) * (K >> 5));        /* HWD = M,1,K (W=1) */
+            r4w[7] = (uint32_t)((1u) * (K >> 3) * (N >> 5));        /* HWD = 1,K,N */
+
+            for (uint32_t r = 0; r < 5; r++) {
+                const uint32_t m_row = r;
+                for (uint32_t n_col = 0; n_col < 128 && n_col < N; n_col++) {
+                    uint32_t block_idx = ((m_row % 32) / 8) * out_n_chunks + (n_col / 32);
+                    uint32_t inblk_off = (m_row / 32) * 256 + (m_row % 8) * 32 + (n_col % 32);
+                    if (block_idx >= total_out_blocks) continue;
+                    uint8_t *blk = (uint8_t *)out_blocks[block_idx];
+                    if (blk) blk[inblk_off] = row_bytes[r][n_col];
+                }
+            }
+        }
+        return QHPI_Success;
+#endif
+
+#if defined(V9_PROBE_REGIONS)
+        /* Differential PMU probe: run the V73DEEP kernel with 4 descriptor
+         * variants that selectively shrink each loop dimension, and record
+         * committed-packet count per variant. Solve a linear model:
+         *
+         *   P(r13_eff, r20, r28) = A + r13_eff * (B + r20 * (C + r28 * D))
+         *
+         * where r13_eff = (r13 + 1) / 2 (kernel decrements r13 by 2 per outer),
+         * A = prologue+epilogue, B = per-outer overhead (bias loads + setup),
+         * C = per-loop1 overhead (drain prep + 2 drain stores),
+         * D = per-loop0 packet count (~K-MAC per loop0 iter).
+         *
+         * 4 variants, output writes to first 4 logical "rows" via Crouton_8 scatter.
+         * Each row 64 bytes contains: magic | variant_id | n_tiles_pow2 | k_total_bytes |
+         *                              n_act_pairs | pkt_count | cyc_count | inst_count
+         */
+        {
+            qurt_pmu_enable(1);
+            qurt_pmu_set(QURT_PMUCFG, 0x400);
+            uint32_t _evtcfg = ((uint32_t)PMU_DISPATCHED_PKTS   << 24)
+                             | ((uint32_t)PMU_COMMITTED_INSTS   << 16)
+                             | ((uint32_t)PMU_COMMITTED_PKT_T0  <<  8)
+                             | ((uint32_t)PMU_COMMITTED_PKT_ANY      );
+            qurt_pmu_set(QURT_PMUEVTCFG, _evtcfg);
+
+            const uint32_t out_n_chunks = N / 32;
+            const uint32_t total_out_blocks_p = qhpi_tensor_block_table_length(outputs[0]);
+            const uint32_t bytes_per_block_p = total_out_blocks_p > 0 ? (uint32_t)(M * N) / total_out_blocks_p : 0;
+            for (uint32_t bi = 0; bi < total_out_blocks_p; bi++) {
+                uint8_t *blk = (uint8_t *)out_blocks[bi];
+                if (blk) for (uint32_t k = 0; k < bytes_per_block_p; k++) blk[k] = 0;
+            }
+
+            struct Variant {
+                uint32_t n_tiles_pow2;
+                uint32_t k_total_bytes;
+                uint32_t n_act_pairs;
+            };
+            const Variant variants[4] = {
+                /* V0 baseline: r20=8, r13=8 (4 outers), r28=4 — full work */
+                { (uint32_t)(M_t * 8),  (uint32_t)(N_t * 32), (uint32_t)K_t },
+                /* V1 small M: r20=1 (1 loop1) */
+                { 8,                    (uint32_t)(N_t * 32), (uint32_t)K_t },
+                /* V2 small K-inner: r28=1 (1 loop0 iter) */
+                { (uint32_t)(M_t * 8),  (uint32_t)(N_t * 32), 2 },
+                /* V3 small N-outer: r13=1 (1 outer iter) */
+                { (uint32_t)(M_t * 8),  32,                   (uint32_t)K_t },
+            };
+
+            uint32_t pkts_v[4]  = {0, 0, 0, 0};   /* PMU_COMMITTED_PKT_ANY */
+            uint32_t pkts_t0_v[4] = {0, 0, 0, 0}; /* PMU_COMMITTED_PKT_T0  */
+            uint32_t cycs_v[4]  = {0, 0, 0, 0};
+            uint32_t insts_v[4] = {0, 0, 0, 0};
+
+            /* Phase 1: run all 4 variants, capturing PMU values per variant.
+             * Kernel calls clobber the output buffer, so we write probe rows
+             * AFTER all variants have run. */
+            for (uint32_t v = 0; v < 4; v++) {
+                hmx_conv_out_desc_t od_v = {
+                    out_tbl_all,
+                    (uint32_t)N_t,
+                    0,
+                    variants[v].n_tiles_pow2,
+                    8,                                 /* keep m_total_minus_step = 8 */
+                    variants[v].k_total_bytes
+                };
+                hmx_conv_act_desc_t ad_v = {
+                    act_tbl_all,
+                    variants[v].n_act_pairs,
+                    0
+                };
+
+                uint32_t any_b  = qurt_pmu_get(QURT_PMUCNT0);
+                uint32_t t0_b   = qurt_pmu_get(QURT_PMUCNT1);
+                uint32_t inst_b = qurt_pmu_get(QURT_PMUCNT2);
+                uint64_t cyc_b;
+                asm volatile ("%0 = C15:14" : "=r"(cyc_b));
+
+#if defined(V9_PROBE_V73_NONDEEP)
+                /* probe non-deep V73 kernel with same descriptors */
+                {
+                    const uint32_t ep2[2] = { 1u, 0u };
+                    hmx_v73_convbbb1x1_stride1(&od_v, &ad_v, wt_pack, bias_bytes, md, ep2);
+                }
+#elif defined(V9_PROBE_V73_UNALIGNED)
+                /* probe v73 unaligned kernel with same descriptors */
+                {
+                    const uint32_t ep2[2] = { 1u, 0u };
+                    hmx_v73_convbbb1x1_stride1_unaligned(&od_v, &ad_v, wt_pack, bias_bytes, md, ep2);
+                }
+#elif defined(V9_PROBE_OLD_KERNEL)
+                /* probe OLD non-v73 kernel with same descriptors */
+                hmx_convbbb1x1_stride1(&od_v, &ad_v, wt_pack, bias_bytes, md);
+#else
+                hmx_v73_convbbb1x1deep_stride1(&od_v, &ad_v, wt_pack, bias_bytes, md, extra_param);
+#endif
+
+                uint64_t cyc_a;
+                asm volatile ("%0 = C15:14" : "=r"(cyc_a));
+                uint32_t any_a  = qurt_pmu_get(QURT_PMUCNT0);
+                uint32_t t0_a   = qurt_pmu_get(QURT_PMUCNT1);
+                uint32_t inst_a = qurt_pmu_get(QURT_PMUCNT2);
+
+                pkts_v[v]    = any_a  - any_b;
+                pkts_t0_v[v] = t0_a   - t0_b;
+                cycs_v[v]    = (uint32_t)(cyc_a - cyc_b);
+                insts_v[v]   = inst_a - inst_b;
+            }
+
+            /* Phase 2: zero output then scatter probe rows. */
+            for (uint32_t bi = 0; bi < total_out_blocks_p; bi++) {
+                uint8_t *blk = (uint8_t *)out_blocks[bi];
+                if (blk) for (uint32_t k = 0; k < bytes_per_block_p; k++) blk[k] = 0;
+            }
+            for (uint32_t v = 0; v < 4; v++) {
+                uint8_t row_p[128];
+                for (uint32_t i = 0; i < 128; i++) row_p[i] = 0;
+                uint32_t *rw = (uint32_t *)row_p;
+                rw[0] = 0xC0DE0000u | v;
+                rw[1] = v;
+                rw[2] = variants[v].n_tiles_pow2;
+                rw[3] = variants[v].k_total_bytes;
+                rw[4] = variants[v].n_act_pairs;
+                rw[5] = pkts_v[v];
+                rw[6] = cycs_v[v];
+                rw[7] = insts_v[v];
+                rw[8]  = (variants[v].n_tiles_pow2 + 7) >> 3;
+                rw[9]  = (variants[v].k_total_bytes + 0x1f) >> 5;
+                rw[10] = (rw[9] + 1) / 2;
+                rw[11] = variants[v].n_act_pairs >> 1;
+                rw[12] = pkts_t0_v[v];
+
+                const uint32_t m_row = v;
+                for (uint32_t n_col = 0; n_col < 128 && n_col < N; n_col++) {
+                    uint32_t block_idx = ((m_row % 32) / 8) * out_n_chunks + (n_col / 32);
+                    uint32_t inblk_off = (m_row / 32) * 256 + (m_row % 8) * 32 + (n_col % 32);
+                    if (block_idx >= total_out_blocks_p) continue;
+                    uint8_t *blk = (uint8_t *)out_blocks[block_idx];
+                    if (blk) blk[inblk_off] = row_p[n_col];
+                }
+            }
+        }
+        return QHPI_Success;
+#endif
 
 #if defined(V9_NATIVE_V73DEEP_SPARSITY)
         /* DEAD-END 2026-04-28: tested but crashes on device. Disasm shows
