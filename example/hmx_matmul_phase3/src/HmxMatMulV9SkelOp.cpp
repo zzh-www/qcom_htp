@@ -125,6 +125,26 @@ extern "C" void hmx_v73_convbbb1x1deep_stride1_sparsity(
     const void                 *bias_base,
     const hmx_conv_mask_desc_t *mask_desc,
     const uint32_t             *extra_param);
+
+/* Untested kernel variants in libQnnHtpV75Skel.so. ABI assumed compatible
+ * with v73 1x1 stride1 family (5 or 6 args). For NxN variants the descriptor
+ * format may differ but with filter_x_stride=0 and stride1 they may handle
+ * 1x1 as degenerate case. */
+extern "C" void hmx_v73_convbbb1x1_stride1_unaligned(
+    const hmx_conv_out_desc_t *, const hmx_conv_act_desc_t *,
+    const void *, const void *, const hmx_conv_mask_desc_t *,
+    const uint32_t *);
+extern "C" void hmx_convbbb1x1_stride1_unaligned(
+    const hmx_conv_out_desc_t *, const hmx_conv_act_desc_t *,
+    const void *, const void *, const hmx_conv_mask_desc_t *);
+extern "C" void hmx_v73_convbbb_stride1(
+    const hmx_conv_out_desc_t *, const hmx_conv_act_desc_t *,
+    const void *, const void *, const hmx_conv_mask_desc_t *,
+    const uint32_t *);
+extern "C" void hmx_v73_convbbb_stride1_aligned(
+    const hmx_conv_out_desc_t *, const hmx_conv_act_desc_t *,
+    const void *, const void *, const hmx_conv_mask_desc_t *,
+    const uint32_t *);
 #endif
 
 #if defined(__hexagon__) && (defined(V9_DUMP_HMX_PARAMS) || defined(V9_PARAMS_PROBE) || defined(V9_USE_NATIVE_KERNEL))
@@ -693,7 +713,13 @@ static uint32_t hmx_matmul_v9_kernel(
 #ifndef V73DEEP_ARG4
 #define V73DEEP_ARG4 0
 #endif
-            set_hmx_params_conv1x1(mask_buf, 0x70b, 0, 0, V73DEEP_ARG4, 0x20);
+#ifndef V73DEEP_ARG1
+#define V73DEEP_ARG1 0x70b
+#endif
+#ifndef V73DEEP_ARG5
+#define V73DEEP_ARG5 0x20
+#endif
+            set_hmx_params_conv1x1(mask_buf, V73DEEP_ARG1, 0, 0, V73DEEP_ARG4, V73DEEP_ARG5);
 #else
             set_hmx_params_conv1x1(mask_buf, 0x700, 0, 0, 0, 0);
 #endif
@@ -821,18 +847,38 @@ static uint32_t hmx_matmul_v9_kernel(
         uint64_t cyc_after_table;
         asm volatile ("%0 = C15:14" : "=r"(cyc_after_table));
 #endif
+        /* Descriptor sweep knobs (override via -D). Defaults are the
+         * baseline that gives 100% bit-exact at 747 pkts for V73DEEP. */
+#ifndef V73D_N_TILES_POW2
+#define V73D_N_TILES_POW2 (M_t * 8)        /* +0x0c: r20 = (val+7)>>3 → loop1 trip */
+#endif
+#ifndef V73D_M_TOTAL_MINUS_STEP
+#define V73D_M_TOTAL_MINUS_STEP 8           /* +0x10: → r17 = val, sub r22=8 → K-iters */
+#endif
+#ifndef V73D_K_TOTAL_BYTES
+#define V73D_K_TOTAL_BYTES (N_t * 32)       /* +0x14: r13 = (val+0x1f)>>5 → outer trip */
+#endif
+#ifndef V73D_N_ACT_PAIRS
+#define V73D_N_ACT_PAIRS K_t                /* +0x04 act_desc: r4 = val → loop0 (val/2) */
+#endif
+#ifndef V73D_EXTRA_PARAM_0
+#define V73D_EXTRA_PARAM_0 1u
+#endif
+#ifndef V73D_EXTRA_PARAM_1
+#define V73D_EXTRA_PARAM_1 0u
+#endif
         hmx_conv_out_desc_t od = {
             out_tbl_all,
-            (uint32_t)N_t,         /* +0x04: out_table_stride_dwords = N_t (m0 = N_t*4) */
-            0,                     /* +0x08: out_y_stride_words */
-            (uint32_t)(M_t * 8),   /* +0x0c: n_tiles_pow2 = M_t*8 → r20 = M_t */
-            (int32_t)8,            /* +0x10: m_total_minus_step = 8 → 1 K-iter */
-            (uint32_t)(N_t * 32)   /* +0x14: k_total_bytes = N_t*32 → N_t outer iters */
+            (uint32_t)N_t,                  /* +0x04: out_table_stride_dwords = N_t */
+            0,                              /* +0x08: out_y_stride_words */
+            (uint32_t)(V73D_N_TILES_POW2),  /* +0x0c */
+            (int32_t)(V73D_M_TOTAL_MINUS_STEP), /* +0x10 */
+            (uint32_t)(V73D_K_TOTAL_BYTES)  /* +0x14 */
         };
         hmx_conv_act_desc_t ad = {
             act_tbl_all,
-            (uint32_t)K_t,         /* +0x04: n_act_pairs = K_t MACs per loop1 iter */
-            0                      /* +0x08: act_table_y_stride_words = 0 (irrelevant) */
+            (uint32_t)(V73D_N_ACT_PAIRS),   /* +0x04 */
+            0                               /* +0x08 */
         };
 #if defined(V9_NATIVE_V73DEEP)
         /* hmx_v73_convbbb1x1deep_stride1 — REAL deep variant: :deep on both
@@ -847,7 +893,7 @@ static uint32_t hmx_matmul_v9_kernel(
          * V9_NATIVE_V73DEEP is enabled (--wt_layout=kmaj). We pass the bytes
          * verbatim — no runtime repack (would overflow op-pkg .bss).
          */
-        uint32_t extra_param[16] __attribute__((aligned(16))) = { 1u, 0u };
+        uint32_t extra_param[16] __attribute__((aligned(16))) = { V73D_EXTRA_PARAM_0, V73D_EXTRA_PARAM_1 };
 
 #if defined(V9_NATIVE_V73DEEP_SPARSITY)
         /* DEAD-END 2026-04-28: tested but crashes on device. Disasm shows
@@ -857,6 +903,29 @@ static uint32_t hmx_matmul_v9_kernel(
          * provide. Per packet count analysis, this variant also has SAME loop
          * structure as non-deep (1 drain/loop1) so wouldn't help anyway. */
         hmx_v73_convbbb1x1deep_stride1_sparsity(&od, &ad, wt_pack, bias_bytes, md, extra_param);
+#elif defined(V9_KERNEL_V73_UNALIGNED)
+        hmx_v73_convbbb1x1_stride1_unaligned(&od, &ad, wt_pack, bias_bytes, md, extra_param);
+#elif defined(V9_KERNEL_OLD_UNALIGNED)
+        hmx_convbbb1x1_stride1_unaligned(&od, &ad, wt_pack, bias_bytes, md);
+#elif defined(V9_KERNEL_V73_BBB_NXN)
+        hmx_v73_convbbb_stride1(&od, &ad, wt_pack, bias_bytes, md, extra_param);
+#elif defined(V9_KERNEL_V73_BBB_ALIGNED)
+        hmx_v73_convbbb_stride1_aligned(&od, &ad, wt_pack, bias_bytes, md, extra_param);
+#elif defined(V9_KERNEL_V73DEEP_SPLIT)
+        /* DEAD-END 2026-04-28 PM: tested 4-call split (k_total_bytes=64 per call,
+         * advancing wt+bias). Resulted in dur=4380 cyc / 1790 pkts (worse than
+         * 2946/747 baseline). Kernel call overhead dominates; native achieves
+         * fewer pkts via different mechanism (likely a kernel variant with
+         * higher fan-out we haven't identified, or a different internal path).
+         * Kept for future reference. */
+        hmx_v73_convbbb1x1deep_stride1(&od, &ad, wt_pack, bias_bytes, md, extra_param);
+#elif defined(V9_KERNEL_OLD_V73DESC)
+        /* OLD non-v73 kernel called with V73DEEP-style descriptor.
+         * Native q::ConvLayer_s1.opt at 256³ calls 0x2ea740 (per wrapper
+         * disasm 0x3dc440). Mask args same as deep (arg5=0x20 sets deep
+         * flag — but OLD kernel doesn't check that; it just reads its
+         * Rt fields). */
+        hmx_convbbb1x1_stride1(&od, &ad, wt_pack, bias_bytes, md);
 #elif defined(V9_PROBE_KERNEL_CYC)
         /* Fine-grained pcycle probe. Stash 4× uint32 (16 B), all little-endian:
          *   bytes  0..3  = kernel_cyc (kernel call body)

@@ -1,5 +1,5 @@
 {
-    "graphs": [{"graph_names": ["v8_model_cpp", "v9_model", "v9_no_mm", "v9_test"], "vtcm_mb": 8, "O": 3}],
+    "graphs": [{"graph_names": ["v8_model_cpp", "v9_model", "v9_no_mm", "v9_test", "v8c8"], "vtcm_mb": 8, "O": 3}],
     "devices": [{
         "dsp_arch": "v75",
         "soc_id": 57,
