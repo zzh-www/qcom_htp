@@ -276,14 +276,42 @@ wt/bias too. We use DDR.
 **剩余 1.37× gap → P1.5**: RE act_tbl_all 完整 layout (stride=32 dwords pattern)
 + implement VTCM placement for wt/bias.
 
-### 🟡 P1.5 — RE native act_tbl/out_tbl layout（1-2 day）
+### ✅ P1.5 — Native table layout RE COMPLETE（2026-04-29）
 
-Already have output VTCM stride confirmed (0x800 / 2KB / per tile entry). Need:
-1. Extend dump_stub to write act_tbl entries 到 tile 0 row 0..7 范围 (256 bytes)
-   而不是 row 8+ (Crouton tile layout 在 row 8+ 不可读)
-2. 解 native act_tbl_all 32-entry pattern with stride=32 dwords
-3. 重排我们的 act_tbl_all 来 match
-4. (Optional) implement VTCM allocation for wt + bias 在 op-pkg signature
+详见 `Agent/qnn_re/p1_5_native_layout_2026-04-29.md`.
+
+P1.4 v3 patch dumped 32 act_tbl entries + 16 out_tbl entries within readable
+tile region. Both: 32 entries × 0x800 (2KB) stride VTCM layout. Each ptr =
+M-pair packed (2 M-tiles per 2KB region).
+
+**Implementation**: V73D_NATIVE_LAYOUT knob builds 32-entry tables via HVX
+vmem batch (1 HVX vector = 128 bytes = 32 ptrs × 4 bytes per table).
+
+**Final result @ 256³ chain8 hot**:
+
+| Config | hot pkts | hot dur | bit-exact | vs native |
+|---|---:|---:|---:|---:|
+| Baseline V73DEEP | 747 | 3042 | 100% | 2.16× |
+| **+ P1.4 + P1.5 (native descs + layout + HVX)** | **471** | **1799** | **100%** | **1.36×** |
+| Native | 346 | 1120 | ref | 1.0× |
+
+**37% packet reduction with 100% bit-exact preserved**. Gap closure
+2.16× → 1.36×.
+
+**Build flags** (final best):
+```bash
+DEFS="-DV9_USE_NATIVE_KERNEL -DV9_NATIVE_SINGLE_CALL -DV9_NATIVE_V73DEEP -DV9_C8_ALIGNMENT_TEST"
+DEFS="$DEFS -DV73D_N_TILES_POW2=32 -DV73D_OUT_Y_STRIDE=32 -DV73D_AD_ACT_Y_STRIDE=32"
+DEFS="$DEFS -DV73DEEP_ARG1=0x700 -DV73D_MASK_38_EXTRA_PTR=1 -DV73D_NATIVE_LAYOUT=1"
+```
+
+**Remaining 1.36× gap**: ~125 packets. Sources:
+1. VTCM placement (~80 pkts): native has wt + bias in VTCM (0xfc02_xxxx),
+   we use DDR. Need TCM_Only signature in op-pkg.
+2. Per-call kernel prologue (~45 pkts): native may pre-config HMX state
+   once per session.
+
+Closing further requires P6 (TCM_Only signature) — multi-day op-pkg work.
 
 ### 🟢 P2 — 提取出来的字节直接复制 + dlsym 调用（OBSOLETE — P1 排除了）
 
