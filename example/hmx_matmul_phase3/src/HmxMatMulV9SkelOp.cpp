@@ -847,6 +847,12 @@ static uint32_t hmx_matmul_v9_kernel(
          * dst[16..24]=src+0(next chunk), dst[24..32]=src+1024(next chunk), ...
          * which is the desired interleave by inb. */
         if (mt_per_block == 2 && K_t == 8 && N_t == 8) {
+#if defined(V73D_NATIVE_LAYOUT)
+            /* P1.5 native layout: 32 entries, each = first M-tile of M-pair.
+             * Direct copy of act_blocks (4 groups * 8 K-tiles = 32 ptrs). */
+            std::memcpy(act_tbl_all, act_blocks, 32 * sizeof(int32_t));
+            std::memcpy(out_tbl_all, out_blocks, 32 * sizeof(int32_t));
+#else
             HVX_Vector v_acts, v_outs;
             std::memcpy(&v_acts, act_blocks, sizeof(HVX_Vector));
             std::memcpy(&v_outs, out_blocks, sizeof(HVX_Vector));
@@ -861,10 +867,24 @@ static uint32_t hmx_matmul_v9_kernel(
             std::memcpy(&act_tbl_all[32], &vp_acts_hi2, sizeof(HVX_Vector));
             std::memcpy(&out_tbl_all[ 0], &vp_outs_lo,  sizeof(HVX_Vector));
             std::memcpy(&out_tbl_all[32], &vp_outs_hi2, sizeof(HVX_Vector));
+#endif
         } else
 #endif
         if (mt_per_block == 2) {
             const uint32_t mt_blocks = M_t >> 1;
+#if defined(V73D_NATIVE_LAYOUT)
+            /* P1.5 native layout: 32-entry tables, each entry = ptr to 2KB
+             * region (M-pair packed). Native uses arg1=0x700 → mask[+0x0c]=0x71f
+             * which makes :deep:cm fetch 2 M-tiles from a single 2KB pointer. */
+            for (uint32_t rg = 0; rg < mt_blocks; rg++) {
+                const int32_t *__restrict__ a_src = act_src_int + rg * K_t;
+                const int32_t *__restrict__ o_src = out_src_int + rg * N_t;
+                int32_t *__restrict__ a_dst = act_tbl_all + rg * K_t;
+                int32_t *__restrict__ o_dst = out_tbl_all + rg * N_t;
+                for (uint32_t kt = 0; kt < K_t; kt++) a_dst[kt] = a_src[kt];
+                for (uint32_t nt = 0; nt < N_t; nt++) o_dst[nt] = o_src[nt];
+            }
+#else
             for (uint32_t rg = 0; rg < mt_blocks; rg++) {
                 const int32_t *__restrict__ a_src = act_src_int + rg * K_t;
                 const int32_t *__restrict__ o_src = out_src_int + rg * N_t;
@@ -883,6 +903,7 @@ static uint32_t hmx_matmul_v9_kernel(
                     o_dst1[nt] = o + 1024;
                 }
             }
+#endif
         } else { /* mt_per_block == 1 */
             for (uint32_t rg = 0; rg < M_t; rg++) {
                 const int32_t *__restrict__ a_src = act_src_int + rg * K_t;
