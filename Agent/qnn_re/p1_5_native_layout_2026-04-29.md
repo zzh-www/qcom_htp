@@ -51,11 +51,16 @@ EXTRA_DEFS="$DEFS" bash build.sh && bash build_x86.sh
 |---|---:|---:|---:|---:|---:|
 | V73DEEP main path (旧 baseline) | 747 | 3042 | 4.07 | 100% | 2.16× |
 | + native descs (n_tiles_pow2=32, strides) | 475 | 1730 | 3.64 | 50% | 1.37× |
-| **+ native LAYOUT (32-entry tables)** | **611** | **2027** | **3.32** | **100%** | **1.77×** |
+| + native LAYOUT (scalar memcpy) | 611 | 2027 | 3.32 | 100% | 1.77× |
+| **+ HVX batched table copy** | **471** | **1799** | **3.82** | **100%** | **1.36×** |
 | Native ConvLayer_s1.opt | 346 | 1120 | 3.24 | ref | 1.0× |
 
-**100% bit-exact restored + 1.77× gap (vs 2.16× baseline)** = 18% packet
-reduction with correctness preserved.
+**100% bit-exact + 1.36× gap (vs 2.16× baseline)** = 37% packet reduction
+with correctness preserved.
+
+HVX optimization: 32 ptrs * 4 bytes = 128 bytes per table = exactly 1 HVX
+vector. Two `memcpy(.., HVX_Vector)` for act + out tables replace scalar
+loops. Saves ~140 packets vs scalar memcpy.
 
 ## Remaining 1.77× gap analysis
 

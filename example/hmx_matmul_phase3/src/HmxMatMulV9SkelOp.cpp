@@ -849,9 +849,13 @@ static uint32_t hmx_matmul_v9_kernel(
         if (mt_per_block == 2 && K_t == 8 && N_t == 8) {
 #if defined(V73D_NATIVE_LAYOUT)
             /* P1.5 native layout: 32 entries, each = first M-tile of M-pair.
-             * Direct copy of act_blocks (4 groups * 8 K-tiles = 32 ptrs). */
-            std::memcpy(act_tbl_all, act_blocks, 32 * sizeof(int32_t));
-            std::memcpy(out_tbl_all, out_blocks, 32 * sizeof(int32_t));
+             * 32 ptrs * 4 bytes = 128 bytes = 1 HVX vector per table — batch
+             * via HVX vmem load+store to save ~50 packets vs scalar memcpy. */
+            HVX_Vector v_acts, v_outs;
+            std::memcpy(&v_acts, act_blocks, sizeof(HVX_Vector));
+            std::memcpy(&v_outs, out_blocks, sizeof(HVX_Vector));
+            std::memcpy(act_tbl_all, &v_acts, sizeof(HVX_Vector));
+            std::memcpy(out_tbl_all, &v_outs, sizeof(HVX_Vector));
 #else
             HVX_Vector v_acts, v_outs;
             std::memcpy(&v_acts, act_blocks, sizeof(HVX_Vector));
