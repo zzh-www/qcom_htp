@@ -239,11 +239,51 @@ polynomial scorer，**不是** kernel dispatcher。仅引用 `hmx_v73_convbbb1x1
 HMX state-config descriptor-driven 外部预写让 kernel 内 loop 早结束。
 **必须 P1.4 (patch native kernel dump runtime args) 才能继续推进**。
 
-### 🟡 P1.4 — On-device patch native kernel 入口 dump 真实参数（多天）
+### ✅ P1.4 — On-device kernel patch BREAKTHROUGH（2026-04-29 完成）
 
-Patch `hmx_v73_convbbb1x1deep_stride1`（或 wrapper）入口，让 native run
-时记录真实调用参数。通过对比 dump 出来的 mask/od/ad/extra_param vs 我们的
-来定位差异。
+详见 `Agent/qnn_re/p1_4_kernel_patch_2026-04-29.md`.
+
+**Method**: 156 bytes patched at offset 0x2ebe40 in libQnnHtpV75Skel.so
+(deep variant entry). Replaced kernel with code dumping r0..r5 + mask + od +
+ad + extra to first output tile. Pushed to device qnn_run/, ran native, pulled
+output, decoded.
+
+**Native's true descriptors** (5 关键差异 vs 我们 V73DEEP):
+
+| 字段 | Native | 我们之前 |
+|---|---|---|
+| `mask[+0x0c]` (act_rt_base) | **0x71f** | 0x77c |
+| `mask[+0x38]` | **= extra_param ptr** | 0 |
+| `od.out_y_stride_words` | **32** | 0 |
+| `od.n_tiles_pow2` | **32** | 64 |
+| `ad.act_table_y_stride_words` | **32** | 0 |
+
+Plus: native uses VTCM at `0xfc010000+` for outputs (0x800 stride), VTCM for
+wt/bias too. We use DDR.
+
+**Empirical (apply native descs)**:
+
+| Config | hot pkts | hot dur | bit-exact | vs native |
+|---|---:|---:|---:|---:|
+| V73DEEP main path | 747 | 3042 | 100% | 2.16× |
+| **+ native descs** | **475** | **1730** | **50%** | **1.37×** |
+| Native | 346 | 1120 | ref | 1.0× |
+
+**Gap reduced 2.16× → 1.37×**. 50% bit-exact 因为 n_tiles_pow2=32 让 kernel
+只产 half M outputs。Native 通过 act_tbl_all/out_tbl_all 的 stride=32 dwords 布局
++ n_tiles_pow2=32 同时实现 full coverage AND 减半 packet count.
+
+**剩余 1.37× gap → P1.5**: RE act_tbl_all 完整 layout (stride=32 dwords pattern)
++ implement VTCM placement for wt/bias.
+
+### 🟡 P1.5 — RE native act_tbl/out_tbl layout（1-2 day）
+
+Already have output VTCM stride confirmed (0x800 / 2KB / per tile entry). Need:
+1. Extend dump_stub to write act_tbl entries 到 tile 0 row 0..7 范围 (256 bytes)
+   而不是 row 8+ (Crouton tile layout 在 row 8+ 不可读)
+2. 解 native act_tbl_all 32-entry pattern with stride=32 dwords
+3. 重排我们的 act_tbl_all 来 match
+4. (Optional) implement VTCM allocation for wt + bias 在 op-pkg signature
 
 ### 🟢 P2 — 提取出来的字节直接复制 + dlsym 调用（OBSOLETE — P1 排除了）
 
