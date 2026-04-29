@@ -917,10 +917,16 @@ static uint32_t hmx_matmul_v9_kernel(
 #ifndef V73D_EXTRA_PARAM_1
 #define V73D_EXTRA_PARAM_1 0u
 #endif
+#ifndef V73D_OUT_Y_STRIDE
+#define V73D_OUT_Y_STRIDE 0u           /* P1.4: native uses 32 (= M_t * 4 dwords) */
+#endif
+#ifndef V73D_AD_ACT_Y_STRIDE
+#define V73D_AD_ACT_Y_STRIDE 0u        /* P1.4: native uses 32 (= M_t * 4 dwords) */
+#endif
         hmx_conv_out_desc_t od = {
             out_tbl_all,
             (uint32_t)N_t,                  /* +0x04: out_table_stride_dwords = N_t */
-            0,                              /* +0x08: out_y_stride_words */
+            (uint32_t)(V73D_OUT_Y_STRIDE),  /* +0x08: out_y_stride_words */
             (uint32_t)(V73D_N_TILES_POW2),  /* +0x0c */
             (int32_t)(V73D_M_TOTAL_MINUS_STEP), /* +0x10 */
             (uint32_t)(V73D_K_TOTAL_BYTES)  /* +0x14 */
@@ -928,7 +934,7 @@ static uint32_t hmx_matmul_v9_kernel(
         hmx_conv_act_desc_t ad = {
             act_tbl_all,
             (uint32_t)(V73D_N_ACT_PAIRS),   /* +0x04 */
-            0                               /* +0x08 */
+            (uint32_t)(V73D_AD_ACT_Y_STRIDE) /* +0x08 */
         };
 #if defined(V9_NATIVE_V73DEEP)
         /* hmx_v73_convbbb1x1deep_stride1 — REAL deep variant: :deep on both
@@ -944,6 +950,13 @@ static uint32_t hmx_matmul_v9_kernel(
          * verbatim — no runtime repack (would overflow op-pkg .bss).
          */
         uint32_t extra_param[16] __attribute__((aligned(16))) = { V73D_EXTRA_PARAM_0, V73D_EXTRA_PARAM_1 };
+
+#if defined(V73D_MASK_38_EXTRA_PTR)
+        /* P1.4 finding: native sets mask[+0x38] = extra_param ptr. Mask is
+         * cached static, but we patch it each call since extra_param is
+         * stack-local. */
+        ((uint32_t *)mask_buf)[0x38/4] = (uint32_t)(uintptr_t)extra_param;
+#endif
 
 #if defined(V9_DESC_DUMP)
         /* Dump pre-call descriptors to the Crouton_8 output and skip the
