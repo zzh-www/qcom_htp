@@ -1,19 +1,33 @@
 # Next Steps — V73DEEP → Native Gap @ 256³
 
-## 当前状态（2026-04-29）
+## 当前状态（2026-04-29 — P1.4/P1.5 后）
 
 | Path | dur (cyc) | pkts | cpp | bit-exact | vs native |
 |------|----:|-----:|----:|:---:|:---:|
-| **V73DEEP + Lane A v2 + HVX**（当前最佳） | **2808** | **747** | 3.76 | 100% | **2.51× cyc / 2.16× pkts** |
+| **V73DEEP + native descs + native LAYOUT + HVX 表 copy**（**当前最佳**） | **1799** | **471** | 3.82 | 100% | **1.61× cyc / 1.36× pkts** |
+| V73DEEP main path（旧 baseline，2026-04-28） | 3042 | 747 | 4.07 | 100% | 2.71× cyc / 2.16× pkts |
 | Native q::ConvLayer_s1.opt | 1120 | 346 | 3.24 | ref | 1.0× |
+
+**Build flag set**:
+```bash
+DEFS="-DV9_USE_NATIVE_KERNEL -DV9_NATIVE_SINGLE_CALL -DV9_NATIVE_V73DEEP -DV9_C8_ALIGNMENT_TEST"
+DEFS="$DEFS -DV73D_N_TILES_POW2=32 -DV73D_OUT_Y_STRIDE=32 -DV73D_AD_ACT_Y_STRIDE=32"
+DEFS="$DEFS -DV73DEEP_ARG1=0x700 -DV73D_MASK_38_EXTRA_PTR=1 -DV73D_NATIVE_LAYOUT=1"
+EXTRA_DEFS="$DEFS" bash build.sh && bash build_x86.sh
+```
+
+**P1.4/P1.5 通过 patch native skel.so 抓 ground truth（详见
+`Agent/qnn_re/p1_4_kernel_patch_2026-04-29.md`, `p1_5_native_layout_2026-04-29.md`,
+和 `reference_vendor_kernel_patch_dump.md`）已确定**：
+- 5 个 descriptor 差异（n_tiles_pow2=32, strides=32, mask args, mask[+0x38]=extra ptr）
+- act_tbl/out_tbl 必须是 32 entries × 0x800 (2KB) M-pair packed 布局
+- HVX vmem 一次性 copy 32-ptr table 比 scalar memcpy 省 ~140 pkts
+- Gap 由 2.16× 关到 1.36×（37% packet 减少, 100% bit-exact）
 
 **测量方法已固化**：`scripts/perf_v8c8.py <run> --compare <native>`，详见
 `docs/v8c8_perf_reading_method.md`。
 
-**指标修正（2026-04-29）**：直接 V9_PMU_PROBE 在 baseline V73DEEP 上跑得：
-chrometrace pkts=1303 ≈ PMU `COMMITTED_PKT_ANY`=1316（kernel call only）。
-所以 chrometrace ≈ PMU ANY（所有 HW thread 求和），**不是** T0。
-之前认为 4× gap 是误读；真实 gap **2×**（pkts），**2.5×**（cyc）。
+**指标语义**: chrometrace pkts ≈ PMU `COMMITTED_PKT_ANY`（不是 T0）。
 
 ## 已确认（不要再重做）
 
@@ -413,3 +427,108 @@ EXTRA_DEFS="... -DV9_PMU_PROBE" bash build.sh ...
 ```
 GAP: ours/native  cyc=X.XX×  pkts=X.XX×  cpp_ratio=X.XX×
 ```
+
+---
+
+# 后续计划（2026-04-29 P1.5 后）
+
+## 当前剩余 gap 解构
+
+cpp ratio 1.18× → kernel-internal 已基本对齐 native。
+Packet count gap 1.36× = ~125 packets surplus。来源猜测：
+- **VTCM placement** ~80 pkts（native 把 wt + bias 放在 VTCM 0xfc02_xxxx，
+  我们用 DDR via `qhpi_tensor_raw_data`）
+- **Per-call kernel prologue** ~45 pkts（native 可能 chain 内 share HMX
+  state setup，我们每 call 都重做）
+
+## P2 优先级（按 ROI 排）
+
+### 🟢 P2.1 — 跨 shape 验证（半天）
+
+**目的**：确认 P1.4/P1.5 的 build flag 在 512/1024/2048/4096³ 同样有效，
+不仅仅 256³。可能在大 shape 下：
+- mt_per_block 不同 → V73D_NATIVE_LAYOUT 的 32-entry HVX path 不触发
+- 描述符 strides 需要重新对齐
+- 性能比例与 256 不同
+
+**做法**：
+```bash
+for SIZE in 512 1024 2048 4096; do
+  M=$SIZE K=$SIZE N=$SIZE WT_LAYOUT=kmaj CHAIN=8 \
+    OUT_DIR=".../v73deep_native_hvx_s${SIZE}" \
+    bash standard_flow/phaseB_v8/run_v8c8_chain.sh
+  python3 scripts/perf_v8c8.py .../v73deep_native_hvx_s${SIZE} \
+    --compare standard_flow/phaseA_native/s${SIZE}_chain8_compare
+done
+```
+
+如果某 shape gap 依然 >1.5×，patch native kernel 跑那 shape 的 dump（v3
+patch 已 ready，只需换 OUT_DIR）。
+
+### 🟡 P2.2 — VTCM placement for wt + bias（多天）
+
+**预期 close ~80 pkts gap**，剩 ~45 pkts。
+
+**做法**：在 `BbbKMajorOp.cpp` 的 op signature 里把 wt + bias declare 成
+`Storage_TCM_Only`。QNN 编译器会自动在 op 前插入 `weights_to_vtcm` /
+`bias_to_vtcm` ops（per
+`reference_qnn_custom_op_scheduling.md` + `qnn_primitive_alignment_phase01_2026-04-26.md`）。
+
+具体步骤：
+1. 修改 `interface.cpp` 的 BbbKMajor signature: `inputs[1].storage = Storage_TCM_Only`
+   for wt, `inputs[2].storage = Storage_TCM_Only` for bias
+2. ctxgen 重新跑，确认 lowered graph 自动插入了 to-VTCM ops
+3. 在 V9 op execute 里 wt_pack / bias_bytes 的 ptr 应该自动是 VTCM 地址（因
+   QNN 的 indirect storage）
+4. 测 chain8 hot pkts，预期 ~390 pkts 接近 native 346
+
+**风险**：signature 改完 ctxgen 可能在 Graph Optimizations 阶段崩（per
+P1.5 之前 V9_KERNEL_OLD_V73DESC 路径的经验）。需要 PASS 一次后才继续。
+
+### 🟡 P2.3 — Per-call prologue elimination（高风险，多天）
+
+**预期 close ~45 pkts gap**，到达 native 量级。
+
+**机制**：native 在 chain 内可能多个 ConvLayer_s1.opt 共享 HMX state
+寄存器配置（`mxmem` 写入 HMX descriptor 寄存器一次，后续 call 跳过）。
+
+**做法**：
+1. P1.4 v4 patch dump kernel prologue 阶段写入的 HMX state（前 30 packets
+   写入了什么寄存器）
+2. 把那些寄存器写入提到 V9 op 的 graph init/preCondition 阶段（per-graph
+   一次而不是 per-call）
+3. Patch local kernel 入口跳过对应 prologue packets
+
+**复杂度**：高。要看是否值得 vs 接受 1.36× gap。
+
+### 🔴 P2.4 — 直接接受 1.36× as ceiling（recommend）
+
+V73DEEP 已经从 2.16× 关到 1.36×。dlsym 路径下能做的事我们都做了。
+剩余 gap：
+- 80 pkts in VTCM placement —— 需要 op signature 修改 + ctxgen 调试
+- 45 pkts in kernel internal —— 需要更多 patch 实验
+
+**P6 (NEXT_STEPS 原)更新版**: V73DEEP 已经是 dlsym 实战可达的 best。
+推荐转去：
+- **多 instance ≥2048³ 性能优化** — 大 shape 的 Spill/Fill 优化
+- **prepare 时间优化** — ctxgen 加速
+- **其他模型层瓶颈** — 比如 attention layer norm
+
+## 推荐执行顺序
+
+1. **P2.1 先做**（半天）— 验证 P1.4/P1.5 flag 跨 shape 有效。如果只 256
+   有效，那 1.36× 就只是 256 一个点的 win，需要 per-shape 调优，价值大降。
+2. **P2.1 全过 → P2.2** — VTCM placement 是 closing 80 pkts 的最大单一
+   投入。signature 修改 + ctxgen 调试，2-3 天。
+3. **P2.2 完成 → 评估**：到 ~1.13× 时再决定 P2.3 是否值得。如果 ~1.13×
+   够好就接受。
+4. **如 P2.1 在大 shape 失败，换 P2.4**: 接受 256 的 1.36× win，文档化，
+   不再追 V73DEEP gap，转去其他瓶颈。
+
+## 测试 / RE infra 已就绪
+
+- `Agent/qnn_re/p1_4_kernel_patch_2026-04-29.md` — kernel patch + descs
+- `Agent/qnn_re/p1_5_native_layout_2026-04-29.md` — table layout RE
+- `reference_vendor_kernel_patch_dump.md` — patching method 总结
+- `/tmp/p14_patch/` — patch tools (dump_stub_v1/v2/v3.c, .bin)
+- 复现 patch dump：见 `reference_vendor_kernel_patch_dump.md` 的 recipe
