@@ -122,15 +122,49 @@ VTCM 比 DDR cyc/pkt 低 (3.24 vs 4.07 ratio观察)，但不影响 packet count�
 要让 wt/bias 在 VTCM 需要 op signature 改成 TCM_Only — 详见
 `qnn_primitive_alignment_phase01_2026-04-26.md`。
 
+## V2 patch 扩展 — table layout RE 部分
+
+V2 patch (`/tmp/p14_patch/dump_stub_v2.c`, 204 bytes) 在 v1 基础上额外 dump
+32 dwords from out_tbl_all + 32 dwords from act_tbl_all to offset 0x90..0x18f
+plus tail marker `0xFEEDFACE` at 0x190.
+
+### Native out_tbl_all 揭示 (前 28 entries 干净)
+
+```
+[ 0..27]: 0xfc010000 + i * 0x800   <-- VTCM, 2KB stride per tile
+[28..31]: 垃圾                      <-- 不知是 patch 限制 or layout 特殊
+```
+
+**关键事实**:
+- 输出 tile 在 **VTCM** (0xfc010000..0xfc01ffff = 64KB, exactly = 256³ output size)
+- Tile stride = **0x800 (2KB)** per entry, NOT 1024 — 暗示 tile = 2x M-fanout 64×32 layout
+- 28 valid entries - 不能确认是真实数还是我们 readback 限制
+
+### act_tbl_all dump 失败
+
+`ad[0] = 0x02098c10`, but reading 32 dwords from there gave random-looking values
+(0x340161bd, 0x22de0600, ...) — not pointers. 推测 readback 时机问题：act_tbl
+内容可能在 chain 后续 op 中被覆盖, or 我们解码 layout 在 0x110+ offset 处偏离.
+
+(Markers 在 offset 0x190 处也读不出 0xFEEDFACE，证明 tile 内 row-major 32×32 假设
+在 row 8+ 不成立，可能 Crouton tile 实际 layout 复杂——但 row 0..7 是确认正确的.)
+
 ## artefact
 
 - `Agent/qnn_re/p1_4_kernel_patch_2026-04-29.md` (本文件)
-- `/tmp/p14_patch/dump_stub.c` `dump_stub.bin` `libQnnHtpV75Skel_PATCHED.so`
-- `/tmp/p14_patch/native_dump/Y.raw` (raw 262144 bytes fp32 from native run)
-- `phase1_validation/v73deep_native_full_match/` (with native descs applied)
-- skel restored to original on device after dump
+- `/tmp/p14_patch/dump_stub.c` `dump_stub.bin` `libQnnHtpV75Skel_PATCHED.so` (v1)
+- `/tmp/p14_patch/dump_stub_v2.c` `dump_stub_v2.bin` `skel_v2.so` (v2 with table dump)
+- `/tmp/p14_patch/native_dump/Y.raw` `native_dump_v2.raw` (raw native outputs)
+- `phase1_validation/v73deep_native_full_match/` (with native descs applied — 475 pkts / 50% bit-exact)
+- skel restored to original on device after each dump
 
-## 下一步 (P1.5: layout RE)
+## 下一步 (P1.5: full layout RE + VTCM placement)
 
-要 close 剩余 50% gap，需要 dump native's act_tbl_all / out_tbl_all layout
-via patch 扩展。这是 P1 之后的 P1.5 子任务。
+要 close 剩余 1.37× gap, 需要：
+1. 解 native act_tbl_all 完整 layout (32 entries × 4 bytes per loop1 iter,
+   stride 32 dwords)
+2. Match VTCM placement for wt + bias (现在我们用 DDR via qhpi_tensor_raw_data)
+3. 重排 act_tbl_all 让 stride=32 + n_tiles_pow2=32 covers full 64 outputs
+
+P1.4 已经把 gap 从 2.16× 减到 1.37× (= 36% 减包数). 剩余 gap 推测 ~80% 在
+table layout, ~20% 在 VTCM placement (cyc/pkt ratio).
