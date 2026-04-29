@@ -135,6 +135,14 @@ def main():
     bias_fold_i32 = bias_fold_bytes.view(np.int32).reshape(1, n_tiles, 1, 64).copy()
     bias_init = numpy_helper.from_array(bias_fold_i32, name="bias")
 
+    # ── VTCM scratch — 2 KB static zero, declared TCM_Only in op signature.
+    # QNN auto-DMAs to VTCM (via the same path as wt/bias). At runtime the op
+    # uses this region as backing store for act_tbl_all/out_tbl_all so the
+    # kernel reads pointer tables from VTCM (matches native ConvLayer_s1.opt
+    # 0xfc02_xxxx layout) instead of stack/DDR.
+    vtcm_scratch_init = numpy_helper.from_array(
+        np.zeros((1, 1, 1, 2048), dtype=np.uint8), name="vtcm_scratch")
+
     # ── ONNX graph build ─────────────────────────────────────────────
     chain = max(1, int(args.chain))
     in_reshape_dims = numpy_helper.from_array(
@@ -142,7 +150,8 @@ def main():
     out_reshape_dims = numpy_helper.from_array(
         np.array([1, 1, M, N], dtype=np.int64), name="out_reshape_dims")
 
-    initializers = [wt_init, bias_init, in_reshape_dims, out_reshape_dims]
+    initializers = [wt_init, bias_init, vtcm_scratch_init,
+                    in_reshape_dims, out_reshape_dims]
     inputs_info = []
     outputs_info = []
     nodes = []
@@ -162,7 +171,7 @@ def main():
             out_name = f"mm_c8_{i}" if i < chain - 1 else "mm_c8"
             nodes.append(helper.make_node(
                 "BbbKMajor",
-                inputs=[prev, "wt_packed", "bias"],
+                inputs=["bias", "wt_packed", prev, "vtcm_scratch"],
                 outputs=[out_name],
                 name=f"bbb_chain{i}",
                 domain=DOMAIN,
@@ -196,7 +205,7 @@ def main():
                 name=f"reshape_in_{i}"))
             nodes.append(helper.make_node(
                 "BbbKMajor",
-                inputs=[act4d_name, "wt_packed", "bias"],
+                inputs=["bias", "wt_packed", act4d_name, "vtcm_scratch"],
                 outputs=[mm_c8_name],
                 name=f"bbb_indep{i}",
                 domain=DOMAIN,

@@ -144,6 +144,35 @@ extern "C" void hmx_v73_convbbb1x1deep_stride1(
     const hmx_conv_mask_desc_t *mask_desc,
     const uint32_t             *extra_param);
 
+#if defined(V9_OWN_KERNEL) && defined(__hexagon__)
+/* Phase B step 1 — embedded byte-replica of `hmx_v73_convbbb1x1deep_stride1`.
+ * Runtime no longer dlsyms QNN's binary; we jump into our own copy of the
+ * 1132-byte kernel. PC-relative branches make the bytes position-independent.
+ * See v73deep_replica_bytes.h + scripts/extract_v73deep_bytes.py.
+ *
+ * Phase B step 2 (next): replace the .byte block with hand-written Hexagon
+ * inline asm packet by packet, validating bit-exactness after each packet
+ * substituted. */
+__attribute__((naked, aligned(64), noinline))
+static void our_v73deep_kernel(
+    const hmx_conv_out_desc_t  *od,
+    const hmx_conv_act_desc_t  *ad,
+    const uint8_t              *wt,
+    const uint8_t              *bias,
+    const hmx_conv_mask_desc_t *mask,
+    const uint32_t             *extra_param)
+{
+    __asm__ volatile (
+#       include "v73deep_replica_bytes.inc"
+    );
+}
+#define hmx_v73_convbbb1x1deep_stride1_call(od, ad, wt, bias, md, ep) \
+    our_v73deep_kernel((od), (ad), (wt), (bias), (md), (ep))
+#else
+#define hmx_v73_convbbb1x1deep_stride1_call(od, ad, wt, bias, md, ep) \
+    hmx_v73_convbbb1x1deep_stride1((od), (ad), (wt), (bias), (md), (ep))
+#endif
+
 /* hmx_v73_convbbb1x1deep_stride1_sparsity (0x2ebb00, 820 B). Disasm
  * (Step 3 candidate): activation MAC = `:cm` (NOT `:deep:cm`), weight
  * MAC = `:deep`. Bias single load per outer (r3 += 0x100, like non-deep).
@@ -713,13 +742,14 @@ static uint32_t hmx_matmul_v9_kernel(
         uint64_t cyc_op_start_64;
         asm volatile ("%0 = C15:14" : "=r"(cyc_op_start_64));
 #endif
-        void **act_blocks = qhpi_tensor_block_table(inputs[0]);
+        /* Phase C-1 reorder: sig is now {bias[0], wt[1], act[2], scratch[3]}. */
+        void **act_blocks = qhpi_tensor_block_table(inputs[2]);
         const uint8_t *wt_pack    = (const uint8_t *)qhpi_tensor_raw_data(inputs[1]);
-        const uint8_t *bias_bytes = (const uint8_t *)qhpi_tensor_raw_data(inputs[2]);
+        const uint8_t *bias_bytes = (const uint8_t *)qhpi_tensor_raw_data(inputs[0]);
         void **out_blocks = qhpi_tensor_block_table(outputs[0]);
         if (!act_blocks || !wt_pack || !bias_bytes || !out_blocks) return QHPI_Success;
 
-        uint32_t blocks = qhpi_tensor_block_table_length(inputs[0]);
+        uint32_t blocks = qhpi_tensor_block_table_length(inputs[2]);
         uint32_t S = 0;
         if (blocks == 4)         S = 32;
         else if (blocks == 8)    S = 64;
@@ -825,8 +855,23 @@ static uint32_t hmx_matmul_v9_kernel(
          * Total drains = N_t outer × 1 K-iter × M_t loop1 = M_t × N_t ✓
          * Total MACs   = total drains × K_t = M_t × N_t × K_t ✓
          */
+#if defined(V73D_TABLE_VTCM)
+        /* Table backing store comes from inputs[3] VTCM scratch (2 KB static).
+         * Native ConvLayer_s1.opt has both tables in VTCM at 0xfc02_xxxx; our
+         * stack arrays land at 0x01f5_xxxx (DDR/L2-cached). Per-loop1 reads of
+         * the pointer table cold-miss when not in cache → ~50-100 pkts on
+         * first kernel call. Static layout in scratch:
+         *   [0    ..  511] act_tbl_all  (max 128 entries × 4 bytes = 512 B)
+         *   [512  .. 1023] out_tbl_all  (max 128 entries × 4 bytes = 512 B)
+         * 2 KB tensor leaves headroom. */
+        uint8_t *vtcm_scratch = (uint8_t *)qhpi_tensor_raw_data(inputs[3]);
+        int32_t *act_tbl_all = (int32_t *)(vtcm_scratch != nullptr ? (vtcm_scratch + 0)   : nullptr);
+        int32_t *out_tbl_all = (int32_t *)(vtcm_scratch != nullptr ? (vtcm_scratch + 512) : nullptr);
+        if (act_tbl_all == nullptr) return QHPI_Success;
+#else
         int32_t act_tbl_all[1024] __attribute__((aligned(64))); /* M_t × K_t up to 32×32 = 1024 (1024³) */
         int32_t out_tbl_all[1024] __attribute__((aligned(64))); /* M_t × N_t up to 32×32 = 1024 (1024³) */
+#endif
         /* Lane A round 2 (2026-04-28): split by mt_per_block so the divide
          * `M_t / mt_per_block` and inb branch go away. mt_per_block ∈ {1,2}
          * for all our supported shapes (S ∈ [128, 1024]). The `void **`
@@ -1324,7 +1369,7 @@ static uint32_t hmx_matmul_v9_kernel(
             }
         }
 #else
-        hmx_v73_convbbb1x1deep_stride1(&od, &ad, wt_pack, bias_bytes, md, extra_param);
+        hmx_v73_convbbb1x1deep_stride1_call(&od, &ad, wt_pack, bias_bytes, md, extra_param);
 #endif
 #elif defined(V9_NATIVE_V73)
         /* hmx_v73_convbbb1x1_stride1 — `:deep:cm` activation MAC. 6th param =
@@ -1402,7 +1447,8 @@ static uint32_t hmx_matmul_v9_kernel(
         void **out_blocks = qhpi_tensor_block_table(outputs[0]);
         if (!out_blocks) return QHPI_Success;
 
-        uint32_t blocks = qhpi_tensor_block_table_length(inputs[0]);
+        /* Phase C-1 reorder: act is at inputs[2]. */
+        uint32_t blocks = qhpi_tensor_block_table_length(inputs[2]);
         uint32_t S = 0;
         if (blocks == 4)         S = 32;
         else if (blocks == 8)    S = 64;
@@ -1743,15 +1789,20 @@ static uint32_t hmx_matmul_v9_kernel(
  *
  * NOTE: qhpi_tensor_shape() returns rank=0 for all auto-DMA'd tensors at
  * >=64³. Kernel derives M=K=N (square test) from act block_table_length. */
+/* Phase C-1 (2026-04-30): reorder inputs to put statics first {bias, wt, scratch}
+ * with dynamic act last. Hypothesis: QNN's VTCM allocator may follow input
+ * index order, so bias-first → bias at lowest VTCM addr (matches native
+ * layout bias=0xfc020000 / wt=0xfc020800 / act=0xfc030800). */
 static QHPI_Tensor_Signature_v1 sig_inputs_v9[] = {
-    {QHPI_QUInt8, QHPI_Layout_Crouton_8, QHPI_Storage_Indirect, QHPI_MemLoc_TCM_Only},
-    {QHPI_QUInt8, QHPI_Layout_Flat4,     QHPI_Storage_Direct,   QHPI_MemLoc_TCM_Only},
-    {QHPI_Int32,  QHPI_Layout_Flat4,     QHPI_Storage_Direct,   QHPI_MemLoc_TCM_Only},
+    {QHPI_Int32,  QHPI_Layout_Flat4,     QHPI_Storage_Direct,   QHPI_MemLoc_TCM_Only}, /* [0] bias */
+    {QHPI_QUInt8, QHPI_Layout_Flat4,     QHPI_Storage_Direct,   QHPI_MemLoc_TCM_Only}, /* [1] wt */
+    {QHPI_QUInt8, QHPI_Layout_Crouton_8, QHPI_Storage_Indirect, QHPI_MemLoc_TCM_Only}, /* [2] act */
+    {QHPI_QUInt8, QHPI_Layout_Flat4,     QHPI_Storage_Direct,   QHPI_MemLoc_TCM_Only}, /* [3] scratch */
 };
 static QHPI_Tensor_Signature_v1 sig_outputs_v9[] = {
     {QHPI_QUInt8, QHPI_Layout_Crouton_8, QHPI_Storage_Indirect, QHPI_MemLoc_TCM_Only},
 };
-static const uint32_t SIG_NUM_IN_V9 = 3;
+static const uint32_t SIG_NUM_IN_V9 = 4;
 #else
 static QHPI_Tensor_Signature_v1 sig_inputs_v9[] = {
     {QHPI_QUInt8,  QHPI_Layout_Flat4, QHPI_Storage_Direct, QHPI_MemLoc_TCM_Only},
@@ -1788,8 +1839,9 @@ static const uint32_t SIG_NUM_IN_V9 = 4;
 static float bbb_cost_function(const uint32_t num_inputs, const QHPI_Tensor *const *inputs)
 {
     (void)num_inputs;
-    if (!inputs || !inputs[0]) return 1.0f;
-    QHPI_Shape s = qhpi_tensor_shape(inputs[0]);
+    /* Phase C-1 reorder: act is at inputs[2]. */
+    if (!inputs || num_inputs < 3 || !inputs[2]) return 1.0f;
+    QHPI_Shape s = qhpi_tensor_shape(inputs[2]);
     /* act shape at prepare time: try [1, M/32, 32, K]; rank-3 fallback [1, M, K]. */
     uint32_t M = 256, K = 256;
     if (s.rank == 4) { M = s.dims[1] * s.dims[2]; K = s.dims[3]; }

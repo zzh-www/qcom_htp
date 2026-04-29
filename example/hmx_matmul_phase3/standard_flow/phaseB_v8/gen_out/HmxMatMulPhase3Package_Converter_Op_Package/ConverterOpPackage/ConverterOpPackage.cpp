@@ -117,18 +117,19 @@ EXPORT_API Qnn_ErrorHandle_t CroutonPackSpikeDataTypeInference(Qnn_OpConfig_t *o
     return QNN_SUCCESS;
 }
 
-/* ---------- BbbKMajor (3-input native-aligned) ----------
-   in[0] = [1, M/32, 32, K]    act    (Crouton_8 via QNN auto-insert)
-   in[1] = [1, K/32, N/32,1024] wt    (pre-packed native ConvLayer layout)
-   in[2] = [N]                  bias  (raw int32 STATIC)
+/* ---------- BbbKMajor (4-input — Phase C-1 reordered: bias-first) ----------
+   in[0] = [N]                  bias  (raw int32 STATIC)
+   in[1] = [1, K/32, N/32,1024] wt    (pre-packed)
+   in[2] = [1, M/32, 32, K]    act    (Crouton_8)
+   in[3] = [1, 1, 1, 2048]      scratch (TCM_Only static, runtime tables)
    out   = [1, M/32, N/32, 1024] tile-layout                              */
 EXPORT_API Qnn_ErrorHandle_t BbbKMajorShapeInference(Qnn_OpConfig_t *op) {
-    if (op->v1.numOfInputs < 3 || op->v1.numOfOutputs < 1)
+    if (op->v1.numOfInputs < 4 || op->v1.numOfOutputs < 1)
         return QNN_OP_PACKAGE_ERROR_INVALID_INFO;
-    uint32_t *a = tensor_dims(&op->v1.inputTensors[0]);
     uint32_t *w = tensor_dims(&op->v1.inputTensors[1]);
+    uint32_t *a = tensor_dims(&op->v1.inputTensors[2]);
     uint32_t *o = tensor_dims(&op->v1.outputTensors[0]);
-    if (tensor_rank(&op->v1.inputTensors[0]) != 4 ||
+    if (tensor_rank(&op->v1.inputTensors[2]) != 4 ||
         tensor_rank(&op->v1.inputTensors[1]) != 4) return QNN_OP_PACKAGE_ERROR_INVALID_INFO;
     /* a[1]=M_t, w[2]=N_t. o = [1, M_t, N_t, 1024]. */
     o[0] = 1; o[1] = a[1]; o[2] = w[2]; o[3] = 1024;
