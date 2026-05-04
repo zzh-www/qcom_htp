@@ -63,18 +63,18 @@ ONNX hmx::HmxU8I8ToU8MatMul
   -> XML declares op surface
   -> converter op package provides shape/type inference
   -> qairt-converter emits DLC custom node
-  -> ctxgen loads x86 op package and resolves QHPI registration
+  -> ctxgen loads x86 op package and resolves QHPI precompute registration
   -> HTP runtime inserts surrounding built-ins:
        q::*InputSlice
        q::ForceFormat_Crouton
        q::ConvLayer.opt.weights_to_vtcm
-  -> QHPI calls hmx_u8i8_to_u8_matmul_kernel()
-  -> wrapper reads tensor handles/block tables
-  -> wrapper builds native HMX descriptors
+  -> QHPI graph-load precompute records direct bias/weight pointers,
+     activation/output Crouton block tables, and tile counts
+  -> QHPI hot callback stitches the tiny native descriptors on stack
   -> owned V73DEEP inline asm runs
 ```
 
-这个 boundary 是当前 gap 的核心背景：我们可以运行同一个低层 HMX body，但 custom op wrapper 仍然要付 QHPI callback、tensor lookup、descriptor/table build 的成本；native built-in path 的内部 wrapper 和 scheduler 集成更深。
+这个 boundary 是 gap 的核心背景，但 perf 读法要小心：native MatMul 会拆成 `bias_to_vtcm`、`weights_to_vtcm`、`DmaCheckpointSet`、`ConvLayer_s1.opt` 等多个 HTP 事件。早期 custom 版本把 QHPI lookup、shape recovery、pointer-table copy 都计在 `HmxU8I8ToU8MatMul` 热事件里；当前默认实现用 QHPI precompute 把这些准备工作提前到 graph-load/context-load 阶段，hot event 基本只剩 descriptor stitching + HMX body。
 
 ## Op Signature
 
@@ -168,7 +168,18 @@ extra_param = {1, 0}
 mask[0x38] = extra_param pointer
 ```
 
-The wrapper derives `S` from the activation block table length, builds activation/output pointer tables, patches the mask descriptor, then calls:
+The QHPI precompute function derives `S` from the activation block table length and stores the prepared state:
+
+```text
+precomputed_data:
+  bias_bytes       -> QNN-prepared Direct TCM bias
+  wt_pack          -> QNN-prepared Direct TCM K-major weight
+  act_qhpi_table   -> QNN Crouton activation block table
+  out_qhpi_table   -> QNN Crouton output block table
+  M_t/N_t/K_t      -> recovered tile counts
+```
+
+The hot callback no longer queries QHPI tensors or copies pointer tables. It builds the small native descriptors on stack, patches the mask descriptor, then calls:
 
 ```text
 our_v73deep_kernel(out_desc, act_desc, weight, bias, mask_desc, extra_param)
@@ -300,22 +311,32 @@ Metric interpretation:
 | packets / `pkts` | committed Hexagon packets, inferred from cycles/cpp | best gap metric |
 | `cpp` | cycles per packet | sanity check for stalls/issue behavior |
 
-For the current 256^3 hot-op gap, packets are the most useful number.
+For the current 256^3 hot-op gap, packets are the most useful number, but the native side must be aggregated at QNN-op level.
 
 Latest verified hot-op numbers on device, 2026-05-05:
 
-| Path | cycles | packets | cpp |
-|---|---:|---:|---:|
-| native QNN MatMul lowered to `ConvLayer_s1.opt` | 1147 | 346 | 3.315 |
-| custom `HmxU8I8ToU8MatMul` | 1679 | 471 | 3.565 |
+| Path | cycles | packets | cpp | Meaning |
+|---|---:|---:|---:|---|
+| native kernel-only `ConvLayer_s1.opt` | 1147 | 346 | 3.315 | HMX body event only |
+| native QNN-op aggregate `MatMul_*` | 1444 | 451 | 3.201 | `bias_to_vtcm + weights_to_vtcm + DmaCheckpointSet + ConvLayer_s1.opt` |
+| custom `HmxU8I8ToU8MatMul` precompute default | 1257 | 349 | 3.600 | QHPI-prepared state + tiny descriptor stitching + HMX body |
 
 Gap:
 
 ```text
-custom - native = +532 cycles, +125 packets
+custom - native kernel-only = +110 cycles, +3 packets
+custom - native QNN-op aggregate = -187 cycles, -102 packets
 ```
 
-The simple explanation is: the HMX body has been replicated; the remaining gap is the custom-op invocation/wrapper and descriptor/table setup path around that body.  A post-cleanup scalar table-copy regression measured 550 packets; restoring the old Hexagon-only 128B HVX copy path for the canonical 256^3 C8 table layout brings the hot op back to 471 packets, essentially aligned with the earlier 468-packet state.  Cycles/cpp move run-to-run; packet count is the more stable gap signal.
+The corrected explanation is now stronger than the earlier wrapper diagnosis:
+the HMX body was already correct, and the apparent `+125 pkts` came from
+comparing the old custom callback against only native `ConvLayer_s1.opt`.
+Native QNN hides setup in sidecar HTP ops (`bias_to_vtcm`, `weights_to_vtcm`,
+`DmaCheckpointSet`) and in graph-load preparation.  After moving the custom
+lookup/shape/table preparation into QHPI precompute and consuming QNN's existing
+Crouton block tables directly, the hot custom op is only `+3 pkts` from native
+kernel-only.  The old wrapper path measured `1794 cycles / 471 pkts`; that is
+now historical evidence for where the gap was, not the current implementation.
 
 ## Do Not Reopen Without New Evidence
 

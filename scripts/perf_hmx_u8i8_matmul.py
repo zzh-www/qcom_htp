@@ -176,6 +176,55 @@ def summarise(events, target_op="HmxU8I8ToU8MatMul", drop_chain0=True):
     }
 
 
+def _qnn_suffix_index(name: str):
+    m = re.search(r"(\d+)$", name)
+    return int(m.group(1)) if m else None
+
+
+def aggregate_qnn_ops(events, qnn_prefix: str, drop_index0=True):
+    """Aggregate all HTP events that profiler maps to the same QNN op name.
+
+    This is the apples-to-apples view for native MatMul.  QNN lowers one MatMul
+    into multiple HTP events such as bias_to_vtcm, weights_to_vtcm,
+    DmaCheckpointSet, and ConvLayer_s1.opt.  Looking only at ConvLayer_s1.opt
+    undercounts the native QNN-op cost.
+    """
+    grouped = {}
+    for e in events:
+        qnn_name = e["qnn_name"]
+        if not qnn_name.startswith(qnn_prefix):
+            continue
+        g = grouped.setdefault(qnn_name, {"dur": 0, "pkts": 0, "parts": []})
+        g["dur"] += e["dur"]
+        g["pkts"] += e["pkts"]
+        g["parts"].append(e)
+    if not grouped:
+        return None
+
+    hot = []
+    cold = None
+    for qnn_name, g in grouped.items():
+        idx = _qnn_suffix_index(qnn_name)
+        if drop_index0 and idx == 0:
+            cold = (qnn_name, g)
+        else:
+            hot.append((qnn_name, g))
+    if not hot:
+        return None
+
+    total_dur = sum(g["dur"] for _, g in hot)
+    total_pkts = sum(g["pkts"] for _, g in hot)
+    return {
+        "n_qnn_ops": len(grouped),
+        "hot_count": len(hot),
+        "hot_avg_dur": total_dur / len(hot),
+        "hot_avg_pkts": total_pkts / len(hot),
+        "hot_avg_cpp": total_dur / max(1, total_pkts),
+        "cold": cold,
+        "hot": hot,
+    }
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("out_dir", help="custom_u8i8 run directory (must contain ctx/ + device_out/)")
@@ -183,6 +232,10 @@ def main():
     p.add_argument("--compare", help="Native run directory for side-by-side")
     p.add_argument("--target", default="HmxU8I8ToU8MatMul", help="Op name substring to filter")
     p.add_argument("--target-native", default="ConvLayer_s1.opt", help="Native op name substring")
+    p.add_argument("--custom-qnn-prefix", default="hmx_u8i8_chain",
+                   help="QNN op-name prefix for custom aggregate view")
+    p.add_argument("--native-qnn-prefix", default="MatMul_",
+                   help="QNN op-name prefix for native aggregate view")
     p.add_argument("--shape", type=int, default=256)
     args = p.parse_args()
 
@@ -199,6 +252,11 @@ def main():
             if s['cold']:
                 print(f"    cold  ({s['cold']['qnn_name']}): "
                       f"dur={s['cold']['dur']}  pkts={s['cold']['pkts']}  cpp={s['cold']['cpp']:.3f}")
+            custom_agg = aggregate_qnn_ops(events, args.custom_qnn_prefix)
+            if custom_agg:
+                print(f"  qnn-op aggregate ({args.custom_qnn_prefix}*): hot avg "
+                      f"dur={custom_agg['hot_avg_dur']:.0f}  pkts={custom_agg['hot_avg_pkts']:.0f}  "
+                      f"cpp={custom_agg['hot_avg_cpp']:.3f}")
         else:
             print(f"  no events matched target='{args.target}'")
 
@@ -243,8 +301,22 @@ def main():
             if 'hot_avg_dur' in (s := summarise(events, target_op=args.target) or {}):
                 cyc_ratio = s['hot_avg_dur'] / ns['hot_avg_dur']
                 pkt_ratio = s['hot_avg_pkts'] / ns['hot_avg_pkts']
-                print(f"\n  GAP: ours/native  cyc={cyc_ratio:.2f}×  pkts={pkt_ratio:.2f}×  "
+                print(f"\n  GAP vs native kernel-only HTP op: "
+                      f"cyc={cyc_ratio:.2f}×  pkts={pkt_ratio:.2f}×  "
                       f"cpp_ratio={(s['hot_avg_cpp']/ns['hot_avg_cpp']):.2f}×")
+
+        native_agg = aggregate_qnn_ops(nat_events, args.native_qnn_prefix)
+        custom_agg = aggregate_qnn_ops(events, args.custom_qnn_prefix)
+        if native_agg:
+            print(f"  qnn-op aggregate ({args.native_qnn_prefix}*): hot avg "
+                  f"dur={native_agg['hot_avg_dur']:.0f}  pkts={native_agg['hot_avg_pkts']:.0f}  "
+                  f"cpp={native_agg['hot_avg_cpp']:.3f}")
+            if custom_agg:
+                print(f"\n  GAP vs native QNN-op aggregate: "
+                      f"cyc={custom_agg['hot_avg_dur']/native_agg['hot_avg_dur']:.2f}×  "
+                      f"pkts={custom_agg['hot_avg_pkts']/native_agg['hot_avg_pkts']:.2f}×  "
+                      f"delta_cyc={custom_agg['hot_avg_dur']-native_agg['hot_avg_dur']:.0f}  "
+                      f"delta_pkts={custom_agg['hot_avg_pkts']-native_agg['hot_avg_pkts']:.0f}")
 
 
 if __name__ == "__main__":

@@ -32,6 +32,7 @@ SRCS=(
 FLAGS=(
     -O2 -fPIC
     -D__HVXDBL__ -DUSE_OS_LINUX -DPREPARE_DISABLED
+    -DHMX_U8I8_ENABLE_QHPI_PRECOMPUTE
     "-DTHIS_PKG_NAME=$PACKAGE_NAME"
     -I "$QNN_SDK_ROOT/include/QNN"
     -fvisibility=default

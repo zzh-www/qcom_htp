@@ -4,15 +4,16 @@
  * Single production custom MatMul path:
  *   bias[0], wt[1], act[2], scratch[3] -> out[0]
  *
- * The runtime body is the owned V73DEEP Conv1x1 kernel replica.  The QHPI
- * wrapper exists only to translate QNN tensor/block tables into the native
- * descriptor ABI expected by that kernel.
+ * The runtime body is the owned V73DEEP Conv1x1 kernel replica.  The default
+ * QHPI path precomputes QNN tensor/block metadata at graph load, then the hot
+ * callback only stitches the small native descriptor ABI expected by that
+ * kernel.
  *
  * High-level data flow:
  *
  *   QNN/QHPI tensor form
  *       |
- *       |  C++ wrapper reorganizes metadata, not the large payloads
+ *       |  QHPI precompute records metadata; hot callback stitches descriptors
  *       v
  *   native V73DEEP descriptor form
  *       |
@@ -121,6 +122,12 @@ static inline void store_le32(uint8_t *dst, uint32_t offset, uint32_t value)
     dst[offset + 3] = (uint8_t)((value >> 24) & 0xffu);
 }
 
+static void init_mask_desc(uint32_t *mask_buf)
+{
+    for (uint32_t i = 0; i < 16; ++i) mask_buf[i] = 0;
+    set_hmx_params_conv1x1(mask_buf, 0x700, 0, 0, 0, 0x20);
+}
+
 static const hmx_conv_mask_desc_t *get_mask_desc(uint32_t *mask_buf)
 {
     /*
@@ -130,11 +137,276 @@ static const hmx_conv_mask_desc_t *get_mask_desc(uint32_t *mask_buf)
      */
     static int initialized = 0;
     if (!initialized) {
-        for (uint32_t i = 0; i < 16; ++i) mask_buf[i] = 0;
-        set_hmx_params_conv1x1(mask_buf, 0x700, 0, 0, 0, 0x20);
+        init_mask_desc(mask_buf);
         initialized = 1;
     }
     return reinterpret_cast<const hmx_conv_mask_desc_t *>(mask_buf);
+}
+
+#endif
+
+#if defined(HMX_U8I8_ENABLE_QHPI_PRECOMPUTE)
+static constexpr uint32_t kHmxU8I8PrecomputedDataSize = 56;
+#endif
+
+#if defined(__hexagon__) && !defined(SCALAR_ONLY) && defined(HMX_U8I8_ENABLE_QHPI_PRECOMPUTE)
+/*
+ * Default QHPI precompute path.
+ *
+ * Native QNN MatMul does not charge all setup work to the final ConvLayer
+ * kernel event: constant movement, descriptor construction, and DMA
+ * synchronization show up as sidecar HTP events such as weights_to_vtcm and
+ * bias_to_vtcm.  QHPI exposes the same idea through do_precomputation_function:
+ * it is called once when the graph is loaded, before inference executions.
+ *
+ * This struct is the custom-op equivalent of that native prepared state.  It
+ * captures everything the hot callback used to rebuild every invocation:
+ *
+ *   QHPI tensors/block tables
+ *        |
+ *        | graph-load precompute
+ *        v
+ *   hmx_u8i8_precomputed_t
+ *     - direct bias/weight pointers
+ *     - activation/output Crouton block-table pointers
+ *     - tile counts and descriptor constants
+ *        |
+ *        | inference hot path
+ *        v
+ *   our_v73deep_kernel(...)
+ *
+ * The large payload blocks and pointer tables are still owned by QNN.  The hot
+ * callback no longer asks QHPI for tensor/block metadata; it only stitches the
+ * tiny native descriptor ABI on stack and enters the HMX body.
+ */
+static constexpr uint32_t kHmxU8I8PrecomputeMagic = 0x48385850u; /* H8XP */
+
+struct hmx_u8i8_precomputed_t {
+    uint32_t magic;
+    uint32_t S;
+    uint32_t M_t;
+    uint32_t N_t;
+    uint32_t K_t;
+    uint32_t mt_per_block;
+    uint32_t mt_groups;
+    uint32_t act_entries;
+    uint32_t out_entries;
+    const uint8_t *bias_bytes;
+    const uint8_t *wt_pack;
+    uint8_t *out_first_block;
+    const int32_t *act_qhpi_table;
+    const int32_t *out_qhpi_table;
+};
+
+static_assert(sizeof(hmx_u8i8_precomputed_t) == kHmxU8I8PrecomputedDataSize,
+              "QHPI precompute ABI size must match the x86 registration stub");
+
+static uint32_t hmx_u8i8_precompute(
+    QHPI_RuntimeHandle *handle,
+    void *data,
+    uint32_t num_outputs,
+    QHPI_Tensor **outputs,
+    uint32_t num_inputs,
+    const QHPI_Tensor *const *inputs)
+{
+    (void)handle;
+    (void)num_outputs;
+    (void)num_inputs;
+
+    if (!data || !outputs || !outputs[0] || !inputs || num_inputs < 4) return QHPI_Success;
+
+    hmx_u8i8_precomputed_t *pc = reinterpret_cast<hmx_u8i8_precomputed_t *>(data);
+    std::memset(pc, 0, sizeof(*pc));
+
+    const uint8_t *bias_bytes =
+        reinterpret_cast<const uint8_t *>(qhpi_tensor_raw_data(inputs[0]));
+    const uint8_t *wt_pack =
+        reinterpret_cast<const uint8_t *>(qhpi_tensor_raw_data(inputs[1]));
+    void **act_blocks = qhpi_tensor_block_table(inputs[2]);
+    void **out_blocks = qhpi_tensor_block_table(outputs[0]);
+    const uint32_t blocks = qhpi_tensor_block_table_length(inputs[2]);
+    if (!bias_bytes || !wt_pack || !act_blocks || !out_blocks) return QHPI_Success;
+
+    const uint32_t S = square_size_from_crouton_blocks(blocks);
+    if (S < 128) return QHPI_Success;
+
+    const uint32_t M_t = S / 32;
+    const uint32_t N_t = S / 32;
+    const uint32_t K_t = S / 32;
+    const uint32_t block_rows = (S / 4) < 64 ? (S / 4) : 64;
+    const uint32_t mt_per_block = block_rows / 32;
+    if (mt_per_block == 0) return QHPI_Success;
+
+    const uint32_t mt_groups = (mt_per_block == 2) ? (M_t >> 1) : M_t;
+    const uint32_t act_entries = mt_groups * K_t;
+    const uint32_t out_entries = mt_groups * N_t;
+    if (act_entries > 1024 || out_entries > 1024) {
+        return QHPI_Success;
+    }
+
+    const int32_t *act_src = reinterpret_cast<const int32_t *>(act_blocks);
+    const int32_t *out_src = reinterpret_cast<const int32_t *>(out_blocks);
+
+    pc->bias_bytes = bias_bytes;
+    pc->wt_pack = wt_pack;
+    pc->out_first_block = reinterpret_cast<uint8_t *>(out_blocks[0]);
+    pc->act_qhpi_table = act_src;
+    pc->out_qhpi_table = out_src;
+    pc->S = S;
+    pc->M_t = M_t;
+    pc->N_t = N_t;
+    pc->K_t = K_t;
+    pc->mt_per_block = mt_per_block;
+    pc->mt_groups = mt_groups;
+    pc->act_entries = act_entries;
+    pc->out_entries = out_entries;
+    pc->magic = kHmxU8I8PrecomputeMagic;
+    return QHPI_Success;
+}
+
+static uint32_t hmx_u8i8_to_u8_matmul_precomputed_kernel(
+    QHPI_RuntimeHandle *handle,
+    const void *precomputed_data)
+{
+    (void)handle;
+
+    const hmx_u8i8_precomputed_t *pc =
+        reinterpret_cast<const hmx_u8i8_precomputed_t *>(precomputed_data);
+    if (!pc || pc->magic != kHmxU8I8PrecomputeMagic) return QHPI_Success;
+
+#if defined(HMX_U8I8_PROBE_CYCLES)
+    uint64_t cyc_start = 0;
+    asm volatile("%0 = C15:14" : "=r"(cyc_start));
+#endif
+
+    /*
+     * Hot path after QHPI precompute:
+     *
+     *   prepared state: bias/weight raw pointers, QNN Crouton block tables,
+     *                   tile counts recovered once at graph load
+     *   per invoke:     stitch three tiny native descriptors on stack
+     *   compute:        jump into the owned V73DEEP body
+     *
+     * The pointer tables themselves are not copied here.  QNN already prepared
+     * them as part of tensor materialization, and the V73DEEP table order
+     * matches the Crouton block-table order for this C8 path.
+     */
+    int32_t *act_tbl_ptr = const_cast<int32_t *>(pc->act_qhpi_table);
+    int32_t *out_tbl_ptr = const_cast<int32_t *>(pc->out_qhpi_table);
+
+    static uint32_t mask_buf[16] __attribute__((aligned(16)));
+    uint32_t extra_param_local[16] __attribute__((aligned(16))) = {1u, 0u};
+    const hmx_conv_mask_desc_t *mask_desc = get_mask_desc(mask_buf);
+    mask_buf[0x38 / 4] =
+        static_cast<uint32_t>(reinterpret_cast<uintptr_t>(extra_param_local));
+
+    hmx_conv_out_desc_t out_desc_local = {
+        out_tbl_ptr,
+        pc->N_t,
+        pc->M_t * 4,
+        pc->M_t * 4,
+        8,
+        pc->N_t * 32,
+    };
+    hmx_conv_act_desc_t act_desc_local = {
+        act_tbl_ptr,
+        pc->K_t,
+        pc->M_t * 4,
+    };
+    const hmx_conv_out_desc_t *out_desc = &out_desc_local;
+    const hmx_conv_act_desc_t *act_desc = &act_desc_local;
+    const uint32_t *extra_param = extra_param_local;
+
+#if defined(HMX_U8I8_DESC_DUMP)
+    if (pc->out_first_block) {
+        uint8_t *dst = pc->out_first_block;
+        for (uint32_t i = 0; i < 128; ++i) dst[i] = 0;
+        store_le32(dst, 0, 0x48385844u); /* H8XD */
+        store_le32(dst, 4, pc->S);
+        store_le32(dst, 8, pc->M_t);
+        store_le32(dst, 12, pc->N_t);
+        store_le32(dst, 16, pc->K_t);
+        store_le32(dst, 20, pc->mt_per_block);
+        store_le32(dst, 24, reinterpret_cast<uintptr_t>(act_desc->act_ptr_pairs));
+        store_le32(dst, 28, reinterpret_cast<uintptr_t>(out_desc->out_tile_ptr_table));
+        store_le32(dst, 32, out_desc->out_table_stride_dwords);
+        store_le32(dst, 36, out_desc->out_y_stride_words);
+        store_le32(dst, 40, out_desc->n_tiles_pow2);
+        store_le32(dst, 44, static_cast<uint32_t>(out_desc->m_total_minus_step));
+        store_le32(dst, 48, out_desc->k_total_bytes);
+        store_le32(dst, 52, act_desc->n_act_pairs);
+        store_le32(dst, 56, act_desc->act_table_y_stride_words);
+        const uint32_t *mask_words = reinterpret_cast<const uint32_t *>(mask_desc);
+        for (uint32_t i = 0; i < 16; ++i) store_le32(dst, 64 + i * 4, mask_words[i]);
+    }
+    return QHPI_Success;
+#endif
+
+#if defined(HMX_U8I8_SKIP_KERNEL)
+    if (pc->out_first_block) {
+        uint8_t *dst = pc->out_first_block;
+        for (uint32_t i = 0; i < 16; ++i) dst[i] = 0;
+        store_le32(dst, 0, 0x48385853u); /* H8XS */
+        store_le32(dst, 4, pc->S);
+    }
+    return QHPI_Success;
+#endif
+
+#if defined(HMX_U8I8_PROBE_CYCLES)
+    uint64_t cyc_before_kernel = 0;
+    asm volatile("%0 = C15:14" : "=r"(cyc_before_kernel));
+#endif
+
+    /*
+     * Precomputed hot path: QHPI tensor lookup, shape recovery, and pointer
+     * table discovery happened at graph load.  The custom op event now starts
+     * at the tiny native descriptor stitching boundary.
+     */
+    our_v73deep_kernel(
+        out_desc,
+        act_desc,
+        pc->wt_pack,
+        pc->bias_bytes,
+        mask_desc,
+        extra_param);
+
+#if defined(HMX_U8I8_PROBE_CYCLES)
+    uint64_t cyc_after_kernel = 0;
+    asm volatile("%0 = C15:14" : "=r"(cyc_after_kernel));
+    if (pc->out_first_block) {
+        uint8_t *dst = pc->out_first_block;
+        store_le32(dst, 0, static_cast<uint32_t>(cyc_after_kernel - cyc_before_kernel));
+        store_le32(dst, 4, static_cast<uint32_t>(cyc_before_kernel - cyc_start));
+        store_le32(dst, 8, 0);
+        store_le32(dst, 12, 0);
+    }
+#endif
+
+    return QHPI_Success;
+}
+#elif defined(HMX_U8I8_ENABLE_QHPI_PRECOMPUTE)
+/*
+ * The x86 context generator must see the same QHPI kernel registration as the
+ * device package.  It does not execute the HMX body, so these are registration
+ * stubs only; the real precompute/execute implementation is compiled into the
+ * Hexagon HTP package above.
+ */
+static uint32_t hmx_u8i8_precompute(
+    QHPI_RuntimeHandle *,
+    void *,
+    uint32_t,
+    QHPI_Tensor **,
+    uint32_t,
+    const QHPI_Tensor *const *)
+{
+    return QHPI_Success;
+}
+
+static uint32_t hmx_u8i8_to_u8_matmul_precomputed_kernel(
+    QHPI_RuntimeHandle *,
+    const void *)
+{
+    return QHPI_Success;
 }
 #endif
 
@@ -547,8 +819,13 @@ static QHPI_Shape hmx_u8i8_shape_legalized(const QHPI_Op *op, const QHPI_Shape *
 
 static QHPI_Kernel_v1 sg_kernels[] = {
     {
+#if defined(HMX_U8I8_ENABLE_QHPI_PRECOMPUTE)
+        THIS_PKG_NAME_STR "::hmx_u8i8_to_u8_matmul_precomputed_kernel",
+        nullptr,
+#else
         THIS_PKG_NAME_STR "::hmx_u8i8_to_u8_matmul_kernel",
         hmx_u8i8_to_u8_matmul_kernel,
+#endif
         QHPI_RESOURCE_HMX,
         false,
         false,
@@ -556,7 +833,17 @@ static QHPI_Kernel_v1 sg_kernels[] = {
         4, sig_inputs,
         1, sig_outputs,
         hmx_u8i8_cost_function,
-        0, 0, nullptr, nullptr, nullptr,
+        0,
+#if defined(HMX_U8I8_ENABLE_QHPI_PRECOMPUTE)
+        kHmxU8I8PrecomputedDataSize,
+        hmx_u8i8_precompute,
+        hmx_u8i8_to_u8_matmul_precomputed_kernel,
+#else
+        0,
+        nullptr,
+        nullptr,
+#endif
+        nullptr,
     },
 };
 

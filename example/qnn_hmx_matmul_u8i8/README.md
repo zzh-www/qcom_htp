@@ -9,7 +9,7 @@ Conv1x1 inline-asm kernel replica.
 ```text
 src/
   QnnHmxMatMulU8I8Interface.cpp   OpPackage interface/provider
-  HmxU8I8ToU8MatMulOp.cpp         QHPI wrapper + descriptor builder
+  HmxU8I8ToU8MatMulOp.cpp         QHPI precompute + HMX descriptor bridge
   v73deep_conv1x1_kernel.h        owned V73DEEP kernel entry
   v73deep_conv1x1_kernel.inc      1132-byte inline-asm body
 build.sh                          hexagon-v75 + aarch64 op-package build

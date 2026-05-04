@@ -37,10 +37,13 @@ Latest verified hot-op numbers at 256^3 chain8 on device, 2026-05-05:
 
 | Path | cycles | packets | cpp | correctness |
 |---|---:|---:|---:|---|
-| native QNN `ConvLayer_s1.opt` | 1147 | 346 | 3.315 | baseline |
-| custom `HmxU8I8ToU8MatMul` | 1679 | 471 | 3.565 | bit-exact |
+| native QNN kernel-only `ConvLayer_s1.opt` | 1147 | 346 | 3.315 | under-counts QNN MatMul |
+| native QNN-op aggregate `MatMul_*` | 1444 | 451 | 3.201 | includes sidecar HTP ops |
+| custom `HmxU8I8ToU8MatMul` precompute default | 1257 | 349 | 3.600 | bit-exact |
 
-Simple gap statement: custom runs about 125 more committed packets per hot op in the current verified build.  The old post-cleanup regression was 550 packets; that came from scalarizing the activation/output pointer-table copies.  Restoring the old Hexagon-only 128B HVX copy path brings the custom op back to 471 packets, essentially aligned with the earlier 468-packet state.  The remaining extra work is outside the HMX body itself: QNN calls the custom op through an opaque QHPI custom-op wrapper, then our wrapper rebuilds descriptor/table state before jumping into the same V73DEEP kernel shape.  Native QNN reaches the skel wrapper with more internal state already materialized and scheduled as a built-in op.  Cycles vary more than packets run-to-run, so use packet gap as the stable comparison.
+Current gap statement: after QHPI precompute, the hot custom op is `1257 - 1147 = +110 cycles` and `349 - 346 = +3 packets` versus native kernel-only `ConvLayer_s1.opt`.  Versus native QNN-op aggregate, custom is faster because the custom flow hoists shared bias/weight preparation and uses QHPI precompute for tensor/block metadata.
+
+Historical gap statement: the old custom wrapper path measured `1794 cycles / 471 pkts`.  Comparing that to native kernel-only produced an apparent `+125 pkts`, but native QNN was hiding about `105 pkts` in sidecar HTP ops (`bias_to_vtcm`, `weights_to_vtcm`, `DmaCheckpointSet`).  The real lesson was architectural: input/layout preparation must be outside the hot compute event.
 
 ## How QNN Appears To Call This
 
@@ -49,14 +52,14 @@ QNN does not call a custom op like an internal `q::*` primitive.  The observed d
 ```text
 ONNX custom node
   -> converter XML + converter op package shape/type hooks
-  -> ctxgen resolves OpPackage provider and QHPI registration
+  -> ctxgen resolves OpPackage provider and QHPI precompute registration
   -> runtime inserts surrounding built-ins for tensor movement/layout
-  -> QHPI custom op callback receives tensor handles/block tables
-  -> custom wrapper builds native HMX descriptors
+  -> QHPI precompute records bias/weight pointers, Crouton block tables, tile counts
+  -> hot callback stitches small native descriptors on stack
   -> owned V73DEEP inline-asm kernel runs
 ```
 
-The important architectural boundary is the QHPI callback.  It gives us enough access to run the same low-level kernel, but not the same built-in scheduler/wrapper integration as native `q::ConvLayer_s1.opt`.
+The important architectural boundary is the QHPI callback and accounting model.  Native QNN splits MatMul setup across sidecar HTP ops and graph-load preparation; the custom path must mirror that by using QHPI precompute so `HmxU8I8ToU8MatMul` is effectively a compute event.
 
 ## Perf Reading
 
@@ -73,9 +76,15 @@ Meaning:
 |---|---|
 | `dur` / cycles | user-visible hot-op time on HTP timeline |
 | `pkts` | best proxy for extra executed Hexagon packet work |
-| `cpp` | sanity check for stalls/issue quality, not the primary gap size |
+| `cpp` | sanity check for stalls/issue quality; important after packet accounting is fixed |
 
-Most accurate for the current question is `pkts`: the gap is a packet-count gap, not primarily a cpp/stall gap.
+Most accurate first pass is `pkts`, but only after native sidecar events are
+aggregated back into the QNN MatMul.  Current precompute default is effectively
+packet-aligned with native kernel-only (`+3 pkts`).
+
+Use QNN-op aggregate view for native comparisons.  Kernel-only `ConvLayer_s1.opt`
+is useful for studying the HMX body, but it excludes native setup events that
+the custom op pays inside its own callback.
 
 Optional diagnostic build:
 
