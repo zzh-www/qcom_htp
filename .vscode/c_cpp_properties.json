@@ -26,7 +26,9 @@
             "defines": [
                 "ARCHV=75",
                 "USE_OS_QURT",
-                "__HVXDBL__"
+                "__HVXDBL__",
+                "__hexagon__",
+                "HMX_U8I8_DESC_DUMP"
             ]
         }
     ],
