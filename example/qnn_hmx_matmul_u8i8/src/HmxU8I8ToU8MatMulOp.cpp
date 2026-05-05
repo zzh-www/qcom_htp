@@ -122,31 +122,41 @@ static inline void store_le32(uint8_t *dst, uint32_t offset, uint32_t value)
     dst[offset + 3] = (uint8_t)((value >> 24) & 0xffu);
 }
 
+static uint32_t g_hmx_u8i8_mask_buf[16] __attribute__((aligned(16)));
+
 static void init_mask_desc(uint32_t *mask_buf)
 {
     for (uint32_t i = 0; i < 16; ++i) mask_buf[i] = 0;
     set_hmx_params_conv1x1(mask_buf, 0x700, 0, 0, 0, 0x20);
 }
 
-static const hmx_conv_mask_desc_t *get_mask_desc(uint32_t *mask_buf)
+static const hmx_conv_mask_desc_t *get_mask_desc()
 {
     /*
-     * The mask is shape-independent for the current production path, so we
-     * initialize the stable part once.  The per-invocation extra_param pointer
-     * is patched later because it points to stack storage in the current call.
+     * The mask is shape-independent for the current production path.  Native
+     * QNN sets bit 5 in the conv1x1 mask tuple and then the wrapper tail-calls
+     * the V73DEEP body.  For that direct deep entry, r5 already carries the
+     * extra_param pointer, so the old mask[0x38] patch is not needed.
      */
     static int initialized = 0;
     if (!initialized) {
-        init_mask_desc(mask_buf);
+        init_mask_desc(g_hmx_u8i8_mask_buf);
         initialized = 1;
     }
-    return reinterpret_cast<const hmx_conv_mask_desc_t *>(mask_buf);
+    return reinterpret_cast<const hmx_conv_mask_desc_t *>(g_hmx_u8i8_mask_buf);
+}
+
+static const hmx_conv_mask_desc_t *get_precomputed_mask_desc()
+{
+    return reinterpret_cast<const hmx_conv_mask_desc_t *>(g_hmx_u8i8_mask_buf);
 }
 
 #endif
 
 #if defined(HMX_U8I8_ENABLE_QHPI_PRECOMPUTE)
-static constexpr uint32_t kHmxU8I8PrecomputedDataSize = 56;
+static constexpr uint32_t kHmxU8I8MaxCopiedTableEntries = 64;
+static constexpr uint32_t kHmxU8I8PrecomputedDataSize =
+    56 + 2 * kHmxU8I8MaxCopiedTableEntries * sizeof(int32_t);
 #endif
 
 #if defined(__hexagon__) && !defined(SCALAR_ONLY) && defined(HMX_U8I8_ENABLE_QHPI_PRECOMPUTE)
@@ -175,9 +185,11 @@ static constexpr uint32_t kHmxU8I8PrecomputedDataSize = 56;
  *        v
  *   our_v73deep_kernel(...)
  *
- * The large payload blocks and pointer tables are still owned by QNN.  The hot
- * callback no longer asks QHPI for tensor/block metadata; it only stitches the
- * tiny native descriptor ABI on stack and enters the HMX body.
+ * The large payload blocks are still owned by QNN.  For validated small shapes
+ * the pointer-table values are copied into this precomputed record at graph
+ * load, so the hot callback no longer asks QHPI for tensor/block metadata or
+ * touches the original QNN table storage.  It only stitches the tiny native
+ * descriptor ABI on stack and enters the HMX body.
  */
 static constexpr uint32_t kHmxU8I8PrecomputeMagic = 0x48385850u; /* H8XP */
 
@@ -196,6 +208,8 @@ struct hmx_u8i8_precomputed_t {
     uint8_t *out_first_block;
     const int32_t *act_qhpi_table;
     const int32_t *out_qhpi_table;
+    int32_t act_table_copy[kHmxU8I8MaxCopiedTableEntries];
+    int32_t out_table_copy[kHmxU8I8MaxCopiedTableEntries];
 };
 
 static_assert(sizeof(hmx_u8i8_precomputed_t) == kHmxU8I8PrecomputedDataSize,
@@ -217,6 +231,7 @@ static uint32_t hmx_u8i8_precompute(
 
     hmx_u8i8_precomputed_t *pc = reinterpret_cast<hmx_u8i8_precomputed_t *>(data);
     std::memset(pc, 0, sizeof(*pc));
+    init_mask_desc(g_hmx_u8i8_mask_buf);
 
     const uint8_t *bias_bytes =
         reinterpret_cast<const uint8_t *>(qhpi_tensor_raw_data(inputs[0]));
@@ -252,6 +267,13 @@ static uint32_t hmx_u8i8_precompute(
     pc->out_first_block = reinterpret_cast<uint8_t *>(out_blocks[0]);
     pc->act_qhpi_table = act_src;
     pc->out_qhpi_table = out_src;
+    if (act_entries <= kHmxU8I8MaxCopiedTableEntries &&
+        out_entries <= kHmxU8I8MaxCopiedTableEntries) {
+        for (uint32_t i = 0; i < act_entries; ++i) pc->act_table_copy[i] = act_src[i];
+        for (uint32_t i = 0; i < out_entries; ++i) pc->out_table_copy[i] = out_src[i];
+        pc->act_qhpi_table = pc->act_table_copy;
+        pc->out_qhpi_table = pc->out_table_copy;
+    }
     pc->S = S;
     pc->M_t = M_t;
     pc->N_t = N_t;
@@ -272,7 +294,6 @@ static uint32_t hmx_u8i8_to_u8_matmul_precomputed_kernel(
 
     const hmx_u8i8_precomputed_t *pc =
         reinterpret_cast<const hmx_u8i8_precomputed_t *>(precomputed_data);
-    if (!pc || pc->magic != kHmxU8I8PrecomputeMagic) return QHPI_Success;
 
 #if defined(HMX_U8I8_PROBE_CYCLES)
     uint64_t cyc_start = 0;
@@ -282,25 +303,24 @@ static uint32_t hmx_u8i8_to_u8_matmul_precomputed_kernel(
     /*
      * Hot path after QHPI precompute:
      *
-     *   prepared state: bias/weight raw pointers, QNN Crouton block tables,
-     *                   tile counts recovered once at graph load
+     *   prepared state: bias/weight raw pointers, local Crouton block-table
+     *                   copies, tile counts recovered once at graph load
      *   per invoke:     stitch three tiny native descriptors on stack
      *   compute:        jump into the owned V73DEEP body
      *
-     * The pointer tables themselves are not copied here.  QNN already prepared
-     * them as part of tensor materialization, and the V73DEEP table order
-     * matches the Crouton block-table order for this C8 path.
+     * For the canonical 256^3 shape these tables are copied into
+     * hmx_u8i8_precomputed_t at graph load.  That removes the last hot-path
+     * QNN table locality miss without spending extra dcfetch packets in the
+     * profiled callback.  Larger fallback shapes keep pointing at QNN-owned
+     * block tables.
      */
     int32_t *act_tbl_ptr = const_cast<int32_t *>(pc->act_qhpi_table);
     int32_t *out_tbl_ptr = const_cast<int32_t *>(pc->out_qhpi_table);
 
-    static uint32_t mask_buf[16] __attribute__((aligned(16)));
-    uint32_t extra_param_local[16] __attribute__((aligned(16))) = {1u, 0u};
-    const hmx_conv_mask_desc_t *mask_desc = get_mask_desc(mask_buf);
-    mask_buf[0x38 / 4] =
-        static_cast<uint32_t>(reinterpret_cast<uintptr_t>(extra_param_local));
+    uint32_t extra_param[2] __attribute__((aligned(16))) = {1u, 0u};
+    const hmx_conv_mask_desc_t *mask_desc = get_precomputed_mask_desc();
 
-    hmx_conv_out_desc_t out_desc_local = {
+    hmx_conv_out_desc_t out_desc_local __attribute__((aligned(64))) = {
         out_tbl_ptr,
         pc->N_t,
         pc->M_t * 4,
@@ -308,14 +328,13 @@ static uint32_t hmx_u8i8_to_u8_matmul_precomputed_kernel(
         8,
         pc->N_t * 32,
     };
-    hmx_conv_act_desc_t act_desc_local = {
+    hmx_conv_act_desc_t act_desc_local __attribute__((aligned(64))) = {
         act_tbl_ptr,
         pc->K_t,
         pc->M_t * 4,
     };
     const hmx_conv_out_desc_t *out_desc = &out_desc_local;
     const hmx_conv_act_desc_t *act_desc = &act_desc_local;
-    const uint32_t *extra_param = extra_param_local;
 
 #if defined(HMX_U8I8_DESC_DUMP)
     if (pc->out_first_block) {
@@ -668,10 +687,8 @@ static uint32_t hmx_u8i8_to_u8_matmul_kernel(
      *   k_total_bytes           = N_t * 32  byte span expected by kernel setup
      *   n_act_pairs             = K_t       number of activation pointer pairs
      */
-    static uint32_t mask_buf[16] __attribute__((aligned(16)));
-    uint32_t extra_param[16] __attribute__((aligned(16))) = {1u, 0u};
-    const hmx_conv_mask_desc_t *mask_desc = get_mask_desc(mask_buf);
-    mask_buf[0x38 / 4] = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(extra_param));
+    uint32_t extra_param[2] __attribute__((aligned(16))) = {1u, 0u};
+    const hmx_conv_mask_desc_t *mask_desc = get_mask_desc();
 
     hmx_conv_out_desc_t out_desc = {
         out_tbl_all,
@@ -711,7 +728,8 @@ static uint32_t hmx_u8i8_to_u8_matmul_kernel(
         store_le32(dst, 48, out_desc.k_total_bytes);
         store_le32(dst, 52, act_desc.n_act_pairs);
         store_le32(dst, 56, act_desc.act_table_y_stride_words);
-        for (uint32_t i = 0; i < 16; ++i) store_le32(dst, 64 + i * 4, mask_buf[i]);
+        const uint32_t *mask_words = reinterpret_cast<const uint32_t *>(mask_desc);
+        for (uint32_t i = 0; i < 16; ++i) store_le32(dst, 64 + i * 4, mask_words[i]);
     }
     return QHPI_Success;
 #endif

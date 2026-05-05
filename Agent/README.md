@@ -29,6 +29,32 @@ in[3] scratch  u8    Flat4 Direct   TCM_Only  [1, 1, 1, 2048]
 out[0] output  u8    Crouton_8 Indirect TCM_Only [1, M/32, 32, N]
 ```
 
+## Design Principle
+
+The current QNN MatMul mental model is simple:
+
+```text
+HMX only computes.
+Everything else is prepared before the hot HMX body.
+```
+
+Native QNN does not ask the final HMX kernel to understand high-level MatMul tensors.  It first converts the problem into HMX-native Conv1x1 state:
+
+```text
+ordinary MatMul tensors
+  -> QNN graph/context/runtime preparation
+       - pack weight into K-major HMX tiles
+       - fold bias into native bias blocks
+       - format activation/output as Crouton_8 TCM blocks
+       - move static data through weights_to_vtcm / bias_to_vtcm sidecars
+       - prepare pointer tables, mask state, and tile counts
+  -> hot compute event
+       - stitch tiny native descriptors
+       - enter V73DEEP HMX body
+```
+
+So the custom rule is: do not put input/layout preparation in the profiled hot callback.  The hot callback should not query tensor metadata, recover shapes, repack weights, copy QNN block tables, patch mask state, or handle broad generic cases.  Those belong in the generator, converter, QNN sidecar ops, or QHPI precompute.
+
 ## Current Conclusion
 
 The replicated kernel body is not the main gap anymore.  The owned V73DEEP inline-asm body is byte-equivalent to the native `hmx_v73_convbbb1x1deep_stride1` body for the 1132-byte kernel slice, and the 256^3 chain result is bit-exact.
@@ -37,13 +63,17 @@ Latest verified hot-op numbers at 256^3 chain8 on device, 2026-05-05:
 
 | Path | cycles | packets | cpp | correctness |
 |---|---:|---:|---:|---|
-| native QNN kernel-only `ConvLayer_s1.opt` | 1147 | 346 | 3.315 | under-counts QNN MatMul |
-| native QNN-op aggregate `MatMul_*` | 1444 | 451 | 3.201 | includes sidecar HTP ops |
-| custom `HmxU8I8ToU8MatMul` precompute default | 1257 | 349 | 3.600 | bit-exact |
+| native QNN kernel-only `ConvLayer_s1.opt` | 1140 | 346 | 3.296 | under-counts QNN MatMul |
+| native QNN-op aggregate `MatMul_*` | 1452 | 451 | 3.220 | includes sidecar HTP ops |
+| custom `HmxU8I8ToU8MatMul` precompute default | 1165 | 337 | 3.458 | bit-exact |
 
-Current gap statement: after QHPI precompute, the hot custom op is `1257 - 1147 = +110 cycles` and `349 - 346 = +3 packets` versus native kernel-only `ConvLayer_s1.opt`.  Versus native QNN-op aggregate, custom is faster because the custom flow hoists shared bias/weight preparation and uses QHPI precompute for tensor/block metadata.
+Current gap statement: after QHPI precompute, graph-load pointer-table copies, mask pre-initialization, and 64B stack-descriptor alignment, the latest clean hot-op run is `1165 - 1140 = +25 cycles` and `337 - 346 = -9 packets` versus native kernel-only `ConvLayer_s1.opt`.  Versus native QNN-op aggregate, custom is `287 cycles / 114 packets` lower because the native aggregate includes sidecar HTP setup events.
 
-Historical gap statement: the old custom wrapper path measured `1794 cycles / 471 pkts`.  Comparing that to native kernel-only produced an apparent `+125 pkts`, but native QNN was hiding about `105 pkts` in sidecar HTP ops (`bias_to_vtcm`, `weights_to_vtcm`, `DmaCheckpointSet`).  The real lesson was architectural: input/layout preparation must be outside the hot compute event.
+Probe split: an intrusive `HMX_U8I8_PROBE_CYCLES` run reports `kernel=1074` and `desc=29`.  The owned inline-asm body is therefore already faster than the native kernel-only chrometrace event (`1074 < 1140`); the remaining `+25 cycles` is QHPI callback/profiling envelope plus tiny descriptor glue and issue/locality effects, not extra matmul work.
+
+Cycle-gap experiments: explicit dcfetch of QNN tables reduced some cycles but cost too many packets; graph-load table copies are the retained version. Writing descriptor/mask/extra into the existing Direct-TCM scratch is bit-exact but much slower (`~1700 cycles`, high cpp); pre-writing those records in QHPI precompute fails at device context creation. Raising the owned kernel entry alignment above 64B, static extra/mask variants, and precomputed descriptor records all worsened cycles.
+
+Historical gap statement: the old custom wrapper path measured `1794 cycles / 471 pkts` because it still did input/layout preparation inside the profiled callback.  Comparing that to native kernel-only produced an apparent `+125 pkts`, but native QNN accounted for much of that preparation in sidecar HTP ops (`bias_to_vtcm`, `weights_to_vtcm`, `DmaCheckpointSet`) and graph-load work.  The real lesson is architectural: HMX should only see prepared TCM/VTCM state and perform compute.
 
 ## How QNN Appears To Call This
 
@@ -54,7 +84,7 @@ ONNX custom node
   -> converter XML + converter op package shape/type hooks
   -> ctxgen resolves OpPackage provider and QHPI precompute registration
   -> runtime inserts surrounding built-ins for tensor movement/layout
-  -> QHPI precompute records bias/weight pointers, Crouton block tables, tile counts
+  -> QHPI precompute records bias/weight pointers, copies small Crouton block tables, pre-initializes mask state
   -> hot callback stitches small native descriptors on stack
   -> owned V73DEEP inline-asm kernel runs
 ```
@@ -78,9 +108,10 @@ Meaning:
 | `pkts` | best proxy for extra executed Hexagon packet work |
 | `cpp` | sanity check for stalls/issue quality; important after packet accounting is fixed |
 
-Most accurate first pass is `pkts`, but only after native sidecar events are
-aggregated back into the QNN MatMul.  Current precompute default is effectively
-packet-aligned with native kernel-only (`+3 pkts`).
+Use `dur` as the final latency answer.  Use `pkts` to decide whether custom is
+doing extra work.  Current precompute default is packet-better than native
+kernel-only (`-9 pkts`), so the remaining `+25 cycles` is not caused by extra
+matmul instructions.
 
 Use QNN-op aggregate view for native comparisons.  Kernel-only `ConvLayer_s1.opt`
 is useful for studying the HMX body, but it excludes native setup events that

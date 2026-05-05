@@ -77,6 +77,7 @@ ARM_FLAGS=(
     -O2 -fPIC
     '-DQNN_API=__attribute__((visibility("default")))'
     '-D__QAIC_HEADER_EXPORT=__attribute__((visibility("default")))'
+    ${EXTRA_DEFS:-}
 )
 
 echo "--- aarch64-android ---"
