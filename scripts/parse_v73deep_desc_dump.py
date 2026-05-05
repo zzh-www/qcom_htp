@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Parse the V73DEEP descriptor dump from a V9_DESC_DUMP run.
+"""Parse the V73DEEP descriptor dump from a HMX_U8I8_DESC_DUMP run.
 
-The op-pkg V9_DESC_DUMP branch writes 5 logical "rows" of 128 bytes each
+The op-pkg HMX_U8I8_DESC_DUMP branch writes 5 logical "rows" of 128 bytes each
 into out[0..4] (after UntileToRowMajor). Each row starts with a u32
 magic 0xD0DE000r and contains specific descriptor / shape / pointer data.
 
@@ -34,7 +34,7 @@ def parse_dump(raw_path: Path, n_cols: int, fp32: bool):
     raw = raw_path.read_bytes()
     if fp32:
         # qnn-net-run writes fp32 by default. Output uses scale=1.0, zp=0
-        # (per gen_v8c8_chain.py quant_overrides), so fp32 cell ≈ u8 value.
+        # (per gen_u8i8_chain.py quant_overrides), so fp32 cell ≈ u8 value.
         import numpy as np
         f = np.frombuffer(raw, dtype=np.float32)
         data = bytes(np.round(np.clip(f, 0, 255)).astype(np.uint8).tolist())

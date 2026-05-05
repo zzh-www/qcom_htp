@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
-"""extract_v73deep_bytes.py — regenerate v73deep_replica_bytes.inc.
+"""extract_v73deep_bytes.py — regenerate the V73DEEP Conv1x1 .byte fallback.
 
 Reads libQnnHtpV75Skel.so + the existing disassembly at
 Agent/qnn_re/hmx_v73_convbbb1x1deep_stride1_2ebe40.S, emits an annotated
 .byte block where every 4-byte word line is paired with its decoded Hexagon
-asm. This is the base for Phase B step 2 — replace each .byte line with
-hand-written inline asm packet by packet, validating bit-exactness after
-each substitution.
+asm. The production file is now hand-written inline asm, but this script is
+kept as a sanity/regeneration tool for the owned V73DEEP Conv1x1 body.
 
-Phase B step 1: own the kernel bytes. Runtime no longer dlsym's QNN's
-binary; we jump into our embedded copy of `hmx_v73_convbbb1x1deep_stride1`
-(VMA 0x2ebe40, 1132 bytes). Code is position-independent (PC-relative
-branches only, no calls out).
+Runtime no longer dlsym's QNN's binary. The custom op jumps into its embedded
+copy of `hmx_v73_convbbb1x1deep_stride1` (VMA 0x2ebe40, 1132 bytes). Code is
+position-independent (PC-relative branches only, no calls out).
 """
 import argparse
 import re
@@ -40,7 +38,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--so", default="tools/qnn-sdk/lib/hexagon-v75/unsigned/libQnnHtpV75Skel.so")
     ap.add_argument("--disasm", default="Agent/qnn_re/hmx_v73_convbbb1x1deep_stride1_2ebe40.S")
-    ap.add_argument("--out", default="example/hmx_matmul_phase3/src/v73deep_replica_bytes.inc")
+    ap.add_argument("--out", default="example/qnn_hmx_matmul_u8i8/src/v73deep_conv1x1_kernel.inc")
     args = ap.parse_args()
 
     blob = Path(args.so).read_bytes()[KERNEL_VMA:KERNEL_VMA + KERNEL_SIZE]

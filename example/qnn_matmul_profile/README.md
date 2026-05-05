@@ -167,9 +167,8 @@ bash bench_repeat.sh 5 -- --configs "fp16 w16a16 w8a16 w8a8"
 
 Outputs per-metric `median [min-max]` + `agg_summary.json`.
 
-A saved reference run (2026-04-19, SM8650 v75) lives under
-`bench_data_2026-04-19/`. Headline numbers and analysis in
-`Agent/qnn_matmul_dtype_comparison.md`.
+Reference/profile output directories are intentionally not tracked. Regenerate
+them with `bench_repeat.sh` or `bench_sweep.sh` when you need fresh numbers.
 
 ## Files
 
@@ -181,8 +180,8 @@ parse_chrometrace.py   — aggregate chrometrace (first-inference matmul_1 event
 parse_profile_log.py   — extract matmul_1:OpId cycles across all N iterations — useful for per-dtype scaling analysis only
 bench_repeat.sh        — run profile_all N times at fixed size
 bench_sweep.sh         — run profile_all across a sweep of matmul sizes
-bench_data_2026-04-19/ — 5-run reference data at 32×32×32
-sweep_data_2026-04-19/ — size sweep (32/128/256/512)
+bench_data_*/          — generated repeat-run outputs, ignored by git
+sweep_data_*/          — generated size-sweep outputs, ignored by git
 ```
 
 ## Interpreting `SystemService(lumped)` in compute kernel

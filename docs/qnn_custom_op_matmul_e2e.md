@@ -53,6 +53,147 @@ or patch mask state inside the profiled hot callback.
 
 Those tasks belong in `gen_u8i8_chain.py`, converter/QNN layout planning, QNN sidecar ops, or QHPI precompute.  The hot `HmxU8I8ToU8MatMul` callback should be a compute event, not an input-preparation event.
 
+## Kernel Design And Computation Flow
+
+The kernel is designed as a MatMul-shaped frontend over QNN's native HMX Conv1x1 compute contract.  The important idea is not "write a generic matrix multiply in C++".  The idea is:
+
+```text
+MatMul semantics
+  A[M, K] x W[K, N] -> Y[M, N]
+
+Conv1x1 view used by QNN/HMX
+  M output positions
+  K input channels
+  N output channels
+  1x1 filter
+```
+
+The math is the same:
+
+```text
+Y[m, n] = sum_k A[m, k] * W[k, n]
+```
+
+but the hardware path is different.  HMX wants fixed tiles, fixed descriptor fields, fixed pointer-table traversal, and a native accumulator/convert pipeline.  Therefore the runtime kernel does not see ordinary tensor metadata.  It sees a native Conv1x1 ABI:
+
+```text
+r0 = out_desc
+r1 = act_desc
+r2 = packed_weight
+r3 = folded_bias_record
+r4 = mask_desc
+r5 = extra_param
+```
+
+The hot custom-op callback is only an ABI adapter:
+
+```text
+prepared QHPI state
+  - Direct TCM bias pointer
+  - Direct TCM packed-weight pointer
+  - copied activation/output Crouton pointer tables
+  - recovered M_t/N_t/K_t tile counts
+  - pre-initialized HMX mask
+        |
+        v
+hot callback
+  - build out_desc on stack
+  - build act_desc on stack
+  - create extra_param[2] = {1, 0}
+  - call our_v73deep_kernel(...)
+        |
+        v
+owned V73DEEP inline asm
+```
+
+The HMX body then runs the native Conv1x1 compute flow:
+
+```text
+prologue
+  read out_desc / act_desc / mask_desc
+  derive loop counts, strides, runtime masks
+
+main K-MAC loop
+  load activation block pointer from act table
+  load activation tile from TCM
+  load K-major weight tile
+  feed both into HMX deep MAC pipeline
+
+convert / store
+  load native bias/scale record
+  convert accumulator to u8
+  store u8 tile to Crouton output block
+
+epilogue
+  clear HMX accumulator
+  restore registers
+  return
+```
+
+The core HMX packets are:
+
+```text
+activation.ub = mxmem(...):deep:cm
+weight.b      = mxmem(...):deep
+```
+
+Those packets are the actual compute feed.  They are followed by:
+
+```text
+bias = mxmem2(...)
+cvt.ub = acc(...)
+mxmem(...):cm = cvt
+```
+
+So the accumulator is not manually read in C++.  The HMX convert path applies the prepared bias/scale/baseline record and writes quantized u8 output.
+
+Quantization follows the same principle: no dynamic scale math in the hot kernel.  The native bias record is prepared per N tile:
+
+```text
+256 bytes per N tile:
+
+bytes 0..127
+  32 x (fp16 scale, fp16 baseline)
+
+bytes 128..255
+  32 x int32 effective_bias
+```
+
+The HMX convert formula can be understood as:
+
+```text
+out_u8 = clamp(acc * scale_fp16 / 512 + baseline)
+```
+
+For the current replica test flow:
+
+```text
+runtime scale = 1.0
+scale_fp16    = 512.0
+baseline      = 0
+ACT_ZP        = 128
+```
+
+The activation zero point is folded into the int32 bias before runtime:
+
+```text
+(act_u8 - ACT_ZP) @ W + bias_q
+  = act_u8 @ W + (-ACT_ZP * sum_k(W[k, c]) + bias_q[c])
+
+effective_bias[c] = -ACT_ZP * sum_k(W[k, c]) + bias_q[c]
+```
+
+If a future flow uses real per-channel quantization, it should still use the same kernel ABI:
+
+```text
+runtime_scale[c] = input_scale * weight_scale[c] / output_scale
+scale_fp16[c]    = 512.0 * runtime_scale[c]
+baseline[c]      = output_zp << 7
+effective_bias[c] = bias_q[c] - input_zp * sum_k(W[k, c])
+```
+
+The HMX hot body should remain unchanged.  Only the prepared bias/scale record changes.
+
 ## Current Names
 
 | Surface | Current name |

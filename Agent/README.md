@@ -55,6 +55,8 @@ ordinary MatMul tensors
 
 So the custom rule is: do not put input/layout preparation in the profiled hot callback.  The hot callback should not query tensor metadata, recover shapes, repack weights, copy QNN block tables, patch mask state, or handle broad generic cases.  Those belong in the generator, converter, QNN sidecar ops, or QHPI precompute.
 
+Kernel design summary: this MatMul is implemented as a native HMX Conv1x1 compute body.  The C++ hot callback only translates prepared QHPI state into native descriptors; scale, zero point, and bias are folded into the prepared native bias record before `cvt.ub = acc(...)`.  Keep the detailed explanation in [`docs/qnn_custom_op_matmul_e2e.md`](../docs/qnn_custom_op_matmul_e2e.md).
+
 ## Current Conclusion
 
 The replicated kernel body is not the main gap anymore.  The owned V73DEEP inline-asm body is byte-equivalent to the native `hmx_v73_convbbb1x1deep_stride1` body for the 1132-byte kernel slice, and the 256^3 chain result is bit-exact.

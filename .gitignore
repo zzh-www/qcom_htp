@@ -9,71 +9,9 @@ __pycache__/
 *.pyc
 .libcxx_shim/
 output/
-example/qnn_matmul_profile/bench_data_2026-04-19
-example/qnn_matmul_profile/sweep_data_2026-04-19
-
-# Hexagon build artifacts (rebuildable via example/*/build.sh)
-example/hmx_matmul_int16/probe_hmx_acc
-example/hmx_matmul_int16/probe_dual_scale
-example/hmx_matmul_int16/probe_cycle_bench
-example/hmx_matmul_int16/probe_f16_profile
-example/hmx_matmul_int16/test_int16_matmul
-example/hmx_matmul_device/build/
-example/hmx_matmul_qnn/build/
 
 # docs/hexagon-tutorial/ is a separately-cloned git repo; don't track.
 docs/hexagon-tutorial/
-
-# Hexagon matmul phase3 transient run/test artifacts (rebuildable from
-# gen_v8c8_test.py + run_v8c8_phase2.sh; profiling outputs are large).
-example/hmx_matmul_phase3/standard_flow/phaseB_v8/phase1_validation/
-example/hmx_matmul_phase3/standard_flow/phaseB_v8/traces_unified/
-example/hmx_matmul_phase3/standard_flow/phaseB_v8/sweep_v9/
-example/hmx_matmul_phase3/standard_flow/phaseB_v8/sweep_v9_baseline/
-example/hmx_matmul_phase3/standard_flow/phaseB_v8/tile_sweep/
-example/hmx_matmul_phase3/standard_flow/phaseB_v8/ntile_sweep/
-example/hmx_matmul_phase3/standard_flow/phaseB_v8/v9_small_test/
-example/hmx_matmul_phase3/standard_flow/phaseB_v8/v9_no_mm_out/
-example/hmx_matmul_phase3/standard_flow/phaseB_v8/v9_test_out/
-example/hmx_matmul_phase3/standard_flow/phaseB_v8/v8_small_out/
-example/hmx_matmul_phase3/standard_flow/phaseB_v8/spike_out/
-example/hmx_matmul_phase3/standard_flow/phaseB_v8/pack_act_out/
-example/hmx_matmul_phase3/standard_flow/phaseB_v8/runtime_inputs_*/
-example/hmx_matmul_phase3/standard_flow/phaseB_v8/device_out/
-example/hmx_matmul_phase3/standard_flow/phaseB_v8/ctx_out/
-example/hmx_matmul_phase3/standard_flow/phaseB_v8/model_libs/
-example/hmx_matmul_phase3/standard_flow/phaseB_v8/gen_out/
-example/hmx_matmul_phase3/standard_flow/phaseB_v8/crouton_test/
-example/hmx_matmul_phase3/standard_flow/phaseB_v8/*.onnx
-example/hmx_matmul_phase3/standard_flow/phaseB_v8/*.dlc
-example/hmx_matmul_phase3/standard_flow/phaseB_v8/*.bin
-example/hmx_matmul_phase3/standard_flow/phaseB_v8/*.raw
-example/hmx_matmul_phase3/standard_flow/phaseB_v8/v8_model_*.cpp
-example/hmx_matmul_phase3/standard_flow/phaseB_v8/v8_model_*.json
-example/hmx_matmul_phase3/standard_flow/phaseB_v8/input_list_*.txt
-
-# Native baseline transient (the gen scripts + run scripts are tracked,
-# but the per-shape s256_w8a8/ etc. directories with 100s of MB are not).
-example/hmx_matmul_phase3/standard_flow/phaseA_native/s*_w8a8/
-example/hmx_matmul_phase3/standard_flow/phaseA_native/m*_w8a8/
-example/hmx_matmul_phase3/standard_flow/phaseA_native/s*_chain*/
-example/hmx_matmul_phase3/standard_flow/phaseA_native/s*_indep*/
-example/hmx_matmul_phase3/standard_flow/phaseA_native/s*_independent*/
-example/hmx_matmul_phase3/standard_flow/phaseA_native/quant_overrides.json
-example/hmx_matmul_phase3/standard_flow/phaseA_native/baseline_*/
-example/hmx_matmul_phase3/standard_flow/phaseA_native/runtime_inputs_*/
-example/hmx_matmul_phase3/standard_flow/phaseA_native/inputs_fp32/
-example/hmx_matmul_phase3/standard_flow/phaseA_native/output/
-example/hmx_matmul_phase3/standard_flow/phaseA_native/ctx_out/
-example/hmx_matmul_phase3/standard_flow/phaseA_native/device_out/
-example/hmx_matmul_phase3/standard_flow/phaseA_native/model_libs/
-example/hmx_matmul_phase3/standard_flow/phaseA_native/*.onnx
-example/hmx_matmul_phase3/standard_flow/phaseA_native/*.dlc
-example/hmx_matmul_phase3/standard_flow/phaseA_native/*.bin
-example/hmx_matmul_phase3/standard_flow/phaseA_native/model.cpp
-example/hmx_matmul_phase3/standard_flow/phaseA_native/model_*.json
-example/hmx_matmul_phase3/standard_flow/phaseA_native/input_list*.txt
-example/hmx_matmul_phase3/standard_flow/phaseA_native/runtime_input_list.txt
 
 # qnn_matmul_profile sweep data (rebuildable)
 example/qnn_matmul_profile/sweep_data_*

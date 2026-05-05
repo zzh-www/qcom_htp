@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Phase A: generate a plain fp32 MatMul ONNX model that the QNN converter
-will quantize to u8 × u8 → u8. Shape M=K=N=512 matches NEXT_STEPS.md
-V8/V6 sweet spot.
+Generate a plain fp32 MatMul ONNX model for the native-baseline flow. The QNN
+converter quantizes it to a u8-style MatMul so we can compare the custom
+HmxU8I8ToU8MatMul path against QNN native behavior.
 
 Output tree:
     model.onnx                   fp32 MatMul with baked-in random weights
@@ -20,13 +20,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 M = K = N = 512
 np.random.seed(0xB17E)
 
-# Static weight: match run_matmul_v8_graph.cpp's wRaw (i8 pattern), scaled
-# to fp32. The converter will re-quantize, but the numerical range is what
-# matters for the optrace we care about.
+# Static weight: use the same deterministic i8-style pattern as the custom
+# chain generator, scaled to fp32. The converter will re-quantize, but the
+# numerical range is what matters for the native-baseline trace.
 wRaw_i8 = np.array([((i * 13) % 15) - 7 for i in range(K * N)], dtype=np.int8).reshape(K, N)
 w_fp32 = wRaw_i8.astype(np.float32) / 127.0          # fp32 scale → weights_bitwidth=8 picks scale=1/127 approx
 
-# Activation: match V8's aRaw pattern (u8 0..255), converted to fp32 [0,1].
+# Activation: deterministic u8 0..255 pattern, converted to fp32 [0,1].
 aRaw_u8 = np.array([(i * 37) & 0xFF for i in range(M * K)], dtype=np.uint8).reshape(1, M, K)
 a_fp32 = aRaw_u8.astype(np.float32) / 255.0
 
