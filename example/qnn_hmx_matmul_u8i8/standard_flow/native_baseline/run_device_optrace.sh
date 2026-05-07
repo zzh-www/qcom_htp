@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Push Phase-A artifacts to device, run qnn-net-run with optrace, pull logs.
+# Push Phase-A artifacts to device, run qnn-net-run with native I/O + optrace,
+# pull logs, and decode the standard optrace artifact set.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 DEVICE="${DEVICE:-oneplus}"
 DEV_DIR="~/qnn_run/phaseA"
 
@@ -29,10 +31,37 @@ ssh "$DEVICE" "cd $DEV_DIR && LD_LIBRARY_PATH=../:/vendor/lib64 ADSP_LIBRARY_PAT
         --profiling_option optrace \
         --output_dir out \
         --config_file htp_config.json \
+        --use_native_input_files \
+        --use_native_output_files \
         --perf_profile burst 2>&1 | tail -40"
 
 # 5. pull results
 mkdir -p "$SCRIPT_DIR/device_out"
-scp -q -r "$DEVICE:$DEV_DIR/out" "$SCRIPT_DIR/device_out/" 2>/dev/null || true
+ssh "$DEVICE" "cat $DEV_DIR/out/qnn-profiling-data_0.log 2>/dev/null" \
+    > "$SCRIPT_DIR/device_out/qnn-profiling-data_0.log" 2>/dev/null || true
+ssh "$DEVICE" "cat $DEV_DIR/out/qnn-profiling-data_2.log 2>/dev/null" \
+    > "$SCRIPT_DIR/device_out/qnn-profiling-data_2.log" 2>/dev/null || true
+ssh "$DEVICE" "cat $DEV_DIR/out/Result_0/output_0_native.raw 2>/dev/null || \
+    cat $DEV_DIR/out/Result_0/output_0.raw 2>/dev/null || \
+    cat $DEV_DIR/out/Result_0/Y_native.raw 2>/dev/null || \
+    cat $DEV_DIR/out/Result_0/Y.raw 2>/dev/null" \
+    > "$SCRIPT_DIR/device_out/out.raw" 2>/dev/null || true
+
+if [ "${DECODE_OPTRACE:-1}" = "1" ]; then
+    PROFILE_LOG="$SCRIPT_DIR/device_out/qnn-profiling-data_2.log"
+    [ -s "$PROFILE_LOG" ] || PROFILE_LOG="$SCRIPT_DIR/device_out/qnn-profiling-data_0.log"
+    SCHEMATIC="$(find "$SCRIPT_DIR/ctx_out" -maxdepth 1 -name '*schematic.bin' -print -quit 2>/dev/null || true)"
+    if [ -s "$PROFILE_LOG" ] && [ -n "$SCHEMATIC" ]; then
+        python "$ROOT_DIR/scripts/decode_qnn_optrace.py" "$SCRIPT_DIR" \
+            --profile-log "$PROFILE_LOG" \
+            --schematic "$SCHEMATIC" || {
+            [ "${STRICT_OPTRACE:-0}" = "1" ] && exit 1
+            echo "  [warn] optrace decode failed; raw log kept in $SCRIPT_DIR/device_out" >&2
+        }
+    else
+        echo "  [warn] missing profile log or schematic; optrace decode skipped" >&2
+    fi
+fi
+
 echo "=== pulled ==="
 find "$SCRIPT_DIR/device_out" -type f -printf "  %p (%s bytes)\n"

@@ -468,9 +468,10 @@ Use QNN-op aggregate view for native comparisons.  Kernel-only `ConvLayer_s1.opt
 is useful for studying the HMX body, but it excludes native setup events that
 the custom op pays inside its own callback.
 
-`scripts/perf_hmx_u8i8_matmul.py` remains useful for old u8i8 packet-gap
-reports, but new OP performance evidence should cite the standard `optrace/`
-artifact set above.
+`scripts/perf_hmx_u8i8_matmul.py` is now a reader for the standard artifact
+set: it reuses or creates `<out_dir>/optrace/chrometrace.json`, does not write
+ad-hoc `/tmp/_optrace*` files, and treats native raw output as the default
+bit-exact/probe surface while retaining legacy float-output decoding.
 
 Optional diagnostic build:
 

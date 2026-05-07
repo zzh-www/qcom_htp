@@ -78,6 +78,12 @@ performance oracles.
 - `example/qnn_hmx_matmul_u8i8/standard_flow/native_baseline/run_native_chain.sh`
   and `run_native_sweep.sh` now use the same converter layout rule as the
   custom u8i8 flow.
+- `example/qnn_hmx_matmul_u8i8/standard_flow/native_baseline/run_device_optrace.sh`
+  is kept as a Phase-A manual runner, but now uses native I/O and decodes into
+  the standard local `optrace/` directory.
+- `scripts/perf_hmx_u8i8_matmul.py` is a standard-artifact reader: it consumes
+  or generates `<out_dir>/optrace/chrometrace.json` and supports native raw
+  output before falling back to legacy float output.
 - Quantized custom runners default to native output (`NATIVE_OUTPUT=1`) while
   retaining `NATIVE_OUTPUT=0` for legacy float-output checks.
 

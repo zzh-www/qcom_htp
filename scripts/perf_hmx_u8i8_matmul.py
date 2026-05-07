@@ -20,12 +20,11 @@ Usage:
   device_out/out.raw                  (optional, for probe marker decode)
   u8i8.onnx.out_ref_u8.npy            (optional, for bit-exact check)
 
-<native_dir> (optional) must contain a chrometrace JSON or runtime profile log
-+ schematic. The script auto-detects.
+<native_dir> (optional) must contain standard optrace artifacts or a runtime
+profile log + schematic. The script auto-detects.
 """
 import argparse
 import json
-import os
 import re
 import subprocess
 import sys
@@ -33,113 +32,155 @@ from pathlib import Path
 
 import numpy as np
 
+ROOT_DIR = Path(__file__).resolve().parents[1]
 
-def find_qnn_profiler():
-    qnn = os.environ.get("QNN_SDK_ROOT")
-    if not qnn:
-        sys.exit("ERROR: QNN_SDK_ROOT not set; source scripts/env.sh first")
-    return (
-        f"{qnn}/bin/x86_64-linux-clang/qnn-profile-viewer",
-        f"{qnn}/lib/x86_64-linux-clang/libQnnHtpOptraceProfilingReader.so",
-        f"{qnn}/lib/x86_64-linux-clang",
+
+def _first_existing(candidates):
+    for path in candidates:
+        try:
+            if path.exists() and path.stat().st_size > 0:
+                return path
+        except OSError:
+            continue
+    return None
+
+
+def _find_profile_log(out_dir: Path):
+    cands = (
+        sorted((out_dir / "device_out").glob("qnn-profiling-data*.log"))
+        + sorted((out_dir / "ctx").glob("qnn-profiling-data*.log"))
+        + sorted(out_dir.glob("profile.log"))
+    )
+    return _first_existing(cands)
+
+
+def _find_schematic(out_dir: Path):
+    return _first_existing(
+        sorted((out_dir / "ctx").glob("*schematic.bin"))
+        + sorted(out_dir.glob("*schematic.bin"))
     )
 
 
-def decode_chrometrace(out_dir: Path, prof_log: Path | None = None, schematic: Path | None = None):
-    """Run qnn-profile-viewer to produce optrace.txt; return list of op events."""
-    if prof_log is None:
-        cands = list((out_dir / "device_out").glob("qnn-profiling-data*.log")) + \
-                list((out_dir / "ctx").glob("qnn-profiling-data*.log"))
-        # filter broken symlinks and small files
-        valid = []
-        for c in cands:
-            try:
-                if c.exists() and c.stat().st_size > 1500:
-                    valid.append(c)
-            except (OSError, FileNotFoundError):
-                continue
-        if not valid:
-            return []
-        prof_log = valid[0]
-    if schematic is None:
-        for p in [out_dir / "ctx", out_dir]:
-            sch_candidates = list(p.glob("*schematic.bin"))
-            if sch_candidates:
-                schematic = sch_candidates[0]
-                break
-        if schematic is None:
-            return []
-    pv, reader, ld = find_qnn_profiler()
-    optrace = Path("/tmp") / f"_optrace_{out_dir.name}.txt"
-    if optrace.exists():
-        optrace.unlink()
-    env = os.environ.copy()
-    env["LD_LIBRARY_PATH"] = ld + ":" + env.get("LD_LIBRARY_PATH", "")
-    pv_res = subprocess.run(
-        [pv, "--reader", reader, "--input_log", str(prof_log),
-         "--schematic", str(schematic), "--output", str(optrace)],
-        env=env, check=False, capture_output=True,
+def _ensure_standard_chrometrace(
+    out_dir: Path,
+    prof_log: Path | None = None,
+    schematic: Path | None = None,
+):
+    chrometrace = _first_existing(
+        [
+            out_dir / "optrace" / "chrometrace.json",
+            out_dir / "device_out" / "chrometrace.json",
+            out_dir / "chrometrace.json",
+        ]
     )
-    if not optrace.exists():
-        # try chrometrace.json fallback (for native runs that have it pre-decoded)
-        cj = out_dir / "chrometrace.json"
-        if cj.exists():
-            d = json.loads(cj.read_text())
-            ev = []
-            seen = set()
-            for e in d.get("traceEvents", []):
-                n = e.get("name", "")
-                if not n: continue
-                qn = e.get("args", {}).get("QNN Op Name", "")
-                if (n, qn) in seen: continue
-                seen.add((n, qn))
-                cpp = e.get("args", {}).get("Cycles per Packet", 1) or 1
-                ev.append({
-                    "name": n, "qnn_name": qn,
-                    "dur": e.get("dur", 0), "cpp": cpp,
-                    "pkts": int(round(e.get("dur", 0)/cpp)) if cpp else 0,
-                })
-            return ev
-        sys.stderr.write(f"qnn-profile-viewer failed: {pv_res.stderr.decode()[:200]}\n")
-        return []
-    txt = optrace.read_text()
-    pat = re.compile(
-        r'"name":\s*"([^"]+)".*?"dur":\s*(\d+).*?"Cycles per Packet":\s*([\d.]+).*?"QNN Op Name":\s*"([^"]+)"'
-    )
+    if chrometrace is not None:
+        return chrometrace
+
+    prof_log = prof_log or _find_profile_log(out_dir)
+    schematic = schematic or _find_schematic(out_dir)
+    if prof_log is None or schematic is None:
+        return None
+
+    decoder = ROOT_DIR / "scripts" / "decode_qnn_optrace.py"
+    cmd = [sys.executable, str(decoder), str(out_dir)]
+    if prof_log is not None:
+        cmd += ["--profile-log", str(prof_log)]
+    if schematic is not None:
+        cmd += ["--schematic", str(schematic)]
+    res = subprocess.run(cmd, text=True, capture_output=True, check=False)
+    if res.returncode != 0:
+        sys.stderr.write(res.stdout)
+        sys.stderr.write(res.stderr)
+        return None
+    return _first_existing([out_dir / "optrace" / "chrometrace.json"])
+
+
+def _event_duration(event: dict) -> int:
+    args = event.get("args", {})
+    return int(args.get("Duration (cycles)", event.get("dur", 0)) or 0)
+
+
+def _event_cpp(event: dict):
+    value = event.get("args", {}).get("Cycles per Packet")
+    if value in (None, 0, "0"):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _events_from_chrometrace(chrometrace: Path):
+    data = json.loads(chrometrace.read_text(encoding="utf-8"))
+    raw_events = data if isinstance(data, list) else data.get("traceEvents", [])
     events = []
     seen = set()
-    for m in pat.finditer(txt):
-        name, dur, cpp, qnn_name = m.group(1), int(m.group(2)), float(m.group(3)), m.group(4)
+    for event in raw_events:
+        if not isinstance(event, dict):
+            continue
+        args = event.get("args", {})
+        name = str(event.get("name") or args.get("HTP Op Type", ""))
+        if not name:
+            continue
+        qnn_name = str(args.get("QNN Op Name", ""))
         key = (name, qnn_name)
         if key in seen:
             continue
         seen.add(key)
-        pkts = dur / cpp if cpp else 0
+        dur = _event_duration(event)
+        cpp = _event_cpp(event)
         events.append({
-            "name": name, "qnn_name": qnn_name,
-            "dur": dur, "cpp": cpp, "pkts": int(round(pkts)),
+            "name": name,
+            "qnn_name": qnn_name,
+            "dur": dur,
+            "cpp": cpp if cpp else 0.0,
+            "pkts": int(round(dur / cpp)) if cpp else 0,
         })
     return events
 
 
-def decode_probe_cycles(out_raw: Path):
-    """Decode HMX_U8I8_PROBE_CYCLES markers from out.raw[0..15]."""
-    if not out_raw.exists():
-        return None
-    b = np.fromfile(out_raw, dtype=np.float32)
-    if b.size < 16:
-        return None
-    u8 = np.round(b[:32]).astype(np.uint8)
+def decode_chrometrace(out_dir: Path, prof_log: Path | None = None, schematic: Path | None = None):
+    """Return op events from the standard <out_dir>/optrace artifact set."""
+    chrometrace = _ensure_standard_chrometrace(out_dir, prof_log, schematic)
+    if chrometrace is None:
+        return []
+    return _events_from_chrometrace(chrometrace)
 
+
+def _le_words_from_u8(u8):
     def le(o):
-        return int.from_bytes(u8[o:o+4].tobytes(), "little")
-
+        return int.from_bytes(u8[o:o + 4].tobytes(), "little")
     return {
         "kernel_cyc": le(0),
         "desc_cyc": le(4),
         "table_cyc": le(8),
         "qhpi_setup_cyc": le(12),
     }
+
+
+def _plausible_probe(words):
+    vals = list(words.values())
+    return any(vals) and all(0 <= v < 100_000_000 for v in vals)
+
+
+def decode_probe_cycles(out_raw: Path):
+    """Decode HMX_U8I8_PROBE_CYCLES markers from native-u8 or legacy-f32 raw."""
+    if not out_raw.exists():
+        return None
+    raw = out_raw.read_bytes()
+    if len(raw) < 16:
+        return None
+    native_words = _le_words_from_u8(np.frombuffer(raw[:16], dtype=np.uint8))
+    if _plausible_probe(native_words):
+        return native_words
+    if len(raw) < 64 or len(raw) % 4:
+        return native_words
+    f = np.frombuffer(raw, dtype="<f4", count=min(len(raw) // 4, 32))
+    if f.size < 16:
+        return native_words
+    legacy_u8 = np.clip(np.rint(f[:32]), 0, 255).astype(np.uint8)
+    legacy_words = _le_words_from_u8(legacy_u8)
+    return legacy_words if _plausible_probe(legacy_words) else native_words
 
 
 def bit_exact_check(out_dir: Path, ref_npy: Path | None = None, S: int = 256):
@@ -151,9 +192,15 @@ def bit_exact_check(out_dir: Path, ref_npy: Path | None = None, S: int = 256):
         ref_npy = cands[0]
     if not out_raw.exists() or not ref_npy.exists():
         return None
-    out = np.fromfile(out_raw, dtype=np.float32).reshape(S, S)
     ref = np.load(ref_npy)
-    out_u8 = np.round(out).astype(np.uint8)
+    raw_size = out_raw.stat().st_size
+    if raw_size == ref.nbytes:
+        out_u8 = np.fromfile(out_raw, dtype=ref.dtype).reshape(ref.shape)
+    elif raw_size == ref.size * np.dtype(np.float32).itemsize:
+        out = np.fromfile(out_raw, dtype=np.float32).reshape(ref.shape)
+        out_u8 = np.round(out).astype(ref.dtype)
+    else:
+        return None
     return (out_u8 == ref).sum() / out_u8.size * 100
 
 
@@ -279,21 +326,16 @@ def main():
         nat_events = decode_chrometrace(nat_dir)
         if not nat_events:
             # try chrometrace.json directly
-            cj = nat_dir / "chrometrace.json"
-            if cj.exists():
-                d = json.loads(cj.read_text())
-                seen = set()
-                for e in d.get("traceEvents", []):
-                    if "ConvLayer" not in e.get("name", ""): continue
-                    qn = e.get("args", {}).get("QNN Op Name", "")
-                    if (e["name"], qn) in seen: continue
-                    seen.add((e["name"], qn))
-                    cpp = e.get("args", {}).get("Cycles per Packet", 1)
-                    nat_events.append({
-                        "name": e["name"], "qnn_name": qn,
-                        "dur": e.get("dur", 0), "cpp": cpp,
-                        "pkts": int(round(e.get("dur", 0)/cpp)) if cpp else 0,
-                    })
+            cj = _first_existing([
+                nat_dir / "optrace" / "chrometrace.json",
+                nat_dir / "device_out" / "chrometrace.json",
+                nat_dir / "chrometrace.json",
+            ])
+            if cj is not None:
+                nat_events = [
+                    e for e in _events_from_chrometrace(cj)
+                    if "ConvLayer" in e["name"]
+                ]
         ns = summarise(nat_events, target_op=args.target_native)
         if ns:
             print(f"  chrometrace ({args.target_native}): n={ns['n_events']}  hot avg "

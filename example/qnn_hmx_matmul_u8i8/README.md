@@ -41,7 +41,9 @@ cd example/qnn_hmx_matmul_u8i8/standard_flow/custom_u8i8
 SKIP_DEVICE=1 bash run_u8i8_chain.sh
 ```
 
-Drop `SKIP_DEVICE=1` when the target device is available.  Perf decode:
+Drop `SKIP_DEVICE=1` when the target device is available.  The runner writes
+native output and decoded optrace artifacts under its `OUT_DIR`; perf decode
+reads that standard artifact set:
 
 ```bash
 python scripts/perf_hmx_u8i8_matmul.py \
