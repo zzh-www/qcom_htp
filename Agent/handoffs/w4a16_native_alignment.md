@@ -107,6 +107,18 @@ The parser decodes descriptor fields, mask words, table pointer samples, and
 the first two little-endian u32 words from the effective weight and bias/control
 buffers passed to the HNH kernel.
 
+Native patched-skel entry probes should use the checked-in parser as well:
+
+```bash
+scripts/parse_w4a16_native_entry_probe.py /tmp/qnn_loader_probe_w4a16/Y.raw
+```
+
+This parser currently treats only the stride-sampled entry arguments, output
+descriptor scalars, and the first two activation descriptor fields as trusted.
+Later mask/table/weight/bias/control samples are printed as unverified because
+native post-Conv output ops transform the internal ConvLayer tile before public
+`Y.raw` export.
+
 `HMX_W4A16_DESC_DUMP_TABLE_SELECT` selects which 16-entry pointer-table sample
 is written into the 256-byte dump payload:
 
@@ -208,6 +220,7 @@ Native entry and descriptor follow-up:
 | `/tmp/libQnnHtpV75Skel_hmx_entry_probe.so` | Native run completes with `Y.raw` SHA `372fecf39290f38b9d345e1e3e3cbf2fb986ee78283946a4b87934787593a0ca` instead of canonical `147b7752a5f8c55f59c8539d65dcffe69214e01f27f157f7ccd540d9377822a8`; first output word is probe magic `0x484d5850`, so `0x2fcd80` is on the current native path. |
 | `output_w4a16_import_native_sidecar_bd00_descdump_256/` | Custom descriptor dump with the same imported sidecar reports `out_y_stride_words=256`, `act_table_y_stride_words=256`, `n_tiles_pow2=256`, `m_total_minus_step=8`, `k_total_bytes=256`, mask `[0,0x700,0,0x77c,...,0x20]`. |
 | `output_w4a16_import_native_sidecar_bd00_out_y64_256/` | Forcing only `HMX_W4A16_OUT_Y_STRIDE_WORDS_OVERRIDE=64`, based on the native entry-probe stride sample, leaves the result unchanged: `3298/65536`, `sorted_equal=True`, best row32 roll `32:65536`. |
+| `output_w4a16_import_native_sidecar_bd00_desc32_out_y64_256/` | Forcing both visible native output descriptor scalars, `HMX_W4A16_DESC_M_TILES_OVERRIDE=32` and `HMX_W4A16_OUT_Y_STRIDE_WORDS_OVERRIDE=64`, is a semantic false path: `408/65536`, `sorted_equal=False`, best row32 roll `32:8193`, main-op `14046` cycles. |
 
 The native entry probe currently writes into the internal ConvLayer output tile;
 downstream native output ops transform that tile before `Y.raw` is emitted.  Do
@@ -219,7 +232,9 @@ entry sees `r2(weight)=0x046c0000`, `r3(bias)=0x046c8000`,
 `r5(control)=0xfdd01c00`, `out_table=0x02d994a0`, and output descriptor scalar
 words `[8,64,32,8,256]` after the table pointer.  Since copying just the
 candidate `64` y-stride into custom is a no-op, the missing state is not a
-single output descriptor scalar.
+single output descriptor scalar.  Copying both visible native `64` y-stride and
+`32` tile selector is also a false path, so the remaining blocker is in the full
+native wrapper state rather than an isolated output descriptor field.
 
 Post descriptor-dump-enrichment recheck:
 

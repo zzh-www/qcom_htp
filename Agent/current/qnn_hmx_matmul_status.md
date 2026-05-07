@@ -195,6 +195,14 @@ cycles, but all remain semantic false paths (`505/65536`, `531/65536`, and
 `<out_dir>/analysis/w4a16_native_compare.{json,txt}` in addition to
 `<out_dir>/optrace/`.
 
+After the clean-native artifact refresh, copying the visible native output
+descriptor scalars into the closest imported-sidecar flow is also closed:
+`HMX_W4A16_DESC_M_TILES_OVERRIDE=32` plus
+`HMX_W4A16_OUT_Y_STRIDE_WORDS_OVERRIDE=64` gives only `408/65536` exact,
+`sorted_equal=False`, best row32 roll `32:8193`, and `14046` main-op cycles.
+This reinforces that the row32 rotation/mismatch is not an isolated output
+descriptor scalar.
+
 2026-05-08 native-field probes: on the closest native-surface flow
 (`native_nmajor_k4_lohi` plus `native_a16_nobias`), forcing descriptor
 `act/out +0x08` to `8` as a builder-formula hypothesis improves only to

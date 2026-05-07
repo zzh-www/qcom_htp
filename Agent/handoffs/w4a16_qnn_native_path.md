@@ -835,6 +835,11 @@ Dead-end implication from the current probes:
   pointers and output descriptor scalars, but a reliable native descriptor
   parser must either invert this output transform or patch a wrapper-visible
   public-output location.
+- Use `scripts/parse_w4a16_native_entry_probe.py` for the current
+  stride-sampled entry probe.  It intentionally labels only the entry arguments,
+  output descriptor scalars, and first two activation descriptor fields as
+  trusted; later samples remain unverified until a pattern probe proves the
+  public-output mapping.
 
 The earlier "patched skel was not loaded" conclusion is superseded by the
 invalid-skel loader test above.  The remaining problem is making the descriptor
