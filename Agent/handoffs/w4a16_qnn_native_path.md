@@ -888,6 +888,10 @@ Dead-end implication from the current probes:
   post-output metadata plus a neighboring restore/public-table-looking pointer
   table starts after the compact output table.  The neighboring table is not
   the HNH `out_desc+0` compact table.
+- A paired-marker write through that neighboring table's first 64 pointers does
+  not produce paired marker hits in exported `Y.raw`, so it is also not a direct
+  public-output export table at the HNH entry point.  Keep it classified as
+  adjacent wrapper/layout state until its owner is identified statically.
 - Applying those visible base-record scalar fields to the custom imported-sidecar
   flow is not a semantic bridge.  The focused artifact
   `output_w4a16_import_native_sidecar_bd00_base_record_fields_256/` uses

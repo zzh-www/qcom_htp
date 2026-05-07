@@ -247,7 +247,9 @@ The HMXR record-window probe now anchors the compact tables around the active
 prebuilt record: `act_table_ptr = base-0x180`, `out_table_ptr = base+0x98`,
 pre-base metadata sits at `base-0x80..base-0x04`, and post-output metadata plus
 an adjacent restore/public-table-looking pointer table starts after the compact
-output table.  The adjacent table is not the HNH `out_desc+0` compact table.
+output table.  The adjacent table is not the HNH `out_desc+0` compact table;
+paired-marker probing through that table also produces no paired marker hits in
+exported `Y.raw`, so it is not a direct public-export table at this point.
 
 2026-05-08 native-field probes: on the closest native-surface flow
 (`native_nmajor_k4_lohi` plus `native_a16_nobias`), forcing descriptor
