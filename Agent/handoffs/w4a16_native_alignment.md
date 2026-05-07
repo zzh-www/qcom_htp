@@ -139,6 +139,10 @@ Custom W4A16 evidence:
   of the old unused `UFixed8 [1,1,1,2048]` scratch tensor. This does not change
   correctness, but the standard 256^3 probe's constant-move sidecar cycles drop
   from the old class (`6717` in the refreshed pre-control artifact) to `3285`.
+- Runtime `HMX_W4A16_DESC_DUMP` without QHPI precompute shows the 256^3
+  activation and output QHPI block-table lengths are both `64`, with dense
+  native pointer tables expanded to `512` entries. Artifact:
+  `example/qnn_matmul_profile/output_codex_w4a16_descdump_runtime_blocklen_256/`.
 - The custom output is heavily saturated: about `27977` zeros and `27614`
   `65535` values in the refreshed best probe, versus native's `3309` zeros
   and `5895` `65535` values.
@@ -190,6 +194,11 @@ Dead ends already checked:
   `out_table_stride=8` fails graph execution before a valid optrace is emitted.
   Artifact:
   `example/qnn_matmul_profile/output_codex_w4a16_control_i32_ystride512_tablegap_256/`.
+- `HMX_W4A16_ROW4_BLOCK_ORDER_MOD8`, which forces the W8-style compact
+  Crouton16 block order (`block_index=(row4&7)*K_t+kt`,
+  `offset=(row4>>3)*256`), does not improve correctness (`4229/65536`) and is
+  slightly slower (`95278` cycles). Artifact:
+  `example/qnn_matmul_profile/output_codex_w4a16_control_i32_row4_mod8_256/`.
 
 ## Code State
 
@@ -200,6 +209,7 @@ the w8a16 diagnostic style:
 - `HMX_W4A16_MAX_COPIED_TABLE_ENTRIES`
 - `HMX_W4A16_ACT_PHYSICAL_ONLY`
 - `HMX_W4A16_OUT_PHYSICAL_ONLY`
+- `HMX_W4A16_ROW4_BLOCK_ORDER_MOD8`
 - `HMX_W4A16_ACT_N_PAIRS_OVERRIDE`
 - `HMX_W4A16_ACT_TABLE_Y_STRIDE_WORDS_OVERRIDE`
 - `HMX_W4A16_OUT_TABLE_STRIDE_DWORDS_OVERRIDE`

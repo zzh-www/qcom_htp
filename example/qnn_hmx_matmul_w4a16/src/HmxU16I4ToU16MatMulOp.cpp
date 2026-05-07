@@ -422,6 +422,9 @@ static inline int32_t hmx_w4a16_crouton_logical_or_compact_ptr(
     if (block_entries >= row4_groups * kn_tiles) {
         return block_table[row4_tile * kn_tiles + kn_tile];
     }
+#if defined(HMX_W4A16_ROW4_BLOCK_ORDER_MOD8)
+    return hmx_w4a16_crouton_row4_ptr(block_table, row4_tile, kn_tile, kn_tiles);
+#else
     const uint32_t compact_m_groups = block_entries / kn_tiles;
     if (compact_m_groups == 0) return 0;
     uint32_t row4_per_block = row4_groups / compact_m_groups;
@@ -430,6 +433,7 @@ static inline int32_t hmx_w4a16_crouton_logical_or_compact_ptr(
     const uintptr_t base = static_cast<uintptr_t>(static_cast<uint32_t>(block_table[block_index]));
     const uintptr_t offset_bytes = static_cast<uintptr_t>(row4_tile % row4_per_block) * 256u;
     return static_cast<int32_t>(base + offset_bytes);
+#endif
 }
 
 #if defined(__hexagon__)
