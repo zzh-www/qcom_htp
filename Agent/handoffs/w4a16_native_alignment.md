@@ -155,6 +155,14 @@ Custom W4A16 evidence:
   converter lowers them through `InputSlice + ForceFormat_Crouton`. This cuts
   the profiled custom main op to `29956` cycles at 256^3, but exactness remains
   only `4092/65536`.
+- `HMX_W4A16_DESC_DUMP` on `OP_INPUT_LAYOUT=native` confirms the descriptor
+  fields and mask stay identical to the tiled probe (`n_act_pairs=8`,
+  `act/out_y_stride=256`, `n_tiles_pow2=256`, mask word 1 `0x700`). The
+  material difference is QHPI table shape: native layout exposes dense
+  `act_block_entries=512` and `out_block_entries=512`, while the tiled runtime
+  dump exposed `64` physical table entries that the custom adapter expanded to
+  `512`. Artifact:
+  `example/qnn_matmul_profile/output_codex_w4a16_descdump_native_op_layout_256/`.
 - `OP_INPUT_LAYOUT=native_conv` is also available for a Conv-style input probe.
   Its ONNX input is `[1,K,1,M]` with `QuantizeLinear -> Transpose -> Reshape`
   before HMX, and runtime input bytes are written in NCHW `uint16` order. Ctxgen
