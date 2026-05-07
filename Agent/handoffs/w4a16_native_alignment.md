@@ -119,6 +119,15 @@ Post descriptor-dump-enrichment recheck:
 The precompute-record metadata added for descriptor dumping does not change the
 current default correctness class or main-op cycle class.
 
+Builder-derived mask probe:
+
+| Probe artifact | Variant | Native exact | Main-op cycles | Timeline span |
+|---|---|---:|---:|---:|
+| `output_codex_w4a16_mask_arg5_20_builder_256/` | `HMX_W4A16_MASK_ARG5=0x20` from the native `0x3d9c54` call-shape hypothesis | `3863/65536` | `94819` | `140184` |
+
+The high-bit `arg5=0x20` probe is worse than the default `4229/65536`, so this
+builder-derived lane is not the standalone missing contract.
+
 Latest control-word probe:
 
 | Probe artifact | `HMX_W4A16_EXTRA_PARAM0` | Native exact | Main-op cycles | Timeline span |
@@ -361,6 +370,10 @@ Dead ends already checked:
   at `4229/65536` native exactness. Custom main-op cycles remain in the
   `93633..94431` range and timeline spans in `134072..144387`; artifacts:
   `example/qnn_matmul_profile/output_codex_w4a16_mask_arg5_{1..7}_256/`.
+- A builder-derived high-bit probe with `HMX_W4A16_MASK_ARG5=0x20` worsens the
+  standard native-contract run to `3863/65536` exact with `94819` custom main-op
+  cycles and a `140184`-cycle timeline span; artifact:
+  `example/qnn_matmul_profile/output_codex_w4a16_mask_arg5_20_builder_256/`.
 - External skel wrapper with `HMX_W4A16_MASK_ARG6=0` reaches only
   `4386/65536` and slows to about `122k` cycles. Direct deep with
   `HMX_W4A16_MASK_ARG6=0` drops to `2810/65536`.
@@ -546,9 +559,10 @@ show that simply replacing the custom default final argument does not close the
 gap.  The helper itself stores the final stack argument into mask word `+0x30`;
 for `arg1=0x70b`, `arg5` low bits feed the mask `+0x08` lane, but
 `HMX_W4A16_MASK_ARG4=1..3` and `HMX_W4A16_MASK_ARG5=1..7` are both no-ops for
-correctness.  The remaining work is to decode the full field derivation and
-compare it against the enriched descriptor dump, not to keep sweeping one mask
-lane.
+correctness, and the builder-derived high-bit `HMX_W4A16_MASK_ARG5=0x20`
+worsens exactness to `3863/65536`.  The remaining work is to decode the full
+field derivation and compare it against the enriched descriptor dump, not to keep
+sweeping one mask lane.
 
 ## Next Work
 
