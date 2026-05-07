@@ -15,6 +15,12 @@ Acceptance rule for this family:
    `q::ConvLayer_s1.opt`; full native graph timeline also includes
    transpose/quantize/dequantize work.
 
+Native-path first rule: before adding new custom probes, read
+[`w4a16_qnn_native_path.md`](w4a16_qnn_native_path.md).  The current blocker is
+the native `ConvLayer_s1.opt` contract as a whole: signed W4 sidecar carrier,
+native activation/output Crouton surfaces, descriptor builder state, mask words,
+and control pointer semantics.
+
 ## Standard Flow
 
 Build the real-kernel packages explicitly:
@@ -427,6 +433,25 @@ Dead ends already checked:
   `ConvLayer.opt.weights_to_vtcm@FB.fB`, so it cannot match a `QHPI_QInt8`
   kernel signature. Artifact:
   `example/qnn_matmul_profile/output_codex_w4a16_qhpi_signed_weight_probe_256_host/`.
+- ONNX `INT8` initializer / quant-override carrier probes also do not reach
+  native `SFixed8`. All four host-only variants below lower the prepared custom
+  weight tensor as `UFixed8` (`data_type=1032`) with dims `[1,1,128,256]`;
+  native remains `SFixed8` (`data_type=776`) for the comparable Conv path.
+  Converter logs for the encoded variants state that `weight` is not
+  quantizable because its source datatype is `QNN_DATATYPE_INT_8`, so changing
+  `bitwidth` / `offset` in `quant_overrides.json` does not affect the QHPI
+  carrier:
+
+  | Artifact | Source / override change | Ctxgen weight carrier |
+  |---|---|---|
+  | `output_codex_w4a16_dtype_int8_no_weight_encoding_256_host/` | ONNX `INT8` initializer, no weight encoding | `data_type=1032`, `[1,1,128,256]` |
+  | `output_codex_w4a16_dtype_int8_bw8_offset0_256_host/` | ONNX `INT8`, weight override bitwidth 8 offset 0 | `data_type=1032`, `[1,1,128,256]` |
+  | `output_codex_w4a16_dtype_int8_bw8_offsetm128_256_host/` | ONNX `INT8`, weight override bitwidth 8 offset -128 | `data_type=1032`, `[1,1,128,256]` |
+  | `output_codex_w4a16_dtype_int8_bw4_offset0_256_host/` | ONNX `INT8`, weight override bitwidth 4 offset 0 | `data_type=1032`, `[1,1,128,256]` |
+
+  Treat signed-carrier work as blocked below quant-overrides / initializer
+  dtype. The next useful route is a different converter/custom-op contract or
+  a deeper native descriptor/QHPI ABI decode, not another param-encoding sweep.
 - `HMX_W4A16_USE_SKEL_KERNEL` calls the external skel wrapper but preserves the
   same low exactness class.
 - `DESC_M_TILES_OVERRIDE=32` lowers custom cycles to about `12.8k`, but only

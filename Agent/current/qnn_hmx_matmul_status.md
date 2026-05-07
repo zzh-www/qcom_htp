@@ -186,6 +186,21 @@ descriptor y-stride to `256` preserves the same false classes (`531/65536`, or
 `4092/65536` with physical-only tables).  This rules out y-stride as the missing
 desc32 field.
 
+Native W4A16 path analysis is now split out in
+`Agent/handoffs/w4a16_qnn_native_path.md`.  Treat it as the required entrypoint
+for future custom work: native starts from float Conv plus W4 quant overrides,
+ctxgen lowers weight to `SFixed8 [1,1,128,256]`, bias/control to
+`Int32 [1,8,1,64]`, activation/output to `UFixed16 [1,8,32,256]`, then
+`ConvLayer_s1.opt` enters the HNH wrapper/descriptor-builder/deep-body path.
+
+The signed W4 carrier route is still blocked below quant-overrides.  Four
+host-only probes using an ONNX `INT8` initializer plus no weight encoding,
+8-bit offset `0`, 8-bit offset `-128`, and 4-bit offset `0` all lower the
+prepared custom weight tensor as `UFixed8` (`data_type=1032`) with dims
+`[1,1,128,256]`; none produce native Conv's `SFixed8` (`data_type=776`) carrier.
+Do not repeat param-encoding sweeps until the converter/custom-op contract can
+actually expose a signed QHPI tensor.
+
 Latest w8a16 probes on 2026-05-07:
 
 - The native-rank `MODE=chain_qdq --op-input-layout native --final-output-rank 3d` path is now the reference custom flow. With real HMX enabled through `-UHMX_W8A16_SKIP_KERNEL -DHMX_W8A16_ALLOW_UNVALIDATED_KERNEL`, the source defaults produce output byte-identical to `example/qnn_matmul_profile/output_codex_native_w8a16_custom_full_256/device_out/out.raw` (`65536/65536`, maxdiff `0`). Treat that QNN native artifact as the oracle; the analytic native-contract reference is only a diagnostic cross-check (`22057/65536` exact and `65536/65536` within `abs<=3`, `max=3`).
