@@ -215,6 +215,12 @@ wrong and much slower (`2346/65536`, `204675` main-op cycles); the W8-style
 split with `k_total_bytes=128` is worse (`587/65536`), and keeping
 `k_total_bytes=256` in that split fails execution.  Continue by decoding the
 native wrapper's per-half metadata tuple rather than promoting split as a fix.
+The native HNH wrapper also has a descriptor-advance loop after each body call:
+`0x3de060` increments `out_desc+0x00` by `r24`, increments `act_desc+0x00` by
+`r27 * 4`, and loops until `r26 == r23`.  Those `r23/r24/r27` values come from
+native tensor metadata and are not present in the current custom descriptor
+dump, so the next useful native decode is that loop tuple plus the mask helper
+tuple, not another custom-side table rotation.
 
 The signed W4 carrier route is still blocked below quant-overrides.  Four
 host-only probes using an ONNX `INT8` initializer plus no weight encoding,

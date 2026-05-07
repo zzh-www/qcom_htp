@@ -286,6 +286,38 @@ jumps directly to `hmx_v73_convhnh1x1deep_stride1`.  The deep body reads:
 | mask descriptor | `+0x0..0x18` mask words, plus `+0x30` used by the pre-entry selector |
 | control pointer | first 32-bit word via `memw(r5++#0x4)` |
 
+### Wrapper Descriptor Advance Loop
+
+`0x3ddc60` does more than make a single descriptor and call the body.  After a
+body call returns, the common tail at `0x3de060` advances descriptor table
+pointers and can loop back to the HMX call-selection block:
+
+```text
+0x3de060: r26 += 1
+0x3de064: r2 = memw(r29+#0x40)          # base+0x10, activation desc +0x00
+0x3de068: memw(r29+#0x58) += r24        # base+0x28, output desc +0x00
+0x3de06c: r2 = addasl(r2, r27, #2)      # activation table pointer += r27 * 4
+0x3de070: p0 = cmp.eq(r26, r23)
+0x3de074: if (!p0) jump:t 0x3ddd90
+0x3de078: memw(r29+#0x40) = r2
+```
+
+So the native call state includes three loop fields in addition to the deep-body
+descriptor fields:
+
+| Loop field | Native role |
+|---|---|
+| `r23` | Number of wrapper HMX calls for this tensor metadata state. |
+| `r24` | Output table-pointer advance, in bytes, applied to `out_desc+0x00`. |
+| `r27` | Activation table-pointer advance, in 32-bit table entries, applied to `act_desc+0x00`. |
+
+This is why a static custom descriptor dump is necessary but not sufficient.
+The deep body consumes only `base+0x10`, `base+0x28`, `base+0x48`, and `r5`,
+but native may call that body with advanced descriptor table bases.  The current
+custom adapter has no native-derived values for `r23/r24/r27`; its
+`HMX_W4A16_INTERNAL_SPLIT_N128` diagnostic only proved that writing both N
+halves is possible, not that the native loop metadata was reproduced.
+
 The native descriptor builder call around `0x3d9c54` reaches
 `set_hmx_params_convw4b1x1(base+0x48, 0x70b, r28, 0, r4, r21, r6)`, with later
 arguments derived from tensor metadata and wrapper flags.  Single-lane mask
@@ -472,7 +504,8 @@ The W8-style split that changes each split call to `k_total_bytes=128` is worse
 (`587/65536`) and the `k_total_bytes=256` split variant fails graph execution.
 Therefore the next native-first target is not just "call twice"; it is the
 native wrapper's full per-half metadata state: output table selection, weight
-carrier/offset, control pointer, and mask-helper inputs together.
+carrier/offset, control pointer, mask-helper inputs, and the wrapper
+`r23/r24/r27` descriptor-advance loop together.
 
 ## Alignment Consequences
 
