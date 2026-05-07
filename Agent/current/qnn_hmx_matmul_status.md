@@ -207,6 +207,14 @@ W4A16 quick-read report.  The current closest native-surface run has exactly
 is distributed across all groups.  Treat the next step as native output
 descriptor/table/mask-state analysis, not another formula or byte-packing
 probe.
+`HMX_W4A16_OUT_TABLE_N_ROTATE=4` flips that stuck half to N32 groups 4..7
+(`1219/65536` exact), proving the single custom call currently consumes only
+the upper four output-table entries per row4 group.  A guarded full-descriptor
+`HMX_W4A16_INTERNAL_SPLIT_N128` diagnostic writes both halves but is still
+wrong and much slower (`2346/65536`, `204675` main-op cycles); the W8-style
+split with `k_total_bytes=128` is worse (`587/65536`), and keeping
+`k_total_bytes=256` in that split fails execution.  Continue by decoding the
+native wrapper's per-half metadata tuple rather than promoting split as a fix.
 
 The signed W4 carrier route is still blocked below quant-overrides.  Four
 host-only probes using an ONNX `INT8` initializer plus no weight encoding,

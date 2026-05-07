@@ -447,6 +447,33 @@ still do not match native.  A W8-style compact row4 table order changes neither
 that signature nor exactness.  This points back to the native output
 descriptor/table/mask/body boundary, not to a final analytic formula mismatch.
 
+The first output-table diagnostic confirms the table-consumption part of that
+claim.  Building with `HMX_W4A16_OUT_TABLE_N_ROTATE=4` moves the stuck
+`32767` half from N32 groups 0..3 to groups 4..7:
+
+```text
+artifact: output_codex_w4a16_outrot4_k4_nobias_native_surface_256
+native-exact: 1219/65536
+output-top-value: value=32767 count=32768 n32=[0,0,0,0,8192,8192,8192,8192]
+```
+
+So the current W4 HNH body call consumes the upper four output-table entries
+per row4 group.  A full-descriptor two-call diagnostic,
+`HMX_W4A16_INTERNAL_SPLIT_N128`, can make both N halves non-`32767`, but remains
+incorrect and slow:
+
+```text
+artifact: output_codex_w4a16_fulldesc_splitn128_k4_nobias_native_surface_256
+native-exact: 2346/65536
+custom-optrace main: 204675 cycles
+```
+
+The W8-style split that changes each split call to `k_total_bytes=128` is worse
+(`587/65536`) and the `k_total_bytes=256` split variant fails graph execution.
+Therefore the next native-first target is not just "call twice"; it is the
+native wrapper's full per-half metadata state: output table selection, weight
+carrier/offset, control pointer, and mask-helper inputs together.
+
 ## Alignment Consequences
 
 The custom path is not native-equivalent just because the HMX body is called or

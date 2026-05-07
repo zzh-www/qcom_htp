@@ -448,6 +448,22 @@ static inline int32_t hmx_w4a16_crouton_logical_or_compact_ptr(
 #endif
 }
 
+static inline uint32_t hmx_w4a16_out_table_n_index(uint32_t n_tile, uint32_t n_tiles)
+{
+#if defined(HMX_W4A16_OUT_TABLE_N_ROTATE)
+    /* Diagnostic only: rotate logical N32 table entries to identify which
+     * output pointers the W4 HNH body actually consumes. */
+    if (n_tiles == 0) return n_tile;
+    int32_t rotate = HMX_W4A16_OUT_TABLE_N_ROTATE;
+    int32_t mod = rotate % static_cast<int32_t>(n_tiles);
+    if (mod < 0) mod += static_cast<int32_t>(n_tiles);
+    return (n_tile + static_cast<uint32_t>(mod)) % n_tiles;
+#else
+    (void)n_tiles;
+    return n_tile;
+#endif
+}
+
 #if defined(__hexagon__)
 static inline void store_le32(uint8_t *dst, uint32_t offset, uint32_t value)
 {
@@ -535,6 +551,65 @@ static inline void hmx_w4a16_enter_kernel(
         bias_bytes,
         mask_desc,
         extra_param);
+}
+
+static inline void hmx_w4a16_enter_kernel_maybe_split_n128(
+    const hmx_conv_out_desc_t *out_desc,
+    const hmx_conv_act_desc_t *act_desc,
+    const uint8_t *wt_pack,
+    const uint8_t *bias_bytes,
+    const hmx_conv_mask_desc_t *mask_desc,
+    const uint32_t *extra_param,
+    uint32_t row4_groups,
+    uint32_t N_t,
+    uint32_t K_t,
+    uint32_t out_table_stride)
+{
+#if defined(HMX_W4A16_INTERNAL_SPLIT_N128)
+    /* Diagnostic only: keep the full W4 descriptor shape, but run the body
+     * twice while mapping the consumed upper-half table entries to each N128
+     * physical half.  This tests native-wrapper split hypotheses without
+     * changing the default single-call path. */
+    constexpr uint32_t kSplitNTiles = 4;
+    if (N_t >= kSplitNTiles && (N_t % kSplitNTiles) == 0 &&
+        out_table_stride >= N_t) {
+        int32_t out_tbl_split[kHmxW4A16MaxRuntimeTableEntries] __attribute__((aligned(64)));
+        const uint32_t split_entries = row4_groups * out_table_stride;
+        if (split_entries > 0 && split_entries <= kHmxW4A16MaxRuntimeTableEntries) {
+            const uint32_t split_weight_bytes = K_t * kSplitNTiles * 512u;
+            const uint32_t split_bias_bytes = kSplitNTiles * 256u;
+            for (uint32_t split = 0; split < N_t / kSplitNTiles; ++split) {
+                const uint32_t rotate = ((split + 1u) * kSplitNTiles) % N_t;
+                for (uint32_t row4 = 0; row4 < row4_groups; ++row4) {
+                    int32_t *dst = out_tbl_split + row4 * out_table_stride;
+                    const int32_t *src =
+                        out_desc->out_tile_ptr_table + row4 * out_table_stride;
+                    for (uint32_t nt = 0; nt < out_table_stride; ++nt) {
+                        uint32_t src_nt = nt;
+                        if (nt < N_t) src_nt = (nt + rotate) % N_t;
+                        dst[nt] = src[src_nt];
+                    }
+                }
+                hmx_conv_out_desc_t split_out_desc = *out_desc;
+                split_out_desc.out_tile_ptr_table = out_tbl_split;
+                hmx_w4a16_enter_kernel(
+                    &split_out_desc,
+                    act_desc,
+                    wt_pack + split * split_weight_bytes,
+                    bias_bytes + split * split_bias_bytes,
+                    mask_desc,
+                    extra_param);
+            }
+            return;
+        }
+    }
+#else
+    (void)row4_groups;
+    (void)N_t;
+    (void)K_t;
+    (void)out_table_stride;
+#endif
+    hmx_w4a16_enter_kernel(out_desc, act_desc, wt_pack, bias_bytes, mask_desc, extra_param);
 }
 #endif
 
@@ -719,12 +794,13 @@ static uint32_t hmx_w4a16_precompute(
 #endif
         }
         for (uint32_t nt = 0; nt < N_t; ++nt) {
+            const uint32_t src_nt = hmx_w4a16_out_table_n_index(nt, N_t);
             pc->out_table_copy[rg * out_table_stride + nt] =
 #if defined(HMX_W4A16_OUT_PHYSICAL_ONLY)
-                hmx_w4a16_crouton_row4_physical_ptr(out_src, rg, nt, N_t);
+                hmx_w4a16_crouton_row4_physical_ptr(out_src, rg, src_nt, N_t);
 #else
                 hmx_w4a16_crouton_logical_or_compact_ptr(
-                    out_src, out_block_entries, mt_groups, rg, nt, N_t);
+                    out_src, out_block_entries, mt_groups, rg, src_nt, N_t);
 #endif
         }
     }
@@ -903,13 +979,17 @@ static uint32_t hmx_w4a16_to_u16_matmul_precomputed_kernel(
      * table discovery happened at graph load.  The custom op event now starts
      * at the tiny native descriptor stitching boundary.
      */
-    hmx_w4a16_enter_kernel(
+    hmx_w4a16_enter_kernel_maybe_split_n128(
         out_desc,
         act_desc,
         effective_wt_pack,
         effective_bias_bytes,
         mask_desc,
-        control_param);
+        control_param,
+        pc->mt_groups,
+        pc->N_t,
+        pc->K_t,
+        out_table_stride);
 
 #if defined(HMX_W4A16_PROBE_CYCLES)
     uint64_t cyc_after_kernel = 0;
@@ -1139,12 +1219,13 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
 #endif
         }
         for (uint32_t nt = 0; nt < N_t; ++nt) {
+            const uint32_t src_nt = hmx_w4a16_out_table_n_index(nt, N_t);
             out_tbl_all[rg * out_table_stride + nt] =
 #if defined(HMX_W4A16_OUT_PHYSICAL_ONLY)
-                hmx_w4a16_crouton_row4_physical_ptr(out_src, rg, nt, N_t);
+                hmx_w4a16_crouton_row4_physical_ptr(out_src, rg, src_nt, N_t);
 #else
                 hmx_w4a16_crouton_logical_or_compact_ptr(
-                    out_src, out_block_entries, mt_groups, rg, nt, N_t);
+                    out_src, out_block_entries, mt_groups, rg, src_nt, N_t);
 #endif
         }
     }
@@ -1334,13 +1415,17 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
      * V73DEEP kernel body; the C++ wrapper does not inspect accumulators or
      * implement matmul arithmetic.
      */
-    hmx_w4a16_enter_kernel(
+    hmx_w4a16_enter_kernel_maybe_split_n128(
         &out_desc,
         &act_desc,
         effective_wt_pack,
         effective_bias_bytes,
         mask_desc,
-        control_param);
+        control_param,
+        mt_groups,
+        N_t,
+        K_t,
+        out_table_stride);
 
 #if defined(HMX_W4A16_PROBE_CYCLES)
     uint64_t cyc_after_kernel = 0;
