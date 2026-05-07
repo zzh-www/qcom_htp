@@ -385,6 +385,23 @@ The W4A16 native HNH wrapper evidence is in
   register value. Several apparent native builder contradictions come from
   reading same-packet stores as if they used the newly assigned register.
 
+Confirmed deep-body descriptor reads:
+
+| Descriptor | Native pointer | Fields read by `0x2fdb80` |
+|---|---|---|
+| activation | `base+0x10` (`r1`) | `+0x0` pointer table, `+0x4` pair count, `+0x8` table y stride |
+| output | `base+0x28` (`r0`) | `+0x0` pointer table, `+0x4` table stride, `+0x8` y stride, `+0xc` tile/count selector, `+0x10` inner loop span, `+0x14` byte span |
+| mask | `base+0x48` (`r4`) | `+0x0..0x18` mask words and `+0x30` through the pre-entry deep selector |
+| control | original wrapper `r5` | first 32-bit word only |
+
+Current decoding of the native builder call site at `0x3d9c54`: it calls
+`set_hmx_params_convw4b1x1(base+0x48, 0x70b, r28, 0, r4, r21, r6)`, where
+`r4`, `r21`, and `r6` are derived from tensor metadata and wrapper flags rather
+than literal constants.  The focused `HMX_W4A16_MASK_ARG6={0x4,0xc}` probes
+show that simply replacing the custom default final argument does not close the
+gap; the remaining work is to decode the full field derivation and compare it
+against the enriched descriptor dump, not to keep sweeping one mask lane.
+
 ## Next Work
 
 1. Continue decoding the `0x3d9920` native HNH descriptor builder field
