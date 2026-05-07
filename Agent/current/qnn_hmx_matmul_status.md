@@ -238,6 +238,8 @@ Pure-assembly activation/output layout probes now decode the first compact-table
 coordinate mappings.  Native compact `act_table[i]` starts at logical activation
 `m=(i//8)*4`, `k=(i%8)*32`, with u16 pairs for rows `m/m+1` and K increasing;
 the first block continues with row pairs `m+2/m+3`, then `m+32/m+33`, etc.
+The full `act_table[0]` dump has zero formula misses for
+`j=group*32+k -> rows 32*(group//2)+2*(group&1)` and `+1`.
 Native compact `out_table[i]` is ordered differently in exported `Y.raw`:
 viewed as `[8,32,256]`, marker `i` lands at `m32_group=i%8`, `row=0`,
 `n=(i//8)*4`.  This is a real output-table order mismatch versus the current

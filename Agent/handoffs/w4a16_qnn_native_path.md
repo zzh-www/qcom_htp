@@ -875,6 +875,9 @@ Dead-end implication from the current probes:
   to logical activation samples with `m=(i//8)*4` / `m+1` and
   `k=(i%8)*32 + {0,1,2}`.  `HMXA` confirms the first activation block then
   continues as row pairs `0/1`, `2/3`, `32/33`, `34/35`, ... for K `0..31`.
+  The full 512-u32 activation block0 dump has zero formula misses:
+  `j=group*32+k` maps to u16 halves `(m,k)` and `(m+1,k)`, with
+  `m=32*(group//2)+2*(group&1)`.
 - Output marker probes map compact output table consumption without touching the
   custom op.  Writing a unique marker to compact `out_table[i]` appears in
   exported `Y.raw` as shape `[8,32,256]` at `m32_group=i%8`, `row=0`,

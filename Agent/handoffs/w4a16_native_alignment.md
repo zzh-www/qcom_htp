@@ -232,6 +232,7 @@ Native entry and descriptor follow-up:
 | `/tmp/libQnnHtpV75Skel_hmx_table_probe.so` | Table-memory probe confirms the active table pointers expose a compact first 64-entry view: output table `0x046a0000..0x046bf800` and activation table `0x046c9000..0x046e8800`, both contiguous by `0x800`.  Entries after 64 are adjacent wrapper/metadata memory, not another 448 entries of the custom public-QHPI row4-expanded table. |
 | `/tmp/libQnnHtpV75Skel_hmx_act_tile_probe.so` | Activation table[0] data probe (`HMXA`) confirms the first block stores pairs of M rows with K contiguous: rows `0/1`, then `2/3`, then `32/33`, then `34/35`, etc. for K `0..31`. |
 | `/tmp/libQnnHtpV75Skel_hmx_act_entry_probe.so` | Per-entry activation probe (`HMXV`) maps compact `act_table[i]` to logical activation coordinates: first samples are `m=(i//8)*4` and `m+1`, with `k=(i%8)*32 + {0,1,2}`. |
+| `/tmp/libQnnHtpV75Skel_hmx_act_block_full_probe.so` | Full activation block0 dump covers all 512 u32 offsets with zero formula misses: for `j=group*32+k`, the two u16 halves are logical activation `(m,k)` and `(m+1,k)`, where `m=32*(group//2)+2*(group&1)`. |
 | `/tmp/libQnnHtpV75Skel_hmx_out_marker_probe.so` | Output table marker probe writes a unique marker to each compact `out_table[i]`.  In exported native `Y.raw` viewed as `[8,32,256]`, marker `i` lands at `m32_group=i%8`, `row=0`, `n=(i//8)*4` and `n+1`. |
 | `/tmp/libQnnHtpV75Skel_hmx_out_block_probe.so` | Output block0 marker probe maps the first 256 u32 offsets inside `out_table[0]`: for `j=group*32+row`, the marker lands at `m32_group=0`, `row`, and `n=32*(group//2)+2*(group&1)` / `n+1`. |
 | `/tmp/libQnnHtpV75Skel_hmx_out_block_full_probe.so` | Full output block0 marker probe covers all 512 u32 offsets with zero misses and confirms the same formula through `n=226/227`; `out_table[0]` covers one M32 group and all N pairs in the `[0,2,32,34,...,224,226]` order. |
@@ -280,6 +281,10 @@ compact output table entries use the opposite visible order in exported
 current custom table copy is still built as a 512-entry row4-expanded table
 indexed `row4 * stride + tile`, so its output-table order is not the compact
 native order observed by the marker probe.
+Within one compact activation block, the full-block dump gives
+`j = group * 32 + k`, `k = j % 32`, and
+`m_pair_base = 32 * (group // 2) + 2 * (group & 1)`.  The two u16 halves are
+logical activation rows `m_pair_base` and `m_pair_base + 1`.
 Within one compact output block, the full-block marker probe gives
 `j = group * 32 + row`, `row = j % 32`, and
 `n_pair_base = 32 * (group // 2) + 2 * (group & 1)`.  Combining that with the
