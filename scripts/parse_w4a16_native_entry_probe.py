@@ -14,7 +14,8 @@ words from public `Y.raw`.  The older `--layout stride` mode is kept for
 historical v1 dumps and should not be used for table samples.
 
 Supported record magics are `HMXP` for entry samples, `HMXB` for the active
-prebuilt base record, and `HMXT` for table-memory samples.
+prebuilt base record, `HMXT` for table-memory samples, `HMXA` for activation
+table[0] data samples, and `HMXV` for per-activation-entry value samples.
 """
 
 from __future__ import annotations
@@ -29,6 +30,8 @@ from typing import Any
 MAGIC_ENTRY = 0x484D5850  # "HMXP"
 MAGIC_BASE_RECORD = 0x484D5842  # "HMXB"
 MAGIC_TABLE = 0x484D5854  # "HMXT"
+MAGIC_ACT_TILE = 0x484D5841  # "HMXA"
+MAGIC_ACT_ENTRIES = 0x484D5856  # "HMXV"
 
 FIELD_WORDS = [
     (0, "magic", "hex"),
@@ -206,6 +209,82 @@ def _parse_table_record(path: Path, dtype: str, layout: str, stride_words: int, 
     }
 
 
+def _parse_compact_header(record: list[int]) -> dict[str, int]:
+    return {
+        "magic": record[0],
+        "r31_return": record[1],
+        "out_desc_arg": record[2],
+        "act_desc_arg": record[3],
+        "weight_arg": record[4],
+        "bias_arg": record[5],
+        "mask_arg": record[6],
+        "control_arg": record[7],
+        "out_table_ptr": record[8],
+        "act_table_ptr": record[9],
+        "act_n_pairs": record[10],
+        "act_y_stride_words": record[11],
+        "out_table_stride_dwords": record[12],
+        "out_y_stride_words": record[13],
+        "out_n_tiles_pow2": record[14],
+        "out_k_total_bytes": record[15],
+    }
+
+
+def _u16_pairs(words: list[int]) -> list[list[int]]:
+    return [[word & 0xFFFF, word >> 16] for word in words]
+
+
+def _parse_act_tile_record(path: Path, dtype: str, layout: str, stride_words: int, record: list[int]) -> dict[str, Any]:
+    public_words = _read_words(path, dtype)
+    fields = _parse_compact_header(record)
+    data_words = record[80:272]
+    return {
+        "path": str(path),
+        "record_kind": "act_tile",
+        "dtype": dtype,
+        "layout": layout,
+        "public_u32_words": len(public_words),
+        "stride_words": stride_words,
+        "record_u32_words": len(record),
+        "fields": fields,
+        "samples": {
+            "act_table_64": record[16:80],
+            "act_table0_data_192_u32": data_words,
+            "act_table0_data_192_u16_pairs": _u16_pairs(data_words),
+        },
+    }
+
+
+def _parse_act_entries_record(path: Path, dtype: str, layout: str, stride_words: int, record: list[int]) -> dict[str, Any]:
+    public_words = _read_words(path, dtype)
+    fields = _parse_compact_header(record)
+    entries = []
+    for i in range(64):
+        base = 16 + i * 4
+        sample_words = record[base + 1 : base + 4]
+        entries.append(
+            {
+                "index": i,
+                "ptr": record[base],
+                "first3_u32": sample_words,
+                "first6_u16": [half for pair in _u16_pairs(sample_words) for half in pair],
+            }
+        )
+    return {
+        "path": str(path),
+        "record_kind": "act_entries",
+        "dtype": dtype,
+        "layout": layout,
+        "public_u32_words": len(public_words),
+        "stride_words": stride_words,
+        "record_u32_words": len(record),
+        "fields": fields,
+        "samples": {
+            "act_entries_64": entries,
+        },
+    }
+
+
 def parse_probe(
     path: Path,
     layout: str,
@@ -216,14 +295,18 @@ def parse_probe(
     public_words = _read_words(path, dtype)
     header = _decode_record(public_words, layout, stride_words, 1)
     if record_kind == "auto":
-        if header[0] == MAGIC_TABLE:
+        if header[0] == MAGIC_ACT_TILE:
+            record_kind = "act_tile"
+        elif header[0] == MAGIC_ACT_ENTRIES:
+            record_kind = "act_entries"
+        elif header[0] == MAGIC_TABLE:
             record_kind = "table"
         elif header[0] == MAGIC_BASE_RECORD:
             record_kind = "base"
         else:
             record_kind = "entry"
 
-    record_words = 272 if record_kind == "table" else 96
+    record_words = 272 if record_kind in ("table", "act_tile", "act_entries") else 96
     record = _decode_record(public_words, layout, stride_words, record_words)
     if record_kind == "entry":
         return _parse_entry_record(path, dtype, layout, stride_words, record)
@@ -231,6 +314,10 @@ def parse_probe(
         return _parse_base_record(path, dtype, layout, stride_words, record)
     if record_kind == "table":
         return _parse_table_record(path, dtype, layout, stride_words, record)
+    if record_kind == "act_tile":
+        return _parse_act_tile_record(path, dtype, layout, stride_words, record)
+    if record_kind == "act_entries":
+        return _parse_act_entries_record(path, dtype, layout, stride_words, record)
     raise ValueError(f"unsupported record kind: {record_kind}")
 
 
@@ -248,6 +335,8 @@ def print_human(parsed: dict[str, Any]) -> None:
         "entry": MAGIC_ENTRY,
         "base": MAGIC_BASE_RECORD,
         "table": MAGIC_TABLE,
+        "act_tile": MAGIC_ACT_TILE,
+        "act_entries": MAGIC_ACT_ENTRIES,
     }[kind]
     ok = "ok" if magic == expected_magic else "unexpected"
     print(f"=== W4A16 native HNH {kind} probe: {parsed['path']} ===")
@@ -350,6 +439,61 @@ def print_human(parsed: dict[str, Any]) -> None:
             print()
         return
 
+    if kind in ("act_tile", "act_entries"):
+        print("entry_args:")
+        for name in (
+            "r31_return",
+            "out_desc_arg",
+            "act_desc_arg",
+            "weight_arg",
+            "bias_arg",
+            "mask_arg",
+            "control_arg",
+        ):
+            print(f"  {name:<26} = {_fmt(fields[name])}")
+        print()
+
+        print("native_compact_header:")
+        for name in (
+            "out_table_ptr",
+            "act_table_ptr",
+            "act_n_pairs",
+            "act_y_stride_words",
+            "out_table_stride_dwords",
+            "out_y_stride_words",
+            "out_n_tiles_pow2",
+            "out_k_total_bytes",
+        ):
+            value = fields[name]
+            if name.endswith("_ptr"):
+                text = _fmt(value)
+            else:
+                text = str(value)
+            print(f"  {name:<26} = {text}")
+        print()
+
+        if kind == "act_entries":
+            print("act_entries_64:")
+            for entry in parsed["samples"]["act_entries_64"]:
+                vals = ", ".join(str(v) for v in entry["first6_u16"])
+                print(f"  [{entry['index']:02d}] ptr={_fmt(entry['ptr'])} first6_u16=[{vals}]")
+            print()
+            return
+
+        print("samples:")
+        for title, words in parsed["samples"].items():
+            print(f"{title}:")
+            if title.endswith("_u16_pairs"):
+                for base in range(0, len(words), 8):
+                    chunk = " ".join(f"[{a},{b}]" for a, b in words[base : base + 8])
+                    print(f"  [{base:03d}] {chunk}")
+            else:
+                for base in range(0, len(words), 8):
+                    chunk = " ".join(f"0x{word:08x}" for word in words[base : base + 8])
+                    print(f"  [{base:03d}] {chunk}")
+            print()
+        return
+
     groups = [
         (
             "entry_args",
@@ -414,9 +558,9 @@ def main() -> None:
     parser.add_argument("--dtype", choices=("u16", "u32"), default="u16", help="public raw storage dtype")
     parser.add_argument(
         "--record-kind",
-        choices=("auto", "entry", "base", "table"),
+        choices=("auto", "entry", "base", "table", "act_tile", "act_entries"),
         default="auto",
-        help="probe record format; auto selects HMXB base and HMXT table records by magic",
+        help="probe record format; auto selects known HMX* probe records by magic",
     )
     parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     args = parser.parse_args()

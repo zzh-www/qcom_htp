@@ -207,7 +207,7 @@ Two consequences follow from this spine:
 | Wrapper call shape | Proven for current artifact plus static fallback | Runtime `r31` probe shows current clean artifact uses `0x3de3c0 -> 0x3de464 -> 0x2fcd80 -> 0x2fdb80`; static decode keeps `0x3ddc60 -> 0x3d9920 -> 0x3dde78` for other selections. |
 | Wrapper descriptor loop | Proven statically | Tail `0x3de060` advances output and activation descriptor table bases using `r24` and `r27` until `r26 == r23`. |
 | Runtime tensor-object metadata values | Unknown | Offsets such as `activation.meta[0x04]`, `[0x18]`, `[0x1c]`, `[0x20]` and output counterparts are not exposed by bottom mapping. |
-| Native internal table layout | Partially decoded | HMXT table probe shows the active `out_table_ptr` and `act_table_ptr` expose only a compact first 64-entry contiguous view; entries after 64 are adjacent wrapper/metadata memory, not the custom 512-entry public-QHPI expansion. |
+| Native internal table layout | Partially decoded | HMXT/HMXA/HMXV and output marker probes show compact 64-entry activation/output table views and their first data-coordinate mappings; this differs from the custom 512-entry public-QHPI expansion. |
 | Full W4 mask-helper argument tuple | Partially decoded | `arg1=0x70b` and the helper branch are known, but coupled dynamic args are metadata-derived and not yet dumped. |
 | Public custom path to signed W4 carrier | Unsolved | Current custom boundary still reaches QHPI as `QUInt8` for W4 even when bytes match. |
 
@@ -870,6 +870,17 @@ Dead-end implication from the current probes:
   those 64 entries are nearby wrapper records and other metadata, not another
   448 HNH table entries.  This is structurally different from the custom
   adapter's 512-entry row4-expanded public-QHPI tables.
+- Activation data probes keep the same pure-assembly patched-entry method and
+  make the compact input layout explicit.  `HMXV` maps compact `act_table[i]`
+  to logical activation samples with `m=(i//8)*4` / `m+1` and
+  `k=(i%8)*32 + {0,1,2}`.  `HMXA` confirms the first activation block then
+  continues as row pairs `0/1`, `2/3`, `32/33`, `34/35`, ... for K `0..31`.
+- Output marker probes map compact output table consumption without touching the
+  custom op.  Writing a unique marker to compact `out_table[i]` appears in
+  exported `Y.raw` as shape `[8,32,256]` at `m32_group=i%8`, `row=0`,
+  `n=(i//8)*4` and `n+1`.  Writing markers across the first 256 u32 words of
+  `out_table[0]` maps offset `j=group*32+row` to `m32_group=0`, `row`, and
+  `n=32*(group//2)+2*(group&1)` / `n+1`.
 - Applying those visible base-record scalar fields to the custom imported-sidecar
   flow is not a semantic bridge.  The focused artifact
   `output_w4a16_import_native_sidecar_bd00_base_record_fields_256/` uses
@@ -890,10 +901,11 @@ Before new custom changes, decode or instrument the native path in this order:
 1. For the current clean 256^3 artifact, treat the simple wrapper at `0x3de3c0`
    as the active native path.  Its input is a prebuilt record, not the
    `0x3d9920` builder stack path.
-2. The prebuilt record scalar fields and first 64 table entries are now decoded;
-   do not repeat scalar-only copies into custom.  The next missing native
-   evidence is the relation between this compact table view, the adjacent
-   wrapper metadata, and any loop state that selects or advances the tables.
+2. The prebuilt record scalar fields, first 64 table entries, activation table
+   input mapping, and output marker mapping are now decoded; do not repeat
+   scalar-only copies into custom.  The next missing native evidence is the
+   relation between this compact table view, the adjacent wrapper metadata, and
+   any loop state that selects or advances the tables.
 3. Compare the native entry/base records against the custom descriptor dump
    before changing custom code.  Any difference should be classified as carrier
    lowering, tensor table layout, descriptor scalar, mask helper input, control
@@ -911,6 +923,10 @@ Secondary work remains useful, but should not replace the runtime dump:
   pointer tables passed through `base+0x10` / `base+0x28`.
 - Decode the dynamic mask-helper inputs for the native HNH 1x1 branch after the
   tensor metadata fields above are available.
+- When C++ custom changes are allowed again, the first named boundary to test is
+  a compact-table diagnostic that preserves the native activation order
+  (`row4-residue major, K32 inner`) and native output order (`N4 residue major,
+  M32 inner`) instead of the current 512-entry row4-expanded order.
 
 ## Alignment Checklist
 

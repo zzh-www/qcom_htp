@@ -234,6 +234,15 @@ activation entries are contiguous `0x046c9000..0x046e8800`, and entries after
 table.  This closes the direct scalar-copy route: the custom public-QHPI table
 adapter is structurally different from the compact native table view.
 
+Pure-assembly activation/output layout probes now decode the first compact-table
+coordinate mappings.  Native compact `act_table[i]` starts at logical activation
+`m=(i//8)*4`, `k=(i%8)*32`, with u16 pairs for rows `m/m+1` and K increasing;
+the first block continues with row pairs `m+2/m+3`, then `m+32/m+33`, etc.
+Native compact `out_table[i]` is ordered differently in exported `Y.raw`:
+viewed as `[8,32,256]`, marker `i` lands at `m32_group=i%8`, `row=0`,
+`n=(i//8)*4`.  This is a real output-table order mismatch versus the current
+custom 512-entry `row4 * stride + tile` table construction.
+
 2026-05-08 native-field probes: on the closest native-surface flow
 (`native_nmajor_k4_lohi` plus `native_a16_nobias`), forcing descriptor
 `act/out +0x08` to `8` as a builder-formula hypothesis improves only to
