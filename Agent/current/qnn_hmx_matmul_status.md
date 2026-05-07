@@ -201,6 +201,12 @@ The W8-style compact row4 table order has now also been checked on the current
 closest native-surface W4A16 probe (`native_nmajor_k4_lohi` plus
 `native_a16_nobias`): it keeps exactness at `1014/65536` and slows the main op
 to `96438` cycles, so table block order is not the remaining native mismatch.
+The analyzer now records top-value N32 distribution as part of the standard
+W4A16 quick-read report.  The current closest native-surface run has exactly
+32768 outputs stuck at `32767`, all in N32 groups 0..3, while native's top value
+is distributed across all groups.  Treat the next step as native output
+descriptor/table/mask-state analysis, not another formula or byte-packing
+probe.
 
 The signed W4 carrier route is still blocked below quant-overrides.  Four
 host-only probes using an ONNX `INT8` initializer plus no weight encoding,

@@ -93,6 +93,40 @@ def _distribution(arr: np.ndarray) -> dict[str, Any]:
     }
 
 
+def _value_group_counts(arr: np.ndarray, values: list[int]) -> dict[str, Any]:
+    if arr.ndim != 2:
+        return {}
+    rows, cols = arr.shape
+    n32 = cols // 32
+    row32 = rows // 32
+    result = {}
+    for value in values:
+        mask = arr == value
+        result[str(value)] = {
+            "total": int(mask.sum()),
+            "n32_counts": [
+                int(mask[:, g * 32 : (g + 1) * 32].sum())
+                for g in range(n32)
+            ],
+            "row32_counts": [
+                int(mask[g * 32 : (g + 1) * 32, :].sum())
+                for g in range(row32)
+            ],
+        }
+    return result
+
+
+def _distribution_with_groups(arr: np.ndarray) -> dict[str, Any]:
+    distribution = _distribution(arr)
+    values = [int(item["value"]) for item in distribution["top_values"][:4]]
+    info = np.iinfo(arr.dtype)
+    for value in (0, info.max):
+        if value not in values:
+            values.append(int(value))
+    distribution["value_groups"] = _value_group_counts(arr, values)
+    return distribution
+
+
 def _spatial_stats(lhs: np.ndarray, rhs: np.ndarray) -> dict[str, Any]:
     if lhs.ndim != 2 or rhs.ndim != 2:
         return {}
@@ -335,7 +369,7 @@ def main() -> int:
         scale, offset = _load_output_encoding(out_dir)
         abs_tols = tuple(int(v) for v in args.abs_tols.split(",") if v.strip())
         out_q = _load_quantized_raw(out_raw, ref.dtype, ref.shape, scale, offset)
-        report["output_distribution"] = _distribution(out_q)
+        report["output_distribution"] = _distribution_with_groups(out_q)
         report["analytic"] = {
             "stats": _pair_stats(out_q, ref, abs_tols),
             "spatial": _spatial_stats(out_q, ref),
@@ -352,7 +386,7 @@ def main() -> int:
             )
             report["native_raw"] = str(native_raw)
             report["native_transpose"] = bool(args.native_transpose)
-            report["native_distribution"] = _distribution(native_q)
+            report["native_distribution"] = _distribution_with_groups(native_q)
             report["native"] = {
                 "stats": _pair_stats(out_q, native_q, abs_tols),
                 "spatial": _spatial_stats(out_q, native_q),
@@ -412,6 +446,26 @@ def main() -> int:
             f"kernel={native_perf.get('kernel_convlayer_s1_cycles', 0)} "
             f"conv1x1_qnn={native_perf.get('conv1x1_qnn_op_cycles', 0)} "
             f"timeline={native_perf.get('totals', {}).get('timeline_span_cycles', 0)}"
+        )
+    output_distribution = report.get("output_distribution", {})
+    output_top = output_distribution.get("top_values", [])
+    if output_top:
+        value = output_top[0]["value"]
+        groups = output_distribution.get("value_groups", {}).get(str(value), {})
+        lines.append(
+            "output-top-value: "
+            f"value={value} count={output_top[0]['count']} "
+            f"n32={groups.get('n32_counts', [])}"
+        )
+    native_distribution = report.get("native_distribution", {})
+    native_top = native_distribution.get("top_values", [])
+    if native_top:
+        value = native_top[0]["value"]
+        groups = native_distribution.get("value_groups", {}).get(str(value), {})
+        lines.append(
+            "native-top-value: "
+            f"value={value} count={native_top[0]['count']} "
+            f"n32={groups.get('n32_counts', [])}"
         )
     custom_contract = _format_contract(report.get("custom_graph_boundary"))
     if custom_contract:

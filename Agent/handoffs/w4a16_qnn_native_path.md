@@ -9,6 +9,34 @@ Use this as the first reference before changing the custom
 `HmxU16I4ToU16MatMul` path.  The custom op should be aligned to this native
 path, not to an analytic formula.
 
+## Native-First Rule
+
+Do not start from another descriptor/mask/packing sweep.  First identify which
+native boundary is being copied:
+
+1. source model and quantization override;
+2. converter graph-before tensor contract;
+3. ctxgen-lowered HTP nodes and sidecars;
+4. `ConvLayer_s1.opt` HMX tensor boundary;
+5. skel wrapper, descriptor builder, mask helper, and deep body;
+6. performance scope: kernel-only, native Conv group, or end-to-end execute.
+
+Only after a custom change can name the native boundary it is reproducing should
+it be considered an alignment attempt.
+
+## Evidence Map
+
+| Evidence | Path | What it proves |
+|---|---|---|
+| source ONNX | `conv.onnx` | Native starts as a float `Conv`, not a custom or integer MatMul op. |
+| quant override | `quant_overrides.json` | A/Y use A16 quantization, W uses symmetric 4-bit param encoding. |
+| converter graph-before | `ctx/conv_bottom_mapping_graph_before.json` | High-level lowering is `Convert -> Transpose -> Conv2d -> CastInt4ToInt8 -> Transpose -> Convert`; W is still `UFixed8` metadata here. |
+| final HTP graph | `ctx/conv_bottom_mapping.json` | Ctxgen expands the graph to 210 HTP nodes and introduces `weights_to_vtcm`, `bias_to_vtcm`, `ForceFormat_Crouton`, and `ConvLayer_s1.opt`. |
+| context binary | `ctx/conv_ctx.bin` | Holds the prepared 2048B no-bias/control sidecar and 32768B native W4 sidecar. |
+| native output oracle | `device_out/Y.raw` | The custom output oracle; analytic formulas are secondary diagnostics. |
+| optrace products | `optrace/` | Standard performance source: timeline, profile text, QHAS summary, decoded `summary.json`. |
+| skel evidence | `Agent/qnn_re/skel_text_full.S` | Shows the HNH wrapper, descriptor builder, W4 mask helper, and final deep-body entry. |
+
 ## Implementation Path At A Glance
 
 Native W4A16 is not a direct call from a high-level MatMul tensor into the HMX
@@ -29,6 +57,18 @@ float ONNX Conv
     -> hmx_v73_convhnh1x1_stride1
        mask bit 5 selects hmx_v73_convhnh1x1deep_stride1
 ```
+
+The same path as a stage table:
+
+| Stage | Native owner | Boundary to inspect |
+|---|---|---|
+| ONNX | model generator | `A FLOAT [1,256,1,256]`, `W FLOAT [256,256,1,1]`, `Y FLOAT [1,256,1,256]`. |
+| quantization | `quant_overrides.json` | A/Y A16 scale/offset; W symmetric 4-bit scale/offset. |
+| converter | DLC / graph-before | Conv still sees an 8-bit W carrier plus 4-bit encoding metadata. |
+| ctxgen | QNN HTP lowering | Static W4 and bias records become native sidecar tensors. |
+| runtime HTP graph | `q::*` built-ins | Format conversion and sidecar movement are separate events around the hot Conv. |
+| HMX wrapper | skel `0x3ddc60` path | Small native descriptors and mask words are built from QNN tensor metadata. |
+| deep body | `hmx_v73_convhnh1x1deep_stride1` | HMX consumes only prepared descriptors and sidecars. |
 
 That stage boundary matters.  The graph-before weight tensor is still an
 8-bit carrier with 4-bit quantization metadata; the signed packed HNH sidecar
@@ -88,6 +128,11 @@ format-conversion work around the actual Conv core:
 | `Y_0231` | `q::Transpose.2D` | 16 |
 | output convert | `q::ForceFormat_Flat` | 32 |
 | output convert | `q::Dequantize` | 32 |
+
+The graph-before view has only 6 nodes and 15 tensors.  The lowered HTP view has
+210 nodes and 260 tensors.  That expansion is the native implementation, not
+incidental tracing noise: it is where QNN creates the sidecar movement,
+Crouton/HNH surfaces, and final HMX call boundary.
 
 The core Conv tensor contract at the final HMX node is:
 
@@ -194,6 +239,21 @@ Native `ConvLayer_s1.opt` eventually reaches the HNH HMX wrapper in
 | `0x3dde78` | Final call site into `hmx_v73_convhnh1x1_stride1`. |
 | `0x2fcd80` | `hmx_v73_convhnh1x1_stride1` entry. |
 | `0x2fdb80` | `hmx_v73_convhnh1x1deep_stride1` deep HMX body. |
+
+The owned custom body is byte-identical to the current SDK skel slice for this
+symbol:
+
+```bash
+python3 scripts/extract_hmx_kernel_bytes.py \
+  --symbol hmx_v73_convhnh1x1deep_stride1 \
+  --out /tmp/w4a16_convhnh1x1deep.inc
+diff -u /tmp/w4a16_convhnh1x1deep.inc \
+  example/qnn_hmx_matmul_w4a16/src/v73deep_conv1x1_kernel.inc
+```
+
+The current audit produces an empty diff and extracts 804 bytes from
+`0x2fdb80`.  Treat the embedded deep body as matched before spending more time
+on kernel-byte replacement.
 
 The wrapper uses stack storage rooted at `base = r29 + 0x30`:
 
@@ -372,6 +432,21 @@ artifacts:
   (`1014/65536`).  This keeps the focus on builder-derived mask/table metadata
   and the QHPI carrier/control boundary.
 
+The current closest native-surface custom run has a stronger failure signature
+than the scalar exactness count alone:
+
+```text
+native-exact: 1014/65536
+output-top-value: value=32767 count=32768 n32=[8192,8192,8192,8192,0,0,0,0]
+native-top-value: value=65535 count=5895 n32=[721,674,788,638,774,821,655,824]
+```
+
+So half of the N32 output groups, columns 0..127, are stuck at the A16
+zero-ish value `32767`; the nontrivial writes are only in N32 groups 4..7 and
+still do not match native.  A W8-style compact row4 table order changes neither
+that signature nor exactness.  This points back to the native output
+descriptor/table/mask/body boundary, not to a final analytic formula mismatch.
+
 ## Alignment Consequences
 
 The custom path is not native-equivalent just because the HMX body is called or
@@ -414,3 +489,20 @@ boundaries:
 
 Only after one of those native boundaries is understood should the custom path
 be changed.
+
+## Alignment Checklist
+
+Use this checklist before accepting a future W4A16 custom change:
+
+1. It compares against `device_out/Y.raw` from the native artifact, not only an
+   analytic formula.
+2. It names the native performance scope being compared: `ConvLayer_s1.opt`,
+   whole `conv1x1` group, or qnn-net-run execute.
+3. It preserves standard performance products under `<out_dir>/optrace/`.
+4. It emits `analysis/w4a16_native_compare.{json,txt}` and records boundary
+   tensor contracts plus N32 value distribution.
+5. It explains whether the changed boundary is converter/ctxgen carrier,
+   sidecar bytes, QNN tensor table metadata, mask helper inputs, or deep body.
+6. It avoids repeating closed byte-order, single-lane mask, control-word,
+   desc32/y-stride, and row4-order probes unless new native evidence invalidates
+   the current conclusions.
