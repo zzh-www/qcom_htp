@@ -306,6 +306,7 @@ Latest descriptor-table dump artifacts:
 | `output_codex_w4a16_descdump_table_out_local_256/` | `1` | expanded output table |
 | `output_codex_w4a16_descdump_table_act_source_256/` | `2` | source activation block table |
 | `output_codex_w4a16_descdump_table_out_source_256/` | `3` | source output block table |
+| `output_codex_w4a16_descdump_qhpi_words_k4_nobias_native_surface_nativeout_256/` | `0` | expanded activation table plus raw QHPI tensor-object words |
 
 All four decode with `act_block_entries=64`, `out_block_entries=64`,
 `act_entries=512`, and `out_entries=512`.  The source QHPI tables are contiguous
@@ -315,6 +316,15 @@ after each 8-tile physical row, e.g. activation entries `[8..15]` become
 `0x04020100, 0x04020900, ... 0x04023900`; output follows the same pattern from
 `0x04000000`.  Use this as the custom-side table-shape baseline when comparing
 against native builder expectations.
+
+`HMX_W4A16_DESC_DUMP` now also records activation and output QHPI tensor-object
+raw words at descriptor words `64..95`, and
+`scripts/parse_w4a16_desc_dump.py` prints them as `act_tensor_words` and
+`out_tensor_words`.  The first captured custom native-surface dump shows opaque
+handle-like values rather than the readable pointer/metadata words seen in the
+native post-Conv `HmxW4A16TensorDump` artifact.  Treat this as a boundary
+finding: custom QHPI tensor handles are not a substitute for the native
+`ConvLayer_s1.opt` wrapper's internal tensor-object metadata.
 
 Latest native-shaped loop probes:
 

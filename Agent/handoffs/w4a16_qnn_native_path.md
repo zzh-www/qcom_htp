@@ -78,6 +78,12 @@ runtime values behind:
 - the W4 mask-helper dynamic arguments;
 - the wrapper descriptor-advance tuple `r23/r24/r27`.
 
+A custom-side QHPI tensor-object dump was added to `HMX_W4A16_DESC_DUMP` as a
+negative boundary check.  The captured custom activation/output QHPI object
+words are opaque handle-like values, unlike the readable pointer/metadata words
+from the post-Conv `HmxW4A16TensorDump` diagnostic.  They cannot replace the
+native `ConvLayer_s1.opt` wrapper metadata listed above.
+
 The post-Conv tensor-dump diagnostic proves a different boundary: QNN exposes a
 layout-restored public QHPI surface, `UFixed16 [1,256,1,256]`, to a custom op
 placed after native Conv.  It does not expose the internal HNH compute surface.

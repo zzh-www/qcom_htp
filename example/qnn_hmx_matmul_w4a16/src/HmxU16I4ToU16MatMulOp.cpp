@@ -628,10 +628,10 @@ static constexpr uint32_t kHmxW4A16MaxCopiedTableEntries = 512;
 #endif
 #if defined(HMX_W4A16_USE_CONTROL_INPUT)
 static constexpr uint32_t kHmxW4A16PrecomputedDataSize =
-    76 + 2 * kHmxW4A16MaxCopiedTableEntries * sizeof(int32_t);
+    204 + 2 * kHmxW4A16MaxCopiedTableEntries * sizeof(int32_t);
 #else
 static constexpr uint32_t kHmxW4A16PrecomputedDataSize =
-    72 + 2 * kHmxW4A16MaxCopiedTableEntries * sizeof(int32_t);
+    200 + 2 * kHmxW4A16MaxCopiedTableEntries * sizeof(int32_t);
 #endif
 #endif
 
@@ -690,6 +690,8 @@ struct hmx_w4a16_precomputed_t {
     const int32_t *out_source_table;
     const int32_t *act_qhpi_table;
     const int32_t *out_qhpi_table;
+    uint32_t act_tensor_words[16];
+    uint32_t out_tensor_words[16];
     int32_t act_table_copy[kHmxW4A16MaxCopiedTableEntries];
     int32_t out_table_copy[kHmxW4A16MaxCopiedTableEntries];
 };
@@ -782,6 +784,12 @@ static uint32_t hmx_w4a16_precompute(
     pc->out_source_table = out_src;
     pc->act_qhpi_table = act_src;
     pc->out_qhpi_table = out_src;
+    const uint32_t *act_tensor_words = reinterpret_cast<const uint32_t *>(inputs[2]);
+    const uint32_t *out_tensor_words = reinterpret_cast<const uint32_t *>(outputs[0]);
+    for (uint32_t i = 0; i < 16; ++i) {
+        pc->act_tensor_words[i] = act_tensor_words ? act_tensor_words[i] : 0;
+        pc->out_tensor_words[i] = out_tensor_words ? out_tensor_words[i] : 0;
+    }
 #if HMX_W4A16_USE_ROW4_TABLES
     for (uint32_t rg = 0; rg < mt_groups; ++rg) {
         for (uint32_t kt = 0; kt < K_t; ++kt) {
@@ -900,7 +908,7 @@ static uint32_t hmx_w4a16_to_u16_matmul_precomputed_kernel(
 #if defined(HMX_W4A16_DESC_DUMP)
     if (pc->out_first_block) {
         uint8_t *dst = pc->out_first_block;
-        for (uint32_t i = 0; i < 256; ++i) dst[i] = 0;
+        for (uint32_t i = 0; i < 512; ++i) dst[i] = 0;
         store_le32(dst, 0, 0x48385844u); /* H8XD */
         store_le32(dst, 4, pc->S);
         store_le32(dst, 8, pc->M_t);
@@ -954,6 +962,10 @@ static uint32_t hmx_w4a16_to_u16_matmul_precomputed_kernel(
         if (sample_count > 16) sample_count = 16;
         for (uint32_t i = 0; i < sample_count; ++i) {
             store_le32(dst, 192 + i * 4, static_cast<uint32_t>(sample_table[i]));
+        }
+        for (uint32_t i = 0; i < 16; ++i) {
+            store_le32(dst, 256 + i * 4, pc->act_tensor_words[i]);
+            store_le32(dst, 320 + i * 4, pc->out_tensor_words[i]);
         }
     }
     return QHPI_Success;
@@ -1328,7 +1340,7 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
      */
     if (out_blocks[0]) {
         uint8_t *dst = reinterpret_cast<uint8_t *>(out_blocks[0]);
-        for (uint32_t i = 0; i < 256; ++i) dst[i] = 0;
+        for (uint32_t i = 0; i < 512; ++i) dst[i] = 0;
         store_le32(dst, 0, 0x48385844u); /* H8XD */
         store_le32(dst, 4, M_t * 32u);
         store_le32(dst, 8, M_t);
@@ -1382,6 +1394,12 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
         if (sample_count > 16) sample_count = 16;
         for (uint32_t i = 0; i < sample_count; ++i) {
             store_le32(dst, 192 + i * 4, static_cast<uint32_t>(sample_table[i]));
+        }
+        const uint32_t *act_tensor_words = reinterpret_cast<const uint32_t *>(inputs[2]);
+        const uint32_t *out_tensor_words = reinterpret_cast<const uint32_t *>(outputs[0]);
+        for (uint32_t i = 0; i < 16; ++i) {
+            store_le32(dst, 256 + i * 4, act_tensor_words ? act_tensor_words[i] : 0);
+            store_le32(dst, 320 + i * 4, out_tensor_words ? out_tensor_words[i] : 0);
         }
     }
     return QHPI_Success;

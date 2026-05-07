@@ -175,6 +175,16 @@ cycles, but all remain semantic false paths (`505/65536`, `531/65536`, and
 Treat descriptor y-stride and the existing split diagnostic as insufficient
 without the full native wrapper record.
 
+2026-05-08 descriptor-dump enrichment: `HMX_W4A16_DESC_DUMP` now records raw
+QHPI activation/output tensor-object words, and
+`scripts/parse_w4a16_desc_dump.py` prints them.  Artifact
+`output_codex_w4a16_descdump_qhpi_words_k4_nobias_native_surface_nativeout_256`
+confirms the usual custom descriptor fields and table samples, but the QHPI
+tensor words are opaque handle-like values, not the readable metadata exposed by
+the native post-Conv tensor-dump diagnostic.  This reinforces that native
+`ConvLayer_s1.opt` internal tensor metadata must still be obtained from the
+native wrapper path.
+
 2026-05-07 continuation: the canonical native prepared-W4 sidecar was corrected
 from the old interior `conv_ctx.bin+0xd000` note to the full 32768-byte region
 at `conv_ctx.bin+0xcc00`.  `W4_PACK_ORDER=native_nmajor_k4_lohi` now reproduces
