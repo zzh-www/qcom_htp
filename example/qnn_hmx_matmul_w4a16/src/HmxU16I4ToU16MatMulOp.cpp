@@ -2,7 +2,7 @@
  * HmxU16I4ToU16MatMulOp.cpp
  *
  * Single production custom MatMul path:
- *   bias[0], wt[1], act[2], scratch[3] -> out[0]
+ *   bias[0], wt[1], act[2], control[3] -> out[0]
  *
  * The runtime body is the owned V73DEEP Conv1x1 kernel replica.  The default
  * QHPI path precomputes QNN tensor/block metadata at graph load, then the hot
@@ -1271,7 +1271,7 @@ static QHPI_Tensor_Signature_v1 sig_inputs[] = {
     {QHPI_Int32,            QHPI_Layout_Flat4,      QHPI_Storage_Direct,   QHPI_MemLoc_TCM_Only},
     {QHPI_Any_Element_Type, QHPI_Layout_Flat4,      QHPI_Storage_Direct,   QHPI_MemLoc_TCM_Only},
     {QHPI_QUInt16,          QHPI_Layout_Crouton_16, QHPI_Storage_Indirect, QHPI_MemLoc_TCM_Only},
-    {QHPI_QUInt8,           QHPI_Layout_Flat4,      QHPI_Storage_Direct,   QHPI_MemLoc_TCM_Only},
+    {QHPI_Int32,            QHPI_Layout_Flat4,      QHPI_Storage_Direct,   QHPI_MemLoc_TCM_Only},
 };
 
 static QHPI_Tensor_Signature_v1 sig_outputs[] = {

@@ -396,6 +396,16 @@ def _bias_initializer(
             name="bias",
         )
         return init, bias_q, effective_i32
+    if bias_layout == "native_a16_w4compact":
+        if family.name != "w4a16":
+            raise ValueError("native_a16_w4compact is currently decoded only for w4a16")
+        bias_q = np.zeros(n, dtype=np.int32)
+        bias_fold_bytes, effective_i32 = _pack_native_a16_bias(family, w_raw_kn)
+        init = numpy_helper.from_array(
+            bias_fold_bytes[:, :256].view(np.int32).reshape(1, n_t, 1, 64).copy(),
+            name="bias",
+        )
+        return init, bias_q, effective_i32
     if bias_layout == "native_a16_nobias":
         if family.name != "w4a16":
             raise ValueError("native_a16_nobias is currently decoded only for w4a16")
@@ -613,7 +623,15 @@ def generate(family: Family, args: argparse.Namespace) -> None:
         effective_i32_parts.append(effective_i32_part)
     bias_q = np.concatenate(bias_q_parts).astype(np.int32)
     effective_i32 = np.concatenate(effective_i32_parts).astype(np.int32)
-    scratch_init = numpy_helper.from_array(np.zeros((1, 1, 1, 2048), dtype=np.uint8), name="scratch")
+    if family.name == "w4a16":
+        scratch_input_name = "control"
+        scratch_init = numpy_helper.from_array(np.array([1], dtype=np.int32), name=scratch_input_name)
+    else:
+        scratch_input_name = "scratch"
+        scratch_init = numpy_helper.from_array(
+            np.zeros((1, 1, 1, 2048), dtype=np.uint8),
+            name=scratch_input_name,
+        )
     in_reshape_dims = numpy_helper.from_array(np.array(op_act_shape, dtype=np.int64), name="in_reshape_dims")
     graph_out_shape = [1, m, n] if args.final_output_rank == "3d" else [1, 1, m, n]
     out_reshape_dims = numpy_helper.from_array(np.array(graph_out_shape, dtype=np.int64), name="out_reshape_dims")
@@ -665,7 +683,7 @@ def generate(family: Family, args: argparse.Namespace) -> None:
                 out_name = f"hmx_{family.name}_part{split_idx}"
                 nodes.append(helper.make_node(
                     family.op,
-                    inputs=[f"bias_{split_idx}", f"weight_{split_idx}", prev, "scratch"],
+                    inputs=[f"bias_{split_idx}", f"weight_{split_idx}", prev, scratch_input_name],
                     outputs=[out_name],
                     name=f"hmx_{family.name}_split{split_idx}",
                     domain=DOMAIN,
@@ -709,7 +727,7 @@ def generate(family: Family, args: argparse.Namespace) -> None:
                     out_name = f"hmx_{family.name}"
                 nodes.append(helper.make_node(
                     family.op,
-                    inputs=["bias", "weight", prev, "scratch"],
+                    inputs=["bias", "weight", prev, scratch_input_name],
                     outputs=[out_name],
                     name=f"hmx_{family.name}_chain{i}",
                     domain=DOMAIN,
@@ -734,7 +752,7 @@ def generate(family: Family, args: argparse.Namespace) -> None:
                 out_name = f"hmx_{family.name}_{i}" if i < chain - 1 else "out"
             nodes.append(helper.make_node(
                 family.op,
-                inputs=["bias", "weight", prev, "scratch"],
+                inputs=["bias", "weight", prev, scratch_input_name],
                 outputs=[out_name],
                 name=f"hmx_{family.name}_direct{i}",
                 domain=DOMAIN,
@@ -761,7 +779,7 @@ def generate(family: Family, args: argparse.Namespace) -> None:
             nodes.append(helper.make_node("Reshape", [in_name, in_shape_name], [act4d_name], name=f"reshape_in_{i}"))
             nodes.append(helper.make_node(
                 family.op,
-                inputs=["bias", "weight", act4d_name, "scratch"],
+                inputs=["bias", "weight", act4d_name, scratch_input_name],
                 outputs=[mm_name],
                 name=f"hmx_{family.name}_indep{i}",
                 domain=DOMAIN,
@@ -887,6 +905,7 @@ def main(family_name: str) -> None:
             "a16_eff_all",
             "zero",
             "native_a16",
+            "native_a16_w4compact",
             "native_a16_nobias",
         ],
         default="legacy",

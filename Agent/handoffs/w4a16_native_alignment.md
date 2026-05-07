@@ -30,7 +30,7 @@ bash example/qnn_hmx_matmul_w4a16/build_x86.sh
 Run the current best diagnostic custom flow:
 
 ```bash
-OUT_DIR="$PWD/example/qnn_matmul_profile/output_codex_w4a16_native_nmajor_kpair_hilo_row4_nativebias_256" \
+OUT_DIR="$PWD/example/qnn_matmul_profile/output_codex_w4a16_control_i32_256" \
 M=256 K=256 N=256 CHAIN=1 MODE=chain_qdq \
 NATIVE_OUTPUT=1 STRICT_OPTRACE=1 \
 W4_PACK_ORDER=native_nmajor_kpair_hilo \
@@ -75,16 +75,16 @@ Durable native oracle:
 |---|---|
 | native output | `example/qnn_matmul_profile/output_codex_native_w4a16_same_custom_256/device_out/Y.raw` |
 | native optrace | `example/qnn_matmul_profile/output_codex_native_w4a16_same_custom_256/optrace/` |
-| refreshed custom probe | `example/qnn_matmul_profile/output_codex_w4a16_native_nmajor_kpair_hilo_row4_nativebias_after_desc_overrides_256/` |
+| refreshed custom probe | `example/qnn_matmul_profile/output_codex_w4a16_control_i32_256/` |
 
 Latest refreshed custom result:
 
 | Check | Result |
 |---|---:|
 | output vs native | `4229/65536`, maxdiff `65535` |
-| custom main-op cycles | `95356` |
-| custom timeline span | `141978` |
-| custom sum pid0 event cycles | `142717` |
+| custom main-op cycles | `94579` |
+| custom timeline span | `134324` |
+| custom sum pid0 event cycles | `134416` |
 
 Native performance reference from
 `output_codex_native_w4a16_same_custom_256/optrace/summary.json`:
@@ -121,6 +121,10 @@ Custom W4A16 evidence:
   and still did not trigger the native W4 packer.
 - The best observed pack/layout is `native_nmajor_kpair_hilo` with
   `--bias-layout native_a16`; it remains only `4229/65536` exact.
+- The graph now uses a native-shaped fourth control input, `Int32 [1]`, instead
+  of the old unused `UFixed8 [1,1,1,2048]` scratch tensor. This does not change
+  correctness, but the standard 256^3 probe's constant-move sidecar cycles drop
+  from the old class (`6717` in the refreshed pre-control artifact) to `3285`.
 - The custom output is heavily saturated: about `27977` zeros and `27614`
   `65535` values in the refreshed best probe, versus native's `3309` zeros
   and `5895` `65535` values.
@@ -159,6 +163,11 @@ Dead ends already checked:
   (`4092/65536`, maxdiff `65535`) and remains slower than native
   `q::ConvLayer_s1.opt` (`7702` cycles). Artifact:
   `example/qnn_matmul_profile/output_codex_w4a16_native_nmajor_kpair_hilo_row4_nativebias_physical_tables_256/`.
+- `--bias-layout native_a16_w4compact` changes W4 bias/control to native-shaped
+  `Int32 [1,8,1,64]` while preserving the current native-a16 control words. It
+  lowers static HMX input read accounting from `169984` to `167936`, but
+  worsens correctness to `3846/65536`; artifact:
+  `example/qnn_matmul_profile/output_codex_w4a16_control_i32_biascompact_256/`.
 
 ## Code State
 

@@ -42,14 +42,13 @@
                 </Shape>
             </Input>
             <Input>
-                <Name>scratch</Name>
+                <Name>control</Name>
                 <Mandatory>true</Mandatory>
-                <Datatype>QNN_DATATYPE_UINT_8</Datatype>
-                <Datatype>QNN_DATATYPE_UFIXED_POINT_8</Datatype>
+                <Datatype>QNN_DATATYPE_INT_32</Datatype>
                 <Shape>
-                    <Rank>4D</Rank>
+                    <Rank>1D</Rank>
                     <Layout>NONTRIVIAL</Layout>
-                    <Text>[1, 1, 1, 2048]</Text>
+                    <Text>[1]</Text>
                 </Shape>
             </Input>
             <Output>

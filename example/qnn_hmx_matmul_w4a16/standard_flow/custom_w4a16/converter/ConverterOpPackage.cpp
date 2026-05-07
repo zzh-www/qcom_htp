@@ -75,7 +75,7 @@ EXPORT_API Qnn_ErrorHandle_t HmxU16I4ToU16MatMulDataTypeInference(Qnn_OpConfig_t
         set_tensor_dtype(&op->v1.inputTensors[0], QNN_DATATYPE_SFIXED_POINT_32);
         set_tensor_dtype(&op->v1.inputTensors[1], QNN_DATATYPE_SFIXED_POINT_8);
         set_tensor_dtype(&op->v1.inputTensors[2], QNN_DATATYPE_UFIXED_POINT_16);
-        set_tensor_dtype(&op->v1.inputTensors[3], QNN_DATATYPE_UFIXED_POINT_8);
+        set_tensor_dtype(&op->v1.inputTensors[3], QNN_DATATYPE_INT_32);
     }
     set_tensor_dtype(&op->v1.outputTensors[0], QNN_DATATYPE_UFIXED_POINT_16);
     return QNN_SUCCESS;
