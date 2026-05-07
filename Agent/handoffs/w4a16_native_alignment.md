@@ -194,6 +194,12 @@ Dead ends already checked:
   `--w4-native-sidecar-raw`, while keeping current `native_a16` bias/control,
   also worsens exactness (`3041/65536`, artifact
   `example/qnn_matmul_profile/output_codex_w4a16_control_i32_native_sidecar_nativebias_256/`).
+- Forcing the W4A16 QHPI weight signature to signed with
+  `HMX_W4A16_QHPI_SIGNED_WEIGHT` still fails at ctxgen. The converter/ctxgen
+  path reports input tensor[1] as `QUInt8`, produced by
+  `ConvLayer.opt.weights_to_vtcm@FB.fB`, so it cannot match a `QHPI_QInt8`
+  kernel signature. Artifact:
+  `example/qnn_matmul_profile/output_codex_w4a16_qhpi_signed_weight_probe_256_host/`.
 - `HMX_W4A16_USE_SKEL_KERNEL` calls the external skel wrapper but preserves the
   same low exactness class.
 - `DESC_M_TILES_OVERRIDE=32` lowers custom cycles to about `12.8k`, but only
@@ -276,6 +282,10 @@ probes only.
   bias/control tensor for dead-end checking;
 - `--w4-native-sidecar-raw <path>` imports a prepared native W4 byte stream and
   applies the custom-op `weights_to_vtcm` carrier XOR convention.
+- `HMX_W4A16_QHPI_SIGNED_WEIGHT` is a build-time diagnostic that changes only
+  the QHPI weight signature from wildcard to `QHPI_QInt8`. It is intentionally
+  off by default because current ctxgen still produces `QUInt8` for the custom
+  weight sidecar.
 
 `run_w4a16_chain.sh` exposes the generator layout through `OP_INPUT_LAYOUT`.
 Use this rather than hiding layout probes inside `GEN_EXTRA_ARGS`.

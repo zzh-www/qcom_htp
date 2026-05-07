@@ -1273,7 +1273,11 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
 
 static QHPI_Tensor_Signature_v1 sig_inputs[] = {
     {QHPI_Int32,            QHPI_Layout_Flat4,      QHPI_Storage_Direct,   QHPI_MemLoc_TCM_Only},
+#if defined(HMX_W4A16_QHPI_SIGNED_WEIGHT)
+    {QHPI_QInt8,            QHPI_Layout_Flat4,      QHPI_Storage_Direct,   QHPI_MemLoc_TCM_Only},
+#else
     {QHPI_Any_Element_Type, QHPI_Layout_Flat4,      QHPI_Storage_Direct,   QHPI_MemLoc_TCM_Only},
+#endif
     {QHPI_QUInt16,          QHPI_Layout_Crouton_16, QHPI_Storage_Indirect, QHPI_MemLoc_TCM_Only},
     {QHPI_Int32,            QHPI_Layout_Flat4,      QHPI_Storage_Direct,   QHPI_MemLoc_TCM_Only},
 };
