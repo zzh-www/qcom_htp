@@ -678,9 +678,11 @@ enriched descriptor dump, not to keep sweeping one mask lane.
 
 ## Next Work
 
-1. Continue decoding the `0x3d9920` native HNH descriptor builder field
-   calculations, especially the values that land in `base+0x10..0x24`
-   (`act_desc`/early out fields) and `base+0x28..0x3c` (`out_desc`).
+1. Use the decoded `0x3d9920` field map in
+   [`w4a16_qnn_native_path.md`](w4a16_qnn_native_path.md) as the source of truth
+   for descriptor work.  The scalar fields now point back to QNN tensor metadata;
+   the next unknown is whether custom can expose the same internal table/data
+   pointers that native stores at `base+0x10` and `base+0x28`.
 2. Use the enriched `HMX_W4A16_DESC_DUMP` payload to compare QHPI block-table
    shape, pointer deltas, descriptor fields, and final mask words against the
    decoded native wrapper expectations.

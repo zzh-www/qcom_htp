@@ -203,6 +203,80 @@ arguments derived from tensor metadata and wrapper flags.  Single-lane mask
 sweeps are therefore weak evidence unless they reproduce the whole builder
 state.
 
+### Descriptor Builder Field Decode
+
+Current static decode of `0x3d9920` for the HNH 1x1 W4 path uses these builder
+arguments:
+
+| Builder register | Source from `0x3ddc60` wrapper | Role |
+|---|---|---|
+| `r0` | `base = r29 + 0x30` | Destination stack record. |
+| `r1` | wrapper arg0 | Output tensor object. |
+| `r2` | wrapper arg1 | Activation tensor object. |
+| `r3` | wrapper arg2 | Prepared weight tensor object. |
+| `r4` | wrapper arg3 | Prepared bias/control tensor object. |
+| `r5` | wrapper arg4 | Wrapper flags used by mask selection. |
+| stack arg0 | wrapper arg5 | Control pointer later passed as final HMX `r5`. |
+
+Be careful when checking this in the Hexagon text: stores without `.new` use the
+old register value from before the packet.  With that packet rule, the HMX
+descriptor fields consumed by `0x2fdb80` decode as:
+
+| Native field | Builder store | Decoded source |
+|---|---|---|
+| weight pointer | `base+0x08` | `weight.data + encoded_offset(weight.meta[0x24..0x27], weight.meta[0x04/0x08/0x0c])`. |
+| bias/control pointer | `base+0x0c` | `bias.data`. |
+| activation `+0x00` | `base+0x10` | `activation.data`; this is QNN's internal HNH table/data pointer, not a public QHPI table copy. |
+| activation `+0x04` | `base+0x14` | `activation.meta[0x20] >> 5`. |
+| activation `+0x08` | `base+0x18` | `(activation.meta[0x20] >> 5) * (activation.meta[0x1c] >> 2)`. |
+| output `+0x00` | `base+0x28` | `output.data`; native passes QNN's internal output table/data pointer. |
+| output `+0x04` | `base+0x2c` | `output.meta[0x20] >> 5`. |
+| output `+0x08` | `base+0x30` | `(output.meta[0x20] >> 5) * (output.meta[0x1c] >> 2)`. |
+| output `+0x0c` | `base+0x34` | `output.meta[0x0c]`. |
+| output `+0x10` | `base+0x38` | `output.meta[0x08]`. |
+| output `+0x14` | `base+0x3c` | `output.meta[0x10]`. |
+
+The builder also writes `base+0x1c..0x24`, but the direct deep HNH body does not
+read those fields on this path.  They are useful only as wrapper/debug evidence,
+not as the first custom alignment target.
+
+The W4 mask branch at `0x3d9c54` calls
+`set_hmx_params_convw4b1x1(base+0x48, 0x70b, r28, 0, r4, r21, r6)`.  Only the
+second argument is a literal.  `r28`, `r4`, `r21`, and `r6` are all derived from
+weight/activation metadata and wrapper flags, so custom constants such as one
+fixed final mask argument are at best probes.  A production match must recreate
+the metadata state that feeds the whole helper call.
+
+### Custom-Versus-Native Boundary
+
+The native HMX boundary for the 256 case is `ConvLayer_s1.opt` with:
+
+```text
+activation  UFixed16 [1,8,32,256]
+weight      SFixed8  [1,1,128,256]
+bias        Int32    [1,8,1,64]
+control     Int32    [1]
+output      UFixed16 [1,8,32,256]
+```
+
+The fastest custom `native_op` probes are not this boundary: their custom op
+input/output tensors are logical `[1,1,256,256]`, and QNN inserts a large
+`ForceFormat_Crouton` around that shape.  The custom `tiled` probes are closer
+to native at the tensor surface because activation/output become
+`UFixed16 [1,8,32,256]`.  The `native_a16_w4compact` bias sidecar can also match
+native's compact `[1,8,1,64]` shape.
+
+The confirmed remaining deltas are therefore:
+
+1. Custom W4 reaches QHPI as `QUInt8 [1,1,128,256]`; native reaches HNH as
+   `SFixed8 [1,1,128,256]`.
+2. Custom manually expands public QHPI Crouton block tables; native passes the
+   internal `activation.data` / `output.data` tables produced by QNN's HNH
+   tensor metadata.
+3. Custom mask setup uses fixed probe defaults plus the skel helper, while
+   native derives several helper inputs from the same metadata that creates the
+   descriptor fields.
+
 ## Alignment Consequences
 
 The custom path is not native-equivalent just because the HMX body is called or
@@ -236,12 +310,12 @@ Dead-end implication from the current probes:
 Before new custom changes, decode or instrument the native path at one of these
 boundaries:
 
-1. `0x3d9920` descriptor builder fields for the 256^3 HNH path, especially
-   `base+0x10..0x24`, `base+0x28..0x3c`, and all `base+0x48` mask words.
-2. The QNN converter/ctxgen route that turns float `W` plus 4-bit param encoding
+1. The exact QNN converter/ctxgen route that turns float `W` plus 4-bit param encoding
    into `SFixed8 [1,1,128,256]`.
-3. The exact relation between QNN's native Crouton block tables and the HNH
+2. The exact relation between QNN's native Crouton block tables and the HNH
    pointer tables passed through `base+0x10` / `base+0x28`.
+3. The dynamic mask helper inputs for the native HNH 1x1 branch, after the
+   tensor metadata fields above are reproduced or dumped.
 
 Only after one of those native boundaries is understood should the custom path
 be changed.
