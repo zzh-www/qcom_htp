@@ -228,6 +228,14 @@ The static decode now maps that loop tuple to QNN internal tensor metadata:
 (activation.meta[0x18]>>3)`.  Bottom mapping exposes only visible shapes, not
 these metadata words or native internal table bases.
 
+Direction change: pause custom-side alignment patches until the QNN native
+runtime path is instrumented or otherwise decoded.  The next W4A16 evidence
+should be a native dump of wrapper args, tensor-object metadata, post-builder
+stack descriptors, mask words, and the `r23/r24/r27` loop tuple for the
+canonical 256^3 artifact.  After that, compare the native stack record with the
+custom descriptor dump and only change the custom path for a named native
+boundary.
+
 The signed W4 carrier route is still blocked below quant-overrides.  Four
 host-only probes using an ONNX `INT8` initializer plus no weight encoding,
 8-bit offset `0`, 8-bit offset `-128`, and 4-bit offset `0` all lower the

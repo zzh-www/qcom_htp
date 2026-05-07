@@ -9,6 +9,19 @@ Use this as the first reference before changing the custom
 `HmxU16I4ToU16MatMul` path.  The custom op should be aligned to this native
 path, not to an analytic formula.
 
+## Current Direction
+
+Treat W4A16 as a native-implementation analysis task before treating it as a
+custom-op tuning task.  The current output mismatch is not explained by the
+math reference, and the embedded deep HMX body is already byte-identical to the
+native skel slice.  The unresolved part is the QNN native route into that body:
+converter/ctxgen carrier lowering, runtime tensor-object metadata, descriptor
+builder state, mask-helper arguments, and wrapper descriptor-table looping.
+
+Until those native fields are decoded or dumped, do not spend more cycles on
+single-field descriptor, mask, control-word, or row4-order sweeps.  A future
+custom change should first name the exact native boundary it reproduces.
+
 ## Native-First Rule
 
 Do not start from another descriptor/mask/packing sweep.  First identify which
@@ -75,6 +88,64 @@ That stage boundary matters.  The graph-before weight tensor is still an
 exists only after ctxgen's native Conv lowering.  A custom op that merely asks
 for `SFixed8` in XML/converter is not guaranteed to enter the same lowering
 path.
+
+## Native Runtime Spine
+
+The runtime path under `ConvLayer_s1.opt` has a specific spine in the skel
+binary.  This is the path a custom implementation must reproduce before output
+or performance parity is a meaningful claim:
+
+```text
+q::ConvLayer_s1.opt optrace event
+  -> HTP op trampoline calls 0x3ddc60 at 0x3f2bd0
+     args are QNN tensor objects/control, not flat buffers
+  -> wrapper 0x3ddc60 computes metadata products from tensor objects
+  -> descriptor builder 0x3d9920 writes a stack record at base = r29 + 0x30
+     base+0x08  prepared W4 pointer
+     base+0x0c  prepared bias/control pointer
+     base+0x10  activation descriptor
+     base+0x28  output descriptor
+     base+0x48  mask descriptor
+  -> builder calls set_hmx_params_convw4b1x1 at 0x289380 for the W4 1x1 mask
+  -> wrapper selects HNH 1x1 call site 0x3dde78
+     r0 = base+0x28, r1 = base+0x10, r2 = W, r3 = bias,
+     r4 = base+0x48, r5 = control pointer
+  -> hmx_v73_convhnh1x1_stride1 at 0x2fcd80
+     mask word +0x30 bit 5 jumps to deep body 0x2fdb80
+  -> wrapper tail 0x3de060 advances descriptor table pointers and may repeat
+```
+
+Two consequences follow from this spine:
+
+1. Matching the deep-body bytes or W4 sidecar bytes is necessary but not
+   sufficient.  Native also relies on QNN's internal tensor-object metadata and
+   table pointers.
+2. A custom "call twice" patch is not native by itself.  Native loop count and
+   descriptor advances come from tensor metadata (`r23/r24/r27`), not from a
+   visible `[1,8,32,256]` shape alone.
+
+## Known And Unknown Native State
+
+| State | Current status | Evidence / blocker |
+|---|---|---|
+| Source model route | Proven | Float ONNX `Conv` plus quant overrides; W4 is introduced by quant metadata, not an ONNX int4 tensor. |
+| Graph-before W carrier | Proven | `ctx/conv_bottom_mapping_graph_before.json` shows `UFixed8 [1,1,256,256]` around `CastInt4ToInt8`; the signed compact carrier is not present yet. |
+| Ctxgen sidecar lowering | Proven at tensor surface | Final HTP graph has `weights_to_vtcm`, `bias_to_vtcm`, `ForceFormat_Crouton`, and `ConvLayer_s1.opt`; W becomes `SFixed8 [1,1,128,256]`. |
+| Prepared W4 bytes | Proven | `W4_PACK_ORDER=native_nmajor_k4_lohi` reproduces the 32768-byte native sidecar. |
+| Prepared no-bias/control bytes | Proven | `native_a16_nobias` reproduces the 2048-byte repeated `0x80008000` sidecar. |
+| Deep HMX body bytes | Proven | Extracted `hmx_v73_convhnh1x1deep_stride1` is 804 bytes and diffs empty against the embedded custom inc. |
+| Wrapper call shape | Proven statically | `0x3ddc60 -> 0x3d9920 -> 0x3dde78 -> 0x2fcd80 -> 0x2fdb80`, with descriptor fields rooted at `base = r29 + 0x30`. |
+| Wrapper descriptor loop | Proven statically | Tail `0x3de060` advances output and activation descriptor table bases using `r24` and `r27` until `r26 == r23`. |
+| Runtime tensor-object metadata values | Unknown | Offsets such as `activation.meta[0x04]`, `[0x18]`, `[0x1c]`, `[0x20]` and output counterparts are not exposed by bottom mapping. |
+| Native internal table layout | Unknown | `activation.data` / `output.data` point to QNN internal HNH tables; current custom code expands public QHPI tables instead. |
+| Full W4 mask-helper argument tuple | Partially decoded | `arg1=0x70b` and the helper branch are known, but coupled dynamic args are metadata-derived and not yet dumped. |
+| Public custom path to signed W4 carrier | Unsolved | Current custom boundary still reaches QHPI as `QUInt8` for W4 even when bytes match. |
+
+The next useful evidence is therefore a native runtime metadata/descriptor dump,
+not another guessed constant.  The minimum dump should capture wrapper args,
+tensor-object metadata words, `activation.data` / `output.data`, the
+post-builder stack record at `base+0x08..0x80`, mask words, and the final
+`r23/r24/r27` loop tuple for the canonical 256^3 native artifact.
 
 ## Source Model
 
@@ -551,18 +622,29 @@ Dead-end implication from the current probes:
 
 ## Next Native-First Work
 
-Before new custom changes, decode or instrument the native path at one of these
-boundaries:
+Before new custom changes, decode or instrument the native path in this order:
 
-1. The exact QNN converter/ctxgen route that turns float `W` plus 4-bit param encoding
-   into `SFixed8 [1,1,128,256]`.
-2. The exact relation between QNN's native Crouton block tables and the HNH
-   pointer tables passed through `base+0x10` / `base+0x28`.
-3. The dynamic mask helper inputs for the native HNH 1x1 branch, after the
-   tensor metadata fields above are reproduced or dumped.
+1. Dump the native `0x3ddc60` wrapper inputs for the canonical 256^3 artifact:
+   wrapper args, tensor-object metadata words, tensor data/table pointers, and
+   the final `r23/r24/r27` loop tuple.
+2. Dump the post-`0x3d9920` stack record at `base+0x08..0x80`, including
+   activation descriptor, output descriptor, mask descriptor, W pointer,
+   bias/control pointer, and control pointer.
+3. Compare that native stack record against the custom descriptor dump before
+   changing custom code.  Any difference should be classified as carrier
+   lowering, tensor table layout, descriptor scalar, mask helper input, control
+   ABI, or wrapper loop state.
+4. Only then choose the smallest custom change that reproduces a named native
+   boundary.
 
-Only after one of those native boundaries is understood should the custom path
-be changed.
+Secondary work remains useful, but should not replace the runtime dump:
+
+- Recover the exact QNN converter/ctxgen route that turns float `W` plus 4-bit
+  param encoding into `SFixed8 [1,1,128,256]`.
+- Decode the relation between QNN's native Crouton block tables and the HNH
+  pointer tables passed through `base+0x10` / `base+0x28`.
+- Decode the dynamic mask-helper inputs for the native HNH 1x1 branch after the
+  tensor metadata fields above are available.
 
 ## Alignment Checklist
 
