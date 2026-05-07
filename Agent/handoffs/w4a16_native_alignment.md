@@ -54,6 +54,19 @@ The runner creates the durable performance products under `<OUT_DIR>/optrace/`:
 Use `summary.json` for scripted comparisons and `chrometrace*.json/html` for
 timeline inspection.
 
+Descriptor dumps should also use the checked-in parser instead of one-off
+Python snippets:
+
+```bash
+scripts/parse_w4a16_desc_dump.py \
+  example/qnn_matmul_profile/output_codex_w4a16_descdump_enriched_256/device_out/out.raw \
+  --cols 256
+```
+
+The parser decodes descriptor fields, mask words, table pointer samples, and
+the first two little-endian u32 words from the effective weight and bias/control
+buffers passed to the HNH kernel.
+
 ## Current Evidence
 
 Durable native oracle:
@@ -141,12 +154,21 @@ Dead ends already checked:
   `HMX_W4A16_MASK_ARG6=0` drops to `2810/65536`.
 - Converting the prepacked weight initializer to float with an 8-bit symmetric
   override did not produce native `SFixed8`; ctxgen converted it to `UFixed16`.
+- `HMX_W4A16_ACT_PHYSICAL_ONLY` plus `HMX_W4A16_OUT_PHYSICAL_ONLY` lowers the
+  custom main op to `29385` cycles but does not improve correctness
+  (`4092/65536`, maxdiff `65535`) and remains slower than native
+  `q::ConvLayer_s1.opt` (`7702` cycles). Artifact:
+  `example/qnn_matmul_profile/output_codex_w4a16_native_nmajor_kpair_hilo_row4_nativebias_physical_tables_256/`.
 
 ## Code State
 
 `HmxU16I4ToU16MatMulOp.cpp` now has guarded descriptor override hooks matching
 the w8a16 diagnostic style:
 
+- `HMX_W4A16_MAX_TABLE_ENTRIES`
+- `HMX_W4A16_MAX_COPIED_TABLE_ENTRIES`
+- `HMX_W4A16_ACT_PHYSICAL_ONLY`
+- `HMX_W4A16_OUT_PHYSICAL_ONLY`
 - `HMX_W4A16_ACT_N_PAIRS_OVERRIDE`
 - `HMX_W4A16_ACT_TABLE_Y_STRIDE_WORDS_OVERRIDE`
 - `HMX_W4A16_OUT_TABLE_STRIDE_DWORDS_OVERRIDE`
@@ -174,17 +196,54 @@ latest 256^3 descriptor dump reports:
 | `act_n_pairs`, `act_y_stride` | `8`, `256` |
 | mask words | `[0, 0x700, 0, 0x77c, 0, 0, 0x3ff, 0, 0, 0, 0, 0, 0x20, 0, 0, 0]` |
 
+Payload sampling from
+`example/qnn_matmul_profile/output_codex_w4a16_descdump_payload_256/`:
+
+| Sample | Value |
+|---|---:|
+| effective weight first two u32 | `0xf0debc9a`, `0x79563412` |
+| effective bias/control first two u32 | `0x80405524`, `0x40000092` |
+| `extra_param[0..1]` | `1`, `1025` |
+
+For comparison, the native prepared W4 sidecar at
+`output_codex_native_w4a16_same_custom_256/ctx/conv_ctx.bin+0xd000` starts with
+`0x403f2e1d`, `0x2e1d0cfb`, `0x0cfbead9`, `0xead9c7b6`. The current best custom
+flow therefore still does not pass native prepared-W4 bytes to the HNH body,
+although direct native-sidecar injection already proved that byte identity alone
+is not sufficient.
+
 The old apparent `0x70b` mask argument expands to a `0x700` word in the actual
 mask buffer, so the native descriptor-builder `0x700` evidence is not by itself
 a contradiction.
 
+## Native HNH Wrapper ABI Notes
+
+The W4A16 native HNH wrapper evidence is in
+`Agent/qnn_re/skel_text_full.S` around these anchors:
+
+- `0x3ddc60` is the V73 HNH wrapper that saves original `r5` in `r16`, uses
+  stack base `r21 = r29 + 0x30`, and calls the descriptor builder at
+  `0x3d9920`.
+- After builder return, the wrapper derives `r19 = base + 0x10`,
+  `r20 = base + 0x28`, and `r21 = base + 0x48`. It loads weight and
+  bias/control pointers from `base + 0x8` and `base + 0xc`.
+- The final `hmx_v73_convhnh1x1_stride1` call at `0x3dde78` passes:
+  `r0 = base + 0x28` (`out_desc`), `r1 = base + 0x10` (`act_desc`),
+  `r2 = weight`, `r3 = bias/control`, `r4 = base + 0x48` (`mask`), and
+  `r5 = original wrapper arg5`.
+- The deep HNH body at `0x2fdb80` reads `r5` only as `memw(r5++#0x4)` near
+  `0x2fdc0c`, so the first control word is the relevant ABI for this path.
+  The custom three-word `[1, 1025, 524]` table is therefore unlikely to be the
+  primary W4A16 blocker.
+- Be careful decoding Hexagon packets: stores without `.new` use the old
+  register value. Several apparent native builder contradictions come from
+  reading same-packet stores as if they used the newly assigned register.
+
 ## Next Work
 
-1. Decode the exact native W4A16 hnh wrapper/descriptor builder used by
-   `q::ConvLayer_s1.opt`, not only the older bbb-oriented helper. The relevant
-   disassembly anchors are in `Agent/qnn_re/skel_text_full.S` around
-   `hmx_v73_convhnh1x1_stride1`, `hmx_v73_convhnh1x1deep_stride1`, and native
-   calls to `set_hmx_params_convw4b1x1`.
+1. Continue decoding the `0x3d9920` native HNH descriptor builder field
+   calculations, especially the values that land in `base+0x10..0x24`
+   (`act_desc`/early out fields) and `base+0x28..0x3c` (`out_desc`).
 2. Use the enriched `HMX_W4A16_DESC_DUMP` payload to compare QHPI block-table
    shape, pointer deltas, descriptor fields, and final mask words against the
    decoded native wrapper expectations.

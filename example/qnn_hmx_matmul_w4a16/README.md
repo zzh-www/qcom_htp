@@ -13,6 +13,8 @@ Current status:
 - Device builds currently define `HMX_W4A16_SKIP_KERNEL`, so the callback writes
   the marker path until the real A16/W4 HMX body and packed-weight ABI are
   validated.
+- Native-alignment process and optrace artifacts are tracked in
+  [Agent/handoffs/w4a16_native_alignment.md](../../Agent/handoffs/w4a16_native_alignment.md).
 
 Build:
 

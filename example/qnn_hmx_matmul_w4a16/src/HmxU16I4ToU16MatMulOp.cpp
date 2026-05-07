@@ -402,6 +402,15 @@ static inline int32_t hmx_w4a16_crouton_row4_ptr(
     return static_cast<int32_t>(base + offset_bytes);
 }
 
+static inline int32_t hmx_w4a16_crouton_row4_physical_ptr(
+    const int32_t *block_table,
+    uint32_t row4_tile,
+    uint32_t kn_tile,
+    uint32_t kn_tiles)
+{
+    return block_table[hmx_w4a16_crouton_row4_block_index(row4_tile, kn_tile, kn_tiles)];
+}
+
 static inline int32_t hmx_w4a16_crouton_logical_or_compact_ptr(
     const int32_t *block_table,
     uint32_t block_entries,
@@ -430,6 +439,14 @@ static inline void store_le32(uint8_t *dst, uint32_t offset, uint32_t value)
     dst[offset + 1] = (uint8_t)((value >> 8) & 0xffu);
     dst[offset + 2] = (uint8_t)((value >> 16) & 0xffu);
     dst[offset + 3] = (uint8_t)((value >> 24) & 0xffu);
+}
+
+static inline uint32_t load_le32(const uint8_t *src, uint32_t offset)
+{
+    return (uint32_t)src[offset + 0] |
+           ((uint32_t)src[offset + 1] << 8) |
+           ((uint32_t)src[offset + 2] << 16) |
+           ((uint32_t)src[offset + 3] << 24);
 }
 
 static uint32_t g_hmx_w4a16_mask_buf[16] __attribute__((aligned(16)));
@@ -470,6 +487,18 @@ static const hmx_conv_mask_desc_t *get_precomputed_mask_desc()
 
 #endif
 
+#if defined(HMX_W4A16_MAX_TABLE_ENTRIES)
+static constexpr uint32_t kHmxW4A16MaxRuntimeTableEntries = HMX_W4A16_MAX_TABLE_ENTRIES;
+#elif defined(HMX_W4A16_ACT_TABLE_STRIDE_OVERRIDE) || \
+    defined(HMX_W4A16_OUT_TABLE_STRIDE_OVERRIDE) || \
+    defined(HMX_W4A16_ACT_TABLE_Y_STRIDE_WORDS_OVERRIDE) || \
+    defined(HMX_W4A16_OUT_TABLE_STRIDE_DWORDS_OVERRIDE) || \
+    defined(HMX_W4A16_OUT_Y_STRIDE_WORDS_OVERRIDE)
+static constexpr uint32_t kHmxW4A16MaxRuntimeTableEntries = 4096;
+#else
+static constexpr uint32_t kHmxW4A16MaxRuntimeTableEntries = 1024;
+#endif
+
 #if defined(__hexagon__) && !defined(SCALAR_ONLY)
 static inline void hmx_w4a16_enter_kernel(
     const hmx_conv_out_desc_t *out_desc,
@@ -494,7 +523,18 @@ static inline void hmx_w4a16_enter_kernel(
 #endif
 
 #if defined(HMX_W4A16_ENABLE_QHPI_PRECOMPUTE)
+#if defined(HMX_W4A16_MAX_COPIED_TABLE_ENTRIES)
+static constexpr uint32_t kHmxW4A16MaxCopiedTableEntries =
+    HMX_W4A16_MAX_COPIED_TABLE_ENTRIES;
+#elif defined(HMX_W4A16_ACT_TABLE_STRIDE_OVERRIDE) || \
+    defined(HMX_W4A16_OUT_TABLE_STRIDE_OVERRIDE) || \
+    defined(HMX_W4A16_ACT_TABLE_Y_STRIDE_WORDS_OVERRIDE) || \
+    defined(HMX_W4A16_OUT_TABLE_STRIDE_DWORDS_OVERRIDE) || \
+    defined(HMX_W4A16_OUT_Y_STRIDE_WORDS_OVERRIDE)
+static constexpr uint32_t kHmxW4A16MaxCopiedTableEntries = 4096;
+#else
 static constexpr uint32_t kHmxW4A16MaxCopiedTableEntries = 512;
+#endif
 static constexpr uint32_t kHmxW4A16PrecomputedDataSize =
     56 + 2 * kHmxW4A16MaxCopiedTableEntries * sizeof(int32_t);
 #endif
@@ -635,13 +675,21 @@ static uint32_t hmx_w4a16_precompute(
     for (uint32_t rg = 0; rg < mt_groups; ++rg) {
         for (uint32_t kt = 0; kt < K_t; ++kt) {
             pc->act_table_copy[rg * act_table_stride + kt] =
+#if defined(HMX_W4A16_ACT_PHYSICAL_ONLY)
+                hmx_w4a16_crouton_row4_physical_ptr(act_src, rg, kt, K_t);
+#else
                 hmx_w4a16_crouton_logical_or_compact_ptr(
                     act_src, act_block_entries, mt_groups, rg, kt, K_t);
+#endif
         }
         for (uint32_t nt = 0; nt < N_t; ++nt) {
             pc->out_table_copy[rg * out_table_stride + nt] =
+#if defined(HMX_W4A16_OUT_PHYSICAL_ONLY)
+                hmx_w4a16_crouton_row4_physical_ptr(out_src, rg, nt, N_t);
+#else
                 hmx_w4a16_crouton_logical_or_compact_ptr(
                     out_src, out_block_entries, mt_groups, rg, nt, N_t);
+#endif
         }
     }
 #else
@@ -724,6 +772,10 @@ static uint32_t hmx_w4a16_to_u16_matmul_precomputed_kernel(
     };
     const hmx_conv_out_desc_t *out_desc = &out_desc_local;
     const hmx_conv_act_desc_t *act_desc = &act_desc_local;
+    const uint8_t *effective_wt_pack =
+        hmx_w4a16_ptr_with_offset(pc->wt_pack, HMX_W4A16_WEIGHT_PTR_OFFSET);
+    const uint8_t *effective_bias_bytes =
+        hmx_w4a16_ptr_with_offset(pc->bias_bytes, HMX_W4A16_BIAS_PTR_OFFSET);
 
 #if defined(HMX_W4A16_DESC_DUMP)
     if (pc->out_first_block) {
@@ -755,6 +807,12 @@ static uint32_t hmx_w4a16_to_u16_matmul_precomputed_kernel(
         store_le32(dst, 92, reinterpret_cast<const uint32_t *>(act_tbl_ptr)[1]);
         store_le32(dst, 96, reinterpret_cast<const uint32_t *>(out_tbl_ptr)[0]);
         store_le32(dst, 100, reinterpret_cast<const uint32_t *>(out_tbl_ptr)[1]);
+        store_le32(dst, 104, load_le32(effective_wt_pack, 0));
+        store_le32(dst, 108, load_le32(effective_wt_pack, 4));
+        store_le32(dst, 112, load_le32(effective_bias_bytes, 0));
+        store_le32(dst, 116, load_le32(effective_bias_bytes, 4));
+        store_le32(dst, 120, extra_param[0]);
+        store_le32(dst, 124, extra_param[1]);
         const uint32_t *mask_words = reinterpret_cast<const uint32_t *>(mask_desc);
         for (uint32_t i = 0; i < 16; ++i) store_le32(dst, 128 + i * 4, mask_words[i]);
     }
@@ -784,8 +842,8 @@ static uint32_t hmx_w4a16_to_u16_matmul_precomputed_kernel(
     hmx_w4a16_enter_kernel(
         out_desc,
         act_desc,
-        hmx_w4a16_ptr_with_offset(pc->wt_pack, HMX_W4A16_WEIGHT_PTR_OFFSET),
-        hmx_w4a16_ptr_with_offset(pc->bias_bytes, HMX_W4A16_BIAS_PTR_OFFSET),
+        effective_wt_pack,
+        effective_bias_bytes,
         mask_desc,
         extra_param);
 
@@ -964,7 +1022,8 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
     const uint32_t out_entries = mt_groups * N_t;
 #endif
     if (mt_groups == 0 || act_entries == 0 || out_entries == 0 ||
-        act_entries > 1024 || out_entries > 1024 ||
+        act_entries > kHmxW4A16MaxRuntimeTableEntries ||
+        out_entries > kHmxW4A16MaxRuntimeTableEntries ||
         act_block_entries < (M_t >> 1) * K_t ||
         out_block_entries < (M_t >> 1) * N_t) {
         return QHPI_Success;
@@ -975,8 +1034,8 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
     asm volatile("%0 = C15:14" : "=r"(cyc_after_qhpi));
 #endif
 
-    int32_t act_tbl_all[1024] __attribute__((aligned(64)));
-    int32_t out_tbl_all[1024] __attribute__((aligned(64)));
+    int32_t act_tbl_all[kHmxW4A16MaxRuntimeTableEntries] __attribute__((aligned(64)));
+    int32_t out_tbl_all[kHmxW4A16MaxRuntimeTableEntries] __attribute__((aligned(64)));
     const int32_t *act_src = reinterpret_cast<const int32_t *>(act_blocks);
     const int32_t *out_src = reinterpret_cast<const int32_t *>(out_blocks);
 
@@ -1008,13 +1067,21 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
     for (uint32_t rg = 0; rg < mt_groups; ++rg) {
         for (uint32_t kt = 0; kt < K_t; ++kt) {
             act_tbl_all[rg * act_table_stride + kt] =
+#if defined(HMX_W4A16_ACT_PHYSICAL_ONLY)
+                hmx_w4a16_crouton_row4_physical_ptr(act_src, rg, kt, K_t);
+#else
                 hmx_w4a16_crouton_logical_or_compact_ptr(
                     act_src, act_block_entries, mt_groups, rg, kt, K_t);
+#endif
         }
         for (uint32_t nt = 0; nt < N_t; ++nt) {
             out_tbl_all[rg * out_table_stride + nt] =
+#if defined(HMX_W4A16_OUT_PHYSICAL_ONLY)
+                hmx_w4a16_crouton_row4_physical_ptr(out_src, rg, nt, N_t);
+#else
                 hmx_w4a16_crouton_logical_or_compact_ptr(
                     out_src, out_block_entries, mt_groups, rg, nt, N_t);
+#endif
         }
     }
 #else
@@ -1096,6 +1163,10 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
         hmx_w4a16_act_desc_n_pairs(K_t, act_table_stride),
         hmx_w4a16_act_desc_y_stride_words(K_t, act_table_stride, desc_m_tiles),
     };
+    const uint8_t *effective_wt_pack =
+        hmx_w4a16_ptr_with_offset(wt_pack, HMX_W4A16_WEIGHT_PTR_OFFSET);
+    const uint8_t *effective_bias_bytes =
+        hmx_w4a16_ptr_with_offset(bias_bytes, HMX_W4A16_BIAS_PTR_OFFSET);
 
 #if defined(HMX_W4A16_DESC_DUMP)
     /*
@@ -1132,6 +1203,12 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
         store_le32(dst, 92, reinterpret_cast<const uint32_t *>(act_tbl_all)[1]);
         store_le32(dst, 96, reinterpret_cast<const uint32_t *>(out_tbl_all)[0]);
         store_le32(dst, 100, reinterpret_cast<const uint32_t *>(out_tbl_all)[1]);
+        store_le32(dst, 104, load_le32(effective_wt_pack, 0));
+        store_le32(dst, 108, load_le32(effective_wt_pack, 4));
+        store_le32(dst, 112, load_le32(effective_bias_bytes, 0));
+        store_le32(dst, 116, load_le32(effective_bias_bytes, 4));
+        store_le32(dst, 120, extra_param[0]);
+        store_le32(dst, 124, extra_param[1]);
         const uint32_t *mask_words = reinterpret_cast<const uint32_t *>(mask_desc);
         for (uint32_t i = 0; i < 16; ++i) store_le32(dst, 128 + i * 4, mask_words[i]);
     }
@@ -1169,8 +1246,8 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
     hmx_w4a16_enter_kernel(
         &out_desc,
         &act_desc,
-        hmx_w4a16_ptr_with_offset(wt_pack, HMX_W4A16_WEIGHT_PTR_OFFSET),
-        hmx_w4a16_ptr_with_offset(bias_bytes, HMX_W4A16_BIAS_PTR_OFFSET),
+        effective_wt_pack,
+        effective_bias_bytes,
         mask_desc,
         extra_param);
 
