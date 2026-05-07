@@ -262,6 +262,20 @@ if ok != out_q.size:
     raise SystemExit(3)
 PY
 
+if [ "${ANALYZE_W4A16:-1}" = "1" ]; then
+    echo "=== analyze w4a16 native/perf artifacts ==="
+    ANALYZE_ARGS=("$OUT_DIR")
+    if [ -n "${VERIFY_NATIVE_RAW:-}" ]; then
+        ANALYZE_ARGS+=(--native-raw "$VERIFY_NATIVE_RAW")
+        if [ "${VERIFY_NATIVE_TRANSPOSE:-0}" = "1" ]; then
+            ANALYZE_ARGS+=(--native-transpose)
+        fi
+    fi
+    python "$ROOT_DIR/scripts/analyze_w4a16_native_run.py" "${ANALYZE_ARGS[@]}" || {
+        echo "  [warn] w4a16 analysis failed; raw artifacts kept in $OUT_DIR" >&2
+    }
+fi
+
 if [ "$RUN_STATUS" != "0" ] || [ "$VERIFY_STATUS" != "0" ]; then
     echo "ERROR: device validation failed (run=$RUN_STATUS verify=$VERIFY_STATUS)" >&2
     exit 1

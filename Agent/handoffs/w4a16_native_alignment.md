@@ -54,6 +54,17 @@ The runner creates the durable performance products under `<OUT_DIR>/optrace/`:
 Use `summary.json` for scripted comparisons and `chrometrace*.json/html` for
 timeline inspection.
 
+The runner also creates a normalized W4A16 comparison report under
+`<OUT_DIR>/analysis/`:
+
+- `w4a16_native_compare.json`
+- `w4a16_native_compare.txt`
+
+The analysis report combines quantized output comparison, row4/N32 spatial
+coverage, saturation distribution, custom optrace cycles, and native optrace
+cycles.  This is the standard quick-read artifact for failed probes; the raw
+optrace files remain the source of truth for timeline inspection.
+
 Descriptor dumps should also use the checked-in parser instead of one-off
 Python snippets:
 
@@ -130,6 +141,16 @@ default probe (`65536/65536` custom-output match).  The non-transposed verifier
 prints `3863/65536`; using the same native-output transpose as the baseline
 keeps the expected `4229/65536`.  This builder-derived lane is therefore a no-op
 for correctness, not the missing contract.
+
+Native-builder `arg2` probe:
+
+| Probe artifact | Variant | Native exact | Main-op cycles | Timeline span |
+|---|---|---:|---:|---:|
+| `output_codex_w4a16_mask_arg2_128_256/` | `HMX_W4A16_MASK_ARG2=128`, matching the likely W4 `K/2` metadata lane | `4229/65536` | `93932` | `138472` |
+
+The second argument to `set_hmx_params_convw4b1x1` is not the missing contract
+for the current standard flow; forcing it from `256` to `128` leaves native
+exactness unchanged.
 
 Latest control-word probe:
 
@@ -230,6 +251,20 @@ after each 8-tile physical row, e.g. activation entries `[8..15]` become
 `0x04020100, 0x04020900, ... 0x04023900`; output follows the same pattern from
 `0x04000000`.  Use this as the custom-side table-shape baseline when comparing
 against native builder expectations.
+
+Latest native-shaped loop probes:
+
+| Probe artifact | Variant | Native exact | Main-op cycles | Timeline span |
+|---|---|---:|---:|---:|
+| `output_codex_w4a16_native_layout_desc32_256/` | `OP_INPUT_LAYOUT=native`, `DESC_M_TILES_OVERRIDE=32` | `505/65536` | `6877` | `47663` |
+| `output_codex_w4a16_tiled_desc32_256/` | tiled public-QHPI shape, `DESC_M_TILES_OVERRIDE=32` | `531/65536` | `13686` | `62459` |
+| `output_codex_w4a16_tiled_desc32_biascompact_256/` | tiled, `desc32`, `native_a16_w4compact` | `475/65536` | `14241` | `57682` |
+| `output_codex_w4a16_tiled_desc32_native_w4sidecar_biascompact_256/` | tiled, `desc32`, native W4 sidecar, compact bias/control | `342/65536` | `14302` | `58010` |
+
+`DESC_M_TILES_OVERRIDE=32` identifies the native fast loop class but is not a
+semantic fix.  The `OP_INPUT_LAYOUT=native` fast probe is not a valid native HMX
+surface comparison because the custom HMX output tensor is `[1,1,256,256]`,
+while the real native Conv HMX input/output tensors are `[1,8,32,256]`.
 
 ## Findings
 
