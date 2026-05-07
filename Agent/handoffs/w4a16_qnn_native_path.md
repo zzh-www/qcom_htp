@@ -880,7 +880,10 @@ Dead-end implication from the current probes:
   exported `Y.raw` as shape `[8,32,256]` at `m32_group=i%8`, `row=0`,
   `n=(i//8)*4` and `n+1`.  Writing markers across the first 256 u32 words of
   `out_table[0]` maps offset `j=group*32+row` to `m32_group=0`, `row`, and
-  `n=32*(group//2)+2*(group&1)` / `n+1`.
+  `n=32*(group//2)+2*(group&1)` / `n+1`.  The full 512-u32 block0 marker probe
+  has zero misses and confirms that formula through `n=226/227`; one compact
+  output block spans one M32 group and all N pairs in `[0,2,32,34,...,224,226]`
+  order.
 - The HMXR record-window probe ties the active tables and adjacent records
   together in one native memory window.  With `base=0x02d99408`, activation
   compact table starts at `base-0x180`, output compact table starts at

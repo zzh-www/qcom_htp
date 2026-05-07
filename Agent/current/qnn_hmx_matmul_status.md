@@ -242,6 +242,9 @@ Native compact `out_table[i]` is ordered differently in exported `Y.raw`:
 viewed as `[8,32,256]`, marker `i` lands at `m32_group=i%8`, `row=0`,
 `n=(i//8)*4`.  This is a real output-table order mismatch versus the current
 custom 512-entry `row4 * stride + tile` table construction.
+The full `out_table[0]` block marker has zero missing markers and confirms
+block offset `j=group*32+row` maps to `row=j%32` and
+`n=32*(group//2)+2*(group&1)` / `n+1`.
 
 The HMXR record-window probe now anchors the compact tables around the active
 prebuilt record: `act_table_ptr = base-0x180`, `out_table_ptr = base+0x98`,

@@ -234,6 +234,7 @@ Native entry and descriptor follow-up:
 | `/tmp/libQnnHtpV75Skel_hmx_act_entry_probe.so` | Per-entry activation probe (`HMXV`) maps compact `act_table[i]` to logical activation coordinates: first samples are `m=(i//8)*4` and `m+1`, with `k=(i%8)*32 + {0,1,2}`. |
 | `/tmp/libQnnHtpV75Skel_hmx_out_marker_probe.so` | Output table marker probe writes a unique marker to each compact `out_table[i]`.  In exported native `Y.raw` viewed as `[8,32,256]`, marker `i` lands at `m32_group=i%8`, `row=0`, `n=(i//8)*4` and `n+1`. |
 | `/tmp/libQnnHtpV75Skel_hmx_out_block_probe.so` | Output block0 marker probe maps the first 256 u32 offsets inside `out_table[0]`: for `j=group*32+row`, the marker lands at `m32_group=0`, `row`, and `n=32*(group//2)+2*(group&1)` / `n+1`. |
+| `/tmp/libQnnHtpV75Skel_hmx_out_block_full_probe.so` | Full output block0 marker probe covers all 512 u32 offsets with zero misses and confirms the same formula through `n=226/227`; `out_table[0]` covers one M32 group and all N pairs in the `[0,2,32,34,...,224,226]` order. |
 | `/tmp/libQnnHtpV75Skel_hmx_record_window_probe.so` | Record-window probe (`HMXR`) dumps 496 u32 words starting at `base-0x180 = 0x02d99288`: compact activation table at words `0..63`, pre-base metadata at `64..95`, base record at `96..131`, compact output table at `134..197`, post-output metadata at `198..223`, and an adjacent restore/public-table-looking sample starting at `0x02d99608`. |
 | `/tmp/libQnnHtpV75Skel_hmx_adjacent_marker_probe.so` | Negative marker check for the neighboring table at `base+0x200`: writing paired markers through its first 64 pointers produces no paired marker hits in exported `Y.raw`.  Treat it as adjacent wrapper/layout state, not the active HNH output table or direct public export table. |
 | `output_w4a16_import_native_sidecar_bd00_maskarg6_a0_256/` | Forcing custom `HMX_W4A16_MASK_ARG6=0xa0` to match native mask word `[12]` is a no-op for correctness: `3298/65536`, `sorted_equal=True`, best row32 roll `32:65536`, main-op `95152` cycles. |
@@ -279,6 +280,11 @@ compact output table entries use the opposite visible order in exported
 current custom table copy is still built as a 512-entry row4-expanded table
 indexed `row4 * stride + tile`, so its output-table order is not the compact
 native order observed by the marker probe.
+Within one compact output block, the full-block marker probe gives
+`j = group * 32 + row`, `row = j % 32`, and
+`n_pair_base = 32 * (group // 2) + 2 * (group & 1)`.  Combining that with the
+table-entry marker means native output table entry `i` selects
+`m32_group = i % 8` and an N4 residue `4 * (i // 8)`.
 
 The record-window dump anchors those tables in one contiguous native record
 window.  The active `act_table_ptr` is exactly `base-0x180`, and the active
