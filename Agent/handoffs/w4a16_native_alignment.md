@@ -131,6 +131,19 @@ The default first control word `1` is still the best known setting.  Since the
 deep HNH body reads only the first control word on this path, changing the
 three-word local table does not look like the missing native contract.
 
+Compact bias/control plus control-word probe:
+
+| Probe artifact | Bias/control layout | `HMX_W4A16_EXTRA_PARAM0` | Native exact | Main-op cycles | Timeline span |
+|---|---|---:|---:|---:|---:|
+| `output_codex_w4a16_control_i32_biascompact_256/` | `native_a16_w4compact` | `1` | `3846/65536` | `93300` | `134261` |
+| `output_codex_w4a16_biascompact_control0_0_256/` | `native_a16_w4compact` | `0` | `3288/65536` | `96883` | `135938` |
+| `output_codex_w4a16_biascompact_control0_2_256/` | `native_a16_w4compact` | `2` | `3072/65536` | `106045` | `152037` |
+
+The deep body uses the first control word as a `bias/control` pointer step
+(`r3 += extra_param0 << 10`), but changing that step does not rescue the
+native-sized 2048B W4 compact sidecar.  The default step `1` remains best for
+both default and compact bias/control layouts.
+
 Latest activation-layout probes:
 
 | Probe artifact | Native exact | Main-op cycles | Timeline span |
@@ -286,6 +299,11 @@ Dead ends already checked:
 - `HMX_W4A16_EXTRA_PARAM0={0,2,4}` all worsen both correctness and, in most
   cases, cycles relative to the default first control word `1`.  Artifacts:
   `example/qnn_matmul_profile/output_codex_w4a16_control0_{0,2,4}_256/`.
+- Combining `--bias-layout native_a16_w4compact` with
+  `HMX_W4A16_EXTRA_PARAM0={0,2}` also worsens exactness relative to compact
+  default `1`, despite the deep-body bias/control pointer step semantics.
+  Artifacts:
+  `example/qnn_matmul_profile/output_codex_w4a16_biascompact_control0_{0,2}_256/`.
 - Native no-bias control layout `[1,8,1,64]` with repeated `0x80008000`
   reduces saturation but worsens exactness (`1755/65536` in the refreshed
   comparable probe).
