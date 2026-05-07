@@ -122,6 +122,11 @@ ssh "$DEVICE" "cd $DEV_DIR && rm -rf out && \
 
 mkdir -p device_out
 ssh "$DEVICE" "cat $DEV_DIR/out/qnn-profiling-data_0.log" > device_out/qnn-profiling-data_0.log
+ssh "$DEVICE" "cat $DEV_DIR/out/Result_0/Y_native.raw 2>/dev/null || \
+    cat $DEV_DIR/out/Result_0/Y.raw 2>/dev/null || \
+    cat $DEV_DIR/out/Result_0/output_0_native.raw 2>/dev/null || \
+    cat $DEV_DIR/out/Result_0/output_0.raw 2>/dev/null" \
+    > device_out/Y.raw 2>/dev/null || true
 
 echo "=== decode profile (text) ==="
 LD_LIBRARY_PATH=$QNN_SDK_ROOT/lib/x86_64-linux-clang \
@@ -137,6 +142,10 @@ if [ "${DECODE_OPTRACE:-1}" = "1" ]; then
         echo "  [warn] optrace decode failed; raw log kept in $OUT_DIR/device_out" >&2
     }
 fi
+
+CHECK_ARGS=("$OUT_DIR" --require-native-io --require-layout-flags)
+[ "${STRICT_ARTIFACT_STANDARD:-1}" = "0" ] && CHECK_ARGS+=(--warn-only)
+python "$ROOT_DIR/scripts/check_qnn_artifact_standard.py" "${CHECK_ARGS[@]}"
 
 echo "=== iter 3 (steady) per-MatMul cyc ==="
 awk '/Number of HVX threads used : 4  count/{n++} n==3' device_out/profile.txt | grep -E "MatMul_|Accelerator \(execute\) time \(cycles\)|Accelerator \(execute\) time :|Input OpId|Output OpId" | head -20

@@ -17,6 +17,7 @@ Supported record magics are `HMXP` for entry samples, `HMXB` for the active
 prebuilt base record, `HMXT` for table-memory samples, `HMXA` for activation
 table[0] data samples, `HMXV` for per-activation-entry value samples, and
 `HMXR` for the native record-window dump around `base = out_desc - 0x28`.
+`HMXW` is a wider pre-window dump starting at `base - 0x300`.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ MAGIC_TABLE = 0x484D5854  # "HMXT"
 MAGIC_ACT_TILE = 0x484D5841  # "HMXA"
 MAGIC_ACT_ENTRIES = 0x484D5856  # "HMXV"
 MAGIC_RECORD_WINDOW = 0x484D5852  # "HMXR"
+MAGIC_RECORD_PREWINDOW = 0x484D5857  # "HMXW"
 
 FIELD_WORDS = [
     (0, "magic", "hex"),
@@ -329,6 +331,51 @@ def _parse_record_window(path: Path, dtype: str, layout: str, stride_words: int,
     }
 
 
+def _parse_record_prewindow(path: Path, dtype: str, layout: str, stride_words: int, record: list[int]) -> dict[str, Any]:
+    public_words = _read_words(path, dtype)
+    fields = {
+        "magic": record[0],
+        "r31_return": record[1],
+        "out_desc_arg": record[2],
+        "act_desc_arg": record[3],
+        "weight_arg": record[4],
+        "bias_arg": record[5],
+        "mask_arg": record[6],
+        "control_arg": record[7],
+        "base_ptr": record[8],
+        "window_start_ptr": record[9],
+        "out_table_ptr": record[10],
+        "act_table_ptr": record[11],
+        "out_table_ptr_repeat": record[12],
+        "out_table_stride_dwords": record[13],
+        "act_n_pairs": record[14],
+        "act_y_stride_words": record[15],
+    }
+    window = record[16:512]
+    return {
+        "path": str(path),
+        "record_kind": "record_prewindow",
+        "dtype": dtype,
+        "layout": layout,
+        "public_u32_words": len(public_words),
+        "stride_words": stride_words,
+        "record_u32_words": len(record),
+        "fields": fields,
+        "samples": {
+            "pre_act_descriptor": window[0:24],
+            "pre_act_or_restore_table_64": window[24:88],
+            "pre_act_metadata": window[88:96],
+            "act_table_64": window[96:160],
+            "pre_base_metadata": window[160:192],
+            "base_record_words": window[192:228],
+            "base_plus_0x90_words": window[228:230],
+            "out_table_64": window[230:294],
+            "post_out_metadata": window[294:320],
+            "adjacent_restore_table_sample": window[320:496],
+        },
+    }
+
+
 def parse_probe(
     path: Path,
     layout: str,
@@ -345,6 +392,8 @@ def parse_probe(
             record_kind = "act_entries"
         elif header[0] == MAGIC_RECORD_WINDOW:
             record_kind = "record_window"
+        elif header[0] == MAGIC_RECORD_PREWINDOW:
+            record_kind = "record_prewindow"
         elif header[0] == MAGIC_TABLE:
             record_kind = "table"
         elif header[0] == MAGIC_BASE_RECORD:
@@ -352,7 +401,7 @@ def parse_probe(
         else:
             record_kind = "entry"
 
-    record_words = 512 if record_kind == "record_window" else 272 if record_kind in ("table", "act_tile", "act_entries") else 96
+    record_words = 512 if record_kind in ("record_window", "record_prewindow") else 272 if record_kind in ("table", "act_tile", "act_entries") else 96
     record = _decode_record(public_words, layout, stride_words, record_words)
     if record_kind == "entry":
         return _parse_entry_record(path, dtype, layout, stride_words, record)
@@ -366,6 +415,8 @@ def parse_probe(
         return _parse_act_entries_record(path, dtype, layout, stride_words, record)
     if record_kind == "record_window":
         return _parse_record_window(path, dtype, layout, stride_words, record)
+    if record_kind == "record_prewindow":
+        return _parse_record_prewindow(path, dtype, layout, stride_words, record)
     raise ValueError(f"unsupported record kind: {record_kind}")
 
 
@@ -386,6 +437,7 @@ def print_human(parsed: dict[str, Any]) -> None:
         "act_tile": MAGIC_ACT_TILE,
         "act_entries": MAGIC_ACT_ENTRIES,
         "record_window": MAGIC_RECORD_WINDOW,
+        "record_prewindow": MAGIC_RECORD_PREWINDOW,
     }[kind]
     ok = "ok" if magic == expected_magic else "unexpected"
     print(f"=== W4A16 native HNH {kind} probe: {parsed['path']} ===")
@@ -514,7 +566,7 @@ def print_human(parsed: dict[str, Any]) -> None:
             "out_k_total_bytes",
         ):
             value = fields[name]
-            if name.endswith("_ptr"):
+            if "_ptr" in name:
                 text = _fmt(value)
             else:
                 text = str(value)
@@ -543,7 +595,7 @@ def print_human(parsed: dict[str, Any]) -> None:
             print()
         return
 
-    if kind == "record_window":
+    if kind in ("record_window", "record_prewindow"):
         print("entry_args:")
         for name in (
             "r31_return",
@@ -559,15 +611,18 @@ def print_human(parsed: dict[str, Any]) -> None:
             print(f"  {name:<26} = {_fmt(fields[name])}")
         print()
 
-        print("record_window_header:")
+        print(f"{kind}_header:")
         for name in (
             "out_table_ptr",
             "act_table_ptr",
+            "out_table_ptr_repeat",
             "out_table_stride_dwords",
             "act_n_pairs",
             "out_y_stride_words",
             "act_y_stride_words",
         ):
+            if name not in fields:
+                continue
             value = fields[name]
             if name.endswith("_ptr"):
                 text = _fmt(value)
@@ -652,7 +707,7 @@ def main() -> None:
     parser.add_argument("--dtype", choices=("u16", "u32"), default="u16", help="public raw storage dtype")
     parser.add_argument(
         "--record-kind",
-        choices=("auto", "entry", "base", "table", "act_tile", "act_entries", "record_window"),
+        choices=("auto", "entry", "base", "table", "act_tile", "act_entries", "record_window", "record_prewindow"),
         default="auto",
         help="probe record format; auto selects known HMX* probe records by magic",
     )

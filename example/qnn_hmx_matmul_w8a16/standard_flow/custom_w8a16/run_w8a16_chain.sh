@@ -172,6 +172,10 @@ if [ "${DECODE_OPTRACE:-1}" = "1" ]; then
     }
 fi
 
+CHECK_ARGS=("$OUT_DIR" --require-layout-flags)
+[ "${STRICT_ARTIFACT_STANDARD:-1}" = "0" ] && CHECK_ARGS+=(--warn-only)
+python "$ROOT_DIR/scripts/check_qnn_artifact_standard.py" "${CHECK_ARGS[@]}"
+
 VERIFY_STATUS=0
 python3 - "$OUT_DIR" <<'PY' || VERIFY_STATUS=$?
 import sys

@@ -150,12 +150,12 @@ for `w8a8`, `w4a8`, `w8a16`, `w4a16`, and `w16a16`.
 Latest probe evidence:
 
 2026-05-08 artifact-standard note: treat
-`example/qnn_matmul_profile/output_codex_native_w4a16_same_custom_256/` as a
-historical comparator only.  Its device run used `A:=input_A.raw` and emitted
-fp32-sized output, and its converter run did not record the required
-NONTRIVIAL layout flags.  Regenerate W4A16 native Conv references with
-`example/qnn_matmul_profile/run_native_w4a16_conv_ref.sh` before using QNN
-native output or performance as the current oracle.
+`example/qnn_matmul_profile/output_codex_native_w4a16_same_custom_256/` and the
+earlier `output_codex_native_w4a16_conv1x1_*` directories as historical
+comparators only.  Those runs used float-sized runtime output and/or did not
+record the required NONTRIVIAL layout flags.  Regenerate W4A16 native Conv
+references with `example/qnn_matmul_profile/run_native_w4a16_conv_ref.sh`
+before using QNN native output or performance as the current oracle.
 
 Current standardized W4A16 native oracle:
 `example/qnn_matmul_profile/output_native_w4a16_conv_ref_256/`.  It uses

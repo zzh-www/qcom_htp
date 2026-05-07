@@ -7,7 +7,7 @@ Usage:
 Produces a self-contained directory with model.onnx, calibration files,
 runtime u8 input, and the qairt input lists.
 """
-import argparse, os, sys
+import argparse, json, os, sys
 import numpy as np
 import onnx
 from onnx import helper, TensorProto, numpy_helper
@@ -59,5 +59,23 @@ u8 = os.path.join(OUT, "runtime_inputs_u8"); os.makedirs(u8, exist_ok=True)
 aRaw_u8.tofile(os.path.join(u8, "a.raw"))
 with open(os.path.join(OUT, "runtime_input_list.txt"), "w") as f:
     f.write("A:=runtime_inputs_u8/a.raw\n")
+
+with open(os.path.join(OUT, "native_io.json"), "w") as f:
+    json.dump(
+        {
+            "input_name": "A",
+            "output_name": "Y",
+            "native_input": "runtime_inputs_u8/a.raw",
+            "runtime_input_list": "runtime_input_list.txt",
+            "native_input_storage": "uint8",
+            "native_input_bytes": int(M * K),
+            "expected_native_output_storage": "uint8",
+            "expected_native_output_bytes": int(M * N),
+            "shape": [1, M, K],
+            "output_shape": [1, M, N],
+        },
+        f,
+        indent=2,
+    )
 
 print(f"  size={M} -> {OUT}/model.onnx + inputs")

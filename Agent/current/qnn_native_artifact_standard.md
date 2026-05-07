@@ -6,6 +6,11 @@ files as evidence.
 
 ## Required Flow
 
+The u8i8 custom and native-baseline runners are the template for the standard:
+generate ONNX plus raw runtime inputs, convert to DLC with layout flags, export
+a context binary, run qnn-net-run from that context binary with native I/O, then
+decode optrace into the same run directory.
+
 1. Generate both input surfaces:
    - `input_A.raw` plus `input_list.txt` for converter/calibration or legacy
      non-native runs.
@@ -65,6 +70,21 @@ layout-preservation converter flags above.  Such artifacts can stay as
 historical debugging evidence, but they are not current correctness or
 performance oracles.
 
+QNN native graphs may still have float ONNX public input/output tensors when
+quantization overrides are used.  That is not sufficient for comparison.  The
+accepted runtime contract is the generated native raw input/output recorded in
+`native_io.json` and exercised with qnn-net-run native I/O flags.
+
+Use the checker at the end of every standard run:
+
+```bash
+scripts/check_qnn_artifact_standard.py <out_dir> \
+  --require-layout-flags --require-native-io
+```
+
+Custom-op runners use the same checker with `--require-layout-flags`; native
+reference runners also require `native_io.json`.
+
 ## Current Implementations
 
 - `example/qnn_matmul_profile/gen_onnx.py` emits fp32 calibration input and
@@ -76,8 +96,8 @@ performance oracles.
   W4A16 native Conv reference generator; it replaces the old float-input,
   float-output `output_codex_native_w4a16_same_custom_256` style of artifact.
 - `example/qnn_hmx_matmul_u8i8/standard_flow/native_baseline/run_native_chain.sh`
-  and `run_native_sweep.sh` now use the same converter layout rule as the
-  custom u8i8 flow.
+  and `run_native_sweep.sh` now emit `native_io.json`, pull native output raw,
+  and use the same checker/layout/context/optrace rule as the custom u8i8 flow.
 - `example/qnn_hmx_matmul_u8i8/standard_flow/native_baseline/run_device_optrace.sh`
   is kept as a Phase-A manual runner, but now uses native I/O and decodes into
   the standard local `optrace/` directory.
@@ -95,7 +115,7 @@ Current runner coverage:
 | W4A16 native reference | `example/qnn_matmul_profile/run_native_w4a16_conv_ref.sh` | Emits u16 native input/output for the Conv reference and records the full standard artifact set. |
 | u8i8 native baseline | `example/qnn_hmx_matmul_u8i8/standard_flow/native_baseline/run_native_chain.sh` | Uses generated `runtime_input_list.txt`, preserves graph I/O layout, runs from context binary with native I/O. |
 | u8i8 native sweep | `example/qnn_hmx_matmul_u8i8/standard_flow/native_baseline/run_native_sweep.sh` | Same native-I/O/context-binary rule for size sweeps. |
-| custom u8i8/w4a8/w8a16/w4a16/w16a16 | `example/qnn_hmx_matmul_*/standard_flow/custom_*/run_*_chain.sh` | Preserves public custom-op I/O layout, runs from context binary, defaults to native output, pulls profile log, and decodes `optrace/`. |
+| custom u8i8/w4a8/w8a16/w4a16/w16a16 | `example/qnn_hmx_matmul_*/standard_flow/custom_*/run_*_chain.sh` | Preserves public custom-op I/O layout, runs from context binary, defaults to native output, pulls profile log, decodes `optrace/`, and runs the standard artifact checker. |
 
 ## Current W4A16 Native Reference
 

@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Generate the QNN-native W4A16 Conv1x1 reference graph.
 
-The graph mirrors the native W4A16 comparator used by the custom MatMul flow:
-float ONNX Conv input/weights plus quantization overrides force QNN HTP to
-lower into the native W4 ConvLayer_s1 path.  Runtime execution should use the
-emitted native u16 input with qnn-net-run --use_native_input_files.
+The graph mirrors QNN's native quantized-model entry convention: the ONNX public
+input/output are float tensors, and quantization overrides force QNN HTP to
+lower into the native W4 ConvLayer_s1 path.  This float ONNX surface is not the
+comparison runtime contract.  Standard reference runs must use the emitted u16
+native input with qnn-net-run --use_native_input_files and pull the u16 native
+output with --use_native_output_files.
 """
 
 import argparse

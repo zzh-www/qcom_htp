@@ -17,9 +17,9 @@ Acceptance rule for this family:
 
 2026-05-08 standardization update: the old
 `example/qnn_matmul_profile/output_codex_native_w4a16_same_custom_256/`
-artifact is historical because it used float input/output at qnn-net-run time
-and did not record the required converter layout-preservation flags.  Refresh
-the native oracle with
+artifact and the earlier `output_codex_native_w4a16_conv1x1_*` artifacts are
+historical because they used float-sized runtime output and/or did not record
+the required converter layout-preservation flags.  Refresh the native oracle with
 `example/qnn_matmul_profile/run_native_w4a16_conv_ref.sh` before taking new
 correctness or performance numbers from QNN native.
 
@@ -33,7 +33,10 @@ This artifact uses native u16 runtime input/output, converter NONTRIVIAL layout
 flags on A/Y, a context binary run via `--retrieve_context`, and the standard
 `optrace/` directory.  The native output oracle is
 `device_out/Y.raw`; the native performance reference is
-`optrace/summary.json`.
+`optrace/summary.json`.  The ONNX Conv graph still has a float public surface,
+matching QNN's native quantized-model entry convention; do not treat that as the
+runtime comparison contract.  Runtime acceptance is the `native_io.json` u16 raw
+contract plus qnn-net-run native I/O flags.
 
 Native-path first rule: before adding new custom probes, read
 [`w4a16_qnn_native_path.md`](w4a16_qnn_native_path.md).  The current blocker is
@@ -79,6 +82,11 @@ The runner creates the durable performance products under `<OUT_DIR>/optrace/`:
 
 Use `summary.json` for scripted comparisons and `chrometrace*.json/html` for
 timeline inspection.
+
+All standard custom W4A16 runs now call
+`scripts/check_qnn_artifact_standard.py <OUT_DIR> --require-layout-flags` after
+optrace decode.  Set `STRICT_ARTIFACT_STANDARD=0` only for deliberately
+historical/debug runs.
 
 The runner also creates a normalized W4A16 comparison report under
 `<OUT_DIR>/analysis/`:
@@ -238,6 +246,8 @@ Native entry and descriptor follow-up:
 | `/tmp/libQnnHtpV75Skel_hmx_out_block_full_probe.so` | Full output block0 marker probe covers all 512 u32 offsets with zero misses and confirms the same formula through `n=226/227`; `out_table[0]` covers one M32 group and all N pairs in the `[0,2,32,34,...,224,226]` order. |
 | `/tmp/libQnnHtpV75Skel_hmx_record_window_probe.so` | Record-window probe (`HMXR`) dumps 496 u32 words starting at `base-0x180 = 0x02d99288`: compact activation table at words `0..63`, pre-base metadata at `64..95`, base record at `96..131`, compact output table at `134..197`, post-output metadata at `198..223`, and an adjacent restore/public-table-looking sample starting at `0x02d99608`. |
 | `/tmp/libQnnHtpV75Skel_hmx_adjacent_marker_probe.so` | Negative marker check for the neighboring table at `base+0x200`: writing paired markers through its first 64 pointers produces no paired marker hits in exported `Y.raw`.  Treat it as adjacent wrapper/layout state, not the active HNH output table or direct public export table. |
+| `/tmp/libQnnHtpV75Skel_hmx_record_prewindow_probe.so` | Pre-window probe (`HMXW`) starts at `base-0x300 = 0x02d99108` and reveals another descriptor-like record plus a contiguous 64-entry table at `0x02d99168` before the compact activation table. |
+| `/tmp/libQnnHtpV75Skel_hmx_pretable_marker_probe.so` | Negative marker check for the `0x02d99168` pre-table: writing paired markers through its first 64 pointers produces no paired marker hits in exported `Y.raw`, so it is also not a direct public export table at the HNH entry point. |
 | `output_w4a16_import_native_sidecar_bd00_maskarg6_a0_256/` | Forcing custom `HMX_W4A16_MASK_ARG6=0xa0` to match native mask word `[12]` is a no-op for correctness: `3298/65536`, `sorted_equal=True`, best row32 roll `32:65536`, main-op `95152` cycles. |
 | `output_w4a16_import_native_sidecar_bd00_base_record_fields_256/` | Applying the visible base-record scalar fields to the imported-sidecar custom flow (`act_y=64`, `out_y=64`, `out_n_tiles=32`, `mask[12]=0xa0`) fails graph execution before a valid optrace/output.  The analyzer still records the graph-boundary mismatch: custom weight carrier `UFixed8` vs native `SFixed8`, and custom control shape `[1,1,1,1]` vs native `[1]`. |
 
@@ -298,6 +308,10 @@ record, plus a neighboring pointer table starting at `base+0x200`.  Treat that
 neighbor as adjacent QNN wrapper/layout state for now; it is not the HNH compact
 output table passed at `out_desc+0`.  The adjacent-marker negative probe also
 shows it is not a direct public-export table at the HNH entry point.
+The wider pre-window dump shows `base+0x90` points back to a descriptor-like
+record at `base-0x300`, with its own table at `base-0x2a0`; that table also
+fails the paired-marker public-export check.  The only table proven to feed HNH
+output remains the compact `out_desc+0` table at `base+0x98`.
 
 Post descriptor-dump-enrichment recheck:
 

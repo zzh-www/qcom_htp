@@ -81,6 +81,11 @@ for cmd in "${iter_cmds[@]}"; do
   mkdir -p device_out
   ssh "$DEVICE" "cat $DEV_DIR/out/qnn-profiling-data_0.log" > device_out/qnn-profiling-data_0.log 2>/dev/null || true
   ssh "$DEVICE" "cat $DEV_DIR/out/qnn-profiling-data_2.log" > device_out/qnn-profiling-data_2.log 2>/dev/null || true
+  ssh "$DEVICE" "cat $DEV_DIR/out/Result_0/Y_native.raw 2>/dev/null || \
+      cat $DEV_DIR/out/Result_0/Y.raw 2>/dev/null || \
+      cat $DEV_DIR/out/Result_0/output_0_native.raw 2>/dev/null || \
+      cat $DEV_DIR/out/Result_0/output_0.raw 2>/dev/null" \
+      > device_out/Y.raw 2>/dev/null || true
 
   if [ "${DECODE_OPTRACE:-1}" = "1" ]; then
     echo "  --- decode optrace artifacts ---"
@@ -95,6 +100,10 @@ for cmd in "${iter_cmds[@]}"; do
       echo "  [warn] optrace decode failed; raw log kept in $OUT_DIR/device_out" >&2
     }
   fi
+
+  CHECK_ARGS=("$OUT_DIR" --require-native-io --require-layout-flags)
+  [ "${STRICT_ARTIFACT_STANDARD:-1}" = "0" ] && CHECK_ARGS+=(--warn-only)
+  python "$ROOT_DIR/scripts/check_qnn_artifact_standard.py" "${CHECK_ARGS[@]}"
 
   # Plain profile-viewer for wall µs / cycles
   LD_LIBRARY_PATH=$QNN_SDK_ROOT/lib/x86_64-linux-clang \

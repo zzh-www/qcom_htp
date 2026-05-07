@@ -13,7 +13,7 @@ Output (in --out subdir):
     runtime_inputs_u8/a.raw   u8 runtime input
     input_list.txt / runtime_input_list.txt
 """
-import argparse, os
+import argparse, json, os
 import numpy as np
 import onnx
 from onnx import helper, TensorProto, numpy_helper
@@ -165,6 +165,24 @@ with open(os.path.join(OUT, "input_list.txt"), "w") as f:
     f.write("\n".join(input_list_lines) + "\n")
 with open(os.path.join(OUT, "runtime_input_list.txt"), "w") as f:
     f.write("\n".join(runtime_list_lines) + "\n")
+
+with open(os.path.join(OUT, "native_io.json"), "w") as f:
+    json.dump(
+        {
+            "input_name": "A",
+            "output_name": "Y" if args.mode == "chain" else [f"Y_{i}" for i in range(chain)],
+            "native_input": "runtime_inputs_u8/a.raw",
+            "runtime_input_list": "runtime_input_list.txt",
+            "native_input_storage": "uint8",
+            "native_input_bytes": int(M * K),
+            "expected_native_output_storage": "uint8",
+            "expected_native_output_bytes": int(M * N),
+            "shape": [1, M, K],
+            "output_shape": [1, M, N],
+        },
+        f,
+        indent=2,
+    )
 
 # Write quant_overrides.json with int8 specs for ALL intermediate tensors.
 # Without this, QNN falls back to fp16 ConvLayer for intermediates (Y_0..Y_{n-2})

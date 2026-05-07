@@ -369,6 +369,9 @@ postprocess() {
         echo "    [warn] optrace decode failed; see $cfg_dir/_decode_optrace.log"
         return 1
     }
+    local -a check_args=("$cfg_dir" --require-native-io --require-layout-flags)
+    [ "${STRICT_ARTIFACT_STANDARD:-1}" = "0" ] && check_args+=(--warn-only)
+    python "$ROOT_DIR/scripts/check_qnn_artifact_standard.py" "${check_args[@]}"
 }
 
 # ---- main -------------------------------------------------------------------
