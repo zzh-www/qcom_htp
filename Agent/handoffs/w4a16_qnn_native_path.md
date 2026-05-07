@@ -48,6 +48,7 @@ it be considered an alignment attempt.
 | context binary | `ctx/conv_ctx.bin` | Holds the prepared 2048B no-bias/control sidecar and 32768B native W4 sidecar. |
 | native output oracle | `device_out/Y.raw` | The custom output oracle; analytic formulas are secondary diagnostics. |
 | optrace products | `optrace/` | Standard performance source: timeline, profile text, QHAS summary, decoded `summary.json`. |
+| native Conv tensor dump | `example/qnn_hmx_matmul_w4a16/standard_flow/custom_w4a16/out/native_conv_tensor_dump_256/` | Diagnostic graph that keeps native W4 Conv lowering and records the QHPI tensor surface exposed to a custom op after Conv/layout restore. |
 | skel evidence | `Agent/qnn_re/skel_text_full.S` | Shows the HNH wrapper, descriptor builder, W4 mask helper, and final deep-body entry. |
 
 ## Implementation Path At A Glance
@@ -296,6 +297,85 @@ So there are three different performance scopes:
    conversion, transposes, output dequant/export, RPC, and accelerator wait.
 
 Custom W4A16 performance claims must name which scope they compare against.
+
+## Native Conv Tensor-Dump Diagnostic
+
+The current native-first diagnostic flow is:
+
+```bash
+bash example/qnn_hmx_matmul_w4a16/build_x86.sh
+bash example/qnn_hmx_matmul_w4a16/build.sh
+OUT_DIR=example/qnn_hmx_matmul_w4a16/standard_flow/custom_w4a16/out/native_conv_tensor_dump_256 \
+STRICT_OPTRACE=1 \
+bash example/qnn_hmx_matmul_w4a16/standard_flow/custom_w4a16/run_native_conv_tensor_dump.sh
+```
+
+The flow is intentionally separate from the custom MatMul runner:
+
+1. `gen_native_conv_tensor_dump.py` clones the canonical native `conv.onnx`,
+   keeps the original Conv output `Y`, appends a side-branch
+   `hmx::HmxW4A16TensorDump(Y -> D)`, and copies native input/quant files.
+2. `qairt-converter` uses the same native W4 carrier contract as the canonical
+   artifact: no `--pack_4_bit_weights`, and `--preserve_io_datatype A Y` so
+   the original input/output stay float while dump output `D` is exported as
+   native UFixed16.
+3. `qnn-context-binary-generator` keeps the native W4 Conv lowering and adds
+   one custom QHPI dump op.
+4. Device run pulls `device_out/D.raw`, decodes standard optrace into
+   `optrace/`, and parses `device_out/tensor_dump.{json,txt}`.
+
+The latest captured diagnostic artifact is:
+
+`example/qnn_hmx_matmul_w4a16/standard_flow/custom_w4a16/out/native_conv_tensor_dump_256/`
+
+Ctxgen confirms both boundaries are present:
+
+| Boundary | Tensor contract |
+|---|---|
+| `q::ConvLayer_s1.opt` input activation | `UFixed16 [1,8,32,256]` |
+| `q::ConvLayer_s1.opt` weight sidecar | `SFixed8 [1,1,128,256]` |
+| `q::ConvLayer_s1.opt` bias/control sidecar | `Int32 [1,8,1,128]` in this side-branch diagnostic graph |
+| `q::ConvLayer_s1.opt` output | `UFixed16 [1,8,32,256]` |
+| `HmxW4A16TensorDump` input/output | `UFixed16 [1,256,1,256]` |
+
+`tensor_dump.json` reports the QHPI surface exposed to the custom dump op:
+
+| Field | Value |
+|---|---|
+| magic/version | `0x48385444` / `1` |
+| element/layout/placement | `2` / `10` / `1` |
+| quant | zero offset `32768`, step `3.0518509447574615e-05` |
+| logical shape | `[1,256,1,256]` |
+| padded shape | `[1,256,1,256]` |
+| block shape | `[1,8,2,32]` |
+| block table length | `256` |
+| first block pointers | `0x04480000`, `0x04480800`, `0x04481000`, ... |
+
+This is not yet the internal `ConvLayer_s1.opt` wrapper descriptor dump, and
+the added side branch still perturbs part of ctxgen's prepared sidecar contract
+(`bias_to_vtcm` is `[1,8,1,128]` here, while the canonical artifact records
+`[1,8,1,64]`).  It shows the tensor object that QNN exposes to a custom op
+after native Conv and layout restoration.  Use it to align the public QHPI
+contract and to prevent custom descriptor guesses from drifting away from
+QNN's real tensor layout.  The remaining hard target is still the native
+wrapper state under `0x3ddc60`: wrapper args, tensor-object metadata words,
+post-builder stack descriptors, mask words, and the `r23/r24/r27`
+descriptor-loop tuple.
+
+For this diagnostic graph, optrace is a trace-validation artifact rather than
+a performance target.  The dump op and output export dominate runtime:
+
+| Scope | Cycles |
+|---|---:|
+| HTP timeline span | `362211` |
+| Sum of pid0 events | `692866` |
+| `HmxW4A16TensorDump` | `209080` |
+| diagnostic `conv1x1` QNN-op aggregate | `32532` |
+| diagnostic `q::ConvLayer_s1.opt` | `6122` |
+
+Continue using the canonical native artifact's `optrace/summary.json` for
+performance acceptance.  Use this diagnostic artifact for native-path tensor
+evidence.
 
 ## Skel Execution Path
 

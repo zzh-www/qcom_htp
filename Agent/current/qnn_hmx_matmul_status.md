@@ -236,6 +236,23 @@ canonical 256^3 artifact.  After that, compare the native stack record with the
 custom descriptor dump and only change the custom path for a named native
 boundary.
 
+2026-05-08 native-path diagnostic added: `HmxW4A16TensorDump` is registered in
+the W4A16 package and `run_native_conv_tensor_dump.sh` now generates a side
+branch `Conv(Y) -> HmxW4A16TensorDump(Y -> D)` from the canonical native Conv
+artifact.  The standard artifact directory is
+`example/qnn_hmx_matmul_w4a16/standard_flow/custom_w4a16/out/native_conv_tensor_dump_256/`.
+It keeps decoded optrace under `optrace/` and parses `device_out/D.raw` into
+`device_out/tensor_dump.{json,txt}`.  Latest dump validates the public QHPI
+surface exposed after native Conv/layout restore: UFixed16, quant zero
+`32768`, scale `3.0518509447574615e-05`, shape `[1,256,1,256]`, block shape
+`[1,8,2,32]`, block table length `256`, and first block pointers
+`0x04550000`, `0x04550800`, `0x04551000`, ... .  Ctxgen still contains native
+`q::ConvLayer_s1.opt` with activation/output `[1,8,32,256]` and W sidecar
+`SFixed8 [1,1,128,256]`, but the diagnostic branch perturbs bias/control to
+`Int32 [1,8,1,128]`; use this as QHPI tensor-surface evidence, not as the
+final wrapper-state dump.  The remaining target is still the native `0x3ddc60`
+wrapper metadata/stack/mask/loop tuple.
+
 The signed W4 carrier route is still blocked below quant-overrides.  Four
 host-only probes using an ONNX `INT8` initializer plus no weight encoding,
 8-bit offset `0`, 8-bit offset `-128`, and 4-bit offset `0` all lower the

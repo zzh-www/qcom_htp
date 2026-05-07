@@ -1,8 +1,7 @@
 /*
  * QnnHmxMatMulW4A16Interface.cpp
  *
- * QNN OpPackage interface for the single custom op kept in this example:
- * HmxU16I4ToU16MatMul.
+ * QNN OpPackage interface for the W4A16 custom op plus diagnostics.
  */
 
 #include "HTP/QnnHtpCommon.h"
@@ -19,7 +18,8 @@ extern "C" void register_hmx_w4a16_to_u16_matmul_op();
 
 static constexpr auto sg_packageName = THIS_PKG_NAME_STR;
 static constexpr auto sg_opName = "HmxU16I4ToU16MatMul";
-static std::array<const char *, 1> sg_opNames{{sg_opName}};
+static constexpr auto sg_dumpOpName = "HmxW4A16TensorDump";
+static std::array<const char *, 2> sg_opNames{{sg_opName, sg_dumpOpName}};
 
 static Qnn_ApiVersion_t sg_sdkApiVersion = QNN_HTP_API_VERSION_INIT;
 static Qnn_Version_t sg_opsetVersion = {1, 0, 0};
@@ -63,7 +63,8 @@ static Qnn_ErrorHandle_t pkgValidateOpConfig(Qnn_OpConfig_t opConfig)
     if (std::string(sg_packageName) != opConfig.v1.packageName) {
         return QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
     }
-    if (std::string(sg_opName) != opConfig.v1.typeName) {
+    const std::string typeName(opConfig.v1.typeName);
+    if (typeName != sg_opName && typeName != sg_dumpOpName) {
         return QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
     }
     return QNN_SUCCESS;

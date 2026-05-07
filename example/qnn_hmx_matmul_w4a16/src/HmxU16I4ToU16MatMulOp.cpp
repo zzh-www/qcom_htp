@@ -1443,6 +1443,137 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
 #endif
 }
 
+static QHPI_Tensor_Signature_v1 dump_sig_inputs[] = {
+    {QHPI_QUInt16, QHPI_Layout_Crouton_16, QHPI_Storage_Indirect, QHPI_MemLoc_TCM_Only},
+};
+
+static QHPI_Tensor_Signature_v1 dump_sig_outputs[] = {
+    {QHPI_QUInt16, QHPI_Layout_Crouton_16, QHPI_Storage_Indirect, QHPI_MemLoc_TCM_Only},
+};
+
+static float hmx_w4a16_tensor_dump_cost_function(uint32_t, const QHPI_Tensor *const *)
+{
+    return 1.0f;
+}
+
+static QHPI_Shape hmx_w4a16_tensor_dump_shape_required(const QHPI_Op *)
+{
+    QHPI_Shape req = {0};
+    req.rank = 4;
+    req.dims[0] = 1;
+    req.dims[1] = 1;
+    req.dims[2] = 32;
+    req.dims[3] = 32;
+    return req;
+}
+
+static QHPI_Shape hmx_w4a16_tensor_dump_shape_legalized(
+    const QHPI_Op *,
+    const QHPI_Shape *proposed)
+{
+    QHPI_Shape s = *proposed;
+    if (s.rank >= 4) {
+        if (s.dims[1] < 1) s.dims[1] = 1;
+        if (s.dims[2] < 32) s.dims[2] = 32;
+        if (s.dims[3] < 32) s.dims[3] = 32;
+        if (s.dims[3] % 32) s.dims[3] = ((s.dims[3] + 31) / 32) * 32;
+    }
+    return s;
+}
+
+static uint32_t hmx_w4a16_tensor_dump_kernel(
+    QHPI_RuntimeHandle *,
+    uint32_t num_outputs,
+    QHPI_Tensor **outputs,
+    uint32_t num_inputs,
+    const QHPI_Tensor *const *inputs)
+{
+#if !defined(__hexagon__) || defined(SCALAR_ONLY)
+    (void)num_outputs;
+    (void)outputs;
+    (void)num_inputs;
+    (void)inputs;
+    return QHPI_Success;
+#else
+    auto float_bits = [](float value) -> uint32_t {
+        uint32_t bits = 0;
+        std::memcpy(&bits, &value, sizeof(bits));
+        return bits;
+    };
+    if (!outputs || !outputs[0] || !inputs || !inputs[0] ||
+        num_outputs < 1 || num_inputs < 1) {
+        return QHPI_Success;
+    }
+    void **out_blocks = qhpi_tensor_block_table(outputs[0]);
+    if (!out_blocks || !out_blocks[0]) return QHPI_Success;
+    const uint32_t out_block_count = qhpi_tensor_block_table_length(outputs[0]);
+    for (uint32_t block = 0; block < 4 && block < out_block_count; ++block) {
+        if (!out_blocks[block]) continue;
+        uint8_t *dst = reinterpret_cast<uint8_t *>(out_blocks[block]);
+        for (uint32_t i = 0; i < 2048; ++i) dst[i] = 0;
+    }
+
+    auto store_u16_lane = [&](uint32_t global_cell, uint16_t value) {
+        const uint32_t block = global_cell / 32u;
+        const uint32_t lane = global_cell % 32u;
+        if (block >= out_block_count || !out_blocks[block]) return;
+        uint8_t *base = reinterpret_cast<uint8_t *>(out_blocks[block]);
+        const uint32_t offset = lane * 4u;
+        base[offset + 0] = static_cast<uint8_t>(value & 0xffu);
+        base[offset + 1] = static_cast<uint8_t>((value >> 8) & 0xffu);
+        base[offset + 2] = 0;
+        base[offset + 3] = 0;
+    };
+    auto store_dump_word = [&](uint32_t word, uint32_t value) {
+        store_u16_lane(word * 2u, static_cast<uint16_t>(value & 0xffffu));
+        store_u16_lane(word * 2u + 1u, static_cast<uint16_t>((value >> 16) & 0xffffu));
+    };
+    auto store_shape4 = [&](uint32_t word, QHPI_Shape shape) {
+        store_dump_word(word, shape.rank);
+        for (uint32_t i = 0; i < 4; ++i) {
+            store_dump_word(word + 1u + i, i < shape.rank ? shape.dims[i] : 0);
+        }
+    };
+
+    const QHPI_Tensor *input = inputs[0];
+    const QHPI_Quant_Parameters q = qhpi_tensor_quant_parameters(input);
+    void **in_blocks = qhpi_tensor_block_table(input);
+    void *raw_data = qhpi_tensor_raw_data(input);
+    const uint32_t input_block_count = qhpi_tensor_block_table_length(input);
+
+    store_dump_word(0, 0x48385444u); /* H8TD */
+    store_dump_word(1, 1u);
+    store_dump_word(2, reinterpret_cast<uintptr_t>(input));
+    store_dump_word(3, reinterpret_cast<uintptr_t>(outputs[0]));
+    store_dump_word(4, reinterpret_cast<uintptr_t>(raw_data));
+    store_dump_word(5, reinterpret_cast<uintptr_t>(in_blocks));
+    store_dump_word(6, input_block_count);
+    store_dump_word(7, qhpi_tensor_type(input));
+    store_dump_word(8, qhpi_tensor_layout(input));
+    store_dump_word(9, qhpi_tensor_placement(input));
+    store_dump_word(10, static_cast<uint32_t>(q.zero_offset));
+    store_dump_word(11, float_bits(q.stepsize));
+    store_shape4(12, qhpi_tensor_shape(input));
+    store_shape4(17, qhpi_tensor_padded_shape(input));
+    store_shape4(22, qhpi_tensor_block_shape(input));
+    store_shape4(27, qhpi_tensor_padding(input));
+    for (uint32_t i = 0; i < 16; ++i) {
+        uint32_t value = 0;
+        if (in_blocks && i < input_block_count) {
+            value = static_cast<uint32_t>(
+                reinterpret_cast<uintptr_t>(in_blocks[i]));
+        }
+        store_dump_word(32u + i, value);
+    }
+    const uint32_t *raw_words = reinterpret_cast<const uint32_t *>(input);
+    for (uint32_t i = 0; i < 15; ++i) {
+        store_dump_word(48u + i, raw_words[i]);
+    }
+    store_dump_word(63u, reinterpret_cast<uintptr_t>(outputs[0]));
+    return QHPI_Success;
+#endif
+}
+
 static QHPI_Tensor_Signature_v1 sig_inputs[] = {
     {QHPI_Int32,            QHPI_Layout_Flat4,      QHPI_Storage_Direct,   QHPI_MemLoc_TCM_Only},
 #if defined(HMX_W4A16_QHPI_SIGNED_WEIGHT)
@@ -1532,6 +1663,25 @@ static QHPI_Kernel_v1 sg_kernels[] = {
     },
 };
 
+static QHPI_Kernel_v1 sg_dump_kernels[] = {
+    {
+        THIS_PKG_NAME_STR "::hmx_w4a16_tensor_dump_kernel",
+        hmx_w4a16_tensor_dump_kernel,
+        QHPI_RESOURCE_HMX,
+        false,
+        false,
+        false, false,
+        1, dump_sig_inputs,
+        1, dump_sig_outputs,
+        hmx_w4a16_tensor_dump_cost_function,
+        0,
+        0,
+        nullptr,
+        nullptr,
+        nullptr,
+    },
+};
+
 static QHPI_OpInfo_v1 sg_ops[] = {
     {
         THIS_PKG_NAME_STR "::HmxU16I4ToU16MatMul",
@@ -1539,6 +1689,16 @@ static QHPI_OpInfo_v1 sg_ops[] = {
         nullptr,
         hmx_w4a16_shape_required,
         hmx_w4a16_shape_legalized,
+        0,
+        nullptr,
+        nullptr,
+    },
+    {
+        THIS_PKG_NAME_STR "::HmxW4A16TensorDump",
+        1, sg_dump_kernels,
+        nullptr,
+        hmx_w4a16_tensor_dump_shape_required,
+        hmx_w4a16_tensor_dump_shape_legalized,
         0,
         nullptr,
         nullptr,
