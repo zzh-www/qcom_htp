@@ -186,6 +186,10 @@ Dead ends already checked:
   lowers static HMX input read accounting from `169984` to `167936`, but
   worsens correctness to `3846/65536`; artifact:
   `example/qnn_matmul_profile/output_codex_w4a16_control_i32_biascompact_256/`.
+- A large-table `y_stride=512` probe with `n_act_pairs=8` and
+  `out_table_stride=8` fails graph execution before a valid optrace is emitted.
+  Artifact:
+  `example/qnn_matmul_profile/output_codex_w4a16_control_i32_ystride512_tablegap_256/`.
 
 ## Code State
 
