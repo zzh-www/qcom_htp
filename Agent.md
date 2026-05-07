@@ -6,6 +6,7 @@ Start here: [Agent/README.md](Agent/README.md).
 
 Rules:
 - Keep this file short.
-- Put current status, handoffs, findings, and project-specific rules in `Agent/README.md`.
+- Keep `Agent/README.md` as a short link-oriented entrypoint.
+- Put current status, handoffs, findings, and project-specific rules in linked documents under `Agent/`.
 - Do not add new agent docs under repo root, `docs/`, or ad-hoc folders.
 - Keep non-Markdown reverse-engineering evidence under `Agent/qnn_re/`.

@@ -106,18 +106,13 @@ $QNN_SDK_ROOT/bin/x86_64-linux-clang/qnn-profile-viewer \
     --input_log device_out/qnn-profiling-data_0.log \
     > device_out/profile.txt 2>&1
 
-echo "=== decode chrometrace (optrace + schematic) ==="
-cat > device_out/_optrace_config.json <<'EOF'
-{"enable_input_output_flow_events": false, "enable_sequencer_flow_events": false,
- "htp_json": true, "runtrace": true, "memory_info": true}
-EOF
-LD_LIBRARY_PATH=$QNN_SDK_ROOT/lib/x86_64-linux-clang \
-$QNN_SDK_ROOT/bin/x86_64-linux-clang/qnn-profile-viewer \
-    --config device_out/_optrace_config.json \
-    --reader $QNN_SDK_ROOT/lib/x86_64-linux-clang/libQnnHtpOptraceProfilingReader.so \
-    --input_log device_out/qnn-profiling-data_0.log \
-    --schematic "${SCHEMATIC}" \
-    --output device_out/chrometrace.json > device_out/_optrace_run.log 2>&1
+if [ "${DECODE_OPTRACE:-1}" = "1" ]; then
+    echo "=== decode optrace artifacts ==="
+    python "$ROOT_DIR/scripts/decode_qnn_optrace.py" "$OUT_DIR" || {
+        [ "${STRICT_OPTRACE:-0}" = "1" ] && exit 1
+        echo "  [warn] optrace decode failed; raw log kept in $OUT_DIR/device_out" >&2
+    }
+fi
 
 echo "=== iter 3 (steady) per-MatMul cyc ==="
 awk '/Number of HVX threads used : 4  count/{n++} n==3' device_out/profile.txt | grep -E "MatMul_|Accelerator \(execute\) time \(cycles\)|Accelerator \(execute\) time :|Input OpId|Output OpId" | head -20

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Generate, convert, ctxgen, and optionally run the custom u8/i8 HMX MatMul
+# Generate, convert, ctxgen, and optionally run the custom w4a8 HMX MatMul
 # chain.  Set SKIP_DEVICE=1 to stop after context-binary generation.
 
 set -euo pipefail
@@ -23,15 +23,15 @@ K="${K:-256}"
 N="${N:-256}"
 CHAIN="${CHAIN:-8}"
 MODE="${MODE:-chain}"
-OUT_DIR="${OUT_DIR:-$SCRIPT_DIR/out/u8i8_${MODE}_${M}}"
+OUT_DIR="${OUT_DIR:-$SCRIPT_DIR/out/w4a8_${MODE}_${M}}"
 SKIP_DEVICE="${SKIP_DEVICE:-0}"
 
 mkdir -p "$OUT_DIR"
 cd "$SCRIPT_DIR"
 
-X86_PKG="$EXAMPLE_DIR/build/x86_64-linux-clang/libQnnHmxMatMulU8I8.so"
-PKG_HTP="$EXAMPLE_DIR/build/hexagon-v75/libQnnHmxMatMulU8I8_htp.so"
-PKG_CPU="$EXAMPLE_DIR/build/aarch64/libQnnHmxMatMulU8I8_cpu.so"
+X86_PKG="$EXAMPLE_DIR/build/x86_64-linux-clang/libQnnHmxMatMulW4A8.so"
+PKG_HTP="$EXAMPLE_DIR/build/hexagon-v75/libQnnHmxMatMulW4A8_htp.so"
+PKG_CPU="$EXAMPLE_DIR/build/aarch64/libQnnHmxMatMulW4A8_cpu.so"
 CPL="$SCRIPT_DIR/converter/build/libConverterOpPackage.so"
 
 for f in "$X86_PKG" "$PKG_HTP" "$PKG_CPU"; do
@@ -41,11 +41,15 @@ for f in "$X86_PKG" "$PKG_HTP" "$PKG_CPU"; do
     fi
 done
 
-echo "=== [1/4] generate ONNX: HmxU8I8ToU8MatMul x $CHAIN ($MODE, ${M}x${K}x${N}) ==="
-python gen_u8i8_chain.py \
+echo "=== [1/4] generate ONNX: HmxU8I4ToU8MatMul x $CHAIN ($MODE, ${M}x${K}x${N}) ==="
+python gen_w4a8_chain.py \
     --chain "$CHAIN" --mode "$MODE" \
     --M "$M" --K "$K" --N "$N" \
-    -o "$OUT_DIR/u8i8.onnx"
+    --bias-scale "${BIAS_SCALE:-512.0}" \
+    --w4-pack-order "${W4_PACK_ORDER:-lohi}" \
+    --w4-nibble-encoding "${W4_NIBBLE_ENCODING:-twos}" \
+    ${GEN_EXTRA_ARGS:-} \
+    -o "$OUT_DIR/w4a8.onnx"
 
 echo "=== [2/4] build converter op package ==="
 mkdir -p "$SCRIPT_DIR/converter/build"
@@ -56,7 +60,7 @@ mkdir -p "$SCRIPT_DIR/converter/build"
 echo "  -> $CPL"
 
 LAYOUT_FLAGS=()
-if [ "$MODE" = "chain" ]; then
+if [ "$MODE" = "chain" ] || [ "$MODE" = "direct" ] || [ "$MODE" = "direct_flat" ]; then
     LAYOUT_FLAGS+=(--source_model_input_layout act_raw NONTRIVIAL)
     LAYOUT_FLAGS+=(--desired_input_layout act_raw NONTRIVIAL)
     LAYOUT_FLAGS+=(--source_model_output_layout out NONTRIVIAL)
@@ -75,21 +79,21 @@ fi
 
 echo "=== [3/4] qairt-converter ==="
 "$QNN_SDK_ROOT/bin/x86_64-linux-clang/qairt-converter" \
-    -i "$OUT_DIR/u8i8.onnx" \
-    --op_package_config QnnHmxMatMulU8I8Package.xml \
+    -i "$OUT_DIR/w4a8.onnx" \
+    --op_package_config QnnHmxMatMulW4A8Package.xml \
     --converter_op_package_lib "$CPL" \
     --quantization_overrides "$OUT_DIR/quant_overrides.json" \
     "${LAYOUT_FLAGS[@]}" \
-    -o "$OUT_DIR/u8i8.dlc" \
+    -o "$OUT_DIR/w4a8.dlc" \
     2>&1 | tee "$OUT_DIR/convert.log" | tail -5
 
 echo "=== [4/4] qnn-context-binary-generator ==="
 rm -rf "$OUT_DIR/ctx"
 "$QNN_SDK_ROOT/bin/x86_64-linux-clang/qnn-context-binary-generator" \
     --backend "$QNN_SDK_ROOT/lib/x86_64-linux-clang/libQnnHtp.so" \
-    --dlc_path "$OUT_DIR/u8i8.dlc" \
-    --op_packages "$X86_PKG:QnnHmxMatMulU8I8InterfaceProvider" \
-    --binary_file u8i8_ctx \
+    --dlc_path "$OUT_DIR/w4a8.dlc" \
+    --op_packages "$X86_PKG:QnnHmxMatMulW4A8InterfaceProvider" \
+    --binary_file w4a8_ctx \
     --output_dir "$OUT_DIR/ctx" \
     --config_file htp_config.json \
     --profiling_level detailed \
@@ -97,13 +101,13 @@ rm -rf "$OUT_DIR/ctx"
     --save_backend_op_mapping \
     2>&1 | tee "$OUT_DIR/ctxgen.log" | tail -5
 
-if [ -f "$SCRIPT_DIR/u8i8_schematic.bin" ]; then
-    mv "$SCRIPT_DIR/u8i8_schematic.bin" "$OUT_DIR/ctx/u8i8_schematic.bin"
+if [ -f "$SCRIPT_DIR/w4a8_schematic.bin" ]; then
+    mv "$SCRIPT_DIR/w4a8_schematic.bin" "$OUT_DIR/ctx/w4a8_schematic.bin"
 fi
 
-MAPPING_JSON="$OUT_DIR/ctx/u8i8_ctx_bottom_mapping.json"
+MAPPING_JSON="$OUT_DIR/ctx/w4a8_ctx_bottom_mapping.json"
 if [ ! -f "$MAPPING_JSON" ]; then
-    MAPPING_JSON="$OUT_DIR/ctx/u8i8_bottom_mapping.json"
+    MAPPING_JSON="$OUT_DIR/ctx/w4a8_bottom_mapping.json"
 fi
 python3 - "$MAPPING_JSON" <<'PY' || true
 import json
@@ -121,31 +125,31 @@ if [ "$SKIP_DEVICE" = "1" ]; then
 fi
 
 echo "=== device run on $DEVICE ==="
-REMOTE="qnn_run/custom_u8i8"
+REMOTE="qnn_run/custom_w4a8"
 ssh "$DEVICE" "mkdir -p $REMOTE/runtime_inputs_u8"
-ssh "$DEVICE" "cat > $REMOTE/u8i8_ctx.bin" < "$OUT_DIR/ctx/u8i8_ctx.bin"
+ssh "$DEVICE" "cat > $REMOTE/w4a8_ctx.bin" < "$OUT_DIR/ctx/w4a8_ctx.bin"
 ssh "$DEVICE" "cat > $REMOTE/htp_config.json" < htp_config.json
 ssh "$DEVICE" "cat > $REMOTE/htp_backend_ext.json" < htp_backend_ext.json
-ssh "$DEVICE" "cat > qnn_run/libQnnHmxMatMulU8I8_htp.so" < "$PKG_HTP"
-ssh "$DEVICE" "cat > qnn_run/libQnnHmxMatMulU8I8_cpu.so" < "$PKG_CPU"
+ssh "$DEVICE" "cat > qnn_run/libQnnHmxMatMulW4A8_htp.so" < "$PKG_HTP"
+ssh "$DEVICE" "cat > qnn_run/libQnnHmxMatMulW4A8_cpu.so" < "$PKG_CPU"
 
-for f in runtime_inputs_u8/act_u8i8*.raw; do
+for f in "$OUT_DIR"/runtime_inputs_u8/act_w4a8*.raw; do
     [ -f "$f" ] || continue
     ssh "$DEVICE" "cat > $REMOTE/runtime_inputs_u8/$(basename "$f")" < "$f"
 done
 
-if [ "$MODE" = "chain" ]; then
-    echo "act_raw:=runtime_inputs_u8/act_u8i8.raw" > "$OUT_DIR/input_list.txt"
+if [ "$MODE" = "chain" ] || [ "$MODE" = "direct" ] || [ "$MODE" = "direct_flat" ]; then
+    echo "act_raw:=runtime_inputs_u8/act_w4a8.raw" > "$OUT_DIR/input_list.txt"
 else
-    line="act_raw:=runtime_inputs_u8/act_u8i8.raw"
+    line="act_raw:=runtime_inputs_u8/act_w4a8.raw"
     for i in $(seq 1 $((CHAIN - 1))); do
-        line="$line act_raw_${i}:=runtime_inputs_u8/act_u8i8_${i}.raw"
+        line="$line act_raw_${i}:=runtime_inputs_u8/act_w4a8_${i}.raw"
     done
     echo "$line" > "$OUT_DIR/input_list.txt"
 fi
 ssh "$DEVICE" "cat > $REMOTE/input_list.txt" < "$OUT_DIR/input_list.txt"
 RUN_STATUS=0
-ssh "$DEVICE" "cd $REMOTE && rm -rf out && LD_LIBRARY_PATH=../:.:/vendor/lib64 ADSP_LIBRARY_PATH=../ ../qnn-net-run --backend ../libQnnHtp.so --retrieve_context u8i8_ctx.bin --op_packages ../libQnnHmxMatMulU8I8_cpu.so:QnnHmxMatMulU8I8InterfaceProvider:CPU,../libQnnHmxMatMulU8I8_htp.so:QnnHmxMatMulU8I8InterfaceProvider:HTP --input_list input_list.txt --profiling_level detailed --profiling_option optrace --output_dir out --config_file htp_config.json --use_native_input_files --num_inferences 3 --perf_profile burst 2>&1" \
+ssh "$DEVICE" "cd $REMOTE && rm -rf out && LD_LIBRARY_PATH=../:.:/vendor/lib64 ADSP_LIBRARY_PATH=../ ../qnn-net-run --backend ../libQnnHtp.so --retrieve_context w4a8_ctx.bin --op_packages ../libQnnHmxMatMulW4A8_cpu.so:QnnHmxMatMulW4A8InterfaceProvider:CPU,../libQnnHmxMatMulW4A8_htp.so:QnnHmxMatMulW4A8InterfaceProvider:HTP --input_list input_list.txt --profiling_level detailed --profiling_option optrace --output_dir out --config_file htp_config.json --use_native_input_files --num_inferences 3 --perf_profile burst 2>&1" \
     > "$OUT_DIR/run.log" 2>&1 || RUN_STATUS=$?
 
 tail -40 "$OUT_DIR/run.log"
@@ -171,16 +175,17 @@ import numpy as np
 out_dir = Path(sys.argv[1])
 shape = int(sys.argv[2])
 raw = out_dir / "device_out" / "out.raw"
-refs = list(out_dir.glob("*.out_ref_u8.npy"))
+refs = list(out_dir.glob("*.out_ref_u*.npy"))
 if not raw.exists() or not refs:
     print("  bit-exact: failed (missing output or reference)")
     raise SystemExit(2)
 out = np.fromfile(raw, dtype=np.float32).reshape(shape, shape)
 ref = np.load(refs[0])
-out_u8 = np.round(out).astype(np.uint8)
-ok = int((out_u8 == ref).sum())
-print(f"  bit-exact: {ok}/{out_u8.size}")
-if ok != out_u8.size:
+max_value = np.iinfo(ref.dtype).max
+out_q = np.clip(np.round(out), 0, max_value).astype(ref.dtype)
+ok = int((out_q == ref).sum())
+print(f"  bit-exact: {ok}/{out_q.size}")
+if ok != out_q.size:
     raise SystemExit(3)
 PY
 

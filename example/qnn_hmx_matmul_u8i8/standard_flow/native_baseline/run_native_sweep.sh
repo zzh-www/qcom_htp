@@ -78,17 +78,19 @@ for cmd in "${iter_cmds[@]}"; do
   ssh "$DEVICE" "cat $DEV_DIR/out/qnn-profiling-data_0.log" > device_out/qnn-profiling-data_0.log 2>/dev/null || true
   ssh "$DEVICE" "cat $DEV_DIR/out/qnn-profiling-data_2.log" > device_out/qnn-profiling-data_2.log 2>/dev/null || true
 
-  # chrometrace decode (host side; needs schematic.bin)
-  cat > device_out/optrace_config.json <<'EOF'
-{ "chrometrace_export": "chrometrace.json" }
-EOF
-  LD_LIBRARY_PATH=$QNN_SDK_ROOT/lib/x86_64-linux-clang \
-  $QNN_SDK_ROOT/bin/x86_64-linux-clang/qnn-profile-viewer \
-      --reader $QNN_SDK_ROOT/lib/x86_64-linux-clang/libQnnHtpOptraceProfilingReader.so \
-      --input_log device_out/qnn-profiling-data_2.log \
-      --schematic model_schematic.bin \
-      --config device_out/optrace_config.json \
-      --output device_out/optrace.txt 2>&1 | tail -5 || true
+  if [ "${DECODE_OPTRACE:-1}" = "1" ]; then
+    echo "  --- decode optrace artifacts ---"
+    SCHEMATIC="model_schematic.bin"
+    [ -f schematic.bin ] && SCHEMATIC="schematic.bin"
+    PROFILE_LOG="device_out/qnn-profiling-data_2.log"
+    [ -s "$PROFILE_LOG" ] || PROFILE_LOG="device_out/qnn-profiling-data_0.log"
+    python "$ROOT_DIR/scripts/decode_qnn_optrace.py" "$OUT_DIR" \
+        --profile-log "$OUT_DIR/$PROFILE_LOG" \
+        --schematic "$OUT_DIR/$SCHEMATIC" || {
+      [ "${STRICT_OPTRACE:-0}" = "1" ] && exit 1
+      echo "  [warn] optrace decode failed; raw log kept in $OUT_DIR/device_out" >&2
+    }
+  fi
 
   # Plain profile-viewer for wall µs / cycles
   LD_LIBRARY_PATH=$QNN_SDK_ROOT/lib/x86_64-linux-clang \
@@ -99,7 +101,7 @@ EOF
   echo "  --- ConvLayer event count (chrometrace) ---"
   python3 -c "
 import json,os
-for cand in ['device_out/chrometrace.json','chrometrace.json']:
+for cand in ['optrace/chrometrace.json','device_out/chrometrace.json','chrometrace.json']:
     if os.path.exists(cand):
         d=json.load(open(cand))
         evs = d if isinstance(d,list) else d.get('traceEvents',[])

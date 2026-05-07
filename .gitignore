@@ -16,6 +16,8 @@ docs/hexagon-tutorial/
 # qnn_matmul_profile sweep data (rebuildable)
 example/qnn_matmul_profile/sweep_data_*
 example/qnn_matmul_profile/bench_data_*
+example/qnn_matmul_profile/output_*/
+**/qnn_matmul_profile/output_*/
 
 # Standalone trace_for_review dump
 trace_for_review/

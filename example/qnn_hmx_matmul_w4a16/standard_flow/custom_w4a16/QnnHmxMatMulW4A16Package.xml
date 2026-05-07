@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OpDefCollection
+        PackageName="QnnHmxMatMulW4A16Package"
+        Domain="hmx"
+        Version="1.0">
+    <OpDefList>
+        <OpDef>
+            <Name>HmxU16I4ToU16MatMul</Name>
+            <Description>
+                <Content>QNN custom u16 activation x signed int4 weight byte-carrier to u16 MatMul/FC-as-Conv1d package. Activation is per-tensor; W4 weight supports per-channel and future LPBQ/per-group packing.</Content>
+            </Description>
+            <Input>
+                <Name>bias</Name>
+                <Mandatory>true</Mandatory>
+                <Datatype>QNN_DATATYPE_INT_32</Datatype>
+                <Datatype>QNN_DATATYPE_SFIXED_POINT_32</Datatype>
+                <Shape>
+                    <Rank>4D</Rank>
+                    <Layout>NONTRIVIAL</Layout>
+                    <Text>[1, N/32, 1, 64]</Text>
+                </Shape>
+            </Input>
+            <Input>
+                <Name>weight</Name>
+                <Mandatory>true</Mandatory>
+                <Datatype>QNN_DATATYPE_SFIXED_POINT_8</Datatype>
+                <Shape>
+                    <Rank>4D</Rank>
+                    <Layout>NONTRIVIAL</Layout>
+                    <Text>[1, 1, K, N/2]</Text>
+                </Shape>
+            </Input>
+            <Input>
+                <Name>activation</Name>
+                <Mandatory>true</Mandatory>
+                <Datatype>QNN_DATATYPE_UINT_16</Datatype>
+                <Datatype>QNN_DATATYPE_UFIXED_POINT_16</Datatype>
+                <Shape>
+                    <Rank>4D</Rank>
+                    <Layout>NONTRIVIAL</Layout>
+                    <Text>[1, M/32, 32, K]</Text>
+                </Shape>
+            </Input>
+            <Input>
+                <Name>scratch</Name>
+                <Mandatory>true</Mandatory>
+                <Datatype>QNN_DATATYPE_UINT_8</Datatype>
+                <Datatype>QNN_DATATYPE_UFIXED_POINT_8</Datatype>
+                <Shape>
+                    <Rank>4D</Rank>
+                    <Layout>NONTRIVIAL</Layout>
+                    <Text>[1, 1, 1, 2048]</Text>
+                </Shape>
+            </Input>
+            <Output>
+                <Name>output</Name>
+                <Mandatory>true</Mandatory>
+                <Datatype>QNN_DATATYPE_UINT_16</Datatype>
+                <Datatype>QNN_DATATYPE_UFIXED_POINT_16</Datatype>
+                <Shape>
+                    <Rank>4D</Rank>
+                    <Layout>NONTRIVIAL</Layout>
+                    <Text>[1, M/32, 32, N]</Text>
+                </Shape>
+            </Output>
+            <SupportedBackend>HTP</SupportedBackend>
+        </OpDef>
+    </OpDefList></OpDefCollection>
