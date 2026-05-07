@@ -107,6 +107,7 @@ Latest activation-layout probes:
 | `output_codex_w4a16_native_op_layout_probe_256/` | `4092/65536` | `29956` | `78824` |
 | `output_codex_w4a16_native_op_layout_biascompact_256/` | `3775/65536` | `30708` | `79507` |
 | `output_codex_w4a16_native_op_layout_native_sidecar_256/` | `3757/65536` | `29515` | `66969` |
+| `output_codex_w4a16_native_op_layout_native_sidecars_nobias_256/` | `1379/65536` | `30144` | `78471` |
 | `output_codex_w4a16_native_conv_input_u16_probe_256/` | `3784/65536` | `94236` | `139087` |
 
 Native performance reference from
@@ -136,6 +137,8 @@ Native W4A16 Conv evidence:
 - Native no-bias/control sidecar is `Int32` (`data_type=50`) with dims
   `[1,8,1,64]`; the observed control block bytes at `conv_ctx.bin+0xc400`
   repeat `00 80 00 80`.
+- The generator's `--bias-layout native_a16_nobias` emits the same 2048 bytes
+  as the native no-bias/control sidecar at `conv_ctx.bin+0xc400`.
 
 Custom W4A16 evidence:
 
@@ -244,6 +247,11 @@ Dead ends already checked:
   exactness to `3757/65536`, despite the faster `29515`-cycle main op;
   artifact:
   `example/qnn_matmul_profile/output_codex_w4a16_native_op_layout_native_sidecar_256/`.
+- Combining `OP_INPUT_LAYOUT=native`, `--w4-native-sidecar-raw`, and
+  `--bias-layout native_a16_nobias` aligns the known native activation shape,
+  prepared W4 sidecar bytes, and no-bias/control sidecar bytes, but still
+  reaches only `1379/65536` exact with a `30144`-cycle main op. Artifact:
+  `example/qnn_matmul_profile/output_codex_w4a16_native_op_layout_native_sidecars_nobias_256/`.
 - `OP_INPUT_LAYOUT=native_conv` with NCHW `uint16` input worsens exactness to
   `3784/65536` and keeps the main op in the `94k` class; artifact:
   `example/qnn_matmul_profile/output_codex_w4a16_native_conv_input_u16_probe_256/`.
