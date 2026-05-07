@@ -277,6 +277,17 @@ The confirmed remaining deltas are therefore:
    native derives several helper inputs from the same metadata that creates the
    descriptor fields.
 
+The boundary-aware analyzer makes this distinction explicit.  On existing
+artifacts:
+
+- `output_codex_w4a16_native_op_k4pack_256` is fast, but its activation,
+  output, bias, control, and weight carrier all mismatch native HNH boundary
+  metadata.
+- `output_codex_w4a16_k4pack_biascompact_256` reaches the native
+  activation/output/bias surface; its report now shows only the W4 carrier
+  (`QUInt8` versus native `SFixed8`) and the control tensor shape as graph
+  boundary mismatches.
+
 ## Alignment Consequences
 
 The custom path is not native-equivalent just because the HMX body is called or

@@ -144,6 +144,109 @@ def _load_optrace_summary(out_dir: Path) -> dict[str, Any] | None:
         return json.load(f)
 
 
+def _find_mapping_json(out_dir: Path) -> Path | None:
+    candidates = [
+        out_dir / "ctx" / "w4a16_ctx_bottom_mapping.json",
+        out_dir / "ctx" / "w4a16_bottom_mapping.json",
+        out_dir / "ctx" / "conv_ctx_bottom_mapping.json",
+        out_dir / "ctx" / "conv_bottom_mapping.json",
+    ]
+    candidates.extend(sorted((out_dir / "ctx").glob("*bottom_mapping.json")))
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
+
+
+def _tensor_desc(tensors: dict[str, Any], tensor_id: str) -> dict[str, Any]:
+    tensor = tensors.get(tensor_id, {})
+    return {
+        "tensor_id": tensor_id,
+        "id": tensor.get("id"),
+        "type": tensor.get("type"),
+        "data_type": tensor.get("data_type"),
+        "dims": tensor.get("dims"),
+    }
+
+
+def _select_boundary_node(nodes: dict[str, Any], kind: str) -> tuple[str, dict[str, Any]] | None:
+    if kind == "custom":
+        for name, node in nodes.items():
+            if "HmxU16I4ToU16MatMul" in str(node.get("type", "")):
+                return name, node
+    if kind == "native":
+        for name, node in nodes.items():
+            if node.get("type") == "q::ConvLayer_s1.opt":
+                return name, node
+    return None
+
+
+def _graph_boundary_summary(out_dir: Path, kind: str) -> dict[str, Any] | None:
+    mapping = _find_mapping_json(out_dir)
+    if mapping is None:
+        return None
+    with mapping.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+    graph = data.get("graph", {})
+    tensors = graph.get("tensors", {})
+    selected = _select_boundary_node(graph.get("nodes", {}), kind)
+    if selected is None:
+        return {
+            "mapping": str(mapping),
+            "kind": kind,
+            "found": False,
+        }
+    node_name, node = selected
+    if kind == "native":
+        input_roles = ["activation", "weight", "bias", "control"]
+    else:
+        input_roles = ["bias", "weight", "activation", "control"]
+    inputs = {}
+    for role, tensor_id in zip(input_roles, node.get("input_names", [])):
+        inputs[role] = _tensor_desc(tensors, tensor_id)
+    outputs = {}
+    for role, tensor_id in zip(["output"], node.get("output_names", [])):
+        outputs[role] = _tensor_desc(tensors, tensor_id)
+    return {
+        "mapping": str(mapping),
+        "kind": kind,
+        "found": True,
+        "node_name": node_name,
+        "node_type": node.get("type"),
+        "grouping": node.get("grouping"),
+        "inputs": inputs,
+        "outputs": outputs,
+        "scalar_params": node.get("scalar_params", {}),
+    }
+
+
+def _contract_mismatches(
+    custom: dict[str, Any] | None,
+    native: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if not custom or not native or not custom.get("found") or not native.get("found"):
+        return []
+    mismatches = []
+    for section, roles in (("inputs", ["activation", "weight", "bias", "control"]), ("outputs", ["output"])):
+        for role in roles:
+            c = custom.get(section, {}).get(role, {})
+            n = native.get(section, {}).get(role, {})
+            if c.get("data_type") != n.get("data_type") or c.get("dims") != n.get("dims"):
+                mismatches.append({
+                    "section": section,
+                    "role": role,
+                    "custom": {
+                        "data_type": c.get("data_type"),
+                        "dims": c.get("dims"),
+                    },
+                    "native": {
+                        "data_type": n.get("data_type"),
+                        "dims": n.get("dims"),
+                    },
+                })
+    return mismatches
+
+
 def _summarize_optrace(summary: dict[str, Any], main_substr: str) -> dict[str, Any]:
     events = summary.get("events", [])
     matched = [
@@ -186,6 +289,18 @@ def _default_native_out_dir(native_raw: Path | None) -> Path | None:
     if native_raw.parent.name == "device_out":
         return native_raw.parent.parent
     return None
+
+
+def _format_contract(boundary: dict[str, Any] | None) -> str | None:
+    if not boundary or not boundary.get("found"):
+        return None
+    parts = []
+    for section, roles in (("inputs", ["activation", "weight", "bias", "control"]), ("outputs", ["output"])):
+        for role in roles:
+            tensor = boundary.get(section, {}).get(role)
+            if tensor:
+                parts.append(f"{role}={tensor.get('data_type')}:{tensor.get('dims')}")
+    return " ".join(parts)
 
 
 def main() -> int:
@@ -252,6 +367,15 @@ def main() -> int:
     native_perf = _native_perf_summary(native_out_dir)
     if native_perf is not None:
         report["native_optrace"] = native_perf
+    custom_boundary = _graph_boundary_summary(out_dir, "custom")
+    if custom_boundary is not None:
+        report["custom_graph_boundary"] = custom_boundary
+    native_boundary = _graph_boundary_summary(native_out_dir, "native") if native_out_dir else None
+    if native_boundary is not None:
+        report["native_graph_boundary"] = native_boundary
+    contract_mismatches = _contract_mismatches(custom_boundary, native_boundary)
+    if contract_mismatches:
+        report["graph_boundary_mismatches"] = contract_mismatches
 
     json_path = analysis_dir / "w4a16_native_compare.json"
     txt_path = analysis_dir / "w4a16_native_compare.txt"
@@ -289,6 +413,20 @@ def main() -> int:
             f"conv1x1_qnn={native_perf.get('conv1x1_qnn_op_cycles', 0)} "
             f"timeline={native_perf.get('totals', {}).get('timeline_span_cycles', 0)}"
         )
+    custom_contract = _format_contract(report.get("custom_graph_boundary"))
+    if custom_contract:
+        lines.append(f"custom-boundary: {custom_contract}")
+    native_contract = _format_contract(report.get("native_graph_boundary"))
+    if native_contract:
+        lines.append(f"native-boundary: {native_contract}")
+    mismatches = report.get("graph_boundary_mismatches", [])
+    if mismatches:
+        mismatch_text = ", ".join(
+            f"{item['role']} custom={item['custom']['data_type']}:{item['custom']['dims']} "
+            f"native={item['native']['data_type']}:{item['native']['dims']}"
+            for item in mismatches
+        )
+        lines.append(f"boundary-mismatch: {mismatch_text}")
     if "error" in report:
         lines.append(f"error: {report['error']}")
     txt_path.write_text("\n".join(lines) + "\n", encoding="utf-8")

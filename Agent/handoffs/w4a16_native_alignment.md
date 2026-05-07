@@ -67,8 +67,11 @@ The runner also creates a normalized W4A16 comparison report under
 - `w4a16_native_compare.txt`
 
 The analysis report combines quantized output comparison, row4/N32 spatial
-coverage, saturation distribution, custom optrace cycles, and native optrace
-cycles.  This is the standard quick-read artifact for failed probes; the raw
+coverage, saturation distribution, custom optrace cycles, native optrace
+cycles, and the custom-versus-native graph-boundary tensor contract.  The text
+report includes `custom-boundary`, `native-boundary`, and `boundary-mismatch`
+lines so a failed probe records whether it even reached the native HNH tensor
+surface.  This is the standard quick-read artifact for failed probes; the raw
 optrace files remain the source of truth for timeline inspection.
 
 Descriptor dumps should also use the checked-in parser instead of one-off
@@ -683,12 +686,15 @@ enriched descriptor dump, not to keep sweeping one mask lane.
    for descriptor work.  The scalar fields now point back to QNN tensor metadata;
    the next unknown is whether custom can expose the same internal table/data
    pointers that native stores at `base+0x10` and `base+0x28`.
-2. Use the enriched `HMX_W4A16_DESC_DUMP` payload to compare QHPI block-table
+2. Use `scripts/analyze_w4a16_native_run.py` boundary mismatches to keep probes
+   honest.  A fast custom run with logical `[1,1,256,256]` activation/output is
+   not a native HNH-boundary match even if its optrace is shorter.
+3. Use the enriched `HMX_W4A16_DESC_DUMP` payload to compare QHPI block-table
    shape, pointer deltas, descriptor fields, and final mask words against the
    decoded native wrapper expectations.
-3. Investigate whether the custom converter path can expose a prepared
+4. Investigate whether the custom converter path can expose a prepared
    `SFixed8 [1,1,128,256]` W4 weight tensor to QHPI, or whether the prepared
    native sidecar must be imported through another static-tensor route.
-4. Do not repeat the activation-layout, output-permutation, pointer-offset,
+5. Do not repeat the activation-layout, output-permutation, pointer-offset,
    y-stride-only, native-K4 sidecar, `0x700` mask-family, first-control-word, or
    float-weight dtype probes unless new evidence changes the premise.
