@@ -253,6 +253,16 @@ surface exposed after native Conv/layout restore: UFixed16, quant zero
 final wrapper-state dump.  The remaining target is still the native `0x3ddc60`
 wrapper metadata/stack/mask/loop tuple.
 
+The new `OP_INPUT_LAYOUT=native_conv_surface` diagnostic tries to feed
+`HmxU16I4ToU16MatMul` directly with that post-Conv public surface
+(`UFixed16 [1,256,1,256]`).  Host conversion/ctxgen pass and the boundary gets
+native no-bias/control `Int32 [1,8,1,64]`, but device execution fails before a
+valid optrace or output.  Artifact:
+`example/qnn_matmul_profile/output_codex_w4a16_native_conv_surface_real_256/`.
+This rules out treating the post-Conv export/custom-op surface as the HNH
+compute surface; continue targeting the internal `ConvLayer_s1.opt`
+activation/output `[1,8,32,256]` wrapper state.
+
 The signed W4 carrier route is still blocked below quant-overrides.  Four
 host-only probes using an ONNX `INT8` initializer plus no weight encoding,
 8-bit offset `0`, 8-bit offset `-128`, and 4-bit offset `0` all lower the

@@ -205,6 +205,7 @@ Latest activation-layout probes:
 | `output_codex_w4a16_native_op_layout_native_sidecar_256/` | `3757/65536` | `29515` | `66969` |
 | `output_codex_w4a16_native_op_layout_native_sidecars_nobias_256/` | `1379/65536` | `30144` | `78471` |
 | `output_codex_w4a16_native_conv_input_u16_probe_256/` | `3784/65536` | `94236` | `139087` |
+| `output_codex_w4a16_native_conv_surface_real_256/` | graph execution fails | no valid optrace | n/a |
 
 Native/custom raw contract checks:
 
@@ -389,6 +390,16 @@ Custom W4A16 evidence:
   before HMX, and runtime input bytes are written in NCHW `uint16` order. Ctxgen
   folds this to the same `InputSlice + ForceFormat_Crouton` class; it does not
   improve alignment.
+- `OP_INPUT_LAYOUT=native_conv_surface` is a newer W4A16-only diagnostic that
+  feeds the custom op with the post-native-Conv QHPI surface shape observed by
+  `HmxW4A16TensorDump`: activation/output `UFixed16 [1,256,1,256]`. Host
+  conversion and ctxgen pass, and the custom boundary also gets native-shaped
+  no-bias/control sidecar `Int32 [1,8,1,64]`, but device execution fails before
+  a valid output or optrace is emitted. Artifact:
+  `example/qnn_matmul_profile/output_codex_w4a16_native_conv_surface_real_256/`.
+  Treat this as evidence that the post-Conv layout-restored QHPI surface is not
+  the HNH compute surface. The compute target remains the internal
+  `ConvLayer_s1.opt` wrapper state with activation/output `[1,8,32,256]`.
 - Runtime `HMX_W4A16_DESC_DUMP` without QHPI precompute shows the 256^3
   activation and output QHPI block-table lengths are both `64`, with dense
   native pointer tables expanded to `512` entries. Artifact:

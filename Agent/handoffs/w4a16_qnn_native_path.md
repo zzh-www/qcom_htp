@@ -377,6 +377,21 @@ Continue using the canonical native artifact's `optrace/summary.json` for
 performance acceptance.  Use this diagnostic artifact for native-path tensor
 evidence.
 
+Do not use the dumped post-Conv tensor surface as the custom HNH compute
+surface.  A follow-up diagnostic added `OP_INPUT_LAYOUT=native_conv_surface` to
+feed `HmxU16I4ToU16MatMul` with activation/output `UFixed16 [1,256,1,256]`,
+matching the tensor dump's public QHPI shape.  Host conversion and ctxgen pass,
+and the custom boundary receives native no-bias/control shape
+`Int32 [1,8,1,64]`, but device execution fails before a valid output or
+optrace:
+
+`example/qnn_matmul_profile/output_codex_w4a16_native_conv_surface_real_256/`
+
+That failure is a useful boundary result: the layout-restored QHPI tensor
+visible after native Conv is an export/custom-op surface, not the internal HNH
+descriptor surface consumed by `ConvLayer_s1.opt`.  Continue targeting the
+wrapper metadata and stack descriptors under `0x3ddc60`.
+
 ## Skel Execution Path
 
 Native `ConvLayer_s1.opt` eventually reaches the HNH HMX wrapper in
