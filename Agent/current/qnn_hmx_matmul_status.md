@@ -192,6 +192,11 @@ for future custom work: native starts from float Conv plus W4 quant overrides,
 ctxgen lowers weight to `SFixed8 [1,1,128,256]`, bias/control to
 `Int32 [1,8,1,64]`, activation/output to `UFixed16 [1,8,32,256]`, then
 `ConvLayer_s1.opt` enters the HNH wrapper/descriptor-builder/deep-body path.
+The 2026-05-07 helper decode adds that `set_hmx_params_convw4b1x1` with
+`arg1=0x70b` and final flags `0x20` ignores `arg2` for the observed default
+mask words, explaining the `HMX_W4A16_MASK_ARG2=128` no-op.  Do not continue
+single-lane mask sweeps before the native metadata tuple feeding the helper is
+understood.
 
 The signed W4 carrier route is still blocked below quant-overrides.  Four
 host-only probes using an ONNX `INT8` initializer plus no weight encoding,

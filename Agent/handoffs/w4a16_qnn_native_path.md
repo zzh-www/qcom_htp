@@ -9,6 +9,33 @@ Use this as the first reference before changing the custom
 `HmxU16I4ToU16MatMul` path.  The custom op should be aligned to this native
 path, not to an analytic formula.
 
+## Implementation Path At A Glance
+
+Native W4A16 is not a direct call from a high-level MatMul tensor into the HMX
+body.  The implementation path is:
+
+```text
+float ONNX Conv
+  + quant_overrides: A/Y A16, W 4-bit symmetric
+    -> converter graph-before
+       Convert(A) -> Transpose -> Conv2d -> Transpose -> Convert(Y)
+       W appears as CastInt4ToInt8 / UFixed8 at this stage
+    -> ctxgen HTP graph
+       weights_to_vtcm produces SFixed8 [1,1,128,256]
+       bias_to_vtcm produces Int32 [1,8,1,64]
+       ForceFormat_Crouton produces UFixed16 [1,8,32,256]
+    -> ConvLayer_s1.opt runtime event
+       QNN wrapper builds native descriptors and mask state
+    -> hmx_v73_convhnh1x1_stride1
+       mask bit 5 selects hmx_v73_convhnh1x1deep_stride1
+```
+
+That stage boundary matters.  The graph-before weight tensor is still an
+8-bit carrier with 4-bit quantization metadata; the signed packed HNH sidecar
+exists only after ctxgen's native Conv lowering.  A custom op that merely asks
+for `SFixed8` in XML/converter is not guaranteed to enter the same lowering
+path.
+
 ## Source Model
 
 The ONNX model is intentionally simple:
@@ -38,8 +65,10 @@ Transpose Y_0231
 Convert(Y UFixed16 -> float)
 ```
 
-The important point is that native Conv starts from float weights plus a 4-bit
-param encoding.  Ctxgen then owns the signed W4 carrier and sidecar lowering.
+In the graph-before JSON, the Conv weight path is still `UFixed8`
+(`data_type=1032`) with `[1,1,256,256]` logical dimensions.  The important
+point is that native Conv starts from float weights plus a 4-bit param encoding.
+Ctxgen then owns the signed W4 carrier and sidecar lowering.
 
 ## Lowered HTP Path
 
@@ -247,6 +276,44 @@ weight/activation metadata and wrapper flags, so custom constants such as one
 fixed final mask argument are at best probes.  A production match must recreate
 the metadata state that feeds the whole helper call.
 
+### W4 Mask Helper Decode
+
+The helper body at `0x289380` explains why some previous mask probes were
+structurally weak.
+
+For `arg1=0x70b`, the helper computes:
+
+```text
+extractu(arg1, width=6, offset=5) = 0x38
+mask[0x04/4] starts as 0x38 << 5 = 0x700
+mask[0x30/4] is the final flags argument
+```
+
+When `arg1` bit 3 is set, final flags bit `0x20` is set, and final flags bit
+`0x40` is clear, the helper takes the early branch that writes:
+
+```text
+mask words:
+[0]  = 0
+[1]  = 0x700
+[2]  = selector from coupled arg4/arg5 metadata
+[3]  = 0x77c
+[6]  = 0x3ff
+[12] = 0x20
+```
+
+In this branch `arg2` does not affect those words; both `arg2=128` and
+`arg2=256` produce the same default mask tuple
+`[0, 0x700, 0, 0x77c, 0, 0, 0x3ff, 0, 0, 0, 0, 0, 0x20, 0, 0, 0]` when the
+coupled metadata selectors are zero.  That matches the observed no-op result of
+the `HMX_W4A16_MASK_ARG2=128` probe.
+
+`arg4` and `arg5` are not independent lane toggles either.  They combine into
+the selector stored at mask word `[2]` through a shift chosen from the
+`arg1`-derived `0x38` class.  Therefore the useful target is not another
+single-lane sweep; it is the native metadata state that produces the whole
+helper argument tuple.
+
 ### Custom-Versus-Native Boundary
 
 The native HMX boundary for the 256 case is `ConvLayer_s1.opt` with:
@@ -258,6 +325,17 @@ bias        Int32    [1,8,1,64]
 control     Int32    [1]
 output      UFixed16 [1,8,32,256]
 ```
+
+The custom native-surface probe reaches most of this visible tensor shape, but
+not the full native route:
+
+| Boundary | Native Conv path | Current custom path |
+|---|---|---|
+| Graph-before weight | `UFixed8 [1,1,256,256]` after `CastInt4ToInt8`, then private ctxgen W4 lowering. | Custom initializer is already a packed sidecar; bottom mapping still records `UFixed8 [1,1,128,256]` despite XML/converter requesting `SFixed8`. |
+| Final HMX weight | `SFixed8 [1,1,128,256]`, produced by `weights_to_vtcm`. | Raw bytes can match native K4 sidecar, but carrier metadata remains custom `UFixed8` at graph boundary. |
+| Activation/output | QNN internal HNH Crouton table/data pointers. | Custom copies and expands public QHPI block tables. |
+| Bias/control sidecar | `Int32 [1,8,1,64]`, native no-bias bytes for this oracle. | `native_a16_nobias` reproduces raw bytes. |
+| Small control tensor | `Int32 [1]`. | Ctxgen maps current custom control as `[1,1,1,1]`; direct use is worse than local control. |
 
 The fastest custom `native_op` probes are not this boundary: their custom op
 input/output tensors are logical `[1,1,256,256]`, and QNN inserts a large
