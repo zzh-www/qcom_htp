@@ -166,6 +166,15 @@ cycles, but all remain semantic false paths (`505/65536`, `531/65536`, and
 `<out_dir>/analysis/w4a16_native_compare.{json,txt}` in addition to
 `<out_dir>/optrace/`.
 
+2026-05-08 native-field probes: on the closest native-surface flow
+(`native_nmajor_k4_lohi` plus `native_a16_nobias`), forcing descriptor
+`act/out +0x08` to `8` as a builder-formula hypothesis improves only to
+`1419/65536` exact with `94156` main-op cycles and preserves the half-written
+`32767` N32 signature.  Combining the same field hypothesis with
+`HMX_W4A16_INTERNAL_SPLIT_N128` fails graph execution before a valid optrace.
+Treat descriptor y-stride and the existing split diagnostic as insufficient
+without the full native wrapper record.
+
 2026-05-07 continuation: the canonical native prepared-W4 sidecar was corrected
 from the old interior `conv_ctx.bin+0xd000` note to the full 32768-byte region
 at `conv_ctx.bin+0xcc00`.  `W4_PACK_ORDER=native_nmajor_k4_lohi` now reproduces
@@ -277,8 +286,10 @@ visible HTP contract is known (`UFixed16 [1,8,32,256]`, `SFixed8
 runtime `ConvLayer_s1.opt` wrapper record: QNN tensor-object table pointers,
 metadata-derived descriptor fields, W4 mask-helper arguments, and the
 `r23/r24/r27` descriptor-advance tuple.  A direct patched-skel descriptor-dump
-attempt did not produce usable runtime evidence and should not be repeated
-without first proving the patched HTP library is loaded.  See
+attempt did not produce usable runtime evidence.  Even an isolated all-local
+backend/stub/skel rerun produced byte-identical canonical native output, so the
+patched entry was not active; do not repeat that route without first proving the
+patched HTP library is loaded.  See
 `Agent/handoffs/w4a16_qnn_native_path.md` before starting any new custom probe.
 
 The signed W4 carrier route is still blocked below quant-overrides.  Four

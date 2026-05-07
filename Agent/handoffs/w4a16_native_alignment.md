@@ -327,6 +327,8 @@ Latest native-shaped loop probes:
 | `output_codex_w4a16_tiled_desc32_native_w4sidecar_biascompact_256/` | tiled, `desc32`, native W4 sidecar, compact bias/control | `342/65536` | `14302` | `58010` |
 | `output_codex_w4a16_desc32_ystride256_table8_256/` | tiled, `desc32`, table storage stride `8`, descriptor y-stride `256` | `531/65536` | `13575` | `60255` |
 | `output_codex_w4a16_desc32_physical_ystride256_table8_256/` | tiled, `desc32`, physical-only tables, table storage stride `8`, descriptor y-stride `256` | `4092/65536` | `6504` | `54866` |
+| `output_codex_w4a16_native_field_ystride8_k4_nobias_native_surface_256/` | closest native-surface flow, native-K4 sidecar, native no-bias/control, descriptor `act/out +0x08 = 8` | `1419/65536` | `94156` | `138885` |
+| `output_codex_w4a16_native_field_ystride8_splitn128_k4_nobias_native_surface_256/` | same `+0x08 = 8` native-field probe plus `HMX_W4A16_INTERNAL_SPLIT_N128` | graph execution failure | n/a | n/a |
 
 `DESC_M_TILES_OVERRIDE=32` identifies the native fast loop class but is not a
 semantic fix.  Combining `desc32` with physical-only tables proves the hot loop
@@ -338,6 +340,15 @@ Conv HMX input/output tensors are `[1,8,32,256]`.
 Keeping table storage stride at `8` while forcing descriptor y-stride to `256`
 does not change either desc32 semantic class, so y-stride is not the missing
 field for this false path.
+
+The closest native-surface y-stride probe is also not a fix.  Forcing
+descriptor `act_desc+0x08` and `out_desc+0x08` to `8`, matching the table-stride
+interpretation of the static builder formula and the aligned W8A16 path, moves
+exactness only from `1014/65536` to `1419/65536`.  The output signature remains
+the same half-written class: `32767` appears 32768 times, all in N32 groups
+0..3.  Adding the existing `HMX_W4A16_INTERNAL_SPLIT_N128` diagnostic to that
+field hypothesis fails graph execution, so this does not reproduce the native
+wrapper descriptor-advance loop.
 
 ## Findings
 

@@ -763,6 +763,15 @@ native wrapper's full per-half metadata state: output table selection, weight
 carrier/offset, control pointer, mask-helper inputs, and the wrapper
 `r23/r24/r27` descriptor-advance loop together.
 
+A later native-field probe tested the static builder interpretation that
+descriptor `act_desc+0x08` and `out_desc+0x08` should be the table stride `8`
+rather than the current custom `256`.  On the closest native-surface artifact,
+that produces only `1419/65536` exact with `94156` custom main-op cycles, and
+the same half-written `32767` N32 signature remains.  Combining `+0x08 = 8`
+with `HMX_W4A16_INTERNAL_SPLIT_N128` fails graph execution before a valid
+optrace.  This closes descriptor y-stride as an isolated native-field fix; the
+native target remains the whole wrapper record, not a single scalar.
+
 ## Alignment Consequences
 
 The custom path is not native-equivalent just because the HMX body is called or
@@ -802,6 +811,11 @@ produce a usable native descriptor dump:
 - an isolated remote-directory run completed with output byte-identical to the
   canonical native run, indicating the patched skel was not loaded for that
   context;
+- a stricter isolated rerun with local `qnn-net-run`, local `libQnnHtp.so`,
+  local stub, local patched skel, `LD_LIBRARY_PATH=.:/vendor/lib64`, and
+  `ADSP_LIBRARY_PATH=.` also completed with output byte-identical to canonical
+  native (`Y.raw` SHA `4e5e02d4a958db331eeb59de59f99edd11d69a20c0d4c59cec24328aeaaa857a`)
+  and no descriptor-dump magic, so the patched entry was still not active;
 - a parent-directory replacement path failed during backend/device creation
   even after restoring the required backend extension configuration;
 - the original device skel was restored after the experiment.
