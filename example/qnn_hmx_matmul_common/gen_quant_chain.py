@@ -150,6 +150,22 @@ def _pack_w8_kmajor_split128(w_raw_kn: np.ndarray) -> np.ndarray:
     return np.concatenate(parts).astype(np.int8, copy=False)
 
 
+def _pack_w4_native_kpair_linear(nib: np.ndarray, order: str) -> np.ndarray:
+    """Pack W4 as QNN native Conv W4 sidecar shape [1, 1, K/2, N]."""
+    k, n = nib.shape
+    if k % 2:
+        raise ValueError("native W4 K-pair pack requires even K")
+    lo = nib[0::2, :]
+    hi = nib[1::2, :]
+    if order == "native_kpair_lohi":
+        packed = lo | (hi << 4)
+    elif order == "native_kpair_hilo":
+        packed = (lo << 4) | hi
+    else:
+        raise ValueError(f"unsupported native W4 K-pair order: {order}")
+    return packed.astype(np.uint8, copy=False)
+
+
 def _pack_native_a16_bias(family: Family, w_raw_kn: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Pack native A16 bias/control records for 32-column HMX tiles."""
     k, n = w_raw_kn.shape
@@ -187,6 +203,20 @@ def _weight_initializer(
     w8_carrier_dtype: str,
 ):
     if family.weight_bits == 4:
+        if w4_pack_order.startswith("native_kpair_") and family.name != "w4a16":
+            raise ValueError("native_kpair W4 pack order is currently decoded only for w4a16")
+        if w4_pack_order.startswith("native_kpair_"):
+            if w_raw_kn.shape[0] % 32 or w_raw_kn.shape[1] % 32:
+                raise ValueError("native W4 HMX pack requires K and N multiples of 32")
+            if w4_nibble_encoding == "biased":
+                nib = (w_raw_kn.astype(np.int32) + 8).astype(np.uint8) & 0x0F
+            else:
+                nib = (w_raw_kn.astype(np.int8) & 0x0F).astype(np.uint8)
+            packed = _pack_w4_native_kpair_linear(nib, w4_pack_order)
+            carrier = np.bitwise_xor(packed.reshape(-1), np.uint8(0x80))
+            arr = carrier.view(np.int8).reshape(1, 1, w_raw_kn.shape[0] // 2, w_raw_kn.shape[1])
+            return numpy_helper.from_array(arr, name="weight")
+
         # Native HTP stores W4 MatMul/FC weights as an int8 carrier with the N
         # dimension halved.  The VTCM tile is K-major over 32x64 logical tiles.
         # Within each tile, one byte holds output channels n and n+32 for the
@@ -753,7 +783,11 @@ def main(family_name: str) -> None:
     p.add_argument("--weight-limit", type=int, default=None)
     p.add_argument("--activation-mode", choices=["default", "zp", "k_impulse"], default="default")
     p.add_argument("--activation-k", type=int, default=0)
-    p.add_argument("--w4-pack-order", choices=["lohi", "hilo"], default="lohi")
+    p.add_argument(
+        "--w4-pack-order",
+        choices=["lohi", "hilo", "native_kpair_lohi", "native_kpair_hilo"],
+        default="lohi",
+    )
     p.add_argument("--w4-nibble-encoding", choices=["twos", "biased"], default="twos")
     p.add_argument("--w8-pack-order", choices=["raw", "kmajor", "kmajor_split128"], default="raw")
     p.add_argument("--w8-carrier-dtype", choices=["uint8", "int8"], default="uint8")

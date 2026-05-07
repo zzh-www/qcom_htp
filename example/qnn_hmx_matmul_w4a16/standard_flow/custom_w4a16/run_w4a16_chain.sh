@@ -47,7 +47,7 @@ python gen_w4a16_chain.py \
     --chain "$CHAIN" --mode "$MODE" \
     --M "$M" --K "$K" --N "$N" \
     --bias-scale "${BIAS_SCALE:-512.0}" \
-    --w4-pack-order "${W4_PACK_ORDER:-lohi}" \
+    --w4-pack-order "${W4_PACK_ORDER:-native_kpair_lohi}" \
     --w4-nibble-encoding "${W4_NIBBLE_ENCODING:-twos}" \
     ${GEN_EXTRA_ARGS:-} \
     -o "$OUT_DIR/w4a16.onnx"
@@ -202,16 +202,20 @@ if overrides.exists():
         scale = float(enc.get("scale", scale))
         offset = float(enc.get("offset", offset))
 
-def load_quantized_output(path):
+def load_quantized_output(path, transpose_2d=False):
     raw_size = path.stat().st_size
     q_bytes = ref.size * ref.dtype.itemsize
     f_bytes = ref.size * np.dtype(np.float32).itemsize
+    shape = ref.T.shape if transpose_2d else ref.shape
     if raw_size == q_bytes:
-        return np.fromfile(path, dtype=ref.dtype).reshape(ref.shape)
+        out = np.fromfile(path, dtype=ref.dtype).reshape(shape)
+        return out.T.copy() if transpose_2d else out
     if raw_size != f_bytes:
         print(f"  bit-exact: failed ({path} has unexpected size {raw_size})")
         raise SystemExit(2)
-    out = np.fromfile(path, dtype=np.float32).reshape(ref.shape)
+    out = np.fromfile(path, dtype=np.float32).reshape(shape)
+    if transpose_2d:
+        out = out.T
     if scale == 0.0:
         print("  bit-exact: failed (zero output scale)")
         raise SystemExit(2)
@@ -225,7 +229,8 @@ if native_ref:
     if not native_path.exists():
         print(f"  native-exact: failed (missing {native_path})")
         raise SystemExit(2)
-    native_ref_q = load_quantized_output(native_path)
+    native_transpose = os.environ.get("VERIFY_NATIVE_TRANSPOSE", "0") == "1"
+    native_ref_q = load_quantized_output(native_path, native_transpose)
     native_ok = int((out_q == native_ref_q).sum())
     print(f"  native-exact: {native_ok}/{out_q.size}")
     if native_ok != out_q.size:

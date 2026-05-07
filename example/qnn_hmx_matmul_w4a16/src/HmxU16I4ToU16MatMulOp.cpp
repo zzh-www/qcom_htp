@@ -59,6 +59,9 @@
 #ifndef HMX_W4A16_EXTRA_PARAM2
 #define HMX_W4A16_EXTRA_PARAM2 524u
 #endif
+#ifndef HMX_W4A16_USE_ROW4_TABLES
+#define HMX_W4A16_USE_ROW4_TABLES 1
+#endif
 
 /*
  * These descriptor structs are the native skel ABI, not a new C++ API.
@@ -179,8 +182,20 @@ static bool hmx_w4a16_tile_counts_from_shapes(
     if (weight) {
         const QHPI_Shape w = qhpi_tensor_shape(weight);
         if (w.rank == 4) {
-            if (K == 0) K = w.dims[2];
-            if (N == 0) N = w.dims[3] * 2u;
+            if (K == 0) {
+                if (w.dims[2] * 2u == N && N != 0) {
+                    K = w.dims[2] * 2u;
+                } else {
+                    K = w.dims[2];
+                }
+            }
+            if (N == 0) {
+                if (K != 0 && w.dims[2] * 2u == K) {
+                    N = w.dims[3];
+                } else {
+                    N = w.dims[3] * 2u;
+                }
+            }
         }
     }
     if (M == 0 || K == 0 || N == 0) {
@@ -443,14 +458,28 @@ static uint32_t hmx_w4a16_precompute(
     init_mask_desc(g_hmx_w4a16_mask_buf, K_t * 32u);
 
     const uint32_t mt_per_block = 2;
+#if HMX_W4A16_USE_ROW4_TABLES
+    const uint32_t mt_groups = hmx_w4a16_crouton_row4_groups(M_t);
+    const uint32_t act_table_stride = hmx_w4a16_act_table_storage_stride(K_t);
+    const uint32_t out_table_stride = hmx_w4a16_out_table_storage_stride(N_t);
+    const uint32_t act_entries =
+        hmx_w4a16_required_table_entries(mt_groups, K_t, act_table_stride);
+    const uint32_t out_entries =
+        hmx_w4a16_required_table_entries(mt_groups, N_t, out_table_stride);
+#else
     const uint32_t mt_groups = M_t >> 1;
+    const uint32_t act_table_stride = K_t;
+    const uint32_t out_table_stride = N_t;
     const uint32_t act_entries = mt_groups * K_t;
     const uint32_t out_entries = mt_groups * N_t;
+#endif
     if (mt_groups == 0 ||
+        act_entries == 0 ||
+        out_entries == 0 ||
         act_entries > kHmxW4A16MaxCopiedTableEntries ||
         out_entries > kHmxW4A16MaxCopiedTableEntries ||
-        act_block_entries < act_entries ||
-        out_block_entries < out_entries) {
+        act_block_entries < (M_t >> 1) * K_t ||
+        out_block_entries < (M_t >> 1) * N_t) {
         return QHPI_Success;
     }
 
@@ -462,8 +491,23 @@ static uint32_t hmx_w4a16_precompute(
     pc->out_first_block = reinterpret_cast<uint8_t *>(out_blocks[0]);
     pc->act_qhpi_table = act_src;
     pc->out_qhpi_table = out_src;
+#if HMX_W4A16_USE_ROW4_TABLES
+    for (uint32_t rg = 0; rg < mt_groups; ++rg) {
+        for (uint32_t kt = 0; kt < K_t; ++kt) {
+            pc->act_table_copy[rg * act_table_stride + kt] =
+                hmx_w4a16_crouton_logical_or_compact_ptr(
+                    act_src, act_block_entries, mt_groups, rg, kt, K_t);
+        }
+        for (uint32_t nt = 0; nt < N_t; ++nt) {
+            pc->out_table_copy[rg * out_table_stride + nt] =
+                hmx_w4a16_crouton_logical_or_compact_ptr(
+                    out_src, out_block_entries, mt_groups, rg, nt, N_t);
+        }
+    }
+#else
     for (uint32_t i = 0; i < act_entries; ++i) pc->act_table_copy[i] = act_src[i];
     for (uint32_t i = 0; i < out_entries; ++i) pc->out_table_copy[i] = out_src[i];
+#endif
     pc->act_qhpi_table = pc->act_table_copy;
     pc->out_qhpi_table = pc->out_table_copy;
     pc->S = M_t * 32u;
@@ -516,11 +560,16 @@ static uint32_t hmx_w4a16_to_u16_matmul_precomputed_kernel(
         HMX_W4A16_EXTRA_PARAM2,
     };
     const hmx_conv_mask_desc_t *mask_desc = get_precomputed_mask_desc();
-    const uint32_t desc_m_tiles = pc->M_t * 4u;
+    const uint32_t desc_m_tiles =
+#if HMX_W4A16_USE_ROW4_TABLES
+        hmx_w4a16_desc_m_tiles(pc->M_t, pc->mt_groups);
+#else
+        pc->M_t * 4u;
+#endif
 
     hmx_conv_out_desc_t out_desc_local __attribute__((aligned(64))) = {
         out_tbl_ptr,
-        pc->N_t,
+        hmx_w4a16_out_table_storage_stride(pc->N_t),
         desc_m_tiles,
         desc_m_tiles,
         8,
@@ -528,7 +577,7 @@ static uint32_t hmx_w4a16_to_u16_matmul_precomputed_kernel(
     };
     hmx_conv_act_desc_t act_desc_local __attribute__((aligned(64))) = {
         act_tbl_ptr,
-        pc->K_t,
+        hmx_w4a16_act_table_storage_stride(pc->K_t),
         desc_m_tiles,
     };
     const hmx_conv_out_desc_t *out_desc = &out_desc_local;
@@ -746,11 +795,25 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
     }
 
     const uint32_t mt_per_block = 2;
+#if HMX_W4A16_USE_ROW4_TABLES
+    const uint32_t mt_groups = hmx_w4a16_crouton_row4_groups(M_t);
+    const uint32_t act_table_stride = hmx_w4a16_act_table_storage_stride(K_t);
+    const uint32_t out_table_stride = hmx_w4a16_out_table_storage_stride(N_t);
+    const uint32_t act_entries =
+        hmx_w4a16_required_table_entries(mt_groups, K_t, act_table_stride);
+    const uint32_t out_entries =
+        hmx_w4a16_required_table_entries(mt_groups, N_t, out_table_stride);
+#else
     const uint32_t mt_groups = M_t >> 1;
+    const uint32_t act_table_stride = K_t;
+    const uint32_t out_table_stride = N_t;
     const uint32_t act_entries = mt_groups * K_t;
     const uint32_t out_entries = mt_groups * N_t;
-    if (mt_groups == 0 || act_entries > 1024 || out_entries > 1024 ||
-        act_block_entries < act_entries || out_block_entries < out_entries) {
+#endif
+    if (mt_groups == 0 || act_entries == 0 || out_entries == 0 ||
+        act_entries > 1024 || out_entries > 1024 ||
+        act_block_entries < (M_t >> 1) * K_t ||
+        out_block_entries < (M_t >> 1) * N_t) {
         return QHPI_Success;
     }
 
@@ -788,6 +851,20 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
      *   entries per table = mt_groups * K_t = 4 * 8 = 32
      *   32 pointers * 4 bytes = 128 bytes = one HVX_Vector
      */
+#if HMX_W4A16_USE_ROW4_TABLES
+    for (uint32_t rg = 0; rg < mt_groups; ++rg) {
+        for (uint32_t kt = 0; kt < K_t; ++kt) {
+            act_tbl_all[rg * act_table_stride + kt] =
+                hmx_w4a16_crouton_logical_or_compact_ptr(
+                    act_src, act_block_entries, mt_groups, rg, kt, K_t);
+        }
+        for (uint32_t nt = 0; nt < N_t; ++nt) {
+            out_tbl_all[rg * out_table_stride + nt] =
+                hmx_w4a16_crouton_logical_or_compact_ptr(
+                    out_src, out_block_entries, mt_groups, rg, nt, N_t);
+        }
+    }
+#else
     for (uint32_t rg = 0; rg < mt_groups; ++rg) {
         const int32_t *__restrict a_src = act_src + rg * K_t;
         const int32_t *__restrict o_src = out_src + rg * N_t;
@@ -796,6 +873,7 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
         for (uint32_t kt = 0; kt < K_t; ++kt) a_dst[kt] = a_src[kt];
         for (uint32_t nt = 0; nt < N_t; ++nt) o_dst[nt] = o_src[nt];
     }
+#endif
 
 #if defined(HMX_W4A16_PROBE_CYCLES)
     uint64_t cyc_after_tables = 0;
@@ -845,11 +923,16 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
         HMX_W4A16_EXTRA_PARAM2,
     };
     const hmx_conv_mask_desc_t *mask_desc = get_mask_desc(K_t * 32u);
-    const uint32_t desc_m_tiles = M_t * 4u;
+    const uint32_t desc_m_tiles =
+#if HMX_W4A16_USE_ROW4_TABLES
+        hmx_w4a16_desc_m_tiles(M_t, mt_groups);
+#else
+        M_t * 4u;
+#endif
 
     hmx_conv_out_desc_t out_desc = {
         out_tbl_all,
-        N_t,
+        out_table_stride,
         desc_m_tiles,
         desc_m_tiles,
         8,
@@ -857,7 +940,7 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
     };
     hmx_conv_act_desc_t act_desc = {
         act_tbl_all,
-        K_t,
+        act_table_stride,
         desc_m_tiles,
     };
 
@@ -902,7 +985,7 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
         uint8_t *dst = reinterpret_cast<uint8_t *>(out_blocks[0]);
         for (uint32_t i = 0; i < 16; ++i) dst[i] = 0;
         store_le32(dst, 0, 0x48385853u); /* H8XS */
-        store_le32(dst, 4, S);
+        store_le32(dst, 4, M_t * 32u);
     }
     return QHPI_Success;
 #endif

@@ -55,7 +55,14 @@ EXPORT_API Qnn_ErrorHandle_t HmxU16I4ToU16MatMulShapeInference(Qnn_OpConfig_t *o
     o[0] = 1;
     o[1] = a[1];
     o[2] = 32;
-    o[3] = w[3] * 2;
+    // Native W4A16 follows QNN Conv1x1's K-pair sidecar shape [1,1,K/2,N].
+    // Older diagnostic graphs used [1,1,K,N/2].  Keep both forms accepted so
+    // archived artifacts remain convertible while new runs infer N directly.
+    if (w[2] * 2 == a[3]) {
+        o[3] = w[3];
+    } else {
+        o[3] = w[3] * 2;
+    }
     return QNN_SUCCESS;
 }
 
