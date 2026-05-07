@@ -311,6 +311,20 @@ descriptor fields:
 | `r24` | Output table-pointer advance, in bytes, applied to `out_desc+0x00`. |
 | `r27` | Activation table-pointer advance, in 32-bit table entries, applied to `act_desc+0x00`. |
 
+For the direct HNH 1x1 branch that reaches `0x3dde78`, the static source of
+those fields is:
+
+| Loop field | Static source before / after `0x3d9920` |
+|---|---|
+| `r23` | `activation.meta[0x04]`, loaded after the descriptor builder at `0x3ddd2c..0x3ddd30`. |
+| `r24` | `4 * ((output.meta[0x20] >> 5) * (output.meta[0x1c] >> 2) * (output.meta[0x18] >> 3))`, computed before the descriptor builder as `r26`, then shifted by `vaslw(r27:26,#2)`. |
+| `r27` | `(activation.meta[0x20] >> 5) * (activation.meta[0x1c] >> 2) * (activation.meta[0x18] >> 3)`, computed before the descriptor builder. |
+
+Those metadata offsets are QNN internal tensor-object fields, not the public
+bottom-mapping dimensions.  `ctx/conv_bottom_mapping.json` confirms the native
+visible tensor shapes, but it does not expose these runtime metadata words or
+the native internal `activation.data` / `output.data` table layout.
+
 This is why a static custom descriptor dump is necessary but not sufficient.
 The deep body consumes only `base+0x10`, `base+0x28`, `base+0x48`, and `r5`,
 but native may call that body with advanced descriptor table bases.  The current

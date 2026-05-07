@@ -221,6 +221,12 @@ The native HNH wrapper also has a descriptor-advance loop after each body call:
 native tensor metadata and are not present in the current custom descriptor
 dump, so the next useful native decode is that loop tuple plus the mask helper
 tuple, not another custom-side table rotation.
+The static decode now maps that loop tuple to QNN internal tensor metadata:
+`r23=activation.meta[0x04]`, `r24=4*((output.meta[0x20]>>5)*
+(output.meta[0x1c]>>2)*(output.meta[0x18]>>3))`, and
+`r27=(activation.meta[0x20]>>5)*(activation.meta[0x1c]>>2)*
+(activation.meta[0x18]>>3)`.  Bottom mapping exposes only visible shapes, not
+these metadata words or native internal table bases.
 
 The signed W4 carrier route is still blocked below quant-overrides.  Four
 host-only probes using an ONNX `INT8` initializer plus no weight encoding,
