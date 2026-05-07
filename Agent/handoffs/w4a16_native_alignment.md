@@ -237,6 +237,15 @@ Dead ends already checked:
 - `DESC_M_TILES_OVERRIDE=32` lowers custom cycles to about `12.8k`, but only
   computes a small fraction of the output (`~531/65536` exact). It is not a
   performance fix.
+- `HMX_W4A16_DESC_M_TOTAL_MINUS_STEP_OVERRIDE=0` preserves the default
+  correctness class (`4229/65536`, main op `94171` cycles). Raising it to `16`
+  or `32` makes graph execution fail before a valid optrace is emitted.
+  Artifacts:
+  `example/qnn_matmul_profile/output_codex_w4a16_desc_mtotal_{0,16,32}_256/`.
+- `HMX_W4A16_DESC_K_TOTAL_BYTES_OVERRIDE=128` cuts the main op to `48576`
+  cycles but worsens native exactness to `1972/65536`, consistent with
+  under-computing the K span. `512` fails graph execution. Artifacts:
+  `example/qnn_matmul_profile/output_codex_w4a16_desc_ktotal_{128,512}_256/`.
 - Independent `act/out y_stride=8` overrides do not change correctness or
   cycles. Combining `desc_m=32` with `y_stride=8` remains a partial-coverage
   result.
