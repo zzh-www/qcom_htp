@@ -10,6 +10,9 @@ each group of 32 logical u32 words is split into low and high u16 halves:
 
 Use this parser instead of ad-hoc hexdumps when comparing custom descriptor
 state with native wrapper evidence.
+
+Words 48..63 contain the 16-entry table sample selected at build time by
+HMX_W4A16_DESC_DUMP_TABLE_SELECT.
 """
 
 import argparse
@@ -89,7 +92,7 @@ def parse_dump(raw_path: Path, cols: int, dtype: str) -> dict:
     if cols < 32:
         raise ValueError("--cols must be at least 32")
     cells = _read_u16_cells(raw_path.read_bytes(), dtype)
-    words = [_decode_u32(cells, i, cols) for i in range(48)]
+    words = [_decode_u32(cells, i, cols) for i in range(64)]
 
     fields = {}
     for word_index, name, kind in FIELD_WORDS:
@@ -107,6 +110,7 @@ def parse_dump(raw_path: Path, cols: int, dtype: str) -> dict:
         "logical_u32_words_decoded": len(words),
         "fields": fields,
         "mask_words": mask_words,
+        "table_sample": words[48:64],
     }
 
 
@@ -181,6 +185,12 @@ def print_human(parsed: dict) -> None:
     print("mask_words:")
     for i, word in enumerate(parsed["mask_words"]):
         print(f"  [{i:02d}] = 0x{word:08x} ({word})")
+
+    print()
+    print("table_sample:")
+    print("  selected by HMX_W4A16_DESC_DUMP_TABLE_SELECT")
+    for i, word in enumerate(parsed["table_sample"]):
+        print(f"  [{i:02d}] = 0x{word:08x}")
 
     n_tiles = fields["n_tiles_pow2"]
     k_total = fields["k_total_bytes"]

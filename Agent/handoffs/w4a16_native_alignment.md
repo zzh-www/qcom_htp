@@ -67,6 +67,16 @@ The parser decodes descriptor fields, mask words, table pointer samples, and
 the first two little-endian u32 words from the effective weight and bias/control
 buffers passed to the HNH kernel.
 
+`HMX_W4A16_DESC_DUMP_TABLE_SELECT` selects which 16-entry pointer-table sample
+is written into the 256-byte dump payload:
+
+| Value | Sample |
+|---:|---|
+| `0` | expanded activation table used by the HNH descriptor |
+| `1` | expanded output table used by the HNH descriptor |
+| `2` | source QHPI activation block table before expansion |
+| `3` | source QHPI output block table before expansion |
+
 Prepared native W4 sidecars can be imported into the standard generator flow for
 diagnostics. Extract the native 256^3 sidecar first, then pass it through
 `GEN_EXTRA_ARGS`:
@@ -99,6 +109,27 @@ Latest refreshed custom result:
 | custom main-op cycles | `94579` |
 | custom timeline span | `134324` |
 | custom sum pid0 event cycles | `134416` |
+
+Post descriptor-dump-enrichment recheck:
+
+| Probe artifact | Native exact | Main-op cycles | Timeline span |
+|---|---:|---:|---:|
+| `output_codex_w4a16_after_descdump_enrich_256/` | `4229/65536` | `94496` | `135816` |
+
+The precompute-record metadata added for descriptor dumping does not change the
+current default correctness class or main-op cycle class.
+
+Latest control-word probe:
+
+| Probe artifact | `HMX_W4A16_EXTRA_PARAM0` | Native exact | Main-op cycles | Timeline span |
+|---|---:|---:|---:|---:|
+| `output_codex_w4a16_control0_0_256/` | `0` | `3176/65536` | `97808` | `140988` |
+| `output_codex_w4a16_control0_2_256/` | `2` | `2789/65536` | `105855` | `148598` |
+| `output_codex_w4a16_control0_4_256/` | `4` | `3084/65536` | `131926` | `185463` |
+
+The default first control word `1` is still the best known setting.  Since the
+deep HNH body reads only the first control word on this path, changing the
+three-word local table does not look like the missing native contract.
 
 Latest activation-layout probes:
 
@@ -141,6 +172,24 @@ The default custom main op is still far slower than the native W4 kernel event.
 The native-shaped activation/output probe narrows main-op cycles to the old
 physical-table class (`~29k-31k`), but it is still not correct and remains
 slower than native `q::ConvLayer_s1.opt`.
+
+Latest descriptor-table dump artifacts:
+
+| Probe artifact | `HMX_W4A16_DESC_DUMP_TABLE_SELECT` | Sample class |
+|---|---:|---|
+| `output_codex_w4a16_descdump_table_act_local_256/` | `0` | expanded activation table |
+| `output_codex_w4a16_descdump_table_out_local_256/` | `1` | expanded output table |
+| `output_codex_w4a16_descdump_table_act_source_256/` | `2` | source activation block table |
+| `output_codex_w4a16_descdump_table_out_source_256/` | `3` | source output block table |
+
+All four decode with `act_block_entries=64`, `out_block_entries=64`,
+`act_entries=512`, and `out_entries=512`.  The source QHPI tables are contiguous
+physical block pointers, e.g. activation starts at `0x04020000, 0x04020800,
+... 0x04027800`.  The expanded HNH descriptor tables insert the row4 offset
+after each 8-tile physical row, e.g. activation entries `[8..15]` become
+`0x04020100, 0x04020900, ... 0x04023900`; output follows the same pattern from
+`0x04000000`.  Use this as the custom-side table-shape baseline when comparing
+against native builder expectations.
 
 ## Findings
 
@@ -198,9 +247,24 @@ Custom W4A16 evidence:
   activation and output QHPI block-table lengths are both `64`, with dense
   native pointer tables expanded to `512` entries. Artifact:
   `example/qnn_matmul_profile/output_codex_w4a16_descdump_runtime_blocklen_256/`.
+- The enriched dump now keeps the source block-table lengths in precompute mode
+  too and can sample one of four table views with
+  `HMX_W4A16_DESC_DUMP_TABLE_SELECT={0,1,2,3}`.  The 256^3 custom flow expands
+  64 source physical blocks per tensor into 512 HNH table entries by applying
+  the row4 `+0x100` offset within each physical block.  This confirms the
+  current adapter's table expansion explicitly; it does not by itself explain
+  the native mismatch.
 - The custom output is heavily saturated: about `27977` zeros and `27614`
   `65535` values in the refreshed best probe, versus native's `3309` zeros
   and `5895` `65535` values.
+- A direct output-layout comparison between
+  `output_codex_w4a16_control_i32_256/device_out/out.raw` and the quantized
+  native oracle found no simple table/order fix.  The best simple transform was
+  native transpose plus one-axis flip at `4358/65536`; the normal native
+  transpose is `4229/65536`, and row/tile permutations stayed in the same low
+  class.  The blocker is therefore arithmetic/control/weight interpretation or
+  deeper descriptor state, not a final-output-only transpose or block
+  permutation.
 - Native `conv_ctx.bin` contains a high-entropy 32KB prepared-W4 region at
   `0xd000`. Injecting that native prepared sidecar directly into the custom
   weight initializer, with the custom `weights_to_vtcm` XOR convention reversed
@@ -219,6 +283,9 @@ Dead ends already checked:
   a `96943`-cycle custom main op. Default local-control behavior was restored
   and rechecked at `4229/65536`; artifact:
   `example/qnn_matmul_profile/output_codex_w4a16_control_input_diag_256/`.
+- `HMX_W4A16_EXTRA_PARAM0={0,2,4}` all worsen both correctness and, in most
+  cases, cycles relative to the default first control word `1`.  Artifacts:
+  `example/qnn_matmul_profile/output_codex_w4a16_control0_{0,2,4}_256/`.
 - Native no-bias control layout `[1,8,1,64]` with repeated `0x80008000`
   reduces saturation but worsens exactness (`1755/65536` in the refreshed
   comparable probe).
@@ -336,6 +403,7 @@ the w8a16 diagnostic style:
 - `HMX_W4A16_DESC_M_TOTAL_MINUS_STEP_OVERRIDE`
 - `HMX_W4A16_DESC_K_TOTAL_BYTES_OVERRIDE`
 - `HMX_W4A16_USE_CONTROL_INPUT`
+- `HMX_W4A16_DESC_DUMP_TABLE_SELECT`
 - existing `HMX_W4A16_DESC_M_TILES_OVERRIDE`,
   `HMX_W4A16_WEIGHT_PTR_OFFSET`, and `HMX_W4A16_BIAS_PTR_OFFSET`
 
@@ -362,9 +430,10 @@ probes only.
 `run_w4a16_chain.sh` exposes the generator layout through `OP_INPUT_LAYOUT`.
 Use this rather than hiding layout probes inside `GEN_EXTRA_ARGS`.
 
-The enriched `HMX_W4A16_DESC_DUMP` payload decodes through the same Crouton16
+The enriched `HMX_W4A16_DESC_DUMP` payload is capped at 256 bytes, matching the
+safe first-output-block payload budget.  It decodes through the same Crouton16
 row-interleave pattern used by w8a16: for each 32-word group, low 16-bit halves
-export first and high 16-bit halves start 256 `uint16` elements later. The
+export first and high 16-bit halves start 256 `uint16` elements later.  The
 latest 256^3 descriptor dump reports:
 
 | Field | Value |
@@ -454,6 +523,6 @@ lane.
 3. Investigate whether the custom converter path can expose a prepared
    `SFixed8 [1,1,128,256]` W4 weight tensor to QHPI, or whether the prepared
    native sidecar must be imported through another static-tensor route.
-4. Do not repeat the activation-layout, pointer-offset, y-stride-only, `0x700`
-   mask-family, or float-weight dtype probes unless new evidence changes the
-   premise.
+4. Do not repeat the activation-layout, output-permutation, pointer-offset,
+   y-stride-only, `0x700` mask-family, first-control-word, or float-weight dtype
+   probes unless new evidence changes the premise.

@@ -67,6 +67,9 @@ static constexpr uint32_t kHmxW4A16DefaultControlParam[3] = {
 #ifndef HMX_W4A16_USE_ROW4_TABLES
 #define HMX_W4A16_USE_ROW4_TABLES 1
 #endif
+#ifndef HMX_W4A16_DESC_DUMP_TABLE_SELECT
+#define HMX_W4A16_DESC_DUMP_TABLE_SELECT 0
+#endif
 #ifndef HMX_W4A16_WEIGHT_PTR_OFFSET
 #define HMX_W4A16_WEIGHT_PTR_OFFSET 0
 #endif
@@ -546,10 +549,10 @@ static constexpr uint32_t kHmxW4A16MaxCopiedTableEntries = 512;
 #endif
 #if defined(HMX_W4A16_USE_CONTROL_INPUT)
 static constexpr uint32_t kHmxW4A16PrecomputedDataSize =
-    60 + 2 * kHmxW4A16MaxCopiedTableEntries * sizeof(int32_t);
+    76 + 2 * kHmxW4A16MaxCopiedTableEntries * sizeof(int32_t);
 #else
 static constexpr uint32_t kHmxW4A16PrecomputedDataSize =
-    56 + 2 * kHmxW4A16MaxCopiedTableEntries * sizeof(int32_t);
+    72 + 2 * kHmxW4A16MaxCopiedTableEntries * sizeof(int32_t);
 #endif
 #endif
 
@@ -596,12 +599,16 @@ struct hmx_w4a16_precomputed_t {
     uint32_t mt_groups;
     uint32_t act_entries;
     uint32_t out_entries;
+    uint32_t act_block_entries;
+    uint32_t out_block_entries;
     const uint8_t *bias_bytes;
     const uint8_t *wt_pack;
 #if defined(HMX_W4A16_USE_CONTROL_INPUT)
     const uint32_t *control_param;
 #endif
     uint8_t *out_first_block;
+    const int32_t *act_source_table;
+    const int32_t *out_source_table;
     const int32_t *act_qhpi_table;
     const int32_t *out_qhpi_table;
     int32_t act_table_copy[kHmxW4A16MaxCopiedTableEntries];
@@ -692,6 +699,8 @@ static uint32_t hmx_w4a16_precompute(
     pc->control_param = control_param ? control_param : kHmxW4A16DefaultControlParam;
 #endif
     pc->out_first_block = reinterpret_cast<uint8_t *>(out_blocks[0]);
+    pc->act_source_table = act_src;
+    pc->out_source_table = out_src;
     pc->act_qhpi_table = act_src;
     pc->out_qhpi_table = out_src;
 #if HMX_W4A16_USE_ROW4_TABLES
@@ -729,6 +738,8 @@ static uint32_t hmx_w4a16_precompute(
     pc->mt_groups = mt_groups;
     pc->act_entries = act_entries;
     pc->out_entries = out_entries;
+    pc->act_block_entries = act_block_entries;
+    pc->out_block_entries = out_block_entries;
     pc->magic = kHmxW4A16PrecomputeMagic;
     return QHPI_Success;
 }
@@ -809,7 +820,7 @@ static uint32_t hmx_w4a16_to_u16_matmul_precomputed_kernel(
 #if defined(HMX_W4A16_DESC_DUMP)
     if (pc->out_first_block) {
         uint8_t *dst = pc->out_first_block;
-        for (uint32_t i = 0; i < 192; ++i) dst[i] = 0;
+        for (uint32_t i = 0; i < 256; ++i) dst[i] = 0;
         store_le32(dst, 0, 0x48385844u); /* H8XD */
         store_le32(dst, 4, pc->S);
         store_le32(dst, 8, pc->M_t);
@@ -830,8 +841,8 @@ static uint32_t hmx_w4a16_to_u16_matmul_precomputed_kernel(
         store_le32(dst, 68, out_table_stride);
         store_le32(dst, 72, pc->act_entries);
         store_le32(dst, 76, pc->out_entries);
-        store_le32(dst, 80, 0); /* source QHPI block-table length is not kept here */
-        store_le32(dst, 84, 0);
+        store_le32(dst, 80, pc->act_block_entries);
+        store_le32(dst, 84, pc->out_block_entries);
         store_le32(dst, 88, reinterpret_cast<const uint32_t *>(act_tbl_ptr)[0]);
         store_le32(dst, 92, reinterpret_cast<const uint32_t *>(act_tbl_ptr)[1]);
         store_le32(dst, 96, reinterpret_cast<const uint32_t *>(out_tbl_ptr)[0]);
@@ -848,6 +859,22 @@ static uint32_t hmx_w4a16_to_u16_matmul_precomputed_kernel(
 #endif
         const uint32_t *mask_words = reinterpret_cast<const uint32_t *>(mask_desc);
         for (uint32_t i = 0; i < 16; ++i) store_le32(dst, 128 + i * 4, mask_words[i]);
+        const int32_t *sample_table = act_tbl_ptr;
+        uint32_t sample_count = pc->act_entries;
+#if HMX_W4A16_DESC_DUMP_TABLE_SELECT == 1
+        sample_table = out_tbl_ptr;
+        sample_count = pc->out_entries;
+#elif HMX_W4A16_DESC_DUMP_TABLE_SELECT == 2
+        sample_table = pc->act_source_table;
+        sample_count = pc->act_block_entries;
+#elif HMX_W4A16_DESC_DUMP_TABLE_SELECT == 3
+        sample_table = pc->out_source_table;
+        sample_count = pc->out_block_entries;
+#endif
+        if (sample_count > 16) sample_count = 16;
+        for (uint32_t i = 0; i < sample_count; ++i) {
+            store_le32(dst, 192 + i * 4, static_cast<uint32_t>(sample_table[i]));
+        }
     }
     return QHPI_Success;
 #endif
@@ -1216,7 +1243,7 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
      */
     if (out_blocks[0]) {
         uint8_t *dst = reinterpret_cast<uint8_t *>(out_blocks[0]);
-        for (uint32_t i = 0; i < 192; ++i) dst[i] = 0;
+        for (uint32_t i = 0; i < 256; ++i) dst[i] = 0;
         store_le32(dst, 0, 0x48385844u); /* H8XD */
         store_le32(dst, 4, M_t * 32u);
         store_le32(dst, 8, M_t);
@@ -1255,6 +1282,22 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
 #endif
         const uint32_t *mask_words = reinterpret_cast<const uint32_t *>(mask_desc);
         for (uint32_t i = 0; i < 16; ++i) store_le32(dst, 128 + i * 4, mask_words[i]);
+        const int32_t *sample_table = act_tbl_all;
+        uint32_t sample_count = act_entries;
+#if HMX_W4A16_DESC_DUMP_TABLE_SELECT == 1
+        sample_table = out_tbl_all;
+        sample_count = out_entries;
+#elif HMX_W4A16_DESC_DUMP_TABLE_SELECT == 2
+        sample_table = act_src;
+        sample_count = act_block_entries;
+#elif HMX_W4A16_DESC_DUMP_TABLE_SELECT == 3
+        sample_table = out_src;
+        sample_count = out_block_entries;
+#endif
+        if (sample_count > 16) sample_count = 16;
+        for (uint32_t i = 0; i < sample_count; ++i) {
+            store_le32(dst, 192 + i * 4, static_cast<uint32_t>(sample_table[i]));
+        }
     }
     return QHPI_Success;
 #endif
