@@ -243,21 +243,51 @@ def main() -> None:
     with open(os.path.join(os.path.dirname(out_path), "quant_overrides.json"), "w", encoding="utf-8") as f:
         json.dump(overrides, f, indent=2)
 
-    runtime_dir = os.path.join(here, "runtime_inputs_u8")
+    out_dir = os.path.dirname(out_path)
+    runtime_dir = os.path.join(out_dir, "runtime_inputs_u8")
     os.makedirs(runtime_dir, exist_ok=True)
+    runtime_input_list = os.path.join(out_dir, "runtime_input_list.txt")
     if args.mode == "chain":
         a0 = make_activation(m, k, 0)
         a0.tofile(os.path.join(runtime_dir, "act_u8i8.raw"))
+        with open(runtime_input_list, "w", encoding="utf-8") as f:
+            f.write("act_raw:=runtime_inputs_u8/act_u8i8.raw\n")
         cur = a0.reshape(m, k).astype(np.int32)
         for _ in range(chain):
             cur = np.clip((cur - ACT_ZP) @ w_raw_kn.astype(np.int32) + bias_q, 0, 255)
         out_ref = cur.astype(np.uint8)
     else:
+        input_parts = []
         for i in range(chain):
             a_i = make_activation(m, k, i)
             fname = "act_u8i8.raw" if i == 0 else f"act_u8i8_{i}.raw"
             a_i.tofile(os.path.join(runtime_dir, fname))
+            name = "act_raw" if i == 0 else f"act_raw_{i}"
+            input_parts.append(f"{name}:=runtime_inputs_u8/{fname}")
+        with open(runtime_input_list, "w", encoding="utf-8") as f:
+            f.write(" ".join(input_parts) + "\n")
         out_ref = make_reference(make_activation(m, k, 0), w_raw_kn, bias_q)
+
+    with open(os.path.join(out_dir, "native_io.json"), "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "input_name": "act_raw" if args.mode == "chain" else [
+                    "act_raw" if i == 0 else f"act_raw_{i}" for i in range(chain)
+                ],
+                "output_name": "out" if args.mode == "chain" else [f"out_{i}" for i in range(chain)],
+                "native_input": "runtime_inputs_u8/act_u8i8.raw",
+                "runtime_input_list": "runtime_input_list.txt",
+                "native_input_storage": "uint8",
+                "native_input_bytes": int(m * k),
+                "expected_native_output_storage": "uint8",
+                "expected_native_output_bytes": int(m * n),
+                "shape_mkn": [m, k, n],
+                "graph_input_shape": [1, 1, m, k],
+                "graph_output_shape": [1, 1, m, n],
+            },
+            f,
+            indent=2,
+        )
 
     np.save(out_path + ".wRaw_KN.npy", w_raw_kn)
     np.save(out_path + ".bias_q_int32.npy", bias_q)

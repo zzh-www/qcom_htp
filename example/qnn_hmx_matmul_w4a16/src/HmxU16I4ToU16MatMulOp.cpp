@@ -241,6 +241,15 @@ static inline uint32_t hmx_w4a16_desc_m_tiles(uint32_t m_t, uint32_t row4_groups
     (void)m_t;
     (void)row4_groups;
     return HMX_W4A16_DESC_M_TILES_OVERRIDE;
+#elif defined(HMX_W4A16_NATIVE_COMPACT_SOURCE_TABLES)
+    /*
+     * Diagnostic native-boundary path: HMXT/HMXR probes of the clean QNN
+     * W4A16 Conv reference show the active HNH descriptor receives a compact
+     * 64-entry source table for 256^3, with out_desc.n_tiles_pow2 = M_t * 4
+     * rather than the custom row4-expanded row count.
+     */
+    (void)row4_groups;
+    return m_t * 4u;
 #elif defined(HMX_W4A16_DESC_USE_ROW4_GROUPS)
     (void)m_t;
     return row4_groups;
@@ -309,6 +318,10 @@ static inline uint32_t hmx_w4a16_act_desc_y_stride_words(
     (void)table_storage_stride;
     (void)desc_m_tiles;
     return HMX_W4A16_ACT_TABLE_Y_STRIDE_WORDS_OVERRIDE;
+#elif defined(HMX_W4A16_NATIVE_COMPACT_SOURCE_TABLES)
+    (void)k_t;
+    (void)table_storage_stride;
+    return desc_m_tiles * 2u;
 #else
     (void)k_t;
     (void)table_storage_stride;
@@ -340,6 +353,10 @@ static inline uint32_t hmx_w4a16_out_desc_y_stride_words(
     (void)table_storage_stride;
     (void)desc_m_tiles;
     return HMX_W4A16_OUT_Y_STRIDE_WORDS_OVERRIDE;
+#elif defined(HMX_W4A16_NATIVE_COMPACT_SOURCE_TABLES)
+    (void)n_t;
+    (void)table_storage_stride;
+    return desc_m_tiles * 2u;
 #else
     (void)n_t;
     (void)table_storage_stride;
@@ -377,6 +394,19 @@ static inline uint32_t hmx_w4a16_required_table_entries(
         return 0;
     }
     return (row4_groups - 1u) * table_storage_stride + logical_tiles;
+}
+
+static inline uint32_t hmx_w4a16_required_source_table_entries(
+    uint32_t m_t,
+    uint32_t logical_tiles)
+{
+#if defined(HMX_W4A16_NATIVE_COMPACT_SOURCE_TABLES)
+    return m_t * logical_tiles;
+#else
+    (void)m_t;
+    (void)logical_tiles;
+    return 0;
+#endif
 }
 
 static inline const uint8_t *hmx_w4a16_ptr_with_offset(const uint8_t *ptr, intptr_t offset)
@@ -750,10 +780,17 @@ static uint32_t hmx_w4a16_precompute(
     const uint32_t mt_groups = hmx_w4a16_crouton_row4_groups(M_t);
     const uint32_t act_table_stride = hmx_w4a16_act_table_storage_stride(K_t);
     const uint32_t out_table_stride = hmx_w4a16_out_table_storage_stride(N_t);
+#if defined(HMX_W4A16_NATIVE_COMPACT_SOURCE_TABLES)
+    const uint32_t act_entries =
+        hmx_w4a16_required_source_table_entries(M_t, K_t);
+    const uint32_t out_entries =
+        hmx_w4a16_required_source_table_entries(M_t, N_t);
+#else
     const uint32_t act_entries =
         hmx_w4a16_required_table_entries(mt_groups, K_t, act_table_stride);
     const uint32_t out_entries =
         hmx_w4a16_required_table_entries(mt_groups, N_t, out_table_stride);
+#endif
 #else
     const uint32_t mt_groups = M_t >> 1;
     const uint32_t act_table_stride = K_t;
@@ -761,13 +798,20 @@ static uint32_t hmx_w4a16_precompute(
     const uint32_t act_entries = mt_groups * K_t;
     const uint32_t out_entries = mt_groups * N_t;
 #endif
+#if defined(HMX_W4A16_NATIVE_COMPACT_SOURCE_TABLES)
+    const bool have_native_compact_sources =
+        act_block_entries >= act_entries && out_block_entries >= out_entries;
+#else
+    const bool have_native_compact_sources = true;
+#endif
     if (mt_groups == 0 ||
         act_entries == 0 ||
         out_entries == 0 ||
         act_entries > kHmxW4A16MaxCopiedTableEntries ||
         out_entries > kHmxW4A16MaxCopiedTableEntries ||
         act_block_entries < (M_t >> 1) * K_t ||
-        out_block_entries < (M_t >> 1) * N_t) {
+        out_block_entries < (M_t >> 1) * N_t ||
+        !have_native_compact_sources) {
         return QHPI_Success;
     }
 
@@ -791,6 +835,10 @@ static uint32_t hmx_w4a16_precompute(
         pc->out_tensor_words[i] = out_tensor_words ? out_tensor_words[i] : 0;
     }
 #if HMX_W4A16_USE_ROW4_TABLES
+#if defined(HMX_W4A16_NATIVE_COMPACT_SOURCE_TABLES)
+    for (uint32_t i = 0; i < act_entries; ++i) pc->act_table_copy[i] = act_src[i];
+    for (uint32_t i = 0; i < out_entries; ++i) pc->out_table_copy[i] = out_src[i];
+#else
     for (uint32_t rg = 0; rg < mt_groups; ++rg) {
         for (uint32_t kt = 0; kt < K_t; ++kt) {
             pc->act_table_copy[rg * act_table_stride + kt] =
@@ -812,6 +860,7 @@ static uint32_t hmx_w4a16_precompute(
 #endif
         }
     }
+#endif
 #else
     for (uint32_t i = 0; i < act_entries; ++i) pc->act_table_copy[i] = act_src[i];
     for (uint32_t i = 0; i < out_entries; ++i) pc->out_table_copy[i] = out_src[i];
@@ -1166,10 +1215,17 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
     const uint32_t mt_groups = hmx_w4a16_crouton_row4_groups(M_t);
     const uint32_t act_table_stride = hmx_w4a16_act_table_storage_stride(K_t);
     const uint32_t out_table_stride = hmx_w4a16_out_table_storage_stride(N_t);
+#if defined(HMX_W4A16_NATIVE_COMPACT_SOURCE_TABLES)
+    const uint32_t act_entries =
+        hmx_w4a16_required_source_table_entries(M_t, K_t);
+    const uint32_t out_entries =
+        hmx_w4a16_required_source_table_entries(M_t, N_t);
+#else
     const uint32_t act_entries =
         hmx_w4a16_required_table_entries(mt_groups, K_t, act_table_stride);
     const uint32_t out_entries =
         hmx_w4a16_required_table_entries(mt_groups, N_t, out_table_stride);
+#endif
 #else
     const uint32_t mt_groups = M_t >> 1;
     const uint32_t act_table_stride = K_t;
@@ -1177,11 +1233,18 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
     const uint32_t act_entries = mt_groups * K_t;
     const uint32_t out_entries = mt_groups * N_t;
 #endif
+#if defined(HMX_W4A16_NATIVE_COMPACT_SOURCE_TABLES)
+    const bool have_native_compact_sources =
+        act_block_entries >= act_entries && out_block_entries >= out_entries;
+#else
+    const bool have_native_compact_sources = true;
+#endif
     if (mt_groups == 0 || act_entries == 0 || out_entries == 0 ||
         act_entries > kHmxW4A16MaxRuntimeTableEntries ||
         out_entries > kHmxW4A16MaxRuntimeTableEntries ||
         act_block_entries < (M_t >> 1) * K_t ||
-        out_block_entries < (M_t >> 1) * N_t) {
+        out_block_entries < (M_t >> 1) * N_t ||
+        !have_native_compact_sources) {
         return QHPI_Success;
     }
 
@@ -1220,6 +1283,10 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
      *   32 pointers * 4 bytes = 128 bytes = one HVX_Vector
      */
 #if HMX_W4A16_USE_ROW4_TABLES
+#if defined(HMX_W4A16_NATIVE_COMPACT_SOURCE_TABLES)
+    for (uint32_t i = 0; i < act_entries; ++i) act_tbl_all[i] = act_src[i];
+    for (uint32_t i = 0; i < out_entries; ++i) out_tbl_all[i] = out_src[i];
+#else
     for (uint32_t rg = 0; rg < mt_groups; ++rg) {
         for (uint32_t kt = 0; kt < K_t; ++kt) {
             act_tbl_all[rg * act_table_stride + kt] =
@@ -1241,6 +1308,7 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
 #endif
         }
     }
+#endif
 #else
     for (uint32_t rg = 0; rg < mt_groups; ++rg) {
         const int32_t *__restrict a_src = act_src + rg * K_t;

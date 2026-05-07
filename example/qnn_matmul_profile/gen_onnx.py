@@ -120,7 +120,7 @@ def _emit_quant(cfg: dict, path: str, n: int):
         json.dump(enc, f, indent=2)
 
 
-def _emit_input(cfg: dict, out_dir: str, m: int, k: int):
+def _emit_input(cfg: dict, out_dir: str, m: int, k: int, n: int):
     rng = np.random.default_rng(0xBEEF)
     A = rng.uniform(-0.5, 0.5, size=(1, m, k)).astype(np.float32)
     raw = os.path.join(out_dir, "input_A.raw")
@@ -143,15 +143,24 @@ def _emit_input(cfg: dict, out_dir: str, m: int, k: int):
 
     meta = {
         "input_name": "A",
+        "output_name": "Y",
         "legacy_fp32_input": "input_A.raw",
         "native_input": "runtime_inputs_native/A.raw",
         "runtime_input_list": "runtime_input_list.txt",
         "native_input_storage": native_meta["storage"],
         "native_input_bytes": native_meta["bytes"],
         "shape": [1, m, k],
+        "output_shape": [1, m, n],
     }
     if cfg["dtype"] == "quant":
         meta["activation_encoding"] = _symmetric_encoding(cfg["act"])
+        meta["expected_native_output_storage"] = (
+            "uint8" if cfg["out"] <= 8 else "uint16_le"
+        )
+        meta["expected_native_output_bytes"] = int(m * n * (1 if cfg["out"] <= 8 else 2))
+    else:
+        meta["expected_native_output_storage"] = "float16_le"
+        meta["expected_native_output_bytes"] = int(m * n * 2)
     with open(os.path.join(out_dir, "native_io.json"), "w") as f:
         json.dump(meta, f, indent=2)
 
@@ -171,7 +180,7 @@ def main():
     _emit_onnx(cfg, os.path.join(args.out_dir, "matmul.onnx"), args.m, args.k, args.n)
     if cfg["dtype"] == "quant":
         _emit_quant(cfg, os.path.join(args.out_dir, "quant_overrides.json"), args.n)
-    _emit_input(cfg, args.out_dir, args.m, args.k)
+    _emit_input(cfg, args.out_dir, args.m, args.k, args.n)
 
     print(f"  [{args.config}] wrote {args.out_dir}/ (dtype={cfg['dtype']}, {args.m}x{args.k}x{args.n})")
 

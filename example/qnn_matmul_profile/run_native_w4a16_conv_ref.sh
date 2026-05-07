@@ -266,7 +266,7 @@ python "$ROOT_DIR/scripts/decode_qnn_optrace.py" "$OUT_DIR" \
     echo "  [warn] optrace decode failed; see $OUT_DIR/_decode_optrace.log" >&2
 }
 
-CHECK_ARGS=("$OUT_DIR" --require-native-io --require-layout-flags)
+CHECK_ARGS=("$OUT_DIR" --require-native-io --require-layout-flags --reject-float-io)
 [ "${STRICT_ARTIFACT_STANDARD:-1}" = "0" ] && CHECK_ARGS+=(--warn-only)
 python "$ROOT_DIR/scripts/check_qnn_artifact_standard.py" "${CHECK_ARGS[@]}"
 

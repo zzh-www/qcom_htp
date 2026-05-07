@@ -1,8 +1,9 @@
 # w4a16 Native Alignment Handoff
 
 Current status: `example/qnn_hmx_matmul_w4a16`
-(`HmxU16I4ToU16MatMul`, i4 weight x u16 activation -> u16 output) is not yet
-aligned with QNN native for the canonical 256^3 native-contract path.
+(`HmxU16I4ToU16MatMul`, i4 weight x u16 activation -> u16 output) now has a
+canonical 256^3 native-contract path that is bit-exact against the clean QNN
+native oracle when built with the real HMX body.
 
 Acceptance rule for this family:
 
@@ -62,10 +63,9 @@ Run the current best diagnostic custom flow:
 OUT_DIR="$PWD/example/qnn_matmul_profile/output_w4a16_k4pack_vs_nativeio_256" \
 M=256 K=256 N=256 CHAIN=1 MODE=chain_qdq \
 NATIVE_OUTPUT=1 STRICT_OPTRACE=1 \
-W4_PACK_ORDER=native_nmajor_k4_lohi W4_NIBBLE_ENCODING=twos \
+W4_PACK_ORDER=native_kblock32_nmajor_k4_lohi W4_NIBBLE_ENCODING=twos \
 VERIFY_NATIVE_RAW="$PWD/example/qnn_matmul_profile/output_native_w4a16_conv_ref_256/device_out/Y.raw" \
 VERIFY_NATIVE_TRANSPOSE=1 \
-GEN_EXTRA_ARGS="--bias-layout native_a16 --a16-quant-contract native --reference-contract native --final-output-rank 3d" \
 bash example/qnn_hmx_matmul_w4a16/standard_flow/custom_w4a16/run_w4a16_chain.sh
 ```
 
@@ -84,7 +84,7 @@ Use `summary.json` for scripted comparisons and `chrometrace*.json/html` for
 timeline inspection.
 
 All standard custom W4A16 runs now call
-`scripts/check_qnn_artifact_standard.py <OUT_DIR> --require-layout-flags` after
+`scripts/check_qnn_artifact_standard.py <OUT_DIR> --require-native-io --require-layout-flags --reject-float-io` after
 optrace decode.  Set `STRICT_ARTIFACT_STANDARD=0` only for deliberately
 historical/debug runs.
 
@@ -145,8 +145,8 @@ Prepared native W4 sidecars can be imported into the standard generator flow for
 diagnostics.  The old float-I/O artifact had a byte-for-byte generated W4
 sidecar at `conv_ctx.bin+0xcc00`; that offset is historical and must not be
 used as the current oracle.  In the current clean native reference, the best
-candidate 32KB region starts at `ctx/conv_ctx.bin+0xbd00`.  Importing it proves
-an important layout fact but does not make the custom op bit-exact:
+candidate 32KB region starts at `ctx/conv_ctx.bin+0xbd00`.  Importing it was the
+first proof that the compact-table path is correct:
 
 ```bash
 dd if=example/qnn_matmul_profile/output_native_w4a16_conv_ref_256/ctx/conv_ctx.bin \
@@ -158,14 +158,12 @@ GEN_EXTRA_ARGS="--bias-layout native_a16 --a16-quant-contract native \
 bash example/qnn_hmx_matmul_w4a16/standard_flow/custom_w4a16/run_w4a16_chain.sh
 ```
 
-The generator can synthesize the historical native-K4 sidecar order without
-importing raw bytes:
+The generator now synthesizes the clean-native sidecar order without importing
+raw bytes:
 
 ```bash
-W4_PACK_ORDER=native_nmajor_k4_lohi \
+W4_PACK_ORDER=native_kblock32_nmajor_k4_lohi \
 W4_NIBBLE_ENCODING=twos \
-GEN_EXTRA_ARGS="--bias-layout native_a16 --a16-quant-contract native \
-  --reference-contract native --final-output-rank 3d" \
 bash example/qnn_hmx_matmul_w4a16/standard_flow/custom_w4a16/run_w4a16_chain.sh
 ```
 
@@ -205,10 +203,34 @@ Latest refreshed custom results:
 | imported `0xbd00` sidecar custom timeline span | `136463` |
 | imported `0xbd00` sidecar permutation check | output multiset equals native; `np.roll(custom, 32, axis=0)` is `65536/65536` exact after native-output transpose |
 
-The imported clean-native sidecar result is the current strongest signal:
-arithmetic values are present, but the custom output is rotated by one 32-row
-block group.  Existing `HMX_W4A16_ROW4_BLOCK_ORDER_MOD8` does not fix this
-rotation.
+Before the compact-table fix, the imported clean-native sidecar result was the
+strongest signal: arithmetic values were present, but the custom output was
+rotated by one 32-row block group.  Existing
+`HMX_W4A16_ROW4_BLOCK_ORDER_MOD8` did not fix that rotation.
+
+Latest native-compact-table resolution:
+
+| Probe artifact | Variant | Native exact | Main-op cycles | Timeline span |
+|---|---|---:|---:|---:|
+| `output_w4a16_native_compact_source_tables_256/` | `HMX_W4A16_NATIVE_COMPACT_SOURCE_TABLES` plus imported clean `0xbd00` sidecar | `65536/65536` | `5179` | `44845` |
+| `output_w4a16_native_compact_generated_k4_256/` | compact source tables plus old `native_nmajor_k4_lohi` pack | `3522/65536` | `5629` | `42549` |
+| `output_w4a16_native_compact_kblock32_pack_256/` | compact source tables plus generated `native_kblock32_nmajor_k4_lohi` pack | `65536/65536` | `6808` | `64996` |
+| `output_w4a16_native_aligned_default_runner_256/` | real-kernel build plus current runner defaults | `65536/65536` | `5735` | `48480` |
+
+This closes the two missing named native boundaries for the canonical 256^3
+path:
+
+- table/descriptor boundary: use the native 64-entry compact source tables
+  observed by HMXT/HMXR, not the custom 512-entry row4-expanded table;
+- W4 sidecar boundary: the clean native sidecar is the same 512-byte K4 tile
+  payload as `native_nmajor_k4_lohi`, but with the outer 8x8 chunk grid ordered
+  K32-block-major then N32 tile.
+
+The custom graph boundary still reports the W4 tensor carrier as `UFixed8`
+instead of native `SFixed8`, and the control tensor shape as `[1,1,1,1]`
+instead of `[1]`; these are boundary-reporting differences after the generated
+payload matches native bytes.  They do not prevent canonical output or main-op
+performance alignment.
 
 Follow-up table-source probes with the same imported clean-native sidecar:
 
@@ -566,8 +588,11 @@ Custom W4A16 evidence:
   Conv's W4 packer.
 - A `native_full_codes` custom probe kept a full `[1,1,256,256]` byte tensor
   and still did not trigger the native W4 packer.
-- The best observed pack/layout is `native_nmajor_kpair_hilo` with
-  `--bias-layout native_a16`; it remains only `4229/65536` exact.
+- The old best observed pre-compact-table pack/layout was
+  `native_nmajor_kpair_hilo` with `--bias-layout native_a16`; it remained only
+  `4229/65536` exact.  The current clean-native pack/layout is
+  `native_kblock32_nmajor_k4_lohi` plus compact source tables, which is
+  `65536/65536` exact for the canonical 256^3 oracle.
 - The graph now uses a native-shaped fourth control input, `Int32 [1]`, instead
   of the old unused `UFixed8 [1,1,1,2048]` scratch tensor. This does not change
   correctness, but the standard 256^3 probe's constant-move sidecar cycles drop

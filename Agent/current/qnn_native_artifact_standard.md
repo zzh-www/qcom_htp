@@ -14,8 +14,10 @@ decode optrace into the same run directory.
 1. Generate both input surfaces:
    - `input_A.raw` plus `input_list.txt` for converter/calibration or legacy
      non-native runs.
-   - `runtime_inputs_native/*.raw` plus `runtime_input_list.txt` for device
-     runs with `--use_native_input_files`.
+   - `runtime_inputs_native/*.raw` plus `runtime_input_list.txt` for native
+     references, or the family runner's quantized runtime directory such as
+     `runtime_inputs_u8/*.raw` for custom OPs, for device runs with
+     `--use_native_input_files`.
    - Keep `native_io.json` beside them so the raw storage and encoding are
      explicit.
 2. Convert with layout-preservation flags on every public graph input and
@@ -75,15 +77,17 @@ quantization overrides are used.  That is not sufficient for comparison.  The
 accepted runtime contract is the generated native raw input/output recorded in
 `native_io.json` and exercised with qnn-net-run native I/O flags.
 
-Use the checker at the end of every standard run:
+Use the checker at the end of every quantized standard run:
 
 ```bash
 scripts/check_qnn_artifact_standard.py <out_dir> \
-  --require-layout-flags --require-native-io
+  --require-layout-flags --require-native-io --reject-float-io
 ```
 
-Custom-op runners use the same checker with `--require-layout-flags`; native
-reference runners also require `native_io.json`.
+Custom-op and quantized native-reference runners use this same gate.  `native_io.json`
+is not optional: it records the exact raw input/output storage accepted for the
+run.  Use `NATIVE_OUTPUT=0` or float runtime inputs only for legacy diagnostics
+with `STRICT_ARTIFACT_STANDARD=0`; those artifacts are not current oracles.
 
 ## Current Implementations
 
@@ -104,8 +108,9 @@ reference runners also require `native_io.json`.
 - `scripts/perf_hmx_u8i8_matmul.py` is a standard-artifact reader: it consumes
   or generates `<out_dir>/optrace/chrometrace.json` and supports native raw
   output before falling back to legacy float output.
-- Quantized custom runners default to native output (`NATIVE_OUTPUT=1`) while
-  retaining `NATIVE_OUTPUT=0` for legacy float-output checks.
+- Quantized custom generators now emit `runtime_input_list.txt` and
+  `native_io.json`; their runners default to native output (`NATIVE_OUTPUT=1`)
+  and enforce `--require-native-io --reject-float-io`.
 
 Current runner coverage:
 

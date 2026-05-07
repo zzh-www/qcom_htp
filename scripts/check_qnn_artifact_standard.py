@@ -39,7 +39,24 @@ def _load_json(path: Path) -> dict:
         return json.load(f)
 
 
-def check_artifact(out_dir: Path, require_native_io: bool, require_layout_flags: bool) -> tuple[list[str], list[str]]:
+def _as_list(value) -> list:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _storage_is_float(storage) -> bool:
+    return any("float" in str(item).lower() or str(item).lower().startswith("fp") for item in _as_list(storage))
+
+
+def check_artifact(
+    out_dir: Path,
+    require_native_io: bool,
+    require_layout_flags: bool,
+    reject_float_io: bool,
+) -> tuple[list[str], list[str]]:
     errors: list[str] = []
     warnings: list[str] = []
 
@@ -87,11 +104,12 @@ def check_artifact(out_dir: Path, require_native_io: bool, require_layout_flags:
         for path in (out_dir / name, out_dir.parent / name)
         if _nonempty(path)
     ]
+    convert_log_text = ""
     if not convert_logs:
         warnings.append("missing converter log; cannot verify layout-preservation flags")
     elif require_layout_flags:
-        log_text = "\n".join(path.read_text(encoding="utf-8", errors="replace") for path in convert_logs)
-        if "NONTRIVIAL" not in log_text:
+        convert_log_text = "\n".join(path.read_text(encoding="utf-8", errors="replace") for path in convert_logs)
+        if "NONTRIVIAL" not in convert_log_text:
             errors.append("converter log does not show NONTRIVIAL layout-preservation flags")
 
     native_io_path = out_dir / "native_io.json"
@@ -112,6 +130,19 @@ def check_artifact(out_dir: Path, require_native_io: bool, require_layout_flags:
             if not any(raw.stat().st_size == int(expected_out) for raw in device_raws):
                 sizes = ", ".join(f"{raw.name}:{raw.stat().st_size}" for raw in device_raws)
                 errors.append(f"no device output raw matches expected native size {expected_out} ({sizes})")
+        if reject_float_io:
+            if _storage_is_float(native_io.get("native_input_storage")):
+                errors.append("native_io.json records float native input storage")
+            if _storage_is_float(native_io.get("expected_native_output_storage")):
+                errors.append("native_io.json records float native output storage")
+        if require_layout_flags and convert_log_text:
+            io_names = [item for item in _as_list(native_io.get("input_name")) + _as_list(native_io.get("output_name")) if isinstance(item, str)]
+            missing_names = [name for name in io_names if name not in convert_log_text]
+            if missing_names:
+                errors.append(
+                    "converter log does not mention layout-preserved native_io tensors: "
+                    + ", ".join(missing_names)
+                )
     elif require_native_io:
         errors.append("missing native_io.json for a native-reference artifact")
 
@@ -123,6 +154,11 @@ def main() -> int:
     parser.add_argument("out_dir", type=Path)
     parser.add_argument("--require-native-io", action="store_true")
     parser.add_argument("--require-layout-flags", action="store_true")
+    parser.add_argument(
+        "--reject-float-io",
+        action="store_true",
+        help="fail if native_io.json records float native input/output storage",
+    )
     parser.add_argument("--warn-only", action="store_true")
     args = parser.parse_args()
 
@@ -131,6 +167,7 @@ def main() -> int:
         out_dir,
         require_native_io=args.require_native_io,
         require_layout_flags=args.require_layout_flags,
+        reject_float_io=args.reject_float_io,
     )
     for warning in warnings:
         print(f"  [warn] {warning}")

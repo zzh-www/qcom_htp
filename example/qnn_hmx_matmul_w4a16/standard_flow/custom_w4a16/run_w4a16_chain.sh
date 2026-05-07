@@ -47,8 +47,12 @@ python gen_w4a16_chain.py \
     --chain "$CHAIN" --mode "$MODE" \
     --M "$M" --K "$K" --N "$N" \
     --bias-scale "${BIAS_SCALE:-512.0}" \
+    --bias-layout "${BIAS_LAYOUT:-native_a16}" \
+    --a16-quant-contract "${A16_QUANT_CONTRACT:-native}" \
+    --reference-contract "${REFERENCE_CONTRACT:-native}" \
+    --final-output-rank "${FINAL_OUTPUT_RANK:-3d}" \
     --op-input-layout "${OP_INPUT_LAYOUT:-tiled}" \
-    --w4-pack-order "${W4_PACK_ORDER:-native_kpair_lohi}" \
+    --w4-pack-order "${W4_PACK_ORDER:-native_kblock32_nmajor_k4_lohi}" \
     --w4-nibble-encoding "${W4_NIBBLE_ENCODING:-twos}" \
     ${GEN_EXTRA_ARGS:-} \
     -o "$OUT_DIR/w4a16.onnx"
@@ -140,7 +144,9 @@ for f in "$OUT_DIR"/runtime_inputs_u8/act_w4a16*.raw; do
     ssh "$DEVICE" "cat > $REMOTE/runtime_inputs_u8/$(basename "$f")" < "$f"
 done
 
-if [ "$MODE" = "chain" ] || [ "$MODE" = "chain_float" ] || [ "$MODE" = "chain_qdq" ] || [ "$MODE" = "direct" ] || [ "$MODE" = "direct_flat" ]; then
+if [ -f "$OUT_DIR/runtime_input_list.txt" ]; then
+    cp "$OUT_DIR/runtime_input_list.txt" "$OUT_DIR/input_list.txt"
+elif [ "$MODE" = "chain" ] || [ "$MODE" = "chain_float" ] || [ "$MODE" = "chain_qdq" ] || [ "$MODE" = "direct" ] || [ "$MODE" = "direct_flat" ]; then
     echo "act_raw:=runtime_inputs_u8/act_w4a16.raw" > "$OUT_DIR/input_list.txt"
 else
     line="act_raw:=runtime_inputs_u8/act_w4a16.raw"
@@ -175,7 +181,7 @@ if [ "${DECODE_OPTRACE:-1}" = "1" ]; then
     }
 fi
 
-CHECK_ARGS=("$OUT_DIR" --require-layout-flags)
+CHECK_ARGS=("$OUT_DIR" --require-native-io --require-layout-flags --reject-float-io)
 [ "${STRICT_ARTIFACT_STANDARD:-1}" = "0" ] && CHECK_ARGS+=(--warn-only)
 python "$ROOT_DIR/scripts/check_qnn_artifact_standard.py" "${CHECK_ARGS[@]}"
 

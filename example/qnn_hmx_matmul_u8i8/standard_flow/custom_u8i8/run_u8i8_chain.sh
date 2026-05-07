@@ -130,12 +130,14 @@ ssh "$DEVICE" "cat > $REMOTE/htp_backend_ext.json" < htp_backend_ext.json
 ssh "$DEVICE" "cat > qnn_run/libQnnHmxMatMulU8I8_htp.so" < "$PKG_HTP"
 ssh "$DEVICE" "cat > qnn_run/libQnnHmxMatMulU8I8_cpu.so" < "$PKG_CPU"
 
-for f in runtime_inputs_u8/act_u8i8*.raw; do
+for f in "$OUT_DIR"/runtime_inputs_u8/act_u8i8*.raw; do
     [ -f "$f" ] || continue
     ssh "$DEVICE" "cat > $REMOTE/runtime_inputs_u8/$(basename "$f")" < "$f"
 done
 
-if [ "$MODE" = "chain" ]; then
+if [ -f "$OUT_DIR/runtime_input_list.txt" ]; then
+    cp "$OUT_DIR/runtime_input_list.txt" "$OUT_DIR/input_list.txt"
+elif [ "$MODE" = "chain" ]; then
     echo "act_raw:=runtime_inputs_u8/act_u8i8.raw" > "$OUT_DIR/input_list.txt"
 else
     line="act_raw:=runtime_inputs_u8/act_u8i8.raw"
@@ -170,7 +172,7 @@ if [ "${DECODE_OPTRACE:-1}" = "1" ]; then
     }
 fi
 
-CHECK_ARGS=("$OUT_DIR" --require-layout-flags)
+CHECK_ARGS=("$OUT_DIR" --require-native-io --require-layout-flags --reject-float-io)
 [ "${STRICT_ARTIFACT_STANDARD:-1}" = "0" ] && CHECK_ARGS+=(--warn-only)
 python "$ROOT_DIR/scripts/check_qnn_artifact_standard.py" "${CHECK_ARGS[@]}"
 

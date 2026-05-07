@@ -101,7 +101,7 @@ for cmd in "${iter_cmds[@]}"; do
     }
   fi
 
-  CHECK_ARGS=("$OUT_DIR" --require-native-io --require-layout-flags)
+  CHECK_ARGS=("$OUT_DIR" --require-native-io --require-layout-flags --reject-float-io)
   [ "${STRICT_ARTIFACT_STANDARD:-1}" = "0" ] && CHECK_ARGS+=(--warn-only)
   python "$ROOT_DIR/scripts/check_qnn_artifact_standard.py" "${CHECK_ARGS[@]}"
 

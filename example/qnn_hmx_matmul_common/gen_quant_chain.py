@@ -38,6 +38,14 @@ def _uint_tensorproto(bits: int):
     return TensorProto.UINT8 if bits == 8 else TensorProto.UINT16
 
 
+def _uint_storage(bits: int) -> str:
+    if bits == 8:
+        return "uint8"
+    if bits == 16:
+        return "uint16_le"
+    raise ValueError(f"unsupported unsigned storage bitwidth: {bits}")
+
+
 def _signed_dtype(bits: int):
     if bits <= 8:
         return np.int8
@@ -206,6 +214,36 @@ def _pack_w4_native_nmajor_k4_linear(nib: np.ndarray, order: str) -> np.ndarray:
     return raw.reshape(k // 2, n)
 
 
+def _pack_w4_native_kblock32_nmajor_k4_linear(nib: np.ndarray, order: str) -> np.ndarray:
+    """Pack native W4 as K32-block-major, then N32-tiled k/k+4 pairs.
+
+    Clean QNN W4A16 Conv sidecars use the same 512-byte tile payload as
+    native_nmajor_k4_lohi, but transpose the outer 8x8 grid for 256^3:
+    K32 block first, N32 tile second.
+    """
+    k, n = nib.shape
+    if k % 32 or n % 32:
+        raise ValueError("native W4 K32-block K4 pack requires K and N multiples of 32")
+    raw = np.zeros((k * n) // 2, dtype=np.uint8)
+    out = 0
+    for kb in range(k // 32):
+        for n_base in range(0, n, 32):
+            for kg in range(4):
+                k_base = kb * 32 + kg * 8
+                for n_idx in range(n_base, n_base + 32):
+                    for kr in range(4):
+                        lo = nib[k_base + kr, n_idx]
+                        hi = nib[k_base + kr + 4, n_idx]
+                        if order == "native_kblock32_nmajor_k4_lohi":
+                            raw[out] = lo | (hi << 4)
+                        elif order == "native_kblock32_nmajor_k4_hilo":
+                            raw[out] = (lo << 4) | hi
+                        else:
+                            raise ValueError(f"unsupported native K32-block K4 order: {order}")
+                        out += 1
+    return raw.reshape(k // 2, n)
+
+
 def _pack_w4_native_npair_nmajor(nib: np.ndarray, order: str) -> np.ndarray:
     """Pack W4 output-channel pairs in prepared Conv sidecar shape [1,1,N/2,K]."""
     k, n = nib.shape
@@ -331,13 +369,15 @@ def _weight_initializer(
         if (
             w4_pack_order.startswith("native_kpair_") or
             w4_pack_order.startswith("native_nmajor_kpair_") or
-            w4_pack_order.startswith("native_nmajor_k4_")
+            w4_pack_order.startswith("native_nmajor_k4_") or
+            w4_pack_order.startswith("native_kblock32_nmajor_k4_")
         ) and family.name != "w4a16":
             raise ValueError("native W4 pack order is currently decoded only for w4a16")
         if (
             w4_pack_order.startswith("native_kpair_") or
             w4_pack_order.startswith("native_nmajor_kpair_") or
-            w4_pack_order.startswith("native_nmajor_k4_")
+            w4_pack_order.startswith("native_nmajor_k4_") or
+            w4_pack_order.startswith("native_kblock32_nmajor_k4_")
         ):
             if w_raw_kn.shape[0] % 32 or w_raw_kn.shape[1] % 32:
                 raise ValueError("native W4 HMX pack requires K and N multiples of 32")
@@ -345,7 +385,9 @@ def _weight_initializer(
                 nib = (w_raw_kn.astype(np.int32) + 8).astype(np.uint8) & 0x0F
             else:
                 nib = (w_raw_kn.astype(np.int8) & 0x0F).astype(np.uint8)
-            if w4_pack_order.startswith("native_nmajor_k4_"):
+            if w4_pack_order.startswith("native_kblock32_nmajor_k4_"):
+                packed = _pack_w4_native_kblock32_nmajor_k4_linear(nib, w4_pack_order)
+            elif w4_pack_order.startswith("native_nmajor_k4_"):
                 packed = _pack_w4_native_nmajor_k4_linear(nib, w4_pack_order)
             elif w4_pack_order.startswith("native_nmajor_kpair_"):
                 packed = _pack_w4_native_nmajor_kpair_linear(nib, w4_pack_order)
@@ -937,29 +979,69 @@ def generate(family: Family, args: argparse.Namespace) -> None:
 
     runtime_dir = os.path.join(os.path.dirname(os.path.abspath(args.out)), "runtime_inputs_u8")
     os.makedirs(runtime_dir, exist_ok=True)
+    runtime_input_list = os.path.join(out_dir, "runtime_input_list.txt")
+    native_input_name = f"act_{family.name}.raw"
+    native_input_rel = f"runtime_inputs_u8/{native_input_name}"
+    native_input_storage = _uint_storage(family.act_bits)
     if args.mode in ("chain", "chain_float", "chain_qdq", "direct_flat"):
         a0 = _make_activation(family, m, k, 0, args.activation_mode, args.activation_k)
         if w4_native_conv_input_layout:
             act_nchw = a0.reshape(m, k).T.reshape(1, k, 1, m)
-            act_nchw.tofile(os.path.join(runtime_dir, f"act_{family.name}.raw"))
+            act_nchw.tofile(os.path.join(runtime_dir, native_input_name))
         elif args.mode == "chain_float":
-            a0.astype(np.float32).tofile(os.path.join(runtime_dir, f"act_{family.name}.raw"))
+            native_input_storage = "float32_le"
+            a0.astype(np.float32).tofile(os.path.join(runtime_dir, native_input_name))
         else:
-            a0.tofile(os.path.join(runtime_dir, f"act_{family.name}.raw"))
+            a0.tofile(os.path.join(runtime_dir, native_input_name))
+        with open(runtime_input_list, "w", encoding="utf-8") as f:
+            f.write(f"act_raw:={native_input_rel}\n")
         cur = a0.reshape(m, k).astype(np.int32)
         for _ in range(chain):
             cur = _make_reference_step(family, cur, w_raw_kn, bias_q, reference_contract)
         out_ref = cur
     else:
+        input_parts = []
         for i in range(chain):
             a_i = _make_activation(family, m, k, i, args.activation_mode, args.activation_k)
             fname = f"act_{family.name}.raw" if i == 0 else f"act_{family.name}_{i}.raw"
             a_i.tofile(os.path.join(runtime_dir, fname))
+            name = "act_raw" if i == 0 else f"act_raw_{i}"
+            input_parts.append(f"{name}:=runtime_inputs_u8/{fname}")
+        with open(runtime_input_list, "w", encoding="utf-8") as f:
+            f.write(" ".join(input_parts) + "\n")
         a0 = _make_activation(family, m, k, 0, args.activation_mode, args.activation_k).reshape(m, k)
         if reference_contract == "legacy":
             out_ref = _make_reference(family, a0, w_raw_kn, bias_q)
         else:
             out_ref = _make_reference_step(family, a0, w_raw_kn, bias_q, reference_contract)
+
+    with open(os.path.join(out_dir, "native_io.json"), "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "input_name": "act_raw" if args.mode != "independent" else [
+                    "act_raw" if i == 0 else f"act_raw_{i}" for i in range(chain)
+                ],
+                "output_name": (
+                    [f"out_part{i}" for i in range(split_count)]
+                    if native_split_layout and args.native_split_output_mode == "separate"
+                    else ("out" if args.mode != "independent" else [f"out_{i}" for i in range(chain)])
+                ),
+                "native_input": native_input_rel,
+                "runtime_input_list": "runtime_input_list.txt",
+                "native_input_storage": native_input_storage,
+                "native_input_bytes": int(os.path.getsize(os.path.join(out_dir, native_input_rel))),
+                "expected_native_output_storage": _uint_storage(family.out_bits),
+                "expected_native_output_bytes": int(out_ref.size * np.dtype(_uint_dtype(family.out_bits)).itemsize),
+                "shape_mkn": [m, k, n],
+                "graph_input_shape": graph_act_shape,
+                "graph_output_shape": graph_out_shape,
+                "op_input_layout": args.op_input_layout,
+                "a16_quant_contract": args.a16_quant_contract,
+                "reference_contract": reference_contract,
+            },
+            f,
+            indent=2,
+        )
 
     np.save(out_path + ".wRaw_KN.npy", w_raw_kn)
     np.save(out_path + ".bias_q_int32.npy", bias_q)
@@ -1011,6 +1093,8 @@ def main(family_name: str) -> None:
             "native_nmajor_kpair_hilo",
             "native_nmajor_k4_lohi",
             "native_nmajor_k4_hilo",
+            "native_kblock32_nmajor_k4_lohi",
+            "native_kblock32_nmajor_k4_hilo",
             "native_full_codes",
             "native_npair_adjacent_nmajor_lohi",
             "native_npair_adjacent_nmajor_hilo",
