@@ -258,13 +258,17 @@ Latest native-shaped loop probes:
 |---|---|---:|---:|---:|
 | `output_codex_w4a16_native_layout_desc32_256/` | `OP_INPUT_LAYOUT=native`, `DESC_M_TILES_OVERRIDE=32` | `505/65536` | `6877` | `47663` |
 | `output_codex_w4a16_tiled_desc32_256/` | tiled public-QHPI shape, `DESC_M_TILES_OVERRIDE=32` | `531/65536` | `13686` | `62459` |
+| `output_codex_w4a16_desc32_physical_tables_256/` | tiled, `desc32`, physical-only source block tables | `4092/65536` | `6566` | `50845` |
 | `output_codex_w4a16_tiled_desc32_biascompact_256/` | tiled, `desc32`, `native_a16_w4compact` | `475/65536` | `14241` | `57682` |
 | `output_codex_w4a16_tiled_desc32_native_w4sidecar_biascompact_256/` | tiled, `desc32`, native W4 sidecar, compact bias/control | `342/65536` | `14302` | `58010` |
 
 `DESC_M_TILES_OVERRIDE=32` identifies the native fast loop class but is not a
-semantic fix.  The `OP_INPUT_LAYOUT=native` fast probe is not a valid native HMX
-surface comparison because the custom HMX output tensor is `[1,1,256,256]`,
-while the real native Conv HMX input/output tensors are `[1,8,32,256]`.
+semantic fix.  Combining `desc32` with physical-only tables proves the hot loop
+can run in native-class cycles (`6566`, versus native `7702`), but the output
+distribution falls back to the saturated failure class.  The
+`OP_INPUT_LAYOUT=native` fast probe is not a valid native HMX surface comparison
+because the custom HMX output tensor is `[1,1,256,256]`, while the real native
+Conv HMX input/output tensors are `[1,8,32,256]`.
 
 ## Findings
 

@@ -158,9 +158,10 @@ Latest probe evidence:
 Latest W4A16 continuation notes: `HMX_W4A16_MASK_ARG2=128` is also a no-op
 (`4229/65536`, `93932` cycles).  `DESC_M_TILES_OVERRIDE=32` reaches native-class
 kernel cycles (`6877` cycles with `OP_INPUT_LAYOUT=native`, `13686` cycles with
-the tiled HMX surface) but is semantically a partial-coverage false path
-(`505/65536` and `531/65536` exact, respectively).  Standard W4A16 runs now
-write `<out_dir>/analysis/w4a16_native_compare.{json,txt}` in addition to
+the tiled HMX surface), and `desc32 + physical-only tables` reaches `6566`
+cycles, but all remain semantic false paths (`505/65536`, `531/65536`, and
+`4092/65536` exact, respectively).  Standard W4A16 runs now write
+`<out_dir>/analysis/w4a16_native_compare.{json,txt}` in addition to
 `<out_dir>/optrace/`.
 | Custom w4a8 256^3 default precompute, native `convbnb` body, packed `[1,1,K,N/2]`, twos-complement lo/hi nibbles, W4 mask helper | Device correctness is bit-exact for both single-kernel and chain8 runs (`65536/65536`). Custom chain8 perf observed `HmxU8I4ToU8MatMul` hot avg `dur=19005`, `pkts=2229`, `cpp=8.526`; native W4 same-shape perf compare is still required before closing the strict Goal. |
 | Custom w8a16 256^3 native-rank `chain_qdq` graph | Ctxgen passes and device execution reaches the HMX body. The fast default descriptor uses mask `arg1=0x70b`, `n_tiles_pow2=row4_groups*4` (`256` at 256^3), and `m_total_minus_step=8`. Output is byte-identical to `output_codex_native_w8a16_custom_full_256/device_out/out.raw`. The analytic native-contract reference is only diagnostic (`22057/65536` exact and `65536/65536` within `abs<=3`). Optrace reports `dur=29842`, `pkts=4938`, `cpp=6.04`, aligned with native split `ConvLayer_s1.opt` total `30839` cycles and about `5086` packets. |
