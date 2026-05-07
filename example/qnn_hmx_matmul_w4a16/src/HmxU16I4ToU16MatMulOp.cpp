@@ -62,6 +62,12 @@
 #ifndef HMX_W4A16_USE_ROW4_TABLES
 #define HMX_W4A16_USE_ROW4_TABLES 1
 #endif
+#ifndef HMX_W4A16_WEIGHT_PTR_OFFSET
+#define HMX_W4A16_WEIGHT_PTR_OFFSET 0
+#endif
+#ifndef HMX_W4A16_BIAS_PTR_OFFSET
+#define HMX_W4A16_BIAS_PTR_OFFSET 0
+#endif
 
 /*
  * These descriptor structs are the native skel ABI, not a new C++ API.
@@ -119,6 +125,14 @@ extern "C" void _Z25set_hmx_params_convw4b1x1P10hmx_paramsmmmmmm(
     uint32_t arg5,
     uint32_t arg6);
 #define set_hmx_params_convw4b1x1 _Z25set_hmx_params_convw4b1x1P10hmx_paramsmmmmmm
+
+extern "C" void hmx_v73_convhnh1x1_stride1(
+    const hmx_conv_out_desc_t *od,
+    const hmx_conv_act_desc_t *ad,
+    const uint8_t *wt,
+    const uint8_t *bias,
+    const hmx_conv_mask_desc_t *mask,
+    const uint32_t *extra_param);
 
 #include "v73deep_conv1x1_kernel.h"
 #endif
@@ -259,6 +273,11 @@ static inline uint32_t hmx_w4a16_required_table_entries(
     return (row4_groups - 1u) * table_storage_stride + logical_tiles;
 }
 
+static inline const uint8_t *hmx_w4a16_ptr_with_offset(const uint8_t *ptr, intptr_t offset)
+{
+    return reinterpret_cast<const uint8_t *>(reinterpret_cast<uintptr_t>(ptr) + offset);
+}
+
 static inline uint32_t hmx_w4a16_crouton_row4_groups(uint32_t m_t)
 {
     return m_t * 8u;
@@ -351,6 +370,29 @@ static const hmx_conv_mask_desc_t *get_precomputed_mask_desc()
     return reinterpret_cast<const hmx_conv_mask_desc_t *>(g_hmx_w4a16_mask_buf);
 }
 
+#endif
+
+#if defined(__hexagon__) && !defined(SCALAR_ONLY)
+static inline void hmx_w4a16_enter_kernel(
+    const hmx_conv_out_desc_t *out_desc,
+    const hmx_conv_act_desc_t *act_desc,
+    const uint8_t *wt_pack,
+    const uint8_t *bias_bytes,
+    const hmx_conv_mask_desc_t *mask_desc,
+    const uint32_t *extra_param)
+{
+#if defined(HMX_W4A16_USE_SKEL_KERNEL)
+    hmx_v73_convhnh1x1_stride1(
+#else
+    our_v73deep_kernel(
+#endif
+        out_desc,
+        act_desc,
+        wt_pack,
+        bias_bytes,
+        mask_desc,
+        extra_param);
+}
 #endif
 
 #if defined(HMX_W4A16_ENABLE_QHPI_PRECOMPUTE)
@@ -628,11 +670,11 @@ static uint32_t hmx_w4a16_to_u16_matmul_precomputed_kernel(
      * table discovery happened at graph load.  The custom op event now starts
      * at the tiny native descriptor stitching boundary.
      */
-    our_v73deep_kernel(
+    hmx_w4a16_enter_kernel(
         out_desc,
         act_desc,
-        pc->wt_pack,
-        pc->bias_bytes,
+        hmx_w4a16_ptr_with_offset(pc->wt_pack, HMX_W4A16_WEIGHT_PTR_OFFSET),
+        hmx_w4a16_ptr_with_offset(pc->bias_bytes, HMX_W4A16_BIAS_PTR_OFFSET),
         mask_desc,
         extra_param);
 
@@ -1002,7 +1044,13 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
      * V73DEEP kernel body; the C++ wrapper does not inspect accumulators or
      * implement matmul arithmetic.
      */
-    our_v73deep_kernel(&out_desc, &act_desc, wt_pack, bias_bytes, mask_desc, extra_param);
+    hmx_w4a16_enter_kernel(
+        &out_desc,
+        &act_desc,
+        hmx_w4a16_ptr_with_offset(wt_pack, HMX_W4A16_WEIGHT_PTR_OFFSET),
+        hmx_w4a16_ptr_with_offset(bias_bytes, HMX_W4A16_BIAS_PTR_OFFSET),
+        mask_desc,
+        extra_param);
 
 #if defined(HMX_W4A16_PROBE_CYCLES)
     uint64_t cyc_after_kernel = 0;

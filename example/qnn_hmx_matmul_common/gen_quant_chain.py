@@ -166,6 +166,59 @@ def _pack_w4_native_kpair_linear(nib: np.ndarray, order: str) -> np.ndarray:
     return packed.astype(np.uint8, copy=False)
 
 
+def _pack_w4_native_nmajor_kpair_linear(nib: np.ndarray, order: str) -> np.ndarray:
+    """Pack W4 K-pairs in Conv weight memory order: N-major, then K/2."""
+    k, n = nib.shape
+    if k % 2:
+        raise ValueError("native W4 K-pair pack requires even K")
+    lo = nib[0::2, :]
+    hi = nib[1::2, :]
+    if order == "native_nmajor_kpair_lohi":
+        packed_kn = lo | (hi << 4)
+    elif order == "native_nmajor_kpair_hilo":
+        packed_kn = (lo << 4) | hi
+    else:
+        raise ValueError(f"unsupported native N-major W4 K-pair order: {order}")
+    return packed_kn.T.reshape(k // 2, n).astype(np.uint8, copy=False)
+
+
+def _pack_w4_native_npair_nmajor(nib: np.ndarray, order: str) -> np.ndarray:
+    """Pack W4 output-channel pairs in prepared Conv sidecar shape [1,1,N/2,K]."""
+    k, n = nib.shape
+    if n % 2:
+        raise ValueError("native W4 N-pair pack requires even N")
+    lo = nib[:, 0::2]
+    hi = nib[:, 1::2]
+    if order == "native_npair_adjacent_nmajor_lohi":
+        packed_kn2 = lo | (hi << 4)
+    elif order == "native_npair_adjacent_nmajor_hilo":
+        packed_kn2 = (lo << 4) | hi
+    else:
+        raise ValueError(f"unsupported native N-pair adjacent order: {order}")
+    return packed_kn2.T.astype(np.uint8, copy=False)
+
+
+def _pack_w4_native_npair_tile32_nmajor(nib: np.ndarray, order: str) -> np.ndarray:
+    """Pack W4 output-channel pairs as n,n+32 within each 64-column tile."""
+    k, n = nib.shape
+    if n % 64:
+        raise ValueError("native W4 tile32 N-pair pack requires N multiple of 64")
+    packed = np.zeros((n // 2, k), dtype=np.uint8)
+    for nb in range(n // 64):
+        n_base = nb * 64
+        for nc in range(32):
+            lo = nib[:, n_base + nc]
+            hi = nib[:, n_base + nc + 32]
+            if order == "native_npair_tile32_nmajor_lohi":
+                value = lo | (hi << 4)
+            elif order == "native_npair_tile32_nmajor_hilo":
+                value = (lo << 4) | hi
+            else:
+                raise ValueError(f"unsupported native N-pair tile32 order: {order}")
+            packed[nb * 32 + nc, :] = value
+    return packed.astype(np.uint8, copy=False)
+
+
 def _pack_native_a16_bias(family: Family, w_raw_kn: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Pack native A16 bias/control records for 32-column HMX tiles."""
     k, n = w_raw_kn.shape
@@ -203,16 +256,55 @@ def _weight_initializer(
     w8_carrier_dtype: str,
 ):
     if family.weight_bits == 4:
-        if w4_pack_order.startswith("native_kpair_") and family.name != "w4a16":
-            raise ValueError("native_kpair W4 pack order is currently decoded only for w4a16")
-        if w4_pack_order.startswith("native_kpair_"):
+        if w4_pack_order == "native_full_codes":
+            if family.name != "w4a16":
+                raise ValueError("native_full_codes is currently decoded only for w4a16")
+            if w4_nibble_encoding == "biased":
+                codes = (w_raw_kn.astype(np.int32) + 8).astype(np.uint8) & 0x0F
+            else:
+                codes = (w_raw_kn.astype(np.int8) & 0x0F).astype(np.uint8)
+            arr = codes.view(np.int8).reshape(1, 1, w_raw_kn.shape[0], w_raw_kn.shape[1])
+            return numpy_helper.from_array(arr, name="weight")
+
+        if (
+            w4_pack_order.startswith("native_npair_adjacent_nmajor_") or
+            w4_pack_order.startswith("native_npair_tile32_nmajor_")
+        ):
+            if family.name != "w4a16":
+                raise ValueError("native N-pair W4 pack order is currently decoded only for w4a16")
+            if w_raw_kn.shape[0] % 32 or w_raw_kn.shape[1] % 64:
+                raise ValueError("native W4 N-pair pack requires K multiple of 32 and N multiple of 64")
+            if w4_nibble_encoding == "biased":
+                nib = (w_raw_kn.astype(np.int32) + 8).astype(np.uint8) & 0x0F
+            else:
+                nib = (w_raw_kn.astype(np.int8) & 0x0F).astype(np.uint8)
+            if w4_pack_order.startswith("native_npair_adjacent_nmajor_"):
+                packed = _pack_w4_native_npair_nmajor(nib, w4_pack_order)
+            else:
+                packed = _pack_w4_native_npair_tile32_nmajor(nib, w4_pack_order)
+            carrier = np.bitwise_xor(packed.reshape(-1), np.uint8(0x80))
+            arr = carrier.view(np.int8).reshape(1, 1, w_raw_kn.shape[1] // 2, w_raw_kn.shape[0])
+            return numpy_helper.from_array(arr, name="weight")
+
+        if (
+            w4_pack_order.startswith("native_kpair_") or
+            w4_pack_order.startswith("native_nmajor_kpair_")
+        ) and family.name != "w4a16":
+            raise ValueError("native K-pair W4 pack order is currently decoded only for w4a16")
+        if (
+            w4_pack_order.startswith("native_kpair_") or
+            w4_pack_order.startswith("native_nmajor_kpair_")
+        ):
             if w_raw_kn.shape[0] % 32 or w_raw_kn.shape[1] % 32:
                 raise ValueError("native W4 HMX pack requires K and N multiples of 32")
             if w4_nibble_encoding == "biased":
                 nib = (w_raw_kn.astype(np.int32) + 8).astype(np.uint8) & 0x0F
             else:
                 nib = (w_raw_kn.astype(np.int8) & 0x0F).astype(np.uint8)
-            packed = _pack_w4_native_kpair_linear(nib, w4_pack_order)
+            if w4_pack_order.startswith("native_nmajor_kpair_"):
+                packed = _pack_w4_native_nmajor_kpair_linear(nib, w4_pack_order)
+            else:
+                packed = _pack_w4_native_kpair_linear(nib, w4_pack_order)
             carrier = np.bitwise_xor(packed.reshape(-1), np.uint8(0x80))
             arr = carrier.view(np.int8).reshape(1, 1, w_raw_kn.shape[0] // 2, w_raw_kn.shape[1])
             return numpy_helper.from_array(arr, name="weight")
@@ -303,6 +395,14 @@ def _bias_initializer(
             bias_fold_bytes.view(np.int32).reshape(1, n_t, 1, 128).copy(),
             name="bias",
         )
+        return init, bias_q, effective_i32
+    if bias_layout == "native_a16_nobias":
+        if family.name != "w4a16":
+            raise ValueError("native_a16_nobias is currently decoded only for w4a16")
+        bias_q = np.zeros(n, dtype=np.int32)
+        effective_i32 = np.zeros(n, dtype=np.int32)
+        bias_i32 = np.full((1, n_t, 1, 64), 0x80008000, dtype=np.uint32).view(np.int32)
+        init = numpy_helper.from_array(bias_i32.copy(), name="bias")
         return init, bias_q, effective_i32
     if bias_layout == "zero":
         bias_q = np.zeros(n, dtype=np.int32)
@@ -778,14 +878,38 @@ def main(family_name: str) -> None:
     p.add_argument("--mode", choices=["chain", "chain_float", "chain_qdq", "direct", "direct_flat", "independent"], default="chain")
     p.add_argument("--bias-scale", type=float, default=512.0)
     p.add_argument("--bias-baseline", type=int, default=0)
-    p.add_argument("--bias-layout", choices=["legacy", "swapped", "a16_planes", "a16_eff_all", "zero", "native_a16"], default="legacy")
+    p.add_argument(
+        "--bias-layout",
+        choices=[
+            "legacy",
+            "swapped",
+            "a16_planes",
+            "a16_eff_all",
+            "zero",
+            "native_a16",
+            "native_a16_nobias",
+        ],
+        default="legacy",
+    )
     p.add_argument("--bias-fold", choices=["zero_point", "bias_only"], default="zero_point")
     p.add_argument("--weight-limit", type=int, default=None)
     p.add_argument("--activation-mode", choices=["default", "zp", "k_impulse"], default="default")
     p.add_argument("--activation-k", type=int, default=0)
     p.add_argument(
         "--w4-pack-order",
-        choices=["lohi", "hilo", "native_kpair_lohi", "native_kpair_hilo"],
+        choices=[
+            "lohi",
+            "hilo",
+            "native_kpair_lohi",
+            "native_kpair_hilo",
+            "native_nmajor_kpair_lohi",
+            "native_nmajor_kpair_hilo",
+            "native_full_codes",
+            "native_npair_adjacent_nmajor_lohi",
+            "native_npair_adjacent_nmajor_hilo",
+            "native_npair_tile32_nmajor_lohi",
+            "native_npair_tile32_nmajor_hilo",
+        ],
         default="lohi",
     )
     p.add_argument("--w4-nibble-encoding", choices=["twos", "biased"], default="twos")
