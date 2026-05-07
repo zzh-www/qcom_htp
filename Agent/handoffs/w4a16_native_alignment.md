@@ -249,6 +249,21 @@ The native-K4 sidecar is therefore a byte-order finding and a reusable
 diagnostic, not a semantic fix.  The next useful path remains the native HNH
 descriptor-builder field derivation and the custom QHPI tensor contract.
 
+Native-surface sidecar checkpoint after the `0x3d9920` field decode:
+
+| Probe artifact | Boundary/sidecar facts | Native exact | Main-op cycles | Timeline span |
+|---|---|---:|---:|---:|
+| `output_codex_w4a16_descdump_k4compact_native_surface_nativeout_256/` | `tiled`, generated native-K4 sidecar; descriptor scalars match the current custom HNH form; W4 first words are native; `native_a16_w4compact` bias first words are `0x80405524`, `0x40000092` | descriptor dump | n/a | n/a |
+| `output_codex_w4a16_descdump_k4_nobias_native_surface_nativeout_256/` | same descriptor/weight; `native_a16_nobias` bias first words are `0x80008000`, `0x80008000`; full 2048B bias block at custom `w4a16_ctx.bin+0x9000` matches native `conv_ctx.bin+0xc400` SHA `e595cebf33d435d88cc1e2d0d7382a122ed389f76f97b41ec9e62d736662bdf3` | descriptor dump | n/a | n/a |
+| `output_codex_w4a16_k4_nobias_native_surface_256/` | real HMX run with native HNH activation/output/bias shapes, native K4 W4 bytes at `w4a16_ctx.bin+0x9800`, and native no-bias/control bytes at `+0x9000` | `1014/65536` | `94610` | `139704` |
+
+This rules out two more static-sidecar explanations: the raw native K4 W4
+sidecar and the raw native no-bias/control sidecar can both be reproduced in the
+custom context.  The remaining execution mismatch is deeper than sidecar bytes:
+either the native builder's dynamic mask/table metadata still differs, or the
+custom graph's public QHPI carrier/control boundary is not equivalent to the
+native HNH metadata state even when the byte payloads match.
+
 Latest all-native-sidecar probes:
 
 | Probe artifact | Variant | Native exact | Main-op cycles | Timeline span |

@@ -264,7 +264,9 @@ input/output tensors are logical `[1,1,256,256]`, and QNN inserts a large
 `ForceFormat_Crouton` around that shape.  The custom `tiled` probes are closer
 to native at the tensor surface because activation/output become
 `UFixed16 [1,8,32,256]`.  The `native_a16_w4compact` bias sidecar can also match
-native's compact `[1,8,1,64]` shape.
+native's compact `[1,8,1,64]` shape, but its folded-bias content is not the
+native no-bias/control sidecar.  For the no-bias native oracle, use
+`native_a16_nobias` to reproduce the repeated `0x80008000` 2048B sidecar.
 
 The confirmed remaining deltas are therefore:
 
@@ -287,6 +289,10 @@ artifacts:
   activation/output/bias surface; its report now shows only the W4 carrier
   (`QUInt8` versus native `SFixed8`) and the control tensor shape as graph
   boundary mismatches.
+- `output_codex_w4a16_k4_nobias_native_surface_256` additionally reproduces the
+  native W4 bytes and native no-bias/control bytes, but still fails
+  (`1014/65536`).  This keeps the focus on builder-derived mask/table metadata
+  and the QHPI carrier/control boundary.
 
 ## Alignment Consequences
 
