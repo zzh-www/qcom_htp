@@ -186,6 +186,20 @@ arithmetic values are present, but the custom output is rotated by one 32-row
 block group.  Existing `HMX_W4A16_ROW4_BLOCK_ORDER_MOD8` does not fix this
 rotation.
 
+Follow-up table-source probes with the same imported clean-native sidecar:
+
+| Probe artifact | Variant | Native exact | Permutation | Main-op cycles |
+|---|---|---:|---|---:|
+| `output_w4a16_import_native_sidecar_bd00_act_physical_256/` | `HMX_W4A16_ACT_PHYSICAL_ONLY` | `4540/65536` | `sorted_equal=False`, best row32 roll `32:12048` | `30865` |
+| `output_w4a16_import_native_sidecar_bd00_out_physical_256/` | `HMX_W4A16_OUT_PHYSICAL_ONLY` | `12048/65536` | `sorted_equal=False`, best row32 roll `0:12048` | `93964` |
+
+These probes rule out a simple physical-table substitution.  The default
+activation table reconstruction is necessary to keep the native value multiset,
+and the output physical table does not preserve the imported-sidecar
+`sorted_equal=True` property.  Continue at the native wrapper/descriptor-loop
+state, especially the `r23/r24/r27` table-base advance tuple, before adding any
+new custom table-order logic.
+
 Post descriptor-dump-enrichment recheck:
 
 | Probe artifact | Native exact | Main-op cycles | Timeline span |

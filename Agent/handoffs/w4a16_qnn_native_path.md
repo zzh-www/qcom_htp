@@ -803,6 +803,11 @@ Dead-end implication from the current probes:
 
 - Native-K4 byte packing is solved as a byte-order problem, but it is not the
   semantic fix.
+- The clean-native sidecar import now proves the custom output value multiset
+  can match native exactly, but the rows are rotated by one 32-row block.
+  Existing `ACT_PHYSICAL_ONLY`, `OUT_PHYSICAL_ONLY`, and
+  `ROW4_BLOCK_ORDER_MOD8` probes do not repair that rotation; the physical-table
+  probes also destroy the value multiset.
 - ONNX `INT8` initializer plus quant-overrides does not produce the native
   `SFixed8` QHPI carrier.
 - `desc32`, y-stride-only, pointer-offset, control-word, and one-lane mask
