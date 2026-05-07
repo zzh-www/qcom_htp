@@ -541,6 +541,11 @@ Dead ends already checked:
   `offset=(row4>>3)*256`), does not improve correctness (`4229/65536`) and is
   slightly slower (`95278` cycles). Artifact:
   `example/qnn_matmul_profile/output_codex_w4a16_control_i32_row4_mod8_256/`.
+  Rechecking the same table order on the current closest native-surface probe
+  (`native_nmajor_k4_lohi` W4, `native_a16_nobias`, tiled
+  activation/output) also leaves correctness unchanged at `1014/65536` and
+  slows the main op from `94610` to `96438` cycles. Artifact:
+  `example/qnn_matmul_profile/output_codex_w4a16_k4_nobias_native_surface_row4mod8_256/`.
 - `OP_INPUT_LAYOUT=native` alone improves custom main-op cycles but not
   correctness (`4092/65536`, artifact
   `example/qnn_matmul_profile/output_codex_w4a16_native_op_layout_probe_256/`).

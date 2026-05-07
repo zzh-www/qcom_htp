@@ -197,6 +197,10 @@ The 2026-05-07 helper decode adds that `set_hmx_params_convw4b1x1` with
 mask words, explaining the `HMX_W4A16_MASK_ARG2=128` no-op.  Do not continue
 single-lane mask sweeps before the native metadata tuple feeding the helper is
 understood.
+The W8-style compact row4 table order has now also been checked on the current
+closest native-surface W4A16 probe (`native_nmajor_k4_lohi` plus
+`native_a16_nobias`): it keeps exactness at `1014/65536` and slows the main op
+to `96438` cycles, so table block order is not the remaining native mismatch.
 
 The signed W4 carrier route is still blocked below quant-overrides.  Four
 host-only probes using an ONNX `INT8` initializer plus no weight encoding,
