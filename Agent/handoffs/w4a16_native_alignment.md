@@ -231,6 +231,8 @@ Latest native-K4 sidecar probes:
 |---|---|---:|---:|---:|
 | `output_codex_w4a16_native_op_k4pack_256/` | `OP_INPUT_LAYOUT=native`, generated native-K4 sidecar | `3507/65536` | `30243` | `71611` |
 | `output_codex_w4a16_k4pack_tiled_256/` | tiled public-QHPI shape, generated native-K4 sidecar | `2872/65536` | `96246` | `146055` |
+| `output_codex_w4a16_native_op_k4pack_biascompact_256/` | native layout, generated native-K4 sidecar, `native_a16_w4compact` bias/control | `3183/65536` | `30436` | `75009` |
+| `output_codex_w4a16_k4pack_biascompact_256/` | tiled public-QHPI shape, generated native-K4 sidecar, `native_a16_w4compact` bias/control | `3142/65536` | `95838` | `146213` |
 | `output_codex_w4a16_native_op_desc32_physical_k4pack_256/` | native layout, `DESC_M_TILES_OVERRIDE=32`, physical-only tables, generated native-K4 sidecar | `460/65536` | `6626` | `49714` |
 | `output_codex_w4a16_native_op_k4pack_skel_256/` | native layout, generated native-K4 sidecar, skel `hmx_v73_convhnh1x1_stride1` entry | `3507/65536` | `59686` | `107891` |
 
@@ -297,6 +299,8 @@ Latest native-shaped loop probes:
 | `output_codex_w4a16_desc32_physical_tables_256/` | tiled, `desc32`, physical-only source block tables | `4092/65536` | `6566` | `50845` |
 | `output_codex_w4a16_tiled_desc32_biascompact_256/` | tiled, `desc32`, `native_a16_w4compact` | `475/65536` | `14241` | `57682` |
 | `output_codex_w4a16_tiled_desc32_native_w4sidecar_biascompact_256/` | tiled, `desc32`, native W4 sidecar, compact bias/control | `342/65536` | `14302` | `58010` |
+| `output_codex_w4a16_desc32_ystride256_table8_256/` | tiled, `desc32`, table storage stride `8`, descriptor y-stride `256` | `531/65536` | `13575` | `60255` |
+| `output_codex_w4a16_desc32_physical_ystride256_table8_256/` | tiled, `desc32`, physical-only tables, table storage stride `8`, descriptor y-stride `256` | `4092/65536` | `6504` | `54866` |
 
 `DESC_M_TILES_OVERRIDE=32` identifies the native fast loop class but is not a
 semantic fix.  Combining `desc32` with physical-only tables proves the hot loop
@@ -305,6 +309,9 @@ distribution falls back to the saturated failure class.  The
 `OP_INPUT_LAYOUT=native` fast probe is not a valid native HMX surface comparison
 because the custom HMX output tensor is `[1,1,256,256]`, while the real native
 Conv HMX input/output tensors are `[1,8,32,256]`.
+Keeping table storage stride at `8` while forcing descriptor y-stride to `256`
+does not change either desc32 semantic class, so y-stride is not the missing
+field for this false path.
 
 ## Findings
 

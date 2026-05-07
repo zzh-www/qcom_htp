@@ -179,6 +179,13 @@ exact class while slowing to `59686` cycles.  Treat native-K4 packing as a
 closed byte-order diagnostic; continue with native HNH descriptor-builder and
 QHPI tensor-contract decoding.
 
+Follow-up descriptor probes: combining native-K4 with compact W4 bias/control
+does not rescue the sidecar path (`3183/65536` native-layout, `3142/65536`
+tiled).  For `desc32`, keeping table storage stride at `8` and forcing
+descriptor y-stride to `256` preserves the same false classes (`531/65536`, or
+`4092/65536` with physical-only tables).  This rules out y-stride as the missing
+desc32 field.
+
 Latest w8a16 probes on 2026-05-07:
 
 - The native-rank `MODE=chain_qdq --op-input-layout native --final-output-rank 3d` path is now the reference custom flow. With real HMX enabled through `-UHMX_W8A16_SKIP_KERNEL -DHMX_W8A16_ALLOW_UNVALIDATED_KERNEL`, the source defaults produce output byte-identical to `example/qnn_matmul_profile/output_codex_native_w8a16_custom_full_256/device_out/out.raw` (`65536/65536`, maxdiff `0`). Treat that QNN native artifact as the oracle; the analytic native-contract reference is only a diagnostic cross-check (`22057/65536` exact and `65536/65536` within `abs<=3`, `max=3`).
