@@ -214,6 +214,12 @@ downstream native output ops transform that tile before `Y.raw` is emitted.  Do
 not treat the public dump as a fully linear descriptor record yet.  The next
 native probe should either invert that transform or dump from the `0x3ddc60`
 wrapper into a location that survives to public output linearly.
+The stride-sampled fields that are readable today are still useful: native
+entry sees `r2(weight)=0x046c0000`, `r3(bias)=0x046c8000`,
+`r5(control)=0xfdd01c00`, `out_table=0x02d994a0`, and output descriptor scalar
+words `[8,64,32,8,256]` after the table pointer.  Since copying just the
+candidate `64` y-stride into custom is a no-op, the missing state is not a
+single output descriptor scalar.
 
 Post descriptor-dump-enrichment recheck:
 
