@@ -728,7 +728,7 @@ static uint32_t hmx_w4a16_to_u16_matmul_precomputed_kernel(
 #if defined(HMX_W4A16_DESC_DUMP)
     if (pc->out_first_block) {
         uint8_t *dst = pc->out_first_block;
-        for (uint32_t i = 0; i < 128; ++i) dst[i] = 0;
+        for (uint32_t i = 0; i < 192; ++i) dst[i] = 0;
         store_le32(dst, 0, 0x48385844u); /* H8XD */
         store_le32(dst, 4, pc->S);
         store_le32(dst, 8, pc->M_t);
@@ -744,8 +744,19 @@ static uint32_t hmx_w4a16_to_u16_matmul_precomputed_kernel(
         store_le32(dst, 48, out_desc->k_total_bytes);
         store_le32(dst, 52, act_desc->n_act_pairs);
         store_le32(dst, 56, act_desc->act_table_y_stride_words);
+        store_le32(dst, 60, pc->mt_groups);
+        store_le32(dst, 64, act_table_stride);
+        store_le32(dst, 68, out_table_stride);
+        store_le32(dst, 72, pc->act_entries);
+        store_le32(dst, 76, pc->out_entries);
+        store_le32(dst, 80, 0); /* source QHPI block-table length is not kept here */
+        store_le32(dst, 84, 0);
+        store_le32(dst, 88, reinterpret_cast<const uint32_t *>(act_tbl_ptr)[0]);
+        store_le32(dst, 92, reinterpret_cast<const uint32_t *>(act_tbl_ptr)[1]);
+        store_le32(dst, 96, reinterpret_cast<const uint32_t *>(out_tbl_ptr)[0]);
+        store_le32(dst, 100, reinterpret_cast<const uint32_t *>(out_tbl_ptr)[1]);
         const uint32_t *mask_words = reinterpret_cast<const uint32_t *>(mask_desc);
-        for (uint32_t i = 0; i < 16; ++i) store_le32(dst, 64 + i * 4, mask_words[i]);
+        for (uint32_t i = 0; i < 16; ++i) store_le32(dst, 128 + i * 4, mask_words[i]);
     }
     return QHPI_Success;
 #endif
@@ -1094,7 +1105,7 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
      */
     if (out_blocks[0]) {
         uint8_t *dst = reinterpret_cast<uint8_t *>(out_blocks[0]);
-        for (uint32_t i = 0; i < 128; ++i) dst[i] = 0;
+        for (uint32_t i = 0; i < 192; ++i) dst[i] = 0;
         store_le32(dst, 0, 0x48385844u); /* H8XD */
         store_le32(dst, 4, M_t * 32u);
         store_le32(dst, 8, M_t);
@@ -1110,8 +1121,19 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
         store_le32(dst, 48, out_desc.k_total_bytes);
         store_le32(dst, 52, act_desc.n_act_pairs);
         store_le32(dst, 56, act_desc.act_table_y_stride_words);
+        store_le32(dst, 60, mt_groups);
+        store_le32(dst, 64, act_table_stride);
+        store_le32(dst, 68, out_table_stride);
+        store_le32(dst, 72, act_entries);
+        store_le32(dst, 76, out_entries);
+        store_le32(dst, 80, act_block_entries);
+        store_le32(dst, 84, out_block_entries);
+        store_le32(dst, 88, reinterpret_cast<const uint32_t *>(act_tbl_all)[0]);
+        store_le32(dst, 92, reinterpret_cast<const uint32_t *>(act_tbl_all)[1]);
+        store_le32(dst, 96, reinterpret_cast<const uint32_t *>(out_tbl_all)[0]);
+        store_le32(dst, 100, reinterpret_cast<const uint32_t *>(out_tbl_all)[1]);
         const uint32_t *mask_words = reinterpret_cast<const uint32_t *>(mask_desc);
-        for (uint32_t i = 0; i < 16; ++i) store_le32(dst, 64 + i * 4, mask_words[i]);
+        for (uint32_t i = 0; i < 16; ++i) store_le32(dst, 128 + i * 4, mask_words[i]);
     }
     return QHPI_Success;
 #endif

@@ -111,6 +111,12 @@ Custom W4A16 evidence:
 - The custom output is heavily saturated: about `27977` zeros and `27614`
   `65535` values in the refreshed best probe, versus native's `3309` zeros
   and `5895` `65535` values.
+- Native `conv_ctx.bin` contains a high-entropy 32KB prepared-W4 region at
+  `0xd000`. Injecting that native prepared sidecar directly into the custom
+  weight initializer, with the custom `weights_to_vtcm` XOR convention reversed
+  so the custom ctx contains identical bytes, does not fix correctness:
+  `native_a16_nobias` reaches only `1379/65536`. The blocker is therefore not
+  just W4 weight byte order.
 
 Dead ends already checked:
 
@@ -130,6 +136,9 @@ Dead ends already checked:
   result.
 - `MASK_ARG1` sweep over the `0x700` family did not beat `0x70b` class
   correctness. Several bits raise cycles to `~214k`.
+- External skel wrapper with `HMX_W4A16_MASK_ARG6=0` reaches only
+  `4386/65536` and slows to about `122k` cycles. Direct deep with
+  `HMX_W4A16_MASK_ARG6=0` drops to `2810/65536`.
 - Converting the prepacked weight initializer to float with an 8-bit symmetric
   override did not produce native `SFixed8`; ctxgen converted it to `UFixed16`.
 
@@ -150,6 +159,25 @@ the w8a16 diagnostic style:
 Defaults preserve the prior runtime behavior; these hooks are for focused ABI
 probes only.
 
+The enriched `HMX_W4A16_DESC_DUMP` payload decodes through the same Crouton16
+row-interleave pattern used by w8a16: for each 32-word group, low 16-bit halves
+export first and high 16-bit halves start 256 `uint16` elements later. The
+latest 256^3 descriptor dump reports:
+
+| Field | Value |
+|---|---:|
+| `M_t`, `N_t`, `K_t` | `8`, `8`, `8` |
+| `mt_per_block`, `mt_groups` | `2`, `64` |
+| `act_entries`, `out_entries` | `512`, `512` |
+| `out_stride`, `out_y_stride` | `8`, `256` |
+| `n_tiles`, `m_total_minus_step`, `k_total_bytes` | `256`, `8`, `256` |
+| `act_n_pairs`, `act_y_stride` | `8`, `256` |
+| mask words | `[0, 0x700, 0, 0x77c, 0, 0, 0x3ff, 0, 0, 0, 0, 0, 0x20, 0, 0, 0]` |
+
+The old apparent `0x70b` mask argument expands to a `0x700` word in the actual
+mask buffer, so the native descriptor-builder `0x700` evidence is not by itself
+a contradiction.
+
 ## Next Work
 
 1. Decode the exact native W4A16 hnh wrapper/descriptor builder used by
@@ -157,10 +185,9 @@ probes only.
    disassembly anchors are in `Agent/qnn_re/skel_text_full.S` around
    `hmx_v73_convhnh1x1_stride1`, `hmx_v73_convhnh1x1deep_stride1`, and native
    calls to `set_hmx_params_convw4b1x1`.
-2. Add a richer `HMX_W4A16_DESC_DUMP` payload if needed: include QHPI
-   activation/output block table lengths, first logical pointer deltas, and the
-   final expanded mask words. Compare that against decoded native wrapper
-   expectations.
+2. Use the enriched `HMX_W4A16_DESC_DUMP` payload to compare QHPI block-table
+   shape, pointer deltas, descriptor fields, and final mask words against the
+   decoded native wrapper expectations.
 3. Investigate whether the custom converter path can expose a prepared
    `SFixed8 [1,1,128,256]` W4 weight tensor to QHPI, or whether the prepared
    native sidecar must be imported through another static-tensor route.
