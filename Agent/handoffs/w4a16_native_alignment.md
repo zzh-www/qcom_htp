@@ -110,6 +110,22 @@ Latest activation-layout probes:
 | `output_codex_w4a16_native_op_layout_native_sidecars_nobias_256/` | `1379/65536` | `30144` | `78471` |
 | `output_codex_w4a16_native_conv_input_u16_probe_256/` | `3784/65536` | `94236` | `139087` |
 
+Latest all-native-sidecar probes:
+
+| Probe artifact | Variant | Native exact | Main-op cycles | Timeline span |
+|---|---|---:|---:|---:|
+| `output_codex_w4a16_mask_arg6_4_native_sidecars_nobias_256/` | default public Crouton shape, `HMX_W4A16_MASK_ARG6=0x4` | `1379/65536` | `93542` | `134323` |
+| `output_codex_w4a16_mask_arg6_c_native_sidecars_nobias_256/` | default public Crouton shape, `HMX_W4A16_MASK_ARG6=0xc` | `1379/65536` | `95735` | `141032` |
+| `output_codex_w4a16_native_conv_input_native_sidecars_nobias_256/` | Conv-style input transpose plus native W4/no-bias sidecars | `1379/65536` | `93472` | `139667` |
+
+These runs keep the prepared native W4 stream and native no-bias/control bytes
+byte-identical to the native context.  In the custom context they land at
+`w4a16_ctx.bin+0x9800` and `w4a16_ctx.bin+0x9000`, respectively.  The output
+distribution still matches the saturated all-native-sidecar failure class
+(`11264` zeros and `8704` `65535` values), so the blocker is not the static
+sidecar bytes, the Conv-style input transpose, or the simple low-bit
+`MASK_ARG6` candidates implied by the native builder.
+
 Native performance reference from
 `output_codex_native_w4a16_same_custom_256/optrace/summary.json`:
 
@@ -139,6 +155,11 @@ Native W4A16 Conv evidence:
   repeat `00 80 00 80`.
 - The generator's `--bias-layout native_a16_nobias` emits the same 2048 bytes
   as the native no-bias/control sidecar at `conv_ctx.bin+0xc400`.
+- Native Conv's final HMX input/output tensors in the bottom mapping are
+  `UFixed16` dims `[1,8,32,256]`.  The custom default public-QHPI shape uses
+  the same dims, while `OP_INPUT_LAYOUT=native` (`[1,1,256,256]`) remains a
+  dense-table diagnostic shape rather than the literal native Conv tensor
+  shape.
 
 Custom W4A16 evidence:
 
@@ -255,6 +276,14 @@ Dead ends already checked:
 - `OP_INPUT_LAYOUT=native_conv` with NCHW `uint16` input worsens exactness to
   `3784/65536` and keeps the main op in the `94k` class; artifact:
   `example/qnn_matmul_profile/output_codex_w4a16_native_conv_input_u16_probe_256/`.
+- `HMX_W4A16_MASK_ARG6={0x4,0xc}` on the default public Crouton shape with
+  native W4 sidecar and native no-bias/control bytes keeps the same
+  `1379/65536` native exactness as default `0x20`.  These candidates therefore
+  do not explain the `0x3d9920` builder's dynamic final mask argument.
+- Combining `OP_INPUT_LAYOUT=native_conv`, the imported native W4 sidecar, and
+  `--bias-layout native_a16_nobias` also stays at `1379/65536`.  The Conv-style
+  graph input transpose is not the missing native contract when static
+  sidecars are already native-identical.
 
 ## Code State
 
