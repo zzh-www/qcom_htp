@@ -182,6 +182,30 @@ def _pack_w4_native_nmajor_kpair_linear(nib: np.ndarray, order: str) -> np.ndarr
     return packed_kn.T.reshape(k // 2, n).astype(np.uint8, copy=False)
 
 
+def _pack_w4_native_nmajor_k4_linear(nib: np.ndarray, order: str) -> np.ndarray:
+    """Pack native W4 as N32-tiled, then K8-grouped k/k+4 pairs."""
+    k, n = nib.shape
+    if k % 8 or n % 32:
+        raise ValueError("native W4 K4 pack requires K multiple of 8 and N multiple of 32")
+    raw = np.zeros((k * n) // 2, dtype=np.uint8)
+    out = 0
+    for n_base in range(0, n, 32):
+        for kg in range(k // 8):
+            k_base = kg * 8
+            for n_idx in range(n_base, n_base + 32):
+                for kr in range(4):
+                    lo = nib[k_base + kr, n_idx]
+                    hi = nib[k_base + kr + 4, n_idx]
+                    if order == "native_nmajor_k4_lohi":
+                        raw[out] = lo | (hi << 4)
+                    elif order == "native_nmajor_k4_hilo":
+                        raw[out] = (lo << 4) | hi
+                    else:
+                        raise ValueError(f"unsupported native K4 W4 order: {order}")
+                    out += 1
+    return raw.reshape(k // 2, n)
+
+
 def _pack_w4_native_npair_nmajor(nib: np.ndarray, order: str) -> np.ndarray:
     """Pack W4 output-channel pairs in prepared Conv sidecar shape [1,1,N/2,K]."""
     k, n = nib.shape
@@ -306,12 +330,14 @@ def _weight_initializer(
 
         if (
             w4_pack_order.startswith("native_kpair_") or
-            w4_pack_order.startswith("native_nmajor_kpair_")
+            w4_pack_order.startswith("native_nmajor_kpair_") or
+            w4_pack_order.startswith("native_nmajor_k4_")
         ) and family.name != "w4a16":
-            raise ValueError("native K-pair W4 pack order is currently decoded only for w4a16")
+            raise ValueError("native W4 pack order is currently decoded only for w4a16")
         if (
             w4_pack_order.startswith("native_kpair_") or
-            w4_pack_order.startswith("native_nmajor_kpair_")
+            w4_pack_order.startswith("native_nmajor_kpair_") or
+            w4_pack_order.startswith("native_nmajor_k4_")
         ):
             if w_raw_kn.shape[0] % 32 or w_raw_kn.shape[1] % 32:
                 raise ValueError("native W4 HMX pack requires K and N multiples of 32")
@@ -319,7 +345,9 @@ def _weight_initializer(
                 nib = (w_raw_kn.astype(np.int32) + 8).astype(np.uint8) & 0x0F
             else:
                 nib = (w_raw_kn.astype(np.int8) & 0x0F).astype(np.uint8)
-            if w4_pack_order.startswith("native_nmajor_kpair_"):
+            if w4_pack_order.startswith("native_nmajor_k4_"):
+                packed = _pack_w4_native_nmajor_k4_linear(nib, w4_pack_order)
+            elif w4_pack_order.startswith("native_nmajor_kpair_"):
                 packed = _pack_w4_native_nmajor_kpair_linear(nib, w4_pack_order)
             else:
                 packed = _pack_w4_native_kpair_linear(nib, w4_pack_order)
@@ -969,6 +997,8 @@ def main(family_name: str) -> None:
             "native_kpair_hilo",
             "native_nmajor_kpair_lohi",
             "native_nmajor_kpair_hilo",
+            "native_nmajor_k4_lohi",
+            "native_nmajor_k4_hilo",
             "native_full_codes",
             "native_npair_adjacent_nmajor_lohi",
             "native_npair_adjacent_nmajor_hilo",

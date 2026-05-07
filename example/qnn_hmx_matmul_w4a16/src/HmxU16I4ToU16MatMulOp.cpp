@@ -428,7 +428,11 @@ static inline int32_t hmx_w4a16_crouton_logical_or_compact_ptr(
     uint32_t kn_tiles)
 {
     if (block_entries >= row4_groups * kn_tiles) {
+#if defined(HMX_W4A16_DIRECT_TABLE_KN_MAJOR)
+        return block_table[kn_tile * row4_groups + row4_tile];
+#else
         return block_table[row4_tile * kn_tiles + kn_tile];
+#endif
     }
 #if defined(HMX_W4A16_ROW4_BLOCK_ORDER_MOD8)
     return hmx_w4a16_crouton_row4_ptr(block_table, row4_tile, kn_tile, kn_tiles);

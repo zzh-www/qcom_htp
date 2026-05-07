@@ -94,11 +94,21 @@ diagnostics. Extract the native 256^3 sidecar first, then pass it through
 
 ```bash
 dd if=example/qnn_matmul_profile/output_codex_native_w4a16_same_custom_256/ctx/conv_ctx.bin \
-  of=/tmp/native_w4a16_sidecar_256.raw bs=1 skip=$((0xd000)) count=32768 status=none
+  of=/tmp/native_w4a16_sidecar_256.raw bs=1 skip=$((0xcc00)) count=32768 status=none
 
 GEN_EXTRA_ARGS="--bias-layout native_a16 --a16-quant-contract native \
   --reference-contract native --final-output-rank 3d \
   --w4-native-sidecar-raw /tmp/native_w4a16_sidecar_256.raw" \
+bash example/qnn_hmx_matmul_w4a16/standard_flow/custom_w4a16/run_w4a16_chain.sh
+```
+
+The generator can also synthesize that sidecar without importing raw bytes:
+
+```bash
+W4_PACK_ORDER=native_nmajor_k4_lohi \
+W4_NIBBLE_ENCODING=twos \
+GEN_EXTRA_ARGS="--bias-layout native_a16 --a16-quant-contract native \
+  --reference-contract native --final-output-rank 3d" \
 bash example/qnn_hmx_matmul_w4a16/standard_flow/custom_w4a16/run_w4a16_chain.sh
 ```
 
@@ -201,6 +211,32 @@ Native/custom raw contract checks:
 This rules out raw activation values and raw logical W4 codes as the current
 source of mismatch.  The remaining gap is after QNN lowering into prepared HMX
 sidecars/descriptors or inside the HNH interpretation of those prepared bytes.
+
+Prepared W4 sidecar decoding update:
+
+- The full native prepared W4 sidecar for the canonical 256^3 oracle starts at
+  `conv_ctx.bin+0xcc00`, not `+0xd000`.  Its 32768-byte SHA-256 is
+  `b0dbe7545ae03e7c5f9a2a4da06ba27fee7164b58948709ea69795845c261297`.
+- The physical byte order is `N32 tile -> K8 group -> n-in-tile -> k4`, where
+  each byte pairs `(k+0,k+4)`, `(k+1,k+5)`, `(k+2,k+6)`, and `(k+3,k+7)` with
+  two's-complement W4 nibbles.  `W4_PACK_ORDER=native_nmajor_k4_lohi` now
+  reproduces the native `+0xcc00` sidecar byte-for-byte.
+- Standard-flow contexts using `native_nmajor_k4_lohi` embed that exact 32KB
+  stream at custom `w4a16_ctx.bin+0xa000`, so the current low correctness class
+  is not caused by W4 sidecar raw bytes.
+
+Latest native-K4 sidecar probes:
+
+| Probe artifact | Variant | Native exact | Main-op cycles | Timeline span |
+|---|---|---:|---:|---:|
+| `output_codex_w4a16_native_op_k4pack_256/` | `OP_INPUT_LAYOUT=native`, generated native-K4 sidecar | `3507/65536` | `30243` | `71611` |
+| `output_codex_w4a16_k4pack_tiled_256/` | tiled public-QHPI shape, generated native-K4 sidecar | `2872/65536` | `96246` | `146055` |
+| `output_codex_w4a16_native_op_desc32_physical_k4pack_256/` | native layout, `DESC_M_TILES_OVERRIDE=32`, physical-only tables, generated native-K4 sidecar | `460/65536` | `6626` | `49714` |
+| `output_codex_w4a16_native_op_k4pack_skel_256/` | native layout, generated native-K4 sidecar, skel `hmx_v73_convhnh1x1_stride1` entry | `3507/65536` | `59686` | `107891` |
+
+The native-K4 sidecar is therefore a byte-order finding and a reusable
+diagnostic, not a semantic fix.  The next useful path remains the native HNH
+descriptor-builder field derivation and the custom QHPI tensor contract.
 
 Latest all-native-sidecar probes:
 
@@ -344,12 +380,13 @@ Custom W4A16 evidence:
   class.  The blocker is therefore arithmetic/control/weight interpretation or
   deeper descriptor state, not a final-output-only transpose or block
   permutation.
-- Native `conv_ctx.bin` contains a high-entropy 32KB prepared-W4 region at
-  `0xd000`. Injecting that native prepared sidecar directly into the custom
-  weight initializer, with the custom `weights_to_vtcm` XOR convention reversed
-  so the custom ctx contains identical bytes, does not fix correctness:
-  `native_a16_nobias` reaches only `1379/65536`. The blocker is therefore not
-  just W4 weight byte order.
+- Native `conv_ctx.bin` contains the full high-entropy 32KB prepared-W4 region at
+  `0xcc00`; `+0xd000` is an interior offset into that sidecar. Injecting the
+  native prepared sidecar directly into the custom weight initializer, with the
+  custom `weights_to_vtcm` XOR convention reversed so the custom ctx contains
+  identical bytes, does not fix correctness: `native_a16_nobias` reaches only
+  `1379/65536`, and generated `native_nmajor_k4_lohi` sidecars stay in the same
+  low class. The blocker is therefore not just W4 weight byte order.
 
 Dead ends already checked:
 
@@ -551,11 +588,11 @@ Payload sampling from
 | default control words `[0..1]` | `1`, `1025` |
 
 For comparison, the native prepared W4 sidecar at
-`output_codex_native_w4a16_same_custom_256/ctx/conv_ctx.bin+0xd000` starts with
-`0x403f2e1d`, `0x2e1d0cfb`, `0x0cfbead9`, `0xead9c7b6`. The current best custom
-flow therefore still does not pass native prepared-W4 bytes to the HNH body,
-although direct native-sidecar injection already proved that byte identity alone
-is not sufficient.
+`output_codex_native_w4a16_same_custom_256/ctx/conv_ctx.bin+0xcc00` starts with
+`0x0cfbead9`, `0xead9c7b6`, `0xc7b6a594`, `0xa5947362`.  The generated
+`native_nmajor_k4_lohi` path now passes these native prepared-W4 bytes to the
+HNH body, and the direct native-sidecar injection already proved that byte
+identity alone is not sufficient.
 
 The old apparent `0x70b` mask argument expands to a `0x700` word in the actual
 mask buffer, so the native descriptor-builder `0x700` evidence is not by itself
@@ -619,5 +656,5 @@ enriched descriptor dump, not to keep sweeping one mask lane.
    `SFixed8 [1,1,128,256]` W4 weight tensor to QHPI, or whether the prepared
    native sidecar must be imported through another static-tensor route.
 4. Do not repeat the activation-layout, output-permutation, pointer-offset,
-   y-stride-only, `0x700` mask-family, first-control-word, or float-weight dtype
-   probes unless new evidence changes the premise.
+   y-stride-only, native-K4 sidecar, `0x700` mask-family, first-control-word, or
+   float-weight dtype probes unless new evidence changes the premise.
