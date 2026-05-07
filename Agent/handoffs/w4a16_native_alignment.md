@@ -242,6 +242,11 @@ Dead ends already checked:
   result.
 - `MASK_ARG1` sweep over the `0x700` family did not beat `0x70b` class
   correctness. Several bits raise cycles to `~214k`.
+- `HMX_W4A16_MASK_ARG4=1..3` targets the helper lane that feeds mask word
+  `+0x08` for the native `0x3d9c54` call shape, but all three standard 256^3
+  runs stay at `4229/65536` native exactness. Custom main-op cycles are
+  `93180..94997`; artifacts:
+  `example/qnn_matmul_profile/output_codex_w4a16_mask_arg4_{1..3}_256/`.
 - `HMX_W4A16_MASK_ARG5=1..7` targets the low-bit helper lane that contributes
   to mask word `+0x08` for `arg1=0x70b`, but all seven standard 256^3 runs stay
   at `4229/65536` native exactness. Custom main-op cycles remain in the
@@ -417,9 +422,10 @@ than literal constants.  The focused `HMX_W4A16_MASK_ARG6={0x4,0xc}` probes
 show that simply replacing the custom default final argument does not close the
 gap.  The helper itself stores the final stack argument into mask word `+0x30`;
 for `arg1=0x70b`, `arg5` low bits feed the mask `+0x08` lane, but
-`HMX_W4A16_MASK_ARG5=1..7` is also a no-op for correctness.  The remaining work
-is to decode the full field derivation and compare it against the enriched
-descriptor dump, not to keep sweeping one mask lane.
+`HMX_W4A16_MASK_ARG4=1..3` and `HMX_W4A16_MASK_ARG5=1..7` are both no-ops for
+correctness.  The remaining work is to decode the full field derivation and
+compare it against the enriched descriptor dump, not to keep sweeping one mask
+lane.
 
 ## Next Work
 
