@@ -4,7 +4,8 @@
 
 The active custom MatMul line is the family of QNN-native quantized HMX MatMul
 packages under `example/qnn_hmx_matmul_*`.  The latest completed milestone is
-the `w8a16` 256^3 native-rank path above.
+the `w4a16` 256^3 native-contract path against the standardized QNN native
+Conv oracle.
 
 Public names:
 
@@ -173,7 +174,11 @@ with `HMX_W4A16_NATIVE_COMPACT_SOURCE_TABLES` and the real HMX body:
 standard artifact is
 `example/qnn_matmul_profile/output_w4a16_native_aligned_default_runner_256/`:
 custom main op `5735` cycles, timeline `48480` cycles, native kernel event
-`7893` cycles.  Remaining graph-boundary differences are weight carrier
+`7893` cycles.  A fresh current-HEAD completion audit rerun at
+`example/qnn_matmul_profile/output_w4a16_native_aligned_completion_audit_256/`
+also passes the standard checker and reports `65536/65536`, main op `5949`
+cycles, and timeline `49786` cycles.  Remaining graph-boundary differences are
+weight carrier
 `UFixed8` versus native `SFixed8` and custom control `Int32 [1,1,1,1]` versus
 native `Int32 [1]`; generated payload bytes and output semantics now match.
 

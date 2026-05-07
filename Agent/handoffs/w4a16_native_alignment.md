@@ -40,10 +40,11 @@ runtime comparison contract.  Runtime acceptance is the `native_io.json` u16 raw
 contract plus qnn-net-run native I/O flags.
 
 Native-path first rule: before adding new custom probes, read
-[`w4a16_qnn_native_path.md`](w4a16_qnn_native_path.md).  The current blocker is
-the native `ConvLayer_s1.opt` contract as a whole: signed W4 sidecar carrier,
-native activation/output Crouton surfaces, descriptor builder state, mask words,
-and control pointer semantics.
+[`w4a16_qnn_native_path.md`](w4a16_qnn_native_path.md).  The canonical 256^3
+blocker is closed by matching two named native boundaries: compact source
+tables and K32-block-major/N32-inner W4 sidecar order.  Remaining work is
+broader shape coverage plus LPBQ/per-group extensions, not the canonical
+256^3 native contract.
 
 ## Standard Flow
 
@@ -57,13 +58,12 @@ EXTRA_DEFS="-UHMX_W4A16_SKIP_KERNEL -DHMX_W4A16_ALLOW_UNVALIDATED_KERNEL" \
 bash example/qnn_hmx_matmul_w4a16/build_x86.sh
 ```
 
-Run the current best diagnostic custom flow:
+Run the current aligned custom flow:
 
 ```bash
-OUT_DIR="$PWD/example/qnn_matmul_profile/output_w4a16_k4pack_vs_nativeio_256" \
+OUT_DIR="$PWD/example/qnn_matmul_profile/output_w4a16_native_aligned_default_runner_256" \
 M=256 K=256 N=256 CHAIN=1 MODE=chain_qdq \
 NATIVE_OUTPUT=1 STRICT_OPTRACE=1 \
-W4_PACK_ORDER=native_kblock32_nmajor_k4_lohi W4_NIBBLE_ENCODING=twos \
 VERIFY_NATIVE_RAW="$PWD/example/qnn_matmul_profile/output_native_w4a16_conv_ref_256/device_out/Y.raw" \
 VERIFY_NATIVE_TRANSPOSE=1 \
 bash example/qnn_hmx_matmul_w4a16/standard_flow/custom_w4a16/run_w4a16_chain.sh
@@ -216,6 +216,7 @@ Latest native-compact-table resolution:
 | `output_w4a16_native_compact_generated_k4_256/` | compact source tables plus old `native_nmajor_k4_lohi` pack | `3522/65536` | `5629` | `42549` |
 | `output_w4a16_native_compact_kblock32_pack_256/` | compact source tables plus generated `native_kblock32_nmajor_k4_lohi` pack | `65536/65536` | `6808` | `64996` |
 | `output_w4a16_native_aligned_default_runner_256/` | real-kernel build plus current runner defaults | `65536/65536` | `5735` | `48480` |
+| `output_w4a16_native_aligned_completion_audit_256/` | fresh current-HEAD completion audit rerun | `65536/65536` | `5949` | `49786` |
 
 This closes the two missing named native boundaries for the canonical 256^3
 path:
@@ -283,8 +284,9 @@ entry sees `r2(weight)=0x046c0000`, `r3(bias)=0x046c8000`,
 words `[8,64,32,8,256]` after the table pointer.  Since copying just the
 candidate `64` y-stride into custom is a no-op, the missing state is not a
 single output descriptor scalar.  Copying both visible native `64` y-stride and
-`32` tile selector is also a false path, so the remaining blocker is in the full
-native wrapper state rather than an isolated output descriptor field.
+`32` tile selector was also a false path, so this historical probe showed the
+gap was in the full native wrapper state rather than an isolated output
+descriptor field.
 
 The current native wrapper is simpler than the earlier `0x3ddc60` hypothesis for
 this artifact.  It enters at `0x3de3c0` with a prebuilt record pointer in `r0`;
