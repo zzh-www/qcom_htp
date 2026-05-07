@@ -15,7 +15,8 @@ historical v1 dumps and should not be used for table samples.
 
 Supported record magics are `HMXP` for entry samples, `HMXB` for the active
 prebuilt base record, `HMXT` for table-memory samples, `HMXA` for activation
-table[0] data samples, and `HMXV` for per-activation-entry value samples.
+table[0] data samples, `HMXV` for per-activation-entry value samples, and
+`HMXR` for the native record-window dump around `base = out_desc - 0x28`.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ MAGIC_BASE_RECORD = 0x484D5842  # "HMXB"
 MAGIC_TABLE = 0x484D5854  # "HMXT"
 MAGIC_ACT_TILE = 0x484D5841  # "HMXA"
 MAGIC_ACT_ENTRIES = 0x484D5856  # "HMXV"
+MAGIC_RECORD_WINDOW = 0x484D5852  # "HMXR"
 
 FIELD_WORDS = [
     (0, "magic", "hex"),
@@ -285,6 +287,48 @@ def _parse_act_entries_record(path: Path, dtype: str, layout: str, stride_words:
     }
 
 
+def _parse_record_window(path: Path, dtype: str, layout: str, stride_words: int, record: list[int]) -> dict[str, Any]:
+    public_words = _read_words(path, dtype)
+    fields = {
+        "magic": record[0],
+        "r31_return": record[1],
+        "out_desc_arg": record[2],
+        "act_desc_arg": record[3],
+        "weight_arg": record[4],
+        "bias_arg": record[5],
+        "mask_arg": record[6],
+        "control_arg": record[7],
+        "base_ptr": record[8],
+        "window_start_ptr": record[9],
+        "out_table_ptr": record[10],
+        "act_table_ptr": record[11],
+        "out_table_stride_dwords": record[12],
+        "act_n_pairs": record[13],
+        "out_y_stride_words": record[14],
+        "act_y_stride_words": record[15],
+    }
+    window = record[16:512]
+    return {
+        "path": str(path),
+        "record_kind": "record_window",
+        "dtype": dtype,
+        "layout": layout,
+        "public_u32_words": len(public_words),
+        "stride_words": stride_words,
+        "record_u32_words": len(record),
+        "fields": fields,
+        "samples": {
+            "window_start_to_base_minus_0x80": window[0:64],
+            "pre_base_metadata": window[64:96],
+            "base_record_words": window[96:132],
+            "base_plus_0x90_words": window[132:134],
+            "out_table_64": window[134:198],
+            "post_out_metadata": window[198:224],
+            "adjacent_restore_table_sample": window[224:496],
+        },
+    }
+
+
 def parse_probe(
     path: Path,
     layout: str,
@@ -299,6 +343,8 @@ def parse_probe(
             record_kind = "act_tile"
         elif header[0] == MAGIC_ACT_ENTRIES:
             record_kind = "act_entries"
+        elif header[0] == MAGIC_RECORD_WINDOW:
+            record_kind = "record_window"
         elif header[0] == MAGIC_TABLE:
             record_kind = "table"
         elif header[0] == MAGIC_BASE_RECORD:
@@ -306,7 +352,7 @@ def parse_probe(
         else:
             record_kind = "entry"
 
-    record_words = 272 if record_kind in ("table", "act_tile", "act_entries") else 96
+    record_words = 512 if record_kind == "record_window" else 272 if record_kind in ("table", "act_tile", "act_entries") else 96
     record = _decode_record(public_words, layout, stride_words, record_words)
     if record_kind == "entry":
         return _parse_entry_record(path, dtype, layout, stride_words, record)
@@ -318,6 +364,8 @@ def parse_probe(
         return _parse_act_tile_record(path, dtype, layout, stride_words, record)
     if record_kind == "act_entries":
         return _parse_act_entries_record(path, dtype, layout, stride_words, record)
+    if record_kind == "record_window":
+        return _parse_record_window(path, dtype, layout, stride_words, record)
     raise ValueError(f"unsupported record kind: {record_kind}")
 
 
@@ -337,6 +385,7 @@ def print_human(parsed: dict[str, Any]) -> None:
         "table": MAGIC_TABLE,
         "act_tile": MAGIC_ACT_TILE,
         "act_entries": MAGIC_ACT_ENTRIES,
+        "record_window": MAGIC_RECORD_WINDOW,
     }[kind]
     ok = "ok" if magic == expected_magic else "unexpected"
     print(f"=== W4A16 native HNH {kind} probe: {parsed['path']} ===")
@@ -494,6 +543,51 @@ def print_human(parsed: dict[str, Any]) -> None:
             print()
         return
 
+    if kind == "record_window":
+        print("entry_args:")
+        for name in (
+            "r31_return",
+            "out_desc_arg",
+            "act_desc_arg",
+            "weight_arg",
+            "bias_arg",
+            "mask_arg",
+            "control_arg",
+            "base_ptr",
+            "window_start_ptr",
+        ):
+            print(f"  {name:<26} = {_fmt(fields[name])}")
+        print()
+
+        print("record_window_header:")
+        for name in (
+            "out_table_ptr",
+            "act_table_ptr",
+            "out_table_stride_dwords",
+            "act_n_pairs",
+            "out_y_stride_words",
+            "act_y_stride_words",
+        ):
+            value = fields[name]
+            if name.endswith("_ptr"):
+                text = _fmt(value)
+            else:
+                text = str(value)
+            print(f"  {name:<26} = {text}")
+        print()
+
+        print("samples:")
+        start = fields["window_start_ptr"]
+        offset = 0
+        for title, words in parsed["samples"].items():
+            print(f"{title} @ {_fmt(start + offset * 4)}:")
+            for base in range(0, len(words), 8):
+                chunk = " ".join(f"0x{word:08x}" for word in words[base : base + 8])
+                print(f"  [{offset + base:03d}] {chunk}")
+            offset += len(words)
+            print()
+        return
+
     groups = [
         (
             "entry_args",
@@ -558,7 +652,7 @@ def main() -> None:
     parser.add_argument("--dtype", choices=("u16", "u32"), default="u16", help="public raw storage dtype")
     parser.add_argument(
         "--record-kind",
-        choices=("auto", "entry", "base", "table", "act_tile", "act_entries"),
+        choices=("auto", "entry", "base", "table", "act_tile", "act_entries", "record_window"),
         default="auto",
         help="probe record format; auto selects known HMX* probe records by magic",
     )

@@ -881,6 +881,13 @@ Dead-end implication from the current probes:
   `n=(i//8)*4` and `n+1`.  Writing markers across the first 256 u32 words of
   `out_table[0]` maps offset `j=group*32+row` to `m32_group=0`, `row`, and
   `n=32*(group//2)+2*(group&1)` / `n+1`.
+- The HMXR record-window probe ties the active tables and adjacent records
+  together in one native memory window.  With `base=0x02d99408`, activation
+  compact table starts at `base-0x180`, output compact table starts at
+  `base+0x98`, pre-base metadata occupies `base-0x80..base-0x04`, and
+  post-output metadata plus a neighboring restore/public-table-looking pointer
+  table starts after the compact output table.  The neighboring table is not
+  the HNH `out_desc+0` compact table.
 - Applying those visible base-record scalar fields to the custom imported-sidecar
   flow is not a semantic bridge.  The focused artifact
   `output_w4a16_import_native_sidecar_bd00_base_record_fields_256/` uses
@@ -902,10 +909,10 @@ Before new custom changes, decode or instrument the native path in this order:
    as the active native path.  Its input is a prebuilt record, not the
    `0x3d9920` builder stack path.
 2. The prebuilt record scalar fields, first 64 table entries, activation table
-   input mapping, and output marker mapping are now decoded; do not repeat
-   scalar-only copies into custom.  The next missing native evidence is the
-   relation between this compact table view, the adjacent wrapper metadata, and
-   any loop state that selects or advances the tables.
+   input mapping, output marker mapping, and immediate record window are now
+   decoded; do not repeat scalar-only copies into custom.  The next missing
+   native evidence is the exact meaning of the pre-base/post-output metadata and
+   any loop state that selects or advances the compact tables.
 3. Compare the native entry/base records against the custom descriptor dump
    before changing custom code.  Any difference should be classified as carrier
    lowering, tensor table layout, descriptor scalar, mask helper input, control

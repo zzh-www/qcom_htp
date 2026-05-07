@@ -243,6 +243,12 @@ viewed as `[8,32,256]`, marker `i` lands at `m32_group=i%8`, `row=0`,
 `n=(i//8)*4`.  This is a real output-table order mismatch versus the current
 custom 512-entry `row4 * stride + tile` table construction.
 
+The HMXR record-window probe now anchors the compact tables around the active
+prebuilt record: `act_table_ptr = base-0x180`, `out_table_ptr = base+0x98`,
+pre-base metadata sits at `base-0x80..base-0x04`, and post-output metadata plus
+an adjacent restore/public-table-looking pointer table starts after the compact
+output table.  The adjacent table is not the HNH `out_desc+0` compact table.
+
 2026-05-08 native-field probes: on the closest native-surface flow
 (`native_nmajor_k4_lohi` plus `native_a16_nobias`), forcing descriptor
 `act/out +0x08` to `8` as a builder-formula hypothesis improves only to

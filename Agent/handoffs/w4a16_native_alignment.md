@@ -234,6 +234,7 @@ Native entry and descriptor follow-up:
 | `/tmp/libQnnHtpV75Skel_hmx_act_entry_probe.so` | Per-entry activation probe (`HMXV`) maps compact `act_table[i]` to logical activation coordinates: first samples are `m=(i//8)*4` and `m+1`, with `k=(i%8)*32 + {0,1,2}`. |
 | `/tmp/libQnnHtpV75Skel_hmx_out_marker_probe.so` | Output table marker probe writes a unique marker to each compact `out_table[i]`.  In exported native `Y.raw` viewed as `[8,32,256]`, marker `i` lands at `m32_group=i%8`, `row=0`, `n=(i//8)*4` and `n+1`. |
 | `/tmp/libQnnHtpV75Skel_hmx_out_block_probe.so` | Output block0 marker probe maps the first 256 u32 offsets inside `out_table[0]`: for `j=group*32+row`, the marker lands at `m32_group=0`, `row`, and `n=32*(group//2)+2*(group&1)` / `n+1`. |
+| `/tmp/libQnnHtpV75Skel_hmx_record_window_probe.so` | Record-window probe (`HMXR`) dumps 496 u32 words starting at `base-0x180 = 0x02d99288`: compact activation table at words `0..63`, pre-base metadata at `64..95`, base record at `96..131`, compact output table at `134..197`, post-output metadata at `198..223`, and an adjacent restore/public-table-looking sample starting at `0x02d99608`. |
 | `output_w4a16_import_native_sidecar_bd00_maskarg6_a0_256/` | Forcing custom `HMX_W4A16_MASK_ARG6=0xa0` to match native mask word `[12]` is a no-op for correctness: `3298/65536`, `sorted_equal=True`, best row32 roll `32:65536`, main-op `95152` cycles. |
 | `output_w4a16_import_native_sidecar_bd00_base_record_fields_256/` | Applying the visible base-record scalar fields to the imported-sidecar custom flow (`act_y=64`, `out_y=64`, `out_n_tiles=32`, `mask[12]=0xa0`) fails graph execution before a valid optrace/output.  The analyzer still records the graph-boundary mismatch: custom weight carrier `UFixed8` vs native `SFixed8`, and custom control shape `[1,1,1,1]` vs native `[1]`. |
 
@@ -277,6 +278,13 @@ compact output table entries use the opposite visible order in exported
 current custom table copy is still built as a 512-entry row4-expanded table
 indexed `row4 * stride + tile`, so its output-table order is not the compact
 native order observed by the marker probe.
+
+The record-window dump anchors those tables in one contiguous native record
+window.  The active `act_table_ptr` is exactly `base-0x180`, and the active
+`out_table_ptr` is `base+0x98`; there are two metadata regions around the base
+record, plus a neighboring pointer table starting at `base+0x200`.  Treat that
+neighbor as adjacent QNN wrapper/layout state for now; it is not the HNH compact
+output table passed at `out_desc+0`.
 
 Post descriptor-dump-enrichment recheck:
 
