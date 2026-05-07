@@ -37,6 +37,10 @@ for cmd in "${iter_cmds[@]}"; do
   $QNN_SDK_ROOT/bin/x86_64-linux-clang/qairt-converter \
       -i model.onnx \
       --quantization_overrides quant_overrides.json \
+      --source_model_input_layout A NONTRIVIAL \
+      --desired_input_layout A NONTRIVIAL \
+      --source_model_output_layout Y NONTRIVIAL \
+      --desired_output_layout Y NONTRIVIAL \
       -o model.dlc 2>&1 | tee _convert.log | tail -5
 
   rm -rf ctx
@@ -58,8 +62,7 @@ for cmd in "${iter_cmds[@]}"; do
   ssh "$DEVICE" "cat > $DEV_DIR/runtime_inputs_u8/a.raw"   < runtime_inputs_u8/a.raw
   ssh "$DEVICE" "cat > $DEV_DIR/htp_config.json"           < "$SCRIPT_DIR/htp_config.json"
   ssh "$DEVICE" "cat > $DEV_DIR/htp_backend_ext.json"      < "$SCRIPT_DIR/htp_backend_ext.json"
-  printf 'input_0:=runtime_inputs_u8/a.raw\n' > input_list_dev.txt
-  ssh "$DEVICE" "cat > $DEV_DIR/input_list.txt"            < input_list_dev.txt
+  ssh "$DEVICE" "cat > $DEV_DIR/input_list.txt"            < runtime_input_list.txt
 
   ssh "$DEVICE" "cd $DEV_DIR && rm -rf out && \
       LD_LIBRARY_PATH=../:/vendor/lib64 ADSP_LIBRARY_PATH=../ \
@@ -71,6 +74,7 @@ for cmd in "${iter_cmds[@]}"; do
         --output_dir out \
         --config_file htp_config.json \
         --use_native_input_files \
+        --use_native_output_files \
         --num_inferences 3 \
         --perf_profile burst 2>&1 | tail -5" > _run.log
 

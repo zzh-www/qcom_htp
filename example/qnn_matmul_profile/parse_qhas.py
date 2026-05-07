@@ -90,11 +90,26 @@ def _kernel_counts(htp_path: str) -> dict:
     }
 
 
+def _first_existing(*paths: str) -> str | None:
+    for path in paths:
+        if os.path.isfile(path):
+            return path
+    return None
+
+
 def load_qhas_fixed(cfg_dir: str) -> dict | None:
-    qhas = os.path.join(cfg_dir, "chrometrace_qnn_htp_analysis_summary.json")
-    htp  = os.path.join(cfg_dir, "chrometrace_htp.json")
-    if not os.path.isfile(qhas):
+    qhas = _first_existing(
+        os.path.join(cfg_dir, "optrace", "chrometrace_qnn_htp_analysis_summary.json"),
+        os.path.join(cfg_dir, "chrometrace_qnn_htp_analysis_summary.json"),
+    )
+    htp = _first_existing(
+        os.path.join(cfg_dir, "optrace", "chrometrace_htp.json"),
+        os.path.join(cfg_dir, "chrometrace_htp.json"),
+    )
+    if qhas is None:
         return None
+    if htp is None:
+        htp = ""
     d = json.load(open(qhas))
     o = d["data"]["htp_overall_summary"]["data"][0]
 

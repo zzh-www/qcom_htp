@@ -3,11 +3,16 @@
 This note describes the native QNN implementation path for the canonical
 256^3 W4A16 artifact:
 
-`example/qnn_matmul_profile/output_codex_native_w4a16_same_custom_256/`
+`example/qnn_matmul_profile/output_native_w4a16_conv_ref_256/`
 
 Use this as the first reference before changing the custom
 `HmxU16I4ToU16MatMul` path.  The custom op should be aligned to this native
 path, not to an analytic formula.
+
+The older
+`example/qnn_matmul_profile/output_codex_native_w4a16_same_custom_256/`
+artifact is historical only: it used float runtime input/output and did not
+record the required layout-preservation converter flags.
 
 ## Current Direction
 
@@ -62,8 +67,9 @@ The visible final HTP tensor contract is already known:
 ```text
 activation  UFixed16 [1,8,32,256]
 weight      SFixed8  [1,1,128,256]
-bias/control Int32   [1,8,1,64]
+bias        Int32    [1,8,1,128]
 control     Int32    [1]
+extra ctrl  Int32    [1,1,1,3]
 output      UFixed16 [1,8,32,256]
 ```
 
@@ -104,7 +110,7 @@ field in the native wrapper record it reproduces.
 | quant override | `quant_overrides.json` | A/Y use A16 quantization, W uses symmetric 4-bit param encoding. |
 | converter graph-before | `ctx/conv_bottom_mapping_graph_before.json` | High-level lowering is `Convert -> Transpose -> Conv2d -> CastInt4ToInt8 -> Transpose -> Convert`; W is still `UFixed8` metadata here. |
 | final HTP graph | `ctx/conv_bottom_mapping.json` | Ctxgen expands the graph to 210 HTP nodes and introduces `weights_to_vtcm`, `bias_to_vtcm`, `ForceFormat_Crouton`, and `ConvLayer_s1.opt`. |
-| context binary | `ctx/conv_ctx.bin` | Holds the prepared 2048B no-bias/control sidecar and 32768B native W4 sidecar. |
+| context binary | `ctx/conv_ctx.bin` | Holds prepared static records for the W4 sidecar, bias sidecar, and small control tensors. |
 | native output oracle | `device_out/Y.raw` | The custom output oracle; analytic formulas are secondary diagnostics. |
 | optrace products | `optrace/` | Standard performance source: timeline, profile text, QHAS summary, decoded `summary.json`. |
 | native Conv tensor dump | `example/qnn_hmx_matmul_w4a16/standard_flow/custom_w4a16/out/native_conv_tensor_dump_256/` | Diagnostic graph that keeps native W4 Conv lowering and records the QHPI tensor surface exposed to a custom op after Conv/layout restore. |
@@ -124,7 +130,7 @@ float ONNX Conv
        W appears as CastInt4ToInt8 / UFixed8 at this stage
     -> ctxgen HTP graph
        weights_to_vtcm produces SFixed8 [1,1,128,256]
-       bias_to_vtcm produces Int32 [1,8,1,64]
+       bias_to_vtcm produces Int32 [1,8,1,128]
        ForceFormat_Crouton produces UFixed16 [1,8,32,256]
     -> ConvLayer_s1.opt runtime event
        QNN wrapper builds native descriptors and mask state
@@ -275,12 +281,13 @@ The core Conv tensor contract at the final HMX node is:
 |---|---|---|
 | `weights_to_vtcm` input | `SFixed8` (`data_type=776`), `[1,1,128,256]` | Static prepared W4 carrier. |
 | `weights_to_vtcm` output | `SFixed8` (`data_type=776`), `[1,1,128,256]` | Written to VTCM, 32768 bytes. |
-| `bias_to_vtcm` input | `Int32` (`data_type=50`), `[1,8,1,64]` | Static no-bias/control sidecar, 2048 bytes. |
-| `bias_to_vtcm` output | `Int32` (`data_type=50`), `[1,8,1,64]` | Written to VTCM. |
+| `bias_to_vtcm` input | `Int32` (`data_type=50`), `[1,8,1,128]` | Static bias/control sidecar, 4096 bytes. |
+| `bias_to_vtcm` output | `Int32` (`data_type=50`), `[1,8,1,128]` | Written to VTCM. |
 | `ConvLayer_s1.opt` input 0 | `UFixed16` (`data_type=1046`), `[1,8,32,256]` | HMX activation surface after `ForceFormat_Crouton`. |
 | `ConvLayer_s1.opt` input 1 | `SFixed8` (`data_type=776`), `[1,1,128,256]` | Prepared W4 sidecar. |
-| `ConvLayer_s1.opt` input 2 | `Int32` (`data_type=50`), `[1,8,1,64]` | Prepared bias/control sidecar. |
+| `ConvLayer_s1.opt` input 2 | `Int32` (`data_type=50`), `[1,8,1,128]` | Prepared bias/control sidecar. |
 | `ConvLayer_s1.opt` input 3 | `Int32` (`data_type=50`), `[1]` | Small control tensor. |
+| `ConvLayer_s1.opt` input 4 | `Int32` (`data_type=50`), `[1,1,1,3]` | Extra small control tensor. |
 | `ConvLayer_s1.opt` output | `UFixed16` (`data_type=1046`), `[1,8,32,256]` | HMX output surface. |
 
 `ConvLayer_s1.opt` reports `mem_vtcm_read=165888` and
@@ -289,7 +296,7 @@ The core Conv tensor contract at the final HMX node is:
 ```text
 activation  [1,8,32,256] u16  = 131072 bytes
 weight      [1,1,128,256] i4   =  32768 bytes
-bias/control                 =   2048 bytes
+bias/control                 =   4096 bytes
 output      [1,8,32,256] u16  = 131072 bytes
 ```
 
@@ -299,18 +306,19 @@ The canonical native context binary is:
 
 ```text
 ctx/conv_ctx.bin
-size:   94208 bytes
-sha256: 7e66eb07a341473e714e4a540daa6ba14ddecf6ea2b81efb8a253c61c5dea382
+size:   90112 bytes
+sha256: b48db57c34c02741ded507eda349a4ca7e094c92302d28e573eddbaeef177e91
 ```
 
-Useful sidecar regions:
+Current clean-context sidecar note:
 
 | Region | Size | SHA256 | First bytes |
 |---|---:|---|---|
-| `conv_ctx.bin+0xc400` bias/control | 2048 | `e595cebf33d435d88cc1e2d0d7382a122ed389f76f97b41ec9e62d736662bdf3` | `00 80 00 80 ...` |
-| `conv_ctx.bin+0xcc00` W4 weight | 32768 | `b0dbe7545ae03e7c5f9a2a4da06ba27fee7164b58948709ea69795845c261297` | `d9 ea fb 0c b6 c7 d9 ea ...` |
+| `conv_ctx.bin+0xbd00` candidate | 32768 | `6f1016e71e87b727032c17528eaae834dab48017afbe5feae93703cd01a25bf6` | current best imported candidate, not a complete semantic fix |
 
-The W4 sidecar order decoded so far is:
+The historical float-I/O artifact had a byte-for-byte generated W4 region at
+`conv_ctx.bin+0xcc00`; keep that only as a packing-order diagnostic.  The W4
+sidecar order decoded from that historical region is:
 
 ```text
 N32 tile -> K8 group -> n-in-tile -> k4 pair
@@ -319,42 +327,36 @@ twos-complement nibbles
 ```
 
 `W4_PACK_ORDER=native_nmajor_k4_lohi` reproduces this 32768-byte native stream
-byte-for-byte.  That proves byte packing, but not the full native runtime
-contract.
+byte-for-byte for the old artifact.  It does not reproduce the full clean
+native context contract.
 
 ## Runtime And Performance Path
 
 The standard native optrace directory is:
 
-`example/qnn_matmul_profile/output_codex_native_w4a16_same_custom_256/optrace/`
+`example/qnn_matmul_profile/output_native_w4a16_conv_ref_256/optrace/`
 
 For the captured run:
 
 | Scope | Cycles / time |
 |---|---:|
-| HTP timeline span | `178332` cycles |
-| Sum of pid0 events | `477257` cycles |
-| qnn-net-run execute stat 1 | `4416 us` QNN execute, `476779` accelerator cycles |
-| qnn-net-run execute stat 2 | `2746 us` QNN execute, `356723` accelerator cycles |
-| qnn-net-run execute stat 3 | `2537 us` QNN execute, `308367` accelerator cycles |
+| HTP timeline span | `313032` cycles |
+| Sum of pid0 events | `542923` cycles |
 
 The `conv1x1` group in `optrace/summary.json` breaks down as:
 
 | Event | Cycles | Packets | Notes |
 |---|---:|---:|---|
-| `q::ConvLayer.opt.weights_to_vtcm` | `3139` | `56` | Static W4 sidecar movement. |
-| `q::ConvLayer.opt.bias_to_vtcm` | `886` | `44` | Static bias/control movement. |
-| `DmaCheckpointSet` | `28` | `4` | Sidecar synchronization. |
-| `q::ConvLayer.opt.bias_to_vtcm` | `163` | `22` | Small follow-up sidecar event. |
-| `q::ForceFormat_Crouton` | `5472` | `1618` | Conv input/output format work. |
-| `q::ConvLayer_s1.opt` | `7702` | `977` | Closest native HMX kernel-only comparator. |
-| `q::Reshape` | `18749` | `9562` | Conv output reshape / movement. |
-| `q::ForceFormat_Crouton` | `2327` | `1618` | Additional format work. |
+| `q::ConvLayer.opt.weights_to_vtcm` | `3323` | n/a | Static W4 sidecar movement. |
+| `q::ConvLayer.opt.bias_to_vtcm` | `878` | n/a | Static bias/control movement. |
+| `q::ForceFormat_Crouton` | `7341` | n/a | Conv format work. |
+| `q::ConvLayer_s1.opt` | `7893` | n/a | Closest native HMX kernel-only comparator. |
+| native `conv1x1` QNN-op aggregate | `37287` | n/a | Full native Conv group in qnn-op grouping. |
 
 So there are three different performance scopes:
 
-1. Kernel-only native comparator: `q::ConvLayer_s1.opt = 7702` cycles.
-2. Native Conv group comparator: all `conv1x1` HTP events, about `38466` cycles
+1. Kernel-only native comparator: `q::ConvLayer_s1.opt = 7893` cycles.
+2. Native Conv group comparator: all `conv1x1` HTP events, about `37287` cycles
    in the qnn-profile grouped stat.
 3. End-to-end execute comparator: qnn-net-run execute stats, including input
    conversion, transposes, output dequant/export, RPC, and accelerator wait.
@@ -675,8 +677,9 @@ The native HMX boundary for the 256 case is `ConvLayer_s1.opt` with:
 ```text
 activation  UFixed16 [1,8,32,256]
 weight      SFixed8  [1,1,128,256]
-bias        Int32    [1,8,1,64]
+bias        Int32    [1,8,1,128]
 control     Int32    [1]
+extra ctrl  Int32    [1,1,1,3]
 output      UFixed16 [1,8,32,256]
 ```
 
@@ -688,17 +691,16 @@ not the full native route:
 | Graph-before weight | `UFixed8 [1,1,256,256]` after `CastInt4ToInt8`, then private ctxgen W4 lowering. | Custom initializer is already a packed sidecar; bottom mapping still records `UFixed8 [1,1,128,256]` despite XML/converter requesting `SFixed8`. |
 | Final HMX weight | `SFixed8 [1,1,128,256]`, produced by `weights_to_vtcm`. | Raw bytes can match native K4 sidecar, but carrier metadata remains custom `UFixed8` at graph boundary. |
 | Activation/output | QNN internal HNH Crouton table/data pointers. | Custom copies and expands public QHPI block tables. |
-| Bias/control sidecar | `Int32 [1,8,1,64]`, native no-bias bytes for this oracle. | `native_a16_nobias` reproduces raw bytes. |
+| Bias/control sidecar | `Int32 [1,8,1,128]` in the clean native oracle. | Current custom generated/imported probes still differ at the graph-control boundary. |
 | Small control tensor | `Int32 [1]`. | Ctxgen maps current custom control as `[1,1,1,1]`; direct use is worse than local control. |
 
 The fastest custom `native_op` probes are not this boundary: their custom op
 input/output tensors are logical `[1,1,256,256]`, and QNN inserts a large
 `ForceFormat_Crouton` around that shape.  The custom `tiled` probes are closer
 to native at the tensor surface because activation/output become
-`UFixed16 [1,8,32,256]`.  The `native_a16_w4compact` bias sidecar can also match
-native's compact `[1,8,1,64]` shape, but its folded-bias content is not the
-native no-bias/control sidecar.  For the no-bias native oracle, use
-`native_a16_nobias` to reproduce the repeated `0x80008000` 2048B sidecar.
+`UFixed16 [1,8,32,256]`.  The older compact `[1,8,1,64]` bias-sidecar probes
+remain historical diagnostics; the clean native oracle currently exposes
+`[1,8,1,128]` at the final HNH boundary.
 
 The confirmed remaining deltas are therefore:
 

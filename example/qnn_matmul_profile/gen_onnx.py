@@ -21,6 +21,9 @@ Writes under <out_dir>/:
     quant_overrides.json  (unless fp16)
     input_A.raw           (fp32 input data, M*K values)
     input_list.txt        (qnn-net-run input list, "A:=input_A.raw")
+    runtime_inputs_native/A.raw
+    runtime_input_list.txt
+    native_io.json
 """
 import argparse, json, os
 import numpy as np
@@ -49,6 +52,26 @@ def _symmetric_encoding(bits: int) -> dict:
         "min":          -1.0,
         "max":           1.0,
     }
+
+
+def _pack_u4(values: np.ndarray) -> np.ndarray:
+    flat = values.reshape(-1).astype(np.uint8) & 0x0F
+    if flat.size % 2:
+        flat = np.pad(flat, (0, 1))
+    return (flat[0::2] | (flat[1::2] << 4)).astype(np.uint8, copy=False)
+
+
+def _quantize_native(values: np.ndarray, bits: int) -> tuple[np.ndarray, dict]:
+    enc = _symmetric_encoding(bits)
+    qmax = (1 << bits) - 1
+    q = np.clip(np.rint(values / enc["scale"] - enc["offset"]), 0, qmax)
+    if bits == 4:
+        return _pack_u4(q), {"storage": "uint4_packed_lohi", "bytes": int((q.size + 1) // 2)}
+    if bits <= 8:
+        return q.astype(np.uint8), {"storage": "uint8", "bytes": int(q.size)}
+    if bits <= 16:
+        return q.astype("<u2"), {"storage": "uint16_le", "bytes": int(q.size * 2)}
+    raise ValueError(f"unsupported native activation bitwidth: {bits}")
 
 
 def _emit_onnx(cfg: dict, path: str, m: int, k: int, n: int):
@@ -97,13 +120,40 @@ def _emit_quant(cfg: dict, path: str, n: int):
         json.dump(enc, f, indent=2)
 
 
-def _emit_input(out_dir: str, m: int, k: int):
+def _emit_input(cfg: dict, out_dir: str, m: int, k: int):
     rng = np.random.default_rng(0xBEEF)
     A = rng.uniform(-0.5, 0.5, size=(1, m, k)).astype(np.float32)
     raw = os.path.join(out_dir, "input_A.raw")
     A.tofile(raw)
     with open(os.path.join(out_dir, "input_list.txt"), "w") as f:
         f.write("A:=input_A.raw\n")
+
+    native_dir = os.path.join(out_dir, "runtime_inputs_native")
+    os.makedirs(native_dir, exist_ok=True)
+    native_raw = os.path.join(native_dir, "A.raw")
+    if cfg["dtype"] == "float":
+        A.astype("<f2").tofile(native_raw)
+        native_meta = {"storage": "float16_le", "bytes": int(A.size * 2)}
+    else:
+        native_values, native_meta = _quantize_native(A, cfg["act"])
+        native_values.tofile(native_raw)
+
+    with open(os.path.join(out_dir, "runtime_input_list.txt"), "w") as f:
+        f.write("A:=runtime_inputs_native/A.raw\n")
+
+    meta = {
+        "input_name": "A",
+        "legacy_fp32_input": "input_A.raw",
+        "native_input": "runtime_inputs_native/A.raw",
+        "runtime_input_list": "runtime_input_list.txt",
+        "native_input_storage": native_meta["storage"],
+        "native_input_bytes": native_meta["bytes"],
+        "shape": [1, m, k],
+    }
+    if cfg["dtype"] == "quant":
+        meta["activation_encoding"] = _symmetric_encoding(cfg["act"])
+    with open(os.path.join(out_dir, "native_io.json"), "w") as f:
+        json.dump(meta, f, indent=2)
 
 
 def main():
@@ -121,7 +171,7 @@ def main():
     _emit_onnx(cfg, os.path.join(args.out_dir, "matmul.onnx"), args.m, args.k, args.n)
     if cfg["dtype"] == "quant":
         _emit_quant(cfg, os.path.join(args.out_dir, "quant_overrides.json"), args.n)
-    _emit_input(args.out_dir, args.m, args.k)
+    _emit_input(cfg, args.out_dir, args.m, args.k)
 
     print(f"  [{args.config}] wrote {args.out_dir}/ (dtype={cfg['dtype']}, {args.m}x{args.k}x{args.n})")
 

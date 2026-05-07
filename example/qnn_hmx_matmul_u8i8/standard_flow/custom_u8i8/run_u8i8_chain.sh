@@ -25,6 +25,7 @@ CHAIN="${CHAIN:-8}"
 MODE="${MODE:-chain}"
 OUT_DIR="${OUT_DIR:-$SCRIPT_DIR/out/u8i8_${MODE}_${M}}"
 SKIP_DEVICE="${SKIP_DEVICE:-0}"
+NATIVE_OUTPUT="${NATIVE_OUTPUT:-1}"
 
 mkdir -p "$OUT_DIR"
 cd "$SCRIPT_DIR"
@@ -145,12 +146,20 @@ else
 fi
 ssh "$DEVICE" "cat > $REMOTE/input_list.txt" < "$OUT_DIR/input_list.txt"
 RUN_STATUS=0
-ssh "$DEVICE" "cd $REMOTE && rm -rf out && LD_LIBRARY_PATH=../:.:/vendor/lib64 ADSP_LIBRARY_PATH=../ ../qnn-net-run --backend ../libQnnHtp.so --retrieve_context u8i8_ctx.bin --op_packages ../libQnnHmxMatMulU8I8_cpu.so:QnnHmxMatMulU8I8InterfaceProvider:CPU,../libQnnHmxMatMulU8I8_htp.so:QnnHmxMatMulU8I8InterfaceProvider:HTP --input_list input_list.txt --profiling_level detailed --profiling_option optrace --output_dir out --config_file htp_config.json --use_native_input_files --num_inferences 3 --perf_profile burst 2>&1" \
+OUTPUT_FLAGS=""
+if [ "$NATIVE_OUTPUT" = "1" ]; then
+    OUTPUT_FLAGS="--use_native_output_files"
+fi
+ssh "$DEVICE" "cd $REMOTE && rm -rf out && LD_LIBRARY_PATH=../:.:/vendor/lib64 ADSP_LIBRARY_PATH=../ ../qnn-net-run --backend ../libQnnHtp.so --retrieve_context u8i8_ctx.bin --op_packages ../libQnnHmxMatMulU8I8_cpu.so:QnnHmxMatMulU8I8InterfaceProvider:CPU,../libQnnHmxMatMulU8I8_htp.so:QnnHmxMatMulU8I8InterfaceProvider:HTP --input_list input_list.txt --profiling_level detailed --profiling_option optrace --output_dir out --config_file htp_config.json --use_native_input_files $OUTPUT_FLAGS --num_inferences 3 --perf_profile burst 2>&1" \
     > "$OUT_DIR/run.log" 2>&1 || RUN_STATUS=$?
 
 tail -40 "$OUT_DIR/run.log"
 mkdir -p "$OUT_DIR/device_out"
-ssh "$DEVICE" "cat $REMOTE/out/Result_0/out.raw 2>/dev/null" > "$OUT_DIR/device_out/out.raw" 2>/dev/null || true
+if [ "$NATIVE_OUTPUT" = "1" ]; then
+    ssh "$DEVICE" "cat $REMOTE/out/Result_0/out_native.raw 2>/dev/null || cat $REMOTE/out/Result_0/out.raw 2>/dev/null" > "$OUT_DIR/device_out/out.raw" 2>/dev/null || true
+else
+    ssh "$DEVICE" "cat $REMOTE/out/Result_0/out.raw 2>/dev/null || cat $REMOTE/out/Result_0/out_native.raw 2>/dev/null" > "$OUT_DIR/device_out/out.raw" 2>/dev/null || true
+fi
 ssh "$DEVICE" "cat $REMOTE/out/qnn-profiling-data_0.log 2>/dev/null" > "$OUT_DIR/device_out/qnn-profiling-data_0.log" 2>/dev/null || true
 
 if [ "${DECODE_OPTRACE:-1}" = "1" ]; then
@@ -175,9 +184,18 @@ refs = list(out_dir.glob("*.out_ref_u8.npy"))
 if not raw.exists() or not refs:
     print("  bit-exact: failed (missing output or reference)")
     raise SystemExit(2)
-out = np.fromfile(raw, dtype=np.float32).reshape(shape, shape)
 ref = np.load(refs[0])
-out_u8 = np.round(out).astype(np.uint8)
+raw_size = raw.stat().st_size
+q_bytes = ref.size * ref.dtype.itemsize
+f_bytes = ref.size * np.dtype(np.float32).itemsize
+if raw_size == q_bytes:
+    out_u8 = np.fromfile(raw, dtype=ref.dtype).reshape(ref.shape)
+elif raw_size == f_bytes:
+    out = np.fromfile(raw, dtype=np.float32).reshape(ref.shape)
+    out_u8 = np.round(out).astype(ref.dtype)
+else:
+    print(f"  bit-exact: failed ({raw} has unexpected size {raw_size})")
+    raise SystemExit(2)
 ok = int((out_u8 == ref).sum())
 print(f"  bit-exact: {ok}/{out_u8.size}")
 if ok != out_u8.size:

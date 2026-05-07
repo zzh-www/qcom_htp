@@ -15,6 +15,26 @@ Acceptance rule for this family:
    `q::ConvLayer_s1.opt`; full native graph timeline also includes
    transpose/quantize/dequantize work.
 
+2026-05-08 standardization update: the old
+`example/qnn_matmul_profile/output_codex_native_w4a16_same_custom_256/`
+artifact is historical because it used float input/output at qnn-net-run time
+and did not record the required converter layout-preservation flags.  Refresh
+the native oracle with
+`example/qnn_matmul_profile/run_native_w4a16_conv_ref.sh` before taking new
+correctness or performance numbers from QNN native.
+
+Current clean native oracle:
+
+```text
+example/qnn_matmul_profile/output_native_w4a16_conv_ref_256/
+```
+
+This artifact uses native u16 runtime input/output, converter NONTRIVIAL layout
+flags on A/Y, a context binary run via `--retrieve_context`, and the standard
+`optrace/` directory.  The native output oracle is
+`device_out/Y.raw`; the native performance reference is
+`optrace/summary.json`.
+
 Native-path first rule: before adding new custom probes, read
 [`w4a16_qnn_native_path.md`](w4a16_qnn_native_path.md).  The current blocker is
 the native `ConvLayer_s1.opt` contract as a whole: signed W4 sidecar carrier,
@@ -36,11 +56,11 @@ bash example/qnn_hmx_matmul_w4a16/build_x86.sh
 Run the current best diagnostic custom flow:
 
 ```bash
-OUT_DIR="$PWD/example/qnn_matmul_profile/output_codex_w4a16_control_i32_256" \
+OUT_DIR="$PWD/example/qnn_matmul_profile/output_w4a16_k4pack_vs_nativeio_256" \
 M=256 K=256 N=256 CHAIN=1 MODE=chain_qdq \
 NATIVE_OUTPUT=1 STRICT_OPTRACE=1 \
-W4_PACK_ORDER=native_nmajor_kpair_hilo \
-VERIFY_NATIVE_RAW="$PWD/example/qnn_matmul_profile/output_codex_native_w4a16_same_custom_256/device_out/Y.raw" \
+W4_PACK_ORDER=native_nmajor_k4_lohi W4_NIBBLE_ENCODING=twos \
+VERIFY_NATIVE_RAW="$PWD/example/qnn_matmul_profile/output_native_w4a16_conv_ref_256/device_out/Y.raw" \
 VERIFY_NATIVE_TRANSPOSE=1 \
 GEN_EXTRA_ARGS="--bias-layout native_a16 --a16-quant-contract native --reference-contract native --final-output-rank 3d" \
 bash example/qnn_hmx_matmul_w4a16/standard_flow/custom_w4a16/run_w4a16_chain.sh
@@ -98,20 +118,24 @@ is written into the 256-byte dump payload:
 | `3` | source QHPI output block table before expansion |
 
 Prepared native W4 sidecars can be imported into the standard generator flow for
-diagnostics. Extract the native 256^3 sidecar first, then pass it through
-`GEN_EXTRA_ARGS`:
+diagnostics.  The old float-I/O artifact had a byte-for-byte generated W4
+sidecar at `conv_ctx.bin+0xcc00`; that offset is historical and must not be
+used as the current oracle.  In the current clean native reference, the best
+candidate 32KB region starts at `ctx/conv_ctx.bin+0xbd00`.  Importing it proves
+an important layout fact but does not make the custom op bit-exact:
 
 ```bash
-dd if=example/qnn_matmul_profile/output_codex_native_w4a16_same_custom_256/ctx/conv_ctx.bin \
-  of=/tmp/native_w4a16_sidecar_256.raw bs=1 skip=$((0xcc00)) count=32768 status=none
+dd if=example/qnn_matmul_profile/output_native_w4a16_conv_ref_256/ctx/conv_ctx.bin \
+  of=/tmp/native_w4a16_ref256_sidecar_0xbd00.raw bs=1 skip=$((0xbd00)) count=32768 status=none
 
 GEN_EXTRA_ARGS="--bias-layout native_a16 --a16-quant-contract native \
   --reference-contract native --final-output-rank 3d \
-  --w4-native-sidecar-raw /tmp/native_w4a16_sidecar_256.raw" \
+  --w4-native-sidecar-raw /tmp/native_w4a16_ref256_sidecar_0xbd00.raw" \
 bash example/qnn_hmx_matmul_w4a16/standard_flow/custom_w4a16/run_w4a16_chain.sh
 ```
 
-The generator can also synthesize that sidecar without importing raw bytes:
+The generator can synthesize the historical native-K4 sidecar order without
+importing raw bytes:
 
 ```bash
 W4_PACK_ORDER=native_nmajor_k4_lohi \
@@ -127,18 +151,40 @@ Durable native oracle:
 
 | Artifact | Path |
 |---|---|
-| native output | `example/qnn_matmul_profile/output_codex_native_w4a16_same_custom_256/device_out/Y.raw` |
-| native optrace | `example/qnn_matmul_profile/output_codex_native_w4a16_same_custom_256/optrace/` |
-| refreshed custom probe | `example/qnn_matmul_profile/output_codex_w4a16_control_i32_256/` |
+| native output | `example/qnn_matmul_profile/output_native_w4a16_conv_ref_256/device_out/Y.raw` |
+| native input | `example/qnn_matmul_profile/output_native_w4a16_conv_ref_256/runtime_inputs_native/A.raw` |
+| native context | `example/qnn_matmul_profile/output_native_w4a16_conv_ref_256/ctx/conv_ctx.bin` |
+| native optrace | `example/qnn_matmul_profile/output_native_w4a16_conv_ref_256/optrace/` |
+| refreshed custom probe | `example/qnn_matmul_profile/output_w4a16_k4pack_vs_nativeio_256/` |
+| imported clean-native sidecar probe | `example/qnn_matmul_profile/output_w4a16_import_native_sidecar_bd00_vs_nativeio_256/` |
 
-Latest refreshed custom result:
+Current clean native boundary:
 
-| Check | Result |
+| Tensor | Contract |
+|---|---|
+| activation | `UFixed16 [1,8,32,256]` |
+| weight | `SFixed8 [1,1,128,256]` |
+| bias | `Int32 [1,8,1,128]` |
+| control | `Int32 [1]` |
+| extra control | `Int32 [1,1,1,3]` |
+| output | `UFixed16 [1,8,32,256]` |
+
+Latest refreshed custom results:
+
+| Probe | Result |
 |---|---:|
-| output vs native | `4229/65536`, maxdiff `65535` |
-| custom main-op cycles | `94579` |
-| custom timeline span | `134324` |
-| custom sum pid0 event cycles | `134416` |
+| generated native-K4 pack vs clean native output | `2883/65536`, maxdiff `65535` |
+| generated native-K4 custom main-op cycles | `94809` |
+| generated native-K4 custom timeline span | `134987` |
+| imported `0xbd00` sidecar vs clean native output | `3298/65536`, maxdiff `65535` |
+| imported `0xbd00` sidecar custom main-op cycles | `94196` |
+| imported `0xbd00` sidecar custom timeline span | `136463` |
+| imported `0xbd00` sidecar permutation check | output multiset equals native; `np.roll(custom, 32, axis=0)` is `65536/65536` exact after native-output transpose |
+
+The imported clean-native sidecar result is the current strongest signal:
+arithmetic values are present, but the custom output is rotated by one 32-row
+block group.  Existing `HMX_W4A16_ROW4_BLOCK_ORDER_MOD8` does not fix this
+rotation.
 
 Post descriptor-dump-enrichment recheck:
 
@@ -225,16 +271,22 @@ sidecars/descriptors or inside the HNH interpretation of those prepared bytes.
 
 Prepared W4 sidecar decoding update:
 
-- The full native prepared W4 sidecar for the canonical 256^3 oracle starts at
-  `conv_ctx.bin+0xcc00`, not `+0xd000`.  Its 32768-byte SHA-256 is
-  `b0dbe7545ae03e7c5f9a2a4da06ba27fee7164b58948709ea69795845c261297`.
-- The physical byte order is `N32 tile -> K8 group -> n-in-tile -> k4`, where
-  each byte pairs `(k+0,k+4)`, `(k+1,k+5)`, `(k+2,k+6)`, and `(k+3,k+7)` with
-  two's-complement W4 nibbles.  `W4_PACK_ORDER=native_nmajor_k4_lohi` now
-  reproduces the native `+0xcc00` sidecar byte-for-byte.
-- Standard-flow contexts using `native_nmajor_k4_lohi` embed that exact 32KB
-  stream at custom `w4a16_ctx.bin+0xa000`, so the current low correctness class
-  is not caused by W4 sidecar raw bytes.
+- The `conv_ctx.bin+0xcc00` finding belongs to the historical float-I/O
+  artifact.  Keep it only as a byte-order diagnostic.
+- The current clean native reference has a different context layout.  The best
+  32KB candidate region tested so far starts at `conv_ctx.bin+0xbd00` and has
+  SHA-256
+  `6f1016e71e87b727032c17528eaae834dab48017afbe5feae93703cd01a25bf6`.
+- Importing that current clean-native candidate sidecar makes the custom output
+  multiset exactly match native and a row32 roll of `+32` become bit-exact, but
+  it still reports only `3298/65536` without the roll.  This points to a
+  row32-block output/table rotation plus remaining boundary differences, not a
+  pure arithmetic formula issue.
+- The historical physical byte order remains useful:
+  `N32 tile -> K8 group -> n-in-tile -> k4`, with each byte pairing
+  `(k+0,k+4)`, `(k+1,k+5)`, `(k+2,k+6)`, and `(k+3,k+7)` as two's-complement W4
+  nibbles.  `W4_PACK_ORDER=native_nmajor_k4_lohi` reproduces that historical
+  stream but does not reproduce the full clean native context.
 
 Latest native-K4 sidecar probes:
 
@@ -282,16 +334,16 @@ distribution still matches the saturated all-native-sidecar failure class
 sidecar bytes, the Conv-style input transpose, or the simple low-bit
 `MASK_ARG6` candidates implied by the native builder.
 
-Native performance reference from
-`output_codex_native_w4a16_same_custom_256/optrace/summary.json`:
+Native performance reference from the current clean artifact,
+`output_native_w4a16_conv_ref_256/optrace/summary.json`:
 
 | Native event/view | Cycles |
 |---|---:|
-| `q::ConvLayer_s1.opt` | `7702` |
-| `q::ConvLayer.opt.weights_to_vtcm` | `3139` |
-| `q::ConvLayer.opt.bias_to_vtcm` | `1049` |
-| native `conv1x1` QNN-op aggregate | `38466` |
-| native graph timeline span | `178332` |
+| `q::ConvLayer_s1.opt` | `7893` |
+| `q::ConvLayer.opt.weights_to_vtcm` | `3323` |
+| `q::ConvLayer.opt.bias_to_vtcm` | `878` |
+| native `conv1x1` QNN-op aggregate | `37287` |
+| native graph timeline span | `313032` |
 
 The default custom main op is still far slower than the native W4 kernel event.
 The native-shaped activation/output probe narrows main-op cycles to the old
@@ -342,8 +394,9 @@ Latest native-shaped loop probes:
 
 `DESC_M_TILES_OVERRIDE=32` identifies the native fast loop class but is not a
 semantic fix.  Combining `desc32` with physical-only tables proves the hot loop
-can run in native-class cycles (`6566`, versus native `7702`), but the output
-distribution falls back to the saturated failure class.  The
+can run in native-class cycles (`6566`, versus the current clean native kernel
+at `7893`), but the output distribution falls back to the saturated failure
+class.  The
 `OP_INPUT_LAYOUT=native` fast probe is not a valid native HMX surface comparison
 because the custom HMX output tensor is `[1,1,256,256]`, while the real native
 Conv HMX input/output tensors are `[1,8,32,256]`.
@@ -550,8 +603,8 @@ Dead ends already checked:
   override did not produce native `SFixed8`; ctxgen converted it to `UFixed16`.
 - `HMX_W4A16_ACT_PHYSICAL_ONLY` plus `HMX_W4A16_OUT_PHYSICAL_ONLY` lowers the
   custom main op to `29385` cycles but does not improve correctness
-  (`4092/65536`, maxdiff `65535`) and remains slower than native
-  `q::ConvLayer_s1.opt` (`7702` cycles). Artifact:
+  (`4092/65536`, maxdiff `65535`) and remains slower than the current clean
+  native `q::ConvLayer_s1.opt` (`7893` cycles). Artifact:
   `example/qnn_matmul_profile/output_codex_w4a16_native_nmajor_kpair_hilo_row4_nativebias_physical_tables_256/`.
 - `--bias-layout native_a16_w4compact` changes W4 bias/control to native-shaped
   `Int32 [1,8,1,64]` while preserving the current native-a16 control words. It
@@ -675,9 +728,9 @@ Payload sampling from
 | effective bias/control first two u32 | `0x80405524`, `0x40000092` |
 | default control words `[0..1]` | `1`, `1025` |
 
-For comparison, the native prepared W4 sidecar at
-`output_codex_native_w4a16_same_custom_256/ctx/conv_ctx.bin+0xcc00` starts with
-`0x0cfbead9`, `0xead9c7b6`, `0xc7b6a594`, `0xa5947362`.  The generated
+For historical comparison only, the prepared W4 sidecar in the old float-I/O
+artifact at `output_codex_native_w4a16_same_custom_256/ctx/conv_ctx.bin+0xcc00`
+starts with `0x0cfbead9`, `0xead9c7b6`, `0xc7b6a594`, `0xa5947362`.  The generated
 `native_nmajor_k4_lohi` path now passes these native prepared-W4 bytes to the
 HNH body, and the direct native-sidecar injection already proved that byte
 identity alone is not sufficient.

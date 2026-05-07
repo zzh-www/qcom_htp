@@ -170,6 +170,31 @@ def _spatial_stats(lhs: np.ndarray, rhs: np.ndarray) -> dict[str, Any]:
     }
 
 
+def _permutation_stats(lhs: np.ndarray, rhs: np.ndarray) -> dict[str, Any]:
+    stats: dict[str, Any] = {
+        "sorted_equal": bool(np.array_equal(np.sort(lhs.reshape(-1)), np.sort(rhs.reshape(-1)))),
+    }
+    if lhs.ndim != 2 or rhs.ndim != 2 or lhs.shape != rhs.shape:
+        return stats
+    rows, cols = lhs.shape
+    if rows % 32 == 0:
+        candidates = []
+        for blocks in range(rows // 32):
+            shift = blocks * 32
+            exact = int((np.roll(lhs, shift=shift, axis=0) == rhs).sum())
+            candidates.append({"row_shift": shift, "exact": exact})
+        stats["best_row32_roll"] = max(candidates, key=lambda item: item["exact"])
+        stats["row32_roll_candidates"] = candidates
+    if cols % 32 == 0:
+        candidates = []
+        for blocks in range(cols // 32):
+            shift = blocks * 32
+            exact = int((np.roll(lhs, shift=shift, axis=1) == rhs).sum())
+            candidates.append({"col_shift": shift, "exact": exact})
+        stats["best_col32_roll"] = max(candidates, key=lambda item: item["exact"])
+    return stats
+
+
 def _load_optrace_summary(out_dir: Path) -> dict[str, Any] | None:
     path = out_dir / "optrace" / "summary.json"
     if not path.exists():
@@ -390,6 +415,7 @@ def main() -> int:
             report["native"] = {
                 "stats": _pair_stats(out_q, native_q, abs_tols),
                 "spatial": _spatial_stats(out_q, native_q),
+                "permutation": _permutation_stats(out_q, native_q),
             }
     except Exception as exc:  # Keep optrace summaries useful even on bad output.
         report["error"] = str(exc)
@@ -423,6 +449,17 @@ def main() -> int:
             f"{native_stats['exact']}/{native_stats['total']} "
             f"maxdiff={native_stats['maxdiff']}"
         )
+        permutation = report.get("native", {}).get("permutation", {})
+        if permutation:
+            best_row = permutation.get("best_row32_roll", {})
+            row_text = ""
+            if best_row:
+                row_text = f" best_row32_roll={best_row.get('row_shift')}:{best_row.get('exact')}"
+            lines.append(
+                "native-permutation: "
+                f"sorted_equal={permutation.get('sorted_equal')}"
+                f"{row_text}"
+            )
     analytic_stats = report.get("analytic", {}).get("stats")
     if analytic_stats:
         lines.append(

@@ -51,6 +51,14 @@ def pick_matmul(cycles: dict) -> dict | None:
     return None
 
 
+def chrometrace_path(root: str, config: str) -> str | None:
+    for rel in ("optrace/chrometrace.json", "chrometrace.json"):
+        path = os.path.join(root, config, rel)
+        if os.path.isfile(path):
+            return path
+    return None
+
+
 # Classify HTP op types into buckets. The actual MAC kernels start with
 # `q::` and usually contain `s1` (stream-1, the HMX compute tile).
 def _classify(htp_type: str) -> str:
@@ -97,18 +105,17 @@ def main():
     preferred = ["fp16", "w16a16", "w8a16", "w8a8", "w4a16", "w4a8", "w4a4"]
     configs = []
     for c in preferred:
-        p = os.path.join(root, c, "chrometrace.json")
-        if os.path.isfile(p):
+        p = chrometrace_path(root, c)
+        if p:
             configs.append((c, p))
     for name in sorted(os.listdir(root)):
-        p = os.path.join(root, name, "chrometrace.json")
-        if os.path.isfile(p) and all(c[0] != name for c in configs):
+        p = chrometrace_path(root, name)
+        if p and all(c[0] != name for c in configs):
             configs.append((name, p))
 
     failed = []
     for c in preferred:
-        if not os.path.isfile(os.path.join(root, c, "chrometrace.json")) \
-                and os.path.isdir(os.path.join(root, c)):
+        if not chrometrace_path(root, c) and os.path.isdir(os.path.join(root, c)):
             for log in ("_convert.log", "_ctxgen.log", "_run.log"):
                 lp = os.path.join(root, c, log)
                 if os.path.isfile(lp):

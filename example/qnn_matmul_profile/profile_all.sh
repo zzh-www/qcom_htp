@@ -3,12 +3,13 @@
 # profile_all.sh — end-to-end QNN MatMul cycle profiling on a real device.
 #
 # For each dtype config (fp16, w16a16, w8a16, w8a8, w4a16, w4a8, w4a4):
-#   1) gen ONNX + quant_overrides + input data (Python helper)
-#   2) qairt-converter                   -> .dlc
-#   3) qnn-context-binary-generator      -> schematic .bin (for chrometrace)
-#   4) push to device, run qnn-net-run with --profiling_option optrace
-#   5) pull profiling-data.log
-#   6) qnn-profile-viewer + HTP optrace reader -> chrometrace.json
+#   1) gen ONNX + quant_overrides + fp32/native input data (Python helper)
+#   2) qairt-converter                   -> .dlc, preserving public I/O layout
+#   3) qnn-context-binary-generator      -> ctx/*.bin + schematic
+#   4) push context binary + native input to device, run qnn-net-run with
+#      --retrieve_context, native I/O, and --profiling_option optrace
+#   5) pull profiling-data.log + native output
+#   6) decode standard optrace artifacts under <config>/optrace/
 # After all configs: parse all chrometrace.json -> summary table.
 #
 # Usage:
@@ -24,6 +25,7 @@
 #
 # Environment:
 #   NUM_INFERENCES=20     inferences per qnn-net-run invocation
+#   NATIVE_IO=1           use qnn-net-run native input/output files
 #   DEVICE_DIR=...        remote working dir (default: adb => /data/local/tmp/qnn_run,
 #                                                     ssh => ~/qnn_run)
 #   SOC_ID=...            override HTP soc_id if auto-pick is wrong for the chip
@@ -80,6 +82,8 @@ if [ -z "${DEVICE_DIR:-}" ]; then
         adb) DEVICE_DIR="/data/local/tmp/qnn_run" ;;
     esac
 fi
+mkdir -p "$OUT_DIR"
+OUT_DIR="$(cd "$OUT_DIR" && pwd)"
 
 # Per-arch QNN SocModel enum (from tools/qnn-sdk/include/QNN/QnnTypes.h).
 # This is NOT the hardware soc revision id (/sys/devices/soc0/soc_id);
@@ -134,12 +138,46 @@ remote_push() {
         adb) adb -s "$DEVICE" push "$1" "$DEVICE_DIR/$2" >/dev/null ;;
     esac
 }
+remote_push_path() {
+    # remote_push_path <local_file> <dst_relative_path>  (dst lives under $DEVICE_DIR)
+    local dst_dir
+    dst_dir="$(dirname "$2")"
+    case "$CONNECT" in
+        ssh)
+            ssh "$DEVICE" "mkdir -p $DEVICE_DIR/$dst_dir && cat > $DEVICE_DIR/$2" < "$1"
+            ;;
+        adb)
+            adb -s "$DEVICE" shell "mkdir -p $DEVICE_DIR/$dst_dir" >/dev/null
+            adb -s "$DEVICE" push "$1" "$DEVICE_DIR/$2" >/dev/null
+            ;;
+    esac
+}
 remote_pull() {
     # remote_pull <src_basename> <local_path>
     case "$CONNECT" in
         ssh) ssh "$DEVICE" "cat $DEVICE_DIR/$1" > "$2" ;;
         adb) adb -s "$DEVICE" pull "$DEVICE_DIR/$1" "$2" >/dev/null ;;
     esac
+}
+remote_pull_optional() {
+    # remote_pull_optional <src_relative_path> <local_path>
+    case "$CONNECT" in
+        ssh) ssh "$DEVICE" "cat $DEVICE_DIR/$1 2>/dev/null" > "$2" 2>/dev/null ;;
+        adb) adb -s "$DEVICE" pull "$DEVICE_DIR/$1" "$2" >/dev/null 2>&1 ;;
+    esac
+}
+remote_pull_first() {
+    # remote_pull_first <local_path> <src_relative_path>...
+    local dst="$1"
+    shift
+    local src
+    for src in "$@"; do
+        if remote_pull_optional "$src" "$dst" && [ -s "$dst" ]; then
+            return 0
+        fi
+    done
+    rm -f "$dst"
+    return 1
 }
 
 # ---- device config files (per-run; written to $OUT_DIR, pushed each config) -
@@ -224,6 +262,10 @@ convert_and_ctx() {
         -i "$onnx"
         --target_backend HTP
         --enable_framework_trace
+        --source_model_input_layout A NONTRIVIAL
+        --desired_input_layout A NONTRIVIAL
+        --source_model_output_layout Y NONTRIVIAL
+        --desired_output_layout Y NONTRIVIAL
         -o "$dlc"
     )
     if [ "$name" = "fp16" ]; then
@@ -256,10 +298,18 @@ convert_and_ctx() {
             --binary_file "matmul_${name}_ctx" \
             --output_dir "ctx" \
         ) > "$cfg_dir/_ctxgen.log" 2>&1; then
-        echo "    [warn] ctxgen failed ($cfg_dir/_ctxgen.log) — will reuse fp16 schematic"
+        echo "    [FAIL] ctxgen failed (see $cfg_dir/_ctxgen.log)"
+        return 1
     fi
-    if [ -f "$cfg_dir/matmul_schematic.bin" ]; then
-        mv "$cfg_dir/matmul_schematic.bin" "$cfg_dir/schematic.bin"
+    mkdir -p "$cfg_dir/ctx"
+    local sch
+    for sch in "$cfg_dir"/*schematic.bin "$cfg_dir"/schematic.bin; do
+        [ -f "$sch" ] || continue
+        mv "$sch" "$cfg_dir/ctx/$(basename "$sch")"
+    done
+    if [ ! -f "$cfg_dir/ctx/matmul_${name}_ctx.bin" ]; then
+        echo "    [FAIL] missing ctx/matmul_${name}_ctx.bin after ctxgen"
+        return 1
     fi
     return 0
 }
@@ -268,20 +318,30 @@ run_on_device() {
     local name="$1" cfg_dir="$2"
     echo "  [$name] push + run on $DEVICE ($CONNECT)"
 
-    remote_push "$cfg_dir/matmul.dlc"      "matmul.dlc"
-    remote_push "$cfg_dir/input_A.raw"     "input_A.raw"
-    remote_push "$cfg_dir/input_list.txt"  "input_list.txt"
+    remote_push "$cfg_dir/ctx/matmul_${name}_ctx.bin" "matmul_${name}_ctx.bin"
     remote_push "$OUT_DIR/_config.json"    "_config.json"
     remote_push "$OUT_DIR/_htp_ext.json"   "_htp_ext.json"
+
+    local input_flags=""
+    if [ "${NATIVE_IO:-1}" = "1" ]; then
+        remote_push_path "$cfg_dir/runtime_inputs_native/A.raw" "runtime_inputs_native/A.raw"
+        remote_push "$cfg_dir/runtime_input_list.txt" "input_list.txt"
+        input_flags="--use_native_input_files --use_native_output_files"
+    else
+        remote_push "$cfg_dir/input_A.raw"    "input_A.raw"
+        remote_push "$cfg_dir/input_list.txt" "input_list.txt"
+    fi
 
     local cmd="cd $DEVICE_DIR && rm -rf out && \
 LD_LIBRARY_PATH=.:/vendor/lib64 ADSP_LIBRARY_PATH=. \
 ./qnn-net-run \
     --backend ./libQnnHtp.so \
-    --dlc_path matmul.dlc \
+    --retrieve_context matmul_${name}_ctx.bin \
     --input_list input_list.txt \
     --config_file _config.json \
     --profiling_level detailed --profiling_option optrace \
+    --perf_profile burst \
+    $input_flags \
     --num_inferences ${NUM_INFERENCES:-20} \
     --output_dir out 2>&1 | tail -6"
     remote_exec "$cmd" > "$cfg_dir/_run.log" 2>&1 || true
@@ -290,30 +350,28 @@ LD_LIBRARY_PATH=.:/vendor/lib64 ADSP_LIBRARY_PATH=. \
         echo "    [FAIL] qnn-net-run (see $cfg_dir/_run.log)"
         return 1
     fi
-    remote_pull "out/qnn-profiling-data_0.log" "$cfg_dir/profile.log"
+    mkdir -p "$cfg_dir/device_out"
+    remote_pull "out/qnn-profiling-data_0.log" "$cfg_dir/device_out/qnn-profiling-data_0.log"
+    cp -f "$cfg_dir/device_out/qnn-profiling-data_0.log" "$cfg_dir/profile.log"
+    remote_pull_first "$cfg_dir/device_out/Y.raw" \
+        "out/Result_0/Y_native.raw" \
+        "out/Result_0/Y.raw" \
+        "out/Y_native.raw" \
+        "out/Y.raw" \
+        >/dev/null || true
 }
 
 postprocess() {
     local name="$1" cfg_dir="$2"
-    local sch="$cfg_dir/schematic.bin"
-    [ ! -f "$sch" ] && sch="$OUT_DIR/fp16/schematic.bin"
-    [ ! -f "$sch" ] && { echo "    [warn] no schematic; skip"; return 1; }
-
-    echo "  [$name] post-process optrace -> chrometrace.json"
-    qnn-profile-viewer \
-        --config    "$OUT_DIR/_optrace_config.json" \
-        --reader    "$QNN/lib/x86_64-linux-clang/libQnnHtpOptraceProfilingReader.so" \
-        --input_log "$cfg_dir/profile.log" \
-        --schematic "$sch" \
-        --output    "$cfg_dir/chrometrace.json" \
-        > "$cfg_dir/_viewer.log" 2>&1 || {
-        echo "    [warn] profile-viewer failed; see $cfg_dir/_viewer.log"
+    echo "  [$name] decode standard optrace artifacts"
+    python "$ROOT_DIR/scripts/decode_qnn_optrace.py" "$cfg_dir" \
+        > "$cfg_dir/_decode_optrace.log" 2>&1 || {
+        echo "    [warn] optrace decode failed; see $cfg_dir/_decode_optrace.log"
         return 1
     }
 }
 
 # ---- main -------------------------------------------------------------------
-mkdir -p "$OUT_DIR"
 echo "=== target: device=$DEVICE via $CONNECT  arch=$ARCH  soc_id=$SOC_ID  shape=${SHAPE_M}x${SHAPE_K}x${SHAPE_N} ==="
 
 build_device_configs

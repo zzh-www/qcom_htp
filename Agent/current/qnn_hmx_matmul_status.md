@@ -149,6 +149,27 @@ for `w8a8`, `w4a8`, `w8a16`, `w4a16`, and `w16a16`.
 
 Latest probe evidence:
 
+2026-05-08 artifact-standard note: treat
+`example/qnn_matmul_profile/output_codex_native_w4a16_same_custom_256/` as a
+historical comparator only.  Its device run used `A:=input_A.raw` and emitted
+fp32-sized output, and its converter run did not record the required
+NONTRIVIAL layout flags.  Regenerate W4A16 native Conv references with
+`example/qnn_matmul_profile/run_native_w4a16_conv_ref.sh` before using QNN
+native output or performance as the current oracle.
+
+Current standardized W4A16 native oracle:
+`example/qnn_matmul_profile/output_native_w4a16_conv_ref_256/`.  It uses
+native u16 runtime input/output, `--retrieve_context`, converter NONTRIVIAL
+layout flags on A/Y, and the full `optrace/` artifact set.  Its native
+`q::ConvLayer_s1.opt` event is `7893` cycles, `conv1x1` QNN-op aggregate is
+`37287` cycles, and the graph timeline span is `313032` cycles.  The current
+custom W4A16 flow is not aligned yet: generated native-K4 packing is
+`2883/65536` exact against this oracle, and importing the clean native
+`conv_ctx.bin+0xbd00` candidate sidecar gives `3298/65536` exact but
+`sorted_equal=True` with a `+32` row roll becoming `65536/65536`.  Remaining
+boundary differences are weight carrier `UFixed8` versus native `SFixed8` and
+custom control `Int32 [1,1,1,1]` versus native `Int32 [1]`.
+
 | Probe | Result | Next gate |
 |---|---|---|
 | Native QNN W4 MatMul 128^3, param bitwidth 4 | Lowers to `q::ConvLayer_s1.opt`; `weights_to_vtcm` sees `[1,1,128,64]` `SFixed8`, confirming W4 uses a 4-bit signed carrier with two output channels per byte. |
@@ -209,7 +230,7 @@ Native W4A16 path analysis is now split out in
 `Agent/handoffs/w4a16_qnn_native_path.md`.  Treat it as the required entrypoint
 for future custom work: native starts from float Conv plus W4 quant overrides,
 ctxgen lowers weight to `SFixed8 [1,1,128,256]`, bias/control to
-`Int32 [1,8,1,64]`, activation/output to `UFixed16 [1,8,32,256]`, then
+`Int32 [1,8,1,128]`, activation/output to `UFixed16 [1,8,32,256]`, then
 `ConvLayer_s1.opt` enters the HNH wrapper/descriptor-builder/deep-body path.
 The 2026-05-07 helper decode adds that `set_hmx_params_convw4b1x1` with
 `arg1=0x70b` and final flags `0x20` ignores `arg2` for the observed default
@@ -292,7 +313,8 @@ boundary.  Treat public layout flags as closed for W4A16 native alignment.
 2026-05-08 native-first direction update: W4A16 alignment work is now gated on
 the QNN native implementation path, not another custom descriptor sweep.  The
 visible HTP contract is known (`UFixed16 [1,8,32,256]`, `SFixed8
-[1,1,128,256]`, `Int32 [1,8,1,64]`, `Int32 [1]`), but the missing state is the
+[1,1,128,256]`, `Int32 [1,8,1,128]`, `Int32 [1]` plus
+`Int32 [1,1,1,3]`), but the missing state is the
 runtime `ConvLayer_s1.opt` wrapper record: QNN tensor-object table pointers,
 metadata-derived descriptor fields, W4 mask-helper arguments, and the
 `r23/r24/r27` descriptor-advance tuple.  A direct patched-skel descriptor-dump

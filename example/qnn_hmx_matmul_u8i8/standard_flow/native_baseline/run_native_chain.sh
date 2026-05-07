@@ -36,10 +36,29 @@ cp -f "$SCRIPT_DIR/htp_config.json" "$SCRIPT_DIR/htp_backend_ext.json" .
 # int8 specs for ALL intermediate tensors (Y_0..Y_{chain-2}), forcing
 # every MatMul to use int8 q::ConvLayer_s1.opt instead of fp16 fallback.
 
+LAYOUT_FLAGS=()
+if [ "$MODE" = "chain" ]; then
+    LAYOUT_FLAGS+=(--source_model_input_layout A NONTRIVIAL)
+    LAYOUT_FLAGS+=(--desired_input_layout A NONTRIVIAL)
+    LAYOUT_FLAGS+=(--source_model_output_layout Y NONTRIVIAL)
+    LAYOUT_FLAGS+=(--desired_output_layout Y NONTRIVIAL)
+else
+    for i in $(seq 0 $((CHAIN - 1))); do
+        IN_NAME="A"
+        if [ "$i" != "0" ]; then IN_NAME="A_${i}"; fi
+        OUT_NAME="Y_${i}"
+        LAYOUT_FLAGS+=(--source_model_input_layout "$IN_NAME" NONTRIVIAL)
+        LAYOUT_FLAGS+=(--desired_input_layout "$IN_NAME" NONTRIVIAL)
+        LAYOUT_FLAGS+=(--source_model_output_layout "$OUT_NAME" NONTRIVIAL)
+        LAYOUT_FLAGS+=(--desired_output_layout "$OUT_NAME" NONTRIVIAL)
+    done
+fi
+
 echo "=== qairt-converter ==="
 $QNN_SDK_ROOT/bin/x86_64-linux-clang/qairt-converter \
     -i model.onnx \
     --quantization_overrides quant_overrides.json \
+    "${LAYOUT_FLAGS[@]}" \
     -o model.dlc 2>&1 | tee _convert.log | tail -3
 
 echo "=== qnn-context-binary-generator ==="
@@ -83,6 +102,10 @@ done
 # multi-input format for independent mode).
 ssh "$DEVICE" "cat > $DEV_DIR/input_list.txt" < runtime_input_list.txt
 
+OUTPUT_FLAGS=""
+if [ "${NATIVE_OUTPUT:-1}" = "1" ]; then
+    OUTPUT_FLAGS="--use_native_output_files"
+fi
 ssh "$DEVICE" "cd $DEV_DIR && rm -rf out && \
     LD_LIBRARY_PATH=../:/vendor/lib64 ADSP_LIBRARY_PATH=../ \
     ../qnn-net-run \
@@ -93,6 +116,7 @@ ssh "$DEVICE" "cd $DEV_DIR && rm -rf out && \
       --output_dir out \
       --config_file htp_config.json \
       --use_native_input_files \
+      $OUTPUT_FLAGS \
       --num_inferences 3 \
       --perf_profile burst 2>&1 | tail -3" > _run.log
 
