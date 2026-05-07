@@ -836,29 +836,42 @@ Dead-end implication from the current probes:
   parser must either invert this output transform or patch a wrapper-visible
   public-output location.
 - Use `scripts/parse_w4a16_native_entry_probe.py` for the current
-  stride-sampled entry probe.  It intentionally labels only the entry arguments,
-  output descriptor scalars, and first two activation descriptor fields as
-  trusted; later samples remain unverified until a pattern probe proves the
-  public-output mapping.
+  entry probe.  The default `--layout crouton512` mode uses the mapping
+  recovered by the corrected pattern probe:
+  `public = (i % 32) * 128 + ((i // 32) // 2) * 16 + ((i // 32) & 1)`.
+  This is the current way to parse the v3 native entry record from public
+  `Y.raw`.
+- A direct `r31` entry probe supersedes the earlier call-site guess for the
+  clean 256^3 artifact: `hmx_v73_convhnh1x1_stride1` returns to `0x03de46c`,
+  so the active call is `0x3de464` inside the simple prebuilt-record wrapper at
+  `0x3de3c0`.  The older `0x3dde78` call in the `0x3ddc60` builder wrapper is
+  not the call taken by this artifact.
+- The v3 entry record reports native mask words
+  `[0,0x700,0,0x77c,0,0,0x3ff,0,0,0,0,0,0xa0,0,control_ptr,0]`, output table
+  entries `0x046a0000..0x046a7800`, activation table entries
+  `0x046c9000..0x046d0800`, and control words `[1,0x401,0x20c,0]`.
+  Matching only mask word `[12]` with `HMX_W4A16_MASK_ARG6=0xa0` leaves the
+  imported-sidecar custom result unchanged, so the fix is not a single final
+  mask flag.
 
 The earlier "patched skel was not loaded" conclusion is superseded by the
-invalid-skel loader test above.  The remaining problem is making the descriptor
-dump placement parseable, not proving that the skel override can load.
+invalid-skel loader test above.  For the v3 entry probe, the descriptor dump is
+now parseable through the `crouton512` map; future probes still need to prove
+their public-output placement before their samples are treated as linear data.
 
 ## Next Native-First Work
 
 Before new custom changes, decode or instrument the native path in this order:
 
-1. Dump the native `0x3ddc60` wrapper inputs for the canonical 256^3 artifact:
-   wrapper args, tensor-object metadata words, tensor data/table pointers, and
-   the final `r23/r24/r27` loop tuple.
-2. Dump the post-`0x3d9920` stack record at `base+0x08..0x80`, including
-   activation descriptor, output descriptor, mask descriptor, W pointer,
-   bias/control pointer, and control pointer.
-3. Compare that native stack record against the custom descriptor dump before
+1. For the current clean 256^3 artifact, treat the simple wrapper at `0x3de3c0`
+   as the active native path.  Its input is a prebuilt record, not the
+   `0x3d9920` builder stack path.
+2. Compare the v3 native entry record against the custom descriptor dump before
    changing custom code.  Any difference should be classified as carrier
    lowering, tensor table layout, descriptor scalar, mask helper input, control
    ABI, or wrapper loop state.
+3. If a future artifact returns to `0x3ddc60`, dump that wrapper's inputs and
+   post-builder stack separately instead of mixing the two paths.
 4. Only then choose the smallest custom change that reproduces a named native
    boundary.
 

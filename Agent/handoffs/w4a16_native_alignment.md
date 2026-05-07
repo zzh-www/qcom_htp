@@ -113,11 +113,10 @@ Native patched-skel entry probes should use the checked-in parser as well:
 scripts/parse_w4a16_native_entry_probe.py /tmp/qnn_loader_probe_w4a16/Y.raw
 ```
 
-This parser currently treats only the stride-sampled entry arguments, output
-descriptor scalars, and the first two activation descriptor fields as trusted.
-Later mask/table/weight/bias/control samples are printed as unverified because
-native post-Conv output ops transform the internal ConvLayer tile before public
-`Y.raw` export.
+Use the default `--layout crouton512` mode for the current v3 probe.  A
+pure-assembly pattern probe recovered the first-512-word internal-output to
+public-output map, so the parser now reconstructs the mask/table/weight/bias
+samples instead of relying on the older stride-only read.
 
 `HMX_W4A16_DESC_DUMP_TABLE_SELECT` selects which 16-entry pointer-table sample
 is written into the 256-byte dump payload:
@@ -221,12 +220,15 @@ Native entry and descriptor follow-up:
 | `output_w4a16_import_native_sidecar_bd00_descdump_256/` | Custom descriptor dump with the same imported sidecar reports `out_y_stride_words=256`, `act_table_y_stride_words=256`, `n_tiles_pow2=256`, `m_total_minus_step=8`, `k_total_bytes=256`, mask `[0,0x700,0,0x77c,...,0x20]`. |
 | `output_w4a16_import_native_sidecar_bd00_out_y64_256/` | Forcing only `HMX_W4A16_OUT_Y_STRIDE_WORDS_OVERRIDE=64`, based on the native entry-probe stride sample, leaves the result unchanged: `3298/65536`, `sorted_equal=True`, best row32 roll `32:65536`. |
 | `output_w4a16_import_native_sidecar_bd00_desc32_out_y64_256/` | Forcing both visible native output descriptor scalars, `HMX_W4A16_DESC_M_TILES_OVERRIDE=32` and `HMX_W4A16_OUT_Y_STRIDE_WORDS_OVERRIDE=64`, is a semantic false path: `408/65536`, `sorted_equal=False`, best row32 roll `32:8193`, main-op `14046` cycles. |
+| `/tmp/libQnnHtpV75Skel_hmx_r31_probe.so` | Patching `0x2fcd80` to write `r31` reports return address `0x03de46c`, so the current clean native artifact reaches HNH through the simple prebuilt-record wrapper call at `0x3de464`, not the earlier hypothesized `0x3dde78` call. |
+| `/tmp/libQnnHtpV75Skel_hmx_direct_pattern_endloop_probe.so` | A pure-assembly pattern probe with `:endloop0` recovers the public-output map for the first 512 internal u32 words: `public = (i % 32) * 128 + ((i // 32) // 2) * 16 + ((i // 32) & 1)`. |
+| `/tmp/libQnnHtpV75Skel_hmx_entry_probe_v3.so` | Corrected copy loops and the recovered map produce reliable native samples: mask `[0,0x700,0,0x77c,0,0,0x3ff,0,0,0,0,0,0xa0,0,control_ptr,0]`, out table `0x046a0000..0x046a7800`, act table `0x046c9000..0x046d0800`, weight words `0x0cfbead9,0xead9c7b6,0xc7b6a594,0xa5947362`, control `[1,0x401,0x20c,0]`. |
+| `output_w4a16_import_native_sidecar_bd00_maskarg6_a0_256/` | Forcing custom `HMX_W4A16_MASK_ARG6=0xa0` to match native mask word `[12]` is a no-op for correctness: `3298/65536`, `sorted_equal=True`, best row32 roll `32:65536`, main-op `95152` cycles. |
 
 The native entry probe currently writes into the internal ConvLayer output tile;
 downstream native output ops transform that tile before `Y.raw` is emitted.  Do
-not treat the public dump as a fully linear descriptor record yet.  The next
-native probe should either invert that transform or dump from the `0x3ddc60`
-wrapper into a location that survives to public output linearly.
+not treat older public dumps as a fully linear descriptor record.  The
+`crouton512` map above now inverts the first 512 u32 words for the v3 probe.
 The stride-sampled fields that are readable today are still useful: native
 entry sees `r2(weight)=0x046c0000`, `r3(bias)=0x046c8000`,
 `r5(control)=0xfdd01c00`, `out_table=0x02d994a0`, and output descriptor scalar
@@ -235,6 +237,13 @@ candidate `64` y-stride into custom is a no-op, the missing state is not a
 single output descriptor scalar.  Copying both visible native `64` y-stride and
 `32` tile selector is also a false path, so the remaining blocker is in the full
 native wrapper state rather than an isolated output descriptor field.
+
+The current native wrapper is simpler than the earlier `0x3ddc60` hypothesis for
+this artifact.  It enters at `0x3de3c0` with a prebuilt record pointer in `r0`;
+the HNH call at `0x3de464` passes `r0+0x28` as output descriptor, `r0+0x10` as
+activation descriptor, `memw(r0+0x8)` as weight, `memw(r0+0x80)` as control, and
+`r0+0x48` as mask.  Continue from this prebuilt-record contract before returning
+to custom layout changes.
 
 Post descriptor-dump-enrichment recheck:
 

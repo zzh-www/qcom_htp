@@ -203,6 +203,18 @@ descriptor scalars into the closest imported-sidecar flow is also closed:
 This reinforces that the row32 rotation/mismatch is not an isolated output
 descriptor scalar.
 
+Native entry instrumentation is now more precise.  A direct `r31` probe at
+`0x2fcd80` reports return address `0x03de46c`, identifying the active clean
+native call as `0x3de464` in the simple `0x3de3c0` prebuilt-record wrapper.  A
+corrected pure-assembly pattern probe recovered the first-512-word public-output
+map used by `scripts/parse_w4a16_native_entry_probe.py --layout crouton512`.
+The reliable v3 native mask is
+`[0,0x700,0,0x77c,0,0,0x3ff,0,0,0,0,0,0xa0,0,control_ptr,0]`, with native
+control `[1,0x401,0x20c,0]`.  Matching only custom `HMX_W4A16_MASK_ARG6=0xa0`
+does not change the imported-sidecar result (`3298/65536`, `sorted_equal=True`,
+best row32 roll `32:65536`), so the remaining issue is still the full prebuilt
+record/table/control contract.
+
 2026-05-08 native-field probes: on the closest native-surface flow
 (`native_nmajor_k4_lohi` plus `native_a16_nobias`), forcing descriptor
 `act/out +0x08` to `8` as a builder-formula hypothesis improves only to
