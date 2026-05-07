@@ -154,6 +154,21 @@ Latest activation-layout probes:
 | `output_codex_w4a16_native_op_layout_native_sidecars_nobias_256/` | `1379/65536` | `30144` | `78471` |
 | `output_codex_w4a16_native_conv_input_u16_probe_256/` | `3784/65536` | `94236` | `139087` |
 
+Native/custom raw contract checks:
+
+- The native Conv input artifact is float `[1,K,1,M]`.  Quantizing it with the
+  native A16 encoding and transposing to `[1,1,M,K]` matches the custom
+  `chain_qdq` native input bytes exactly (`65536/65536`) for
+  `output_codex_w4a16_control_i32_256/runtime_inputs_u8/act_w4a16.raw`.
+- Native Conv ONNX weight `[N,K,1,1]`, divided by the native W4 scale
+  `1/7` and transposed to `[K,N]`, matches
+  `output_codex_w4a16_control_i32_256/w4a16.onnx.wRaw_KN.npy` exactly
+  (`65536/65536`).
+
+This rules out raw activation values and raw logical W4 codes as the current
+source of mismatch.  The remaining gap is after QNN lowering into prepared HMX
+sidecars/descriptors or inside the HNH interpretation of those prepared bytes.
+
 Latest all-native-sidecar probes:
 
 | Probe artifact | Variant | Native exact | Main-op cycles | Timeline span |
@@ -349,6 +364,11 @@ Dead ends already checked:
 - External skel wrapper with `HMX_W4A16_MASK_ARG6=0` reaches only
   `4386/65536` and slows to about `122k` cycles. Direct deep with
   `HMX_W4A16_MASK_ARG6=0` drops to `2810/65536`.
+- External skel wrapper with `HMX_W4A16_MASK_ARG6={0x4,0xc}` on the standard
+  native-contract flow also stays at `4386/65536` exact and slows to about
+  `114k` cycles.  Artifacts:
+  `example/qnn_matmul_profile/output_codex_w4a16_skel_arg6_{4,c}_standard_256/`.
+  These low-bit non-deep pre-entry candidates are not the native fast path.
 - Converting the prepacked weight initializer to float with an 8-bit symmetric
   override did not produce native `SFixed8`; ctxgen converted it to `UFixed16`.
 - `HMX_W4A16_ACT_PHYSICAL_ONLY` plus `HMX_W4A16_OUT_PHYSICAL_ONLY` lowers the
