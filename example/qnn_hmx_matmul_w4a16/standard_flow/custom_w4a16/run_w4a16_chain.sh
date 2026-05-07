@@ -47,6 +47,7 @@ python gen_w4a16_chain.py \
     --chain "$CHAIN" --mode "$MODE" \
     --M "$M" --K "$K" --N "$N" \
     --bias-scale "${BIAS_SCALE:-512.0}" \
+    --op-input-layout "${OP_INPUT_LAYOUT:-tiled}" \
     --w4-pack-order "${W4_PACK_ORDER:-native_kpair_lohi}" \
     --w4-nibble-encoding "${W4_NIBBLE_ENCODING:-twos}" \
     ${GEN_EXTRA_ARGS:-} \

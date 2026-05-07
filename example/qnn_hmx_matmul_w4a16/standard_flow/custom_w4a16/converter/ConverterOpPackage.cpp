@@ -54,7 +54,7 @@ EXPORT_API Qnn_ErrorHandle_t HmxU16I4ToU16MatMulShapeInference(Qnn_OpConfig_t *o
 
     o[0] = 1;
     o[1] = a[1];
-    o[2] = 32;
+    o[2] = a[2];
     // Native W4A16 follows QNN Conv1x1's packed sidecar shape [1,1,K/2,N].
     // Diagnostic graphs may also feed unpacked [1,1,K,N] W4 code bytes or the
     // older [1,1,K,N/2] carrier.  Keep all forms accepted for layout probes.

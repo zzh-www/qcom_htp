@@ -100,6 +100,15 @@ Latest refreshed custom result:
 | custom timeline span | `134324` |
 | custom sum pid0 event cycles | `134416` |
 
+Latest activation-layout probes:
+
+| Probe artifact | Native exact | Main-op cycles | Timeline span |
+|---|---:|---:|---:|
+| `output_codex_w4a16_native_op_layout_probe_256/` | `4092/65536` | `29956` | `78824` |
+| `output_codex_w4a16_native_op_layout_biascompact_256/` | `3775/65536` | `30708` | `79507` |
+| `output_codex_w4a16_native_op_layout_native_sidecar_256/` | `3757/65536` | `29515` | `66969` |
+| `output_codex_w4a16_native_conv_input_u16_probe_256/` | `3784/65536` | `94236` | `139087` |
+
 Native performance reference from
 `output_codex_native_w4a16_same_custom_256/optrace/summary.json`:
 
@@ -111,8 +120,10 @@ Native performance reference from
 | native `conv1x1` QNN-op aggregate | `38466` |
 | native graph timeline span | `178332` |
 
-The custom main op is therefore still far slower than the native W4 kernel
-event and does not satisfy the correctness gate.
+The default custom main op is still far slower than the native W4 kernel event.
+The native-shaped activation/output probe narrows main-op cycles to the old
+physical-table class (`~29k-31k`), but it is still not correct and remains
+slower than native `q::ConvLayer_s1.opt`.
 
 ## Findings
 
@@ -139,6 +150,16 @@ Custom W4A16 evidence:
   of the old unused `UFixed8 [1,1,1,2048]` scratch tensor. This does not change
   correctness, but the standard 256^3 probe's constant-move sidecar cycles drop
   from the old class (`6717` in the refreshed pre-control artifact) to `3285`.
+- `OP_INPUT_LAYOUT=native` is now a standard diagnostic path for W4A16. It
+  emits HMX activation/output tensors as `[1,1,M,K]` and `[1,1,M,N]`, and the
+  converter lowers them through `InputSlice + ForceFormat_Crouton`. This cuts
+  the profiled custom main op to `29956` cycles at 256^3, but exactness remains
+  only `4092/65536`.
+- `OP_INPUT_LAYOUT=native_conv` is also available for a Conv-style input probe.
+  Its ONNX input is `[1,K,1,M]` with `QuantizeLinear -> Transpose -> Reshape`
+  before HMX, and runtime input bytes are written in NCHW `uint16` order. Ctxgen
+  folds this to the same `InputSlice + ForceFormat_Crouton` class; it does not
+  improve alignment.
 - Runtime `HMX_W4A16_DESC_DUMP` without QHPI precompute shows the 256^3
   activation and output QHPI block-table lengths are both `64`, with dense
   native pointer tables expanded to `512` entries. Artifact:
@@ -199,6 +220,19 @@ Dead ends already checked:
   `offset=(row4>>3)*256`), does not improve correctness (`4229/65536`) and is
   slightly slower (`95278` cycles). Artifact:
   `example/qnn_matmul_profile/output_codex_w4a16_control_i32_row4_mod8_256/`.
+- `OP_INPUT_LAYOUT=native` alone improves custom main-op cycles but not
+  correctness (`4092/65536`, artifact
+  `example/qnn_matmul_profile/output_codex_w4a16_native_op_layout_probe_256/`).
+- Combining `OP_INPUT_LAYOUT=native` with `--bias-layout native_a16_w4compact`
+  worsens exactness to `3775/65536`; artifact:
+  `example/qnn_matmul_profile/output_codex_w4a16_native_op_layout_biascompact_256/`.
+- Combining `OP_INPUT_LAYOUT=native` with `--w4-native-sidecar-raw` worsens
+  exactness to `3757/65536`, despite the faster `29515`-cycle main op;
+  artifact:
+  `example/qnn_matmul_profile/output_codex_w4a16_native_op_layout_native_sidecar_256/`.
+- `OP_INPUT_LAYOUT=native_conv` with NCHW `uint16` input worsens exactness to
+  `3784/65536` and keeps the main op in the `94k` class; artifact:
+  `example/qnn_matmul_profile/output_codex_w4a16_native_conv_input_u16_probe_256/`.
 
 ## Code State
 
@@ -226,10 +260,17 @@ probes only.
 
 - the fourth input is now native-shaped `control` (`Int32 [1]`) instead of the
   old unused `scratch` (`UFixed8 [1,1,1,2048]`);
+- `--op-input-layout native` is enabled for W4A16 activation/output layout
+  probes;
+- `--op-input-layout native_conv` emits a Conv-style `[1,K,1,M]` graph input
+  and native NCHW-order `uint16` runtime input for activation-contract probes;
 - `--bias-layout native_a16_w4compact` emits a native-sized 2048B W4
   bias/control tensor for dead-end checking;
 - `--w4-native-sidecar-raw <path>` imports a prepared native W4 byte stream and
   applies the custom-op `weights_to_vtcm` carrier XOR convention.
+
+`run_w4a16_chain.sh` exposes the generator layout through `OP_INPUT_LAYOUT`.
+Use this rather than hiding layout probes inside `GEN_EXTRA_ARGS`.
 
 The enriched `HMX_W4A16_DESC_DUMP` payload decodes through the same Crouton16
 row-interleave pattern used by w8a16: for each 32-word group, low 16-bit halves
@@ -300,5 +341,6 @@ The W4A16 native HNH wrapper evidence is in
 3. Investigate whether the custom converter path can expose a prepared
    `SFixed8 [1,1,128,256]` W4 weight tensor to QHPI, or whether the prepared
    native sidecar must be imported through another static-tensor route.
-4. Do not repeat the pointer-offset, y-stride-only, `0x700` mask-family, or
-   float-weight dtype probes unless new evidence changes the premise.
+4. Do not repeat the activation-layout, pointer-offset, y-stride-only, `0x700`
+   mask-family, or float-weight dtype probes unless new evidence changes the
+   premise.

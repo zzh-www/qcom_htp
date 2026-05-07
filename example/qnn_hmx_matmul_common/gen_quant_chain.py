@@ -567,19 +567,28 @@ def generate(family: Family, args: argparse.Namespace) -> None:
     assert m % row_tile == 0
     row_groups = m // row_tile
     chain = max(1, int(args.chain))
-    native_act_layout = family.name == "w8a16" and args.op_input_layout in (
-        "native",
-        "native_split",
-        "native_in_tiled_out",
-        "native_in_tiled_out_split",
-        "native_in_row4_out",
-    )
-    native_out_layout = family.name == "w8a16" and args.op_input_layout in ("native", "native_split")
+    native_act_layout = (
+        family.name == "w8a16" and args.op_input_layout in (
+            "native",
+            "native_split",
+            "native_in_tiled_out",
+            "native_in_tiled_out_split",
+            "native_in_row4_out",
+        )
+    ) or (family.name == "w4a16" and args.op_input_layout == "native")
+    native_out_layout = (
+        family.name == "w8a16" and args.op_input_layout in ("native", "native_split")
+    ) or (family.name == "w4a16" and args.op_input_layout == "native")
     native_op_layout = native_act_layout or native_out_layout
     native_split_layout = family.name == "w8a16" and args.op_input_layout in (
         "native_split",
         "native_in_tiled_out_split",
     )
+    w4_native_conv_input_layout = family.name == "w4a16" and args.op_input_layout == "native_conv"
+    if args.op_input_layout == "native_conv" and family.name != "w4a16":
+        raise ValueError("native_conv input layout is currently a w4a16-only diagnostic")
+    if family.name == "w4a16" and args.op_input_layout not in ("tiled", "native", "native_conv"):
+        raise ValueError("w4a16 supports only tiled, native, and native_conv op input layouts")
     if native_split_layout and chain != 1:
         raise ValueError("native_split currently supports chain=1 only")
     if native_split_layout and args.mode not in ("chain", "chain_float", "chain_qdq"):
@@ -588,6 +597,9 @@ def generate(family: Family, args: argparse.Namespace) -> None:
         raise ValueError("native_split requires even N")
     if args.native_split_output_mode == "separate" and not native_split_layout:
         raise ValueError("--native-split-output-mode=separate requires a native split layout")
+    if w4_native_conv_input_layout and args.mode != "chain_qdq":
+        raise ValueError("w4a16 native_conv input layout currently supports chain_qdq only")
+    graph_act_shape = [1, k, 1, m] if w4_native_conv_input_layout else [1, 1, m, k]
     op_act_shape = [1, 1, m, k] if native_act_layout else [1, row_groups, row_tile, k]
     if native_out_layout:
         op_out_shape = [1, 1, m, n]
@@ -674,7 +686,7 @@ def generate(family: Family, args: argparse.Namespace) -> None:
     if args.mode in ("chain", "chain_float", "chain_qdq"):
         graph_act_tp = TensorProto.FLOAT if args.mode in ("chain_float", "chain_qdq") else act_tp
         graph_out_tp = out_tp
-        inputs_info.append(helper.make_tensor_value_info("act_raw", graph_act_tp, [1, 1, m, k]))
+        inputs_info.append(helper.make_tensor_value_info("act_raw", graph_act_tp, graph_act_shape))
         if native_split_layout and args.native_split_output_mode == "separate":
             split_graph_out_shape = (
                 [1, m, split_n] if args.final_output_rank == "3d" else
@@ -688,8 +700,18 @@ def generate(family: Family, args: argparse.Namespace) -> None:
         reshape_input = "act_raw"
         if args.mode == "chain_qdq":
             nodes.append(helper.make_node("QuantizeLinear", ["act_raw", "act_q_scale", "act_q_zp"], ["act_q"], name="quantize_act"))
-            value_infos.append(helper.make_tensor_value_info("act_q", act_tp, [1, 1, m, k]))
+            value_infos.append(helper.make_tensor_value_info("act_q", act_tp, graph_act_shape))
             reshape_input = "act_q"
+        if w4_native_conv_input_layout:
+            nodes.append(helper.make_node(
+                "Transpose",
+                [reshape_input],
+                ["act_conv_nhwc"],
+                name="transpose_native_conv_act",
+                perm=[0, 2, 3, 1],
+            ))
+            value_infos.append(helper.make_tensor_value_info("act_conv_nhwc", act_tp, [1, 1, m, k]))
+            reshape_input = "act_conv_nhwc"
         if native_act_layout:
             prev = reshape_input
         else:
@@ -841,6 +863,8 @@ def generate(family: Family, args: argparse.Namespace) -> None:
                 activation_encodings["act_4d"] = [act_enc]
             if args.mode == "chain_qdq":
                 activation_encodings["act_q"] = [act_enc]
+            if w4_native_conv_input_layout:
+                activation_encodings["act_conv_nhwc"] = [act_enc]
             if native_split_layout:
                 for split_idx in range(split_count):
                     activation_encodings[f"hmx_{family.name}_part{split_idx}"] = [out_enc]
@@ -875,7 +899,10 @@ def generate(family: Family, args: argparse.Namespace) -> None:
     os.makedirs(runtime_dir, exist_ok=True)
     if args.mode in ("chain", "chain_float", "chain_qdq", "direct_flat"):
         a0 = _make_activation(family, m, k, 0, args.activation_mode, args.activation_k)
-        if args.mode == "chain_float":
+        if w4_native_conv_input_layout:
+            act_nchw = a0.reshape(m, k).T.reshape(1, k, 1, m)
+            act_nchw.tofile(os.path.join(runtime_dir, f"act_{family.name}.raw"))
+        elif args.mode == "chain_float":
             a0.astype(np.float32).tofile(os.path.join(runtime_dir, f"act_{family.name}.raw"))
         else:
             a0.tofile(os.path.join(runtime_dir, f"act_{family.name}.raw"))
@@ -971,6 +998,7 @@ def main(family_name: str) -> None:
             "native_in_tiled_out",
             "native_in_tiled_out_split",
             "native_in_row4_out",
+            "native_conv",
         ],
         default="tiled",
     )
