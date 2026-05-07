@@ -280,6 +280,13 @@ Dead ends already checked:
   `out_table_stride=8` fails graph execution before a valid optrace is emitted.
   Artifact:
   `example/qnn_matmul_profile/output_codex_w4a16_control_i32_ystride512_tablegap_256/`.
+- A direct `act/out_y_stride=64` hypothesis from a naive read of the
+  `0x3d9920` tensor-field stores is not valid for the current public-QHPI
+  custom tables. Both the constrained descriptor form (`ACT_N_PAIRS=8`,
+  `OUT_TABLE_STRIDE=8`) and the consistent table-stride form fail graph
+  execution before optrace decode. Artifacts:
+  `example/qnn_matmul_profile/output_codex_w4a16_ystride64_desc8_256/` and
+  `example/qnn_matmul_profile/output_codex_w4a16_ystride64_table64_256/`.
 - `HMX_W4A16_ROW4_BLOCK_ORDER_MOD8`, which forces the W8-style compact
   Crouton16 block order (`block_index=(row4&7)*K_t+kt`,
   `offset=(row4>>3)*256`), does not improve correctness (`4229/65536`) and is
