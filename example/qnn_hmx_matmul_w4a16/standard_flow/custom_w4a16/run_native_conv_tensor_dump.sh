@@ -99,12 +99,24 @@ from collections import Counter
 
 with open(sys.argv[1], "r", encoding="utf-8") as f:
     data = json.load(f)
-nodes = data.get("graph", {}).get("nodes", {})
+graph = data.get("graph", {})
+nodes = graph.get("nodes", {})
+tensors = graph.get("tensors", {})
 print("  ctx nodes:", Counter(n.get("type") for n in nodes.values()))
 for name, node in nodes.items():
     typ = str(node.get("type", ""))
     if typ == "q::ConvLayer_s1.opt" or "HmxW4A16TensorDump" in typ:
         print(f"  boundary: {name}: {typ}")
+        for label, tensor_ids in (
+            ("inputs", node.get("input_names", [])),
+            ("outputs", node.get("output_names", [])),
+        ):
+            for idx, tensor_id in enumerate(tensor_ids):
+                tensor = tensors.get(tensor_id, {})
+                print(
+                    f"    {label}[{idx}] {tensor_id}: "
+                    f"data_type={tensor.get('data_type')} dims={tensor.get('dims')}"
+                )
 PY
 fi
 

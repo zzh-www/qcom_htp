@@ -22,6 +22,13 @@ Until those native fields are decoded or dumped, do not spend more cycles on
 single-field descriptor, mask, control-word, or row4-order sweeps.  A future
 custom change should first name the exact native boundary it reproduces.
 
+Current pivot: analyze QNN native first, then align.  The public QHPI tensor
+surface visible after native Conv is now known to be a layout-restored export
+surface, not the internal HNH compute surface.  Converter output-layout flags
+do not move a custom diagnostic op inside the native `ConvLayer_s1.opt`
+boundary.  The next useful work is therefore native wrapper/descriptor evidence,
+not another custom input/output layout probe.
+
 ## Native-First Rule
 
 Do not start from another descriptor/mask/packing sweep.  First identify which
@@ -49,6 +56,7 @@ it be considered an alignment attempt.
 | native output oracle | `device_out/Y.raw` | The custom output oracle; analytic formulas are secondary diagnostics. |
 | optrace products | `optrace/` | Standard performance source: timeline, profile text, QHAS summary, decoded `summary.json`. |
 | native Conv tensor dump | `example/qnn_hmx_matmul_w4a16/standard_flow/custom_w4a16/out/native_conv_tensor_dump_256/` | Diagnostic graph that keeps native W4 Conv lowering and records the QHPI tensor surface exposed to a custom op after Conv/layout restore. |
+| host layout flag sweep | rerun with `gen_native_conv_tensor_dump.py` plus converter output-layout flags | Confirms `HmxW4A16TensorDump` still sees `UFixed16 [1,256,1,256]`; output-layout flags do not expose the internal `[1,8,32,256]` HNH surface to a custom op. |
 | skel evidence | `Agent/qnn_re/skel_text_full.S` | Shows the HNH wrapper, descriptor builder, W4 mask helper, and final deep-body entry. |
 
 ## Implementation Path At A Glance
@@ -187,19 +195,22 @@ Ctxgen then owns the signed W4 carrier and sidecar lowering.
 After ctxgen, the graph is expanded into 210 HTP nodes.  Most nodes are
 format-conversion work around the actual Conv core:
 
-| Grouping | HTP node class | Count |
-|---|---:|---:|
-| input convert | `q::Quantize` | 32 |
-| input convert | `q::*InputSlice` | 32 |
-| `A_0231` | `q::Transpose_impl` | 8 |
-| `A_0231` | `q::SlicePad_shape_inplace` | 8 |
-| `conv1x1` | `q::ConvLayer.opt.weights_to_vtcm` | 1 |
-| `conv1x1` | `q::ConvLayer.opt.bias_to_vtcm` | 1 |
-| `conv1x1` | `q::ForceFormat_Crouton` | 2 |
-| `conv1x1` | `q::ConvLayer_s1.opt` | 1 |
-| `Y_0231` | `q::Transpose.2D` | 16 |
-| output convert | `q::ForceFormat_Flat` | 32 |
-| output convert | `q::Dequantize` | 32 |
+| HTP node class | Count |
+|---|---:|
+| `q::SlicePad_shape_inplace` | 48 |
+| `q::Quantize` | 32 |
+| `q::*InputSlice` | 32 |
+| `q::Dequantize` | 32 |
+| `q::ForceFormat_Flat` | 32 |
+| `q::Transpose.2D` | 16 |
+| `q::Transpose_impl` | 8 |
+| `q::Reshape` | 2 |
+| `q::Concat` | 2 |
+| `q::ForceFormat_Crouton` | 2 |
+| `q::ConvLayer.opt.weights_to_vtcm` | 1 |
+| `q::ConvLayer.opt.bias_to_vtcm` | 1 |
+| `q::ConvLayer_s1.opt` | 1 |
+| `q::ConvLayer.opt.activations_to_vtcm` | 1 |
 
 The graph-before view has only 6 nodes and 15 tensors.  The lowered HTP view has
 210 nodes and 260 tensors.  That expansion is the native implementation, not
@@ -335,6 +346,7 @@ Ctxgen confirms both boundaries are present:
 | `q::ConvLayer_s1.opt` input activation | `UFixed16 [1,8,32,256]` |
 | `q::ConvLayer_s1.opt` weight sidecar | `SFixed8 [1,1,128,256]` |
 | `q::ConvLayer_s1.opt` bias/control sidecar | `Int32 [1,8,1,128]` in this side-branch diagnostic graph |
+| `q::ConvLayer_s1.opt` small control | `Int32 [1]` plus an added diagnostic `Int32 [1,1,1,3]` side input in this graph |
 | `q::ConvLayer_s1.opt` output | `UFixed16 [1,8,32,256]` |
 | `HmxW4A16TensorDump` input/output | `UFixed16 [1,256,1,256]` |
 
@@ -391,6 +403,24 @@ That failure is a useful boundary result: the layout-restored QHPI tensor
 visible after native Conv is an export/custom-op surface, not the internal HNH
 descriptor surface consumed by `ConvLayer_s1.opt`.  Continue targeting the
 wrapper metadata and stack descriptors under `0x3ddc60`.
+
+A host-only converter layout sweep gives the same conclusion without running a
+device kernel.  The sweep regenerated the native Conv plus tensor-dump graph and
+ran qairt-converter/ctxgen with these output-layout variants:
+
+| Variant | Layout flags | Dump-op input | Native Conv boundary |
+|---|---|---|---|
+| `default` | none | `UFixed16 [1,256,1,256]` | `UFixed16 [1,8,32,256]`, `SFixed8 [1,1,128,256]`, `Int32 [1,8,1,128]` |
+| `d_nchw` | `D` source/desired `NCHW` | `UFixed16 [1,256,1,256]` | unchanged |
+| `d_nhwc` | `D` source/desired `NHWC` | `UFixed16 [1,256,1,256]` | unchanged |
+| `d_nchw_to_nhwc` | `D` source `NCHW`, desired `NHWC` | `UFixed16 [1,256,1,256]` | unchanged |
+| `yd_nchw` | `Y` and `D` source/desired `NCHW` | `UFixed16 [1,256,1,256]` | unchanged |
+| `yd_nhwc` | `Y` and `D` source/desired `NHWC` | `UFixed16 [1,256,1,256]` | unchanged |
+| `yd_nchw_to_nhwc` | `Y` and `D` source `NCHW`, desired `NHWC` | `UFixed16 [1,256,1,256]` | unchanged |
+
+This closes the converter-layout hypothesis: QNN only exposes the
+layout-restored `Y/D` surface to the custom diagnostic op.  The native HNH
+state must be recovered under `ConvLayer_s1.opt` itself.
 
 ## Skel Execution Path
 

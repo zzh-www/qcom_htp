@@ -263,6 +263,13 @@ This rules out treating the post-Conv export/custom-op surface as the HNH
 compute surface; continue targeting the internal `ConvLayer_s1.opt`
 activation/output `[1,8,32,256]` wrapper state.
 
+2026-05-08 host layout sweep follow-up: converter output-layout flags for
+`D`, and for `Y` plus `D`, were tested with `NCHW`, `NHWC`, and
+`NCHW -> NHWC` forms on the native Conv tensor-dump graph.  All ctxgen bottom
+mappings kept `HmxW4A16TensorDump` at `UFixed16 [1,256,1,256]` while native
+`q::ConvLayer_s1.opt` stayed at the internal `UFixed16 [1,8,32,256]` HNH
+boundary.  Treat public layout flags as closed for W4A16 native alignment.
+
 The signed W4 carrier route is still blocked below quant-overrides.  Four
 host-only probes using an ONNX `INT8` initializer plus no weight encoding,
 8-bit offset `0`, 8-bit offset `-128`, and 4-bit offset `0` all lower the

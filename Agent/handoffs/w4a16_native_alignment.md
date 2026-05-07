@@ -206,6 +206,7 @@ Latest activation-layout probes:
 | `output_codex_w4a16_native_op_layout_native_sidecars_nobias_256/` | `1379/65536` | `30144` | `78471` |
 | `output_codex_w4a16_native_conv_input_u16_probe_256/` | `3784/65536` | `94236` | `139087` |
 | `output_codex_w4a16_native_conv_surface_real_256/` | graph execution fails | no valid optrace | n/a |
+| host native Conv tensor-dump layout sweep | every tested `Y`/`D` output-layout flag still dumps `UFixed16 [1,256,1,256]`; `ConvLayer_s1.opt` remains `UFixed16 [1,8,32,256]` | n/a | n/a |
 
 Native/custom raw contract checks:
 
