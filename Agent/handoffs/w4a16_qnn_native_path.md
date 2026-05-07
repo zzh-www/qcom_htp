@@ -115,6 +115,7 @@ field in the native wrapper record it reproduces.
 | optrace products | `optrace/` | Standard performance source: timeline, profile text, QHAS summary, decoded `summary.json`. |
 | native Conv tensor dump | `example/qnn_hmx_matmul_w4a16/standard_flow/custom_w4a16/out/native_conv_tensor_dump_256/` | Diagnostic graph that keeps native W4 Conv lowering and records the QHPI tensor surface exposed to a custom op after Conv/layout restore. |
 | host layout flag sweep | rerun with `gen_native_conv_tensor_dump.py` plus converter output-layout flags | Confirms `HmxW4A16TensorDump` still sees `UFixed16 [1,256,1,256]`; output-layout flags do not expose the internal `[1,8,32,256]` HNH surface to a custom op. |
+| native HNH entry/base/table probes | `/tmp/qnn_loader_probe_w4a16/Y_{entry_v3,base_record,table_probe}.raw` parsed by `scripts/parse_w4a16_native_entry_probe.py` | Confirms the active `0x3de3c0` prebuilt-record path and the compact first 64-entry native table view. |
 | skel evidence | `Agent/qnn_re/skel_text_full.S` | Shows the HNH wrapper, descriptor builder, W4 mask helper, and final deep-body entry. |
 
 ## Implementation Path At A Glance
@@ -147,7 +148,7 @@ The same path as a stage table:
 | converter | DLC / graph-before | Conv still sees an 8-bit W carrier plus 4-bit encoding metadata. |
 | ctxgen | QNN HTP lowering | Static W4 and bias records become native sidecar tensors. |
 | runtime HTP graph | `q::*` built-ins | Format conversion and sidecar movement are separate events around the hot Conv. |
-| HMX wrapper | skel `0x3ddc60` path | Small native descriptors and mask words are built from QNN tensor metadata. |
+| HMX wrapper | skel `0x3de3c0` prebuilt-record path for the current clean artifact; `0x3ddc60` builder path in static decode | Small native descriptors, table pointers, and mask words are built or loaded from QNN metadata. |
 | deep body | `hmx_v73_convhnh1x1deep_stride1` | HMX consumes only prepared descriptors and sidecars. |
 
 That stage boundary matters.  The graph-before weight tensor is still an
@@ -159,8 +160,10 @@ path.
 ## Native Runtime Spine
 
 The runtime path under `ConvLayer_s1.opt` has a specific spine in the skel
-binary.  This is the path a custom implementation must reproduce before output
-or performance parity is a meaningful claim:
+binary.  The current clean 256^3 artifact reaches HNH through the simpler
+prebuilt-record wrapper at `0x3de3c0` and calls `0x2fcd80` from `0x3de464`.
+The older static builder spine below remains useful for artifacts that select
+the `0x3ddc60` route, but it is not the active call site for the current oracle:
 
 ```text
 q::ConvLayer_s1.opt optrace event
@@ -201,10 +204,10 @@ Two consequences follow from this spine:
 | Prepared W4 bytes | Proven | `W4_PACK_ORDER=native_nmajor_k4_lohi` reproduces the 32768-byte native sidecar. |
 | Prepared no-bias/control bytes | Proven | `native_a16_nobias` reproduces the 2048-byte repeated `0x80008000` sidecar. |
 | Deep HMX body bytes | Proven | Extracted `hmx_v73_convhnh1x1deep_stride1` is 804 bytes and diffs empty against the embedded custom inc. |
-| Wrapper call shape | Proven statically | `0x3ddc60 -> 0x3d9920 -> 0x3dde78 -> 0x2fcd80 -> 0x2fdb80`, with descriptor fields rooted at `base = r29 + 0x30`. |
+| Wrapper call shape | Proven for current artifact plus static fallback | Runtime `r31` probe shows current clean artifact uses `0x3de3c0 -> 0x3de464 -> 0x2fcd80 -> 0x2fdb80`; static decode keeps `0x3ddc60 -> 0x3d9920 -> 0x3dde78` for other selections. |
 | Wrapper descriptor loop | Proven statically | Tail `0x3de060` advances output and activation descriptor table bases using `r24` and `r27` until `r26 == r23`. |
 | Runtime tensor-object metadata values | Unknown | Offsets such as `activation.meta[0x04]`, `[0x18]`, `[0x1c]`, `[0x20]` and output counterparts are not exposed by bottom mapping. |
-| Native internal table layout | Unknown | `activation.data` / `output.data` point to QNN internal HNH tables; current custom code expands public QHPI tables instead. |
+| Native internal table layout | Partially decoded | HMXT table probe shows the active `out_table_ptr` and `act_table_ptr` expose only a compact first 64-entry contiguous view; entries after 64 are adjacent wrapper/metadata memory, not the custom 512-entry public-QHPI expansion. |
 | Full W4 mask-helper argument tuple | Partially decoded | `arg1=0x70b` and the helper branch are known, but coupled dynamic args are metadata-derived and not yet dumped. |
 | Public custom path to signed W4 carrier | Unsolved | Current custom boundary still reaches QHPI as `QUInt8` for W4 even when bytes match. |
 
@@ -836,10 +839,12 @@ Dead-end implication from the current probes:
   parser must either invert this output transform or patch a wrapper-visible
   public-output location.
 - Use `scripts/parse_w4a16_native_entry_probe.py` for the current
-  entry probe.  The default `--layout crouton512` mode uses the mapping
-  recovered by the corrected pattern probe:
+  entry, base-record, and table probes.  The default
+  `--layout crouton512 --record-kind auto` mode uses the mapping recovered by
+  the corrected pattern probe:
   `public = (i % 32) * 128 + ((i // 32) // 2) * 16 + ((i // 32) & 1)`.
-  This is the current way to parse the v3 native entry record from public
+  This is the current way to parse the v3 native entry record (`HMXP`) and the
+  prebuilt base record (`HMXB`), plus table-memory records (`HMXT`), from public
   `Y.raw`.
 - A direct `r31` entry probe supersedes the earlier call-site guess for the
   clean 256^3 artifact: `hmx_v73_convhnh1x1_stride1` returns to `0x03de46c`,
@@ -853,6 +858,25 @@ Dead-end implication from the current probes:
   Matching only mask word `[12]` with `HMX_W4A16_MASK_ARG6=0xa0` leaves the
   imported-sidecar custom result unchanged, so the fix is not a single final
   mask flag.
+- The base-record probe confirms the active `0x3de3c0` record shape before the
+  HNH call: `r31=0x031de46c`, `base=0x02d99408`, `weight=0x046c0000`,
+  `bias=0x046c8000`, `act_desc=[0x02d99288,8,64,32,8,256]`,
+  `out_desc=[0x02d994a0,8,64,32,8,256]`, the same mask tuple as the v3 entry
+  record, and `control=0xfdd01c00`.
+- The HMXT table probe dumps the memory at those active table pointers without
+  adding any C/C++ code.  The first 64 output entries are contiguous
+  `0x046a0000..0x046bf800` in `0x800` steps, and the first 64 activation
+  entries are contiguous `0x046c9000..0x046e8800` in `0x800` steps.  Words after
+  those 64 entries are nearby wrapper records and other metadata, not another
+  448 HNH table entries.  This is structurally different from the custom
+  adapter's 512-entry row4-expanded public-QHPI tables.
+- Applying those visible base-record scalar fields to the custom imported-sidecar
+  flow is not a semantic bridge.  The focused artifact
+  `output_w4a16_import_native_sidecar_bd00_base_record_fields_256/` uses
+  `act_y=64`, `out_y=64`, `out_n_tiles=32`, and `mask[12]=0xa0`, but fails graph
+  execution before a valid optrace/output.  The analyzer still shows the known
+  boundary mismatches: custom `UFixed8 [1,1,128,256]` versus native `SFixed8`
+  weight carrier, and custom control `[1,1,1,1]` versus native `[1]`.
 
 The earlier "patched skel was not loaded" conclusion is superseded by the
 invalid-skel loader test above.  For the v3 entry probe, the descriptor dump is
@@ -866,13 +890,17 @@ Before new custom changes, decode or instrument the native path in this order:
 1. For the current clean 256^3 artifact, treat the simple wrapper at `0x3de3c0`
    as the active native path.  Its input is a prebuilt record, not the
    `0x3d9920` builder stack path.
-2. Compare the v3 native entry record against the custom descriptor dump before
-   changing custom code.  Any difference should be classified as carrier
+2. The prebuilt record scalar fields and first 64 table entries are now decoded;
+   do not repeat scalar-only copies into custom.  The next missing native
+   evidence is the relation between this compact table view, the adjacent
+   wrapper metadata, and any loop state that selects or advances the tables.
+3. Compare the native entry/base records against the custom descriptor dump
+   before changing custom code.  Any difference should be classified as carrier
    lowering, tensor table layout, descriptor scalar, mask helper input, control
    ABI, or wrapper loop state.
-3. If a future artifact returns to `0x3ddc60`, dump that wrapper's inputs and
+4. If a future artifact returns to `0x3ddc60`, dump that wrapper's inputs and
    post-builder stack separately instead of mixing the two paths.
-4. Only then choose the smallest custom change that reproduces a named native
+5. Only then choose the smallest custom change that reproduces a named native
    boundary.
 
 Secondary work remains useful, but should not replace the runtime dump:

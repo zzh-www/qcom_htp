@@ -12,6 +12,9 @@ Use `--layout crouton512` for the current v3 probe.  That mapping was recovered
 by a pure-assembly pattern probe and reconstructs the first 512 internal u32
 words from public `Y.raw`.  The older `--layout stride` mode is kept for
 historical v1 dumps and should not be used for table samples.
+
+Supported record magics are `HMXP` for entry samples, `HMXB` for the active
+prebuilt base record, and `HMXT` for table-memory samples.
 """
 
 from __future__ import annotations
@@ -23,7 +26,9 @@ from pathlib import Path
 from typing import Any
 
 
-MAGIC = 0x484D5850  # "HMXP"
+MAGIC_ENTRY = 0x484D5850  # "HMXP"
+MAGIC_BASE_RECORD = 0x484D5842  # "HMXB"
+MAGIC_TABLE = 0x484D5854  # "HMXT"
 
 FIELD_WORDS = [
     (0, "magic", "hex"),
@@ -88,9 +93,8 @@ def _decode_record(public_words: list[int], layout: str, stride_words: int, coun
     return [public_words[i] for i in indexes]
 
 
-def parse_probe(path: Path, layout: str, stride_words: int, dtype: str) -> dict[str, Any]:
+def _parse_entry_record(path: Path, dtype: str, layout: str, stride_words: int, record: list[int]) -> dict[str, Any]:
     public_words = _read_words(path, dtype)
-    record = _decode_record(public_words, layout, stride_words, 96)
     fields: dict[str, Any] = {}
     for word_index, name, kind in FIELD_WORDS:
         value = record[word_index]
@@ -99,6 +103,7 @@ def parse_probe(path: Path, layout: str, stride_words: int, dtype: str) -> dict[
         fields[name] = value
     return {
         "path": str(path),
+        "record_kind": "entry",
         "dtype": dtype,
         "layout": layout,
         "public_u32_words": len(public_words),
@@ -116,6 +121,119 @@ def parse_probe(path: Path, layout: str, stride_words: int, dtype: str) -> dict[
     }
 
 
+def _parse_base_record(path: Path, dtype: str, layout: str, stride_words: int, record: list[int]) -> dict[str, Any]:
+    public_words = _read_words(path, dtype)
+    args = {
+        "r31_return": record[1],
+        "out_desc_arg": record[2],
+        "act_desc_arg": record[3],
+        "weight_arg": record[4],
+        "bias_arg": record[5],
+        "mask_arg": record[6],
+        "control_arg": record[7],
+    }
+    base_words = record[16:52]
+    fields = {
+        "magic": record[0],
+        **args,
+        "base_ptr_from_out_desc": (record[2] - 0x28) & 0xFFFFFFFF,
+        "weight_ptr": base_words[2],
+        "bias_ptr": base_words[3],
+        "act_table_ptr": base_words[4],
+        "act_n_pairs": base_words[5],
+        "act_y_stride_words": base_words[6],
+        "out_table_ptr": base_words[10],
+        "out_table_stride_dwords": base_words[11],
+        "out_y_stride_words": base_words[12],
+        "out_n_tiles_pow2": base_words[13],
+        "out_m_total_minus_step": _as_i32(base_words[14]),
+        "out_k_total_bytes": base_words[15],
+        "control_ptr_from_base_0x80": base_words[32],
+    }
+    return {
+        "path": str(path),
+        "record_kind": "base",
+        "dtype": dtype,
+        "layout": layout,
+        "public_u32_words": len(public_words),
+        "stride_words": stride_words,
+        "record_u32_words": len(record),
+        "fields": fields,
+        "samples": {
+            "entry_args": [record[i] for i in range(2, 8)],
+            "base_words_0x00_0x8c": base_words,
+            "act_desc_words": base_words[4:10],
+            "out_desc_words": base_words[10:16],
+            "mask_words": base_words[18:34],
+            "post_mask_words": base_words[34:36],
+        },
+    }
+
+
+def _parse_table_record(path: Path, dtype: str, layout: str, stride_words: int, record: list[int]) -> dict[str, Any]:
+    public_words = _read_words(path, dtype)
+    fields = {
+        "magic": record[0],
+        "r31_return": record[1],
+        "out_desc_arg": record[2],
+        "act_desc_arg": record[3],
+        "weight_arg": record[4],
+        "bias_arg": record[5],
+        "mask_arg": record[6],
+        "control_arg": record[7],
+        "out_table_ptr": record[8],
+        "act_table_ptr": record[9],
+        "out_table_stride_dwords": record[10],
+        "out_y_stride_words": record[11],
+        "out_n_tiles_pow2": record[12],
+        "act_n_pairs": record[13],
+        "act_y_stride_words": record[14],
+        "control_word0_sample": record[15],
+    }
+    return {
+        "path": str(path),
+        "record_kind": "table",
+        "dtype": dtype,
+        "layout": layout,
+        "public_u32_words": len(public_words),
+        "stride_words": stride_words,
+        "record_u32_words": len(record),
+        "fields": fields,
+        "samples": {
+            "out_table_128": record[16:144],
+            "act_table_128": record[144:272],
+        },
+    }
+
+
+def parse_probe(
+    path: Path,
+    layout: str,
+    stride_words: int,
+    dtype: str,
+    record_kind: str,
+) -> dict[str, Any]:
+    public_words = _read_words(path, dtype)
+    header = _decode_record(public_words, layout, stride_words, 1)
+    if record_kind == "auto":
+        if header[0] == MAGIC_TABLE:
+            record_kind = "table"
+        elif header[0] == MAGIC_BASE_RECORD:
+            record_kind = "base"
+        else:
+            record_kind = "entry"
+
+    record_words = 272 if record_kind == "table" else 96
+    record = _decode_record(public_words, layout, stride_words, record_words)
+    if record_kind == "entry":
+        return _parse_entry_record(path, dtype, layout, stride_words, record)
+    if record_kind == "base":
+        return _parse_base_record(path, dtype, layout, stride_words, record)
+    if record_kind == "table":
+        return _parse_table_record(path, dtype, layout, stride_words, record)
+    raise ValueError(f"unsupported record kind: {record_kind}")
+
+
 def _fmt(value: int, *, signed: bool = False) -> str:
     if signed:
         return f"{value}"
@@ -125,8 +243,14 @@ def _fmt(value: int, *, signed: bool = False) -> str:
 def print_human(parsed: dict[str, Any]) -> None:
     fields = parsed["fields"]
     magic = fields["magic"]
-    ok = "ok" if magic == MAGIC else "unexpected"
-    print(f"=== W4A16 native HNH entry probe: {parsed['path']} ===")
+    kind = parsed.get("record_kind", "entry")
+    expected_magic = {
+        "entry": MAGIC_ENTRY,
+        "base": MAGIC_BASE_RECORD,
+        "table": MAGIC_TABLE,
+    }[kind]
+    ok = "ok" if magic == expected_magic else "unexpected"
+    print(f"=== W4A16 native HNH {kind} probe: {parsed['path']} ===")
     print(
         f"dtype={parsed['dtype']} public_u32_words={parsed['public_u32_words']} "
         f"layout={parsed['layout']} stride_words={parsed['stride_words']}"
@@ -137,6 +261,94 @@ def print_human(parsed: dict[str, Any]) -> None:
     else:
         print("mapping=legacy stride mode; table samples are not validated")
     print()
+
+    if kind == "base":
+        print("entry_args:")
+        for name in (
+            "r31_return",
+            "out_desc_arg",
+            "act_desc_arg",
+            "weight_arg",
+            "bias_arg",
+            "mask_arg",
+            "control_arg",
+            "base_ptr_from_out_desc",
+        ):
+            print(f"  {name:<26} = {_fmt(fields[name])}")
+        print()
+
+        print("native_base_record:")
+        for name in (
+            "weight_ptr",
+            "bias_ptr",
+            "act_table_ptr",
+            "act_n_pairs",
+            "act_y_stride_words",
+            "out_table_ptr",
+            "out_table_stride_dwords",
+            "out_y_stride_words",
+            "out_n_tiles_pow2",
+            "out_m_total_minus_step",
+            "out_k_total_bytes",
+            "control_ptr_from_base_0x80",
+        ):
+            value = fields[name]
+            if name.endswith("_ptr") or name.endswith("_arg") or name.endswith("_0x80"):
+                text = _fmt(value)
+            else:
+                text = str(value)
+            print(f"  {name:<26} = {text}")
+        print()
+
+        print("samples:")
+        for title, words in parsed["samples"].items():
+            print(f"{title}:")
+            for i, word in enumerate(words):
+                print(f"  [{i:02d}] = 0x{word:08x}")
+            print()
+        return
+
+    if kind == "table":
+        print("entry_args:")
+        for name in (
+            "r31_return",
+            "out_desc_arg",
+            "act_desc_arg",
+            "weight_arg",
+            "bias_arg",
+            "mask_arg",
+            "control_arg",
+        ):
+            print(f"  {name:<26} = {_fmt(fields[name])}")
+        print()
+
+        print("native_table_header:")
+        for name in (
+            "out_table_ptr",
+            "act_table_ptr",
+            "out_table_stride_dwords",
+            "out_y_stride_words",
+            "out_n_tiles_pow2",
+            "act_n_pairs",
+            "act_y_stride_words",
+            "control_word0_sample",
+        ):
+            value = fields[name]
+            if name.endswith("_ptr") or name.endswith("_sample"):
+                text = _fmt(value)
+            else:
+                text = str(value)
+            print(f"  {name:<26} = {text}")
+        print()
+
+        print("samples:")
+        for title, words in parsed["samples"].items():
+            print(f"{title}:")
+            for base in range(0, len(words), 8):
+                chunk = " ".join(f"0x{word:08x}" for word in words[base : base + 8])
+                print(f"  [{base:03d}] {chunk}")
+            print()
+        return
 
     groups = [
         (
@@ -200,10 +412,16 @@ def main() -> None:
     )
     parser.add_argument("--stride-words", type=int, default=128, help="public u32 stride between probe words")
     parser.add_argument("--dtype", choices=("u16", "u32"), default="u16", help="public raw storage dtype")
+    parser.add_argument(
+        "--record-kind",
+        choices=("auto", "entry", "base", "table"),
+        default="auto",
+        help="probe record format; auto selects HMXB base and HMXT table records by magic",
+    )
     parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     args = parser.parse_args()
 
-    parsed = parse_probe(args.raw_path, args.layout, args.stride_words, args.dtype)
+    parsed = parse_probe(args.raw_path, args.layout, args.stride_words, args.dtype, args.record_kind)
     if args.json:
         print(json.dumps(parsed, indent=2, sort_keys=True))
     else:

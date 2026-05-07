@@ -207,13 +207,32 @@ Native entry instrumentation is now more precise.  A direct `r31` probe at
 `0x2fcd80` reports return address `0x03de46c`, identifying the active clean
 native call as `0x3de464` in the simple `0x3de3c0` prebuilt-record wrapper.  A
 corrected pure-assembly pattern probe recovered the first-512-word public-output
-map used by `scripts/parse_w4a16_native_entry_probe.py --layout crouton512`.
+map used by
+`scripts/parse_w4a16_native_entry_probe.py --layout crouton512 --record-kind auto`.
 The reliable v3 native mask is
 `[0,0x700,0,0x77c,0,0,0x3ff,0,0,0,0,0,0xa0,0,control_ptr,0]`, with native
 control `[1,0x401,0x20c,0]`.  Matching only custom `HMX_W4A16_MASK_ARG6=0xa0`
 does not change the imported-sidecar result (`3298/65536`, `sorted_equal=True`,
 best row32 roll `32:65536`), so the remaining issue is still the full prebuilt
 record/table/control contract.
+
+The base-record probe now decodes that visible prebuilt record:
+`act_desc=[table,8,64,32,8,256]`, `out_desc=[table,8,64,32,8,256]`,
+`weight=0x046c0000`, `bias=0x046c8000`, and `control=0xfdd01c00`.
+Applying those scalar fields to the imported-sidecar custom flow
+(`output_w4a16_import_native_sidecar_bd00_base_record_fields_256/`) fails graph
+execution before a valid optrace/output, while the graph boundary still differs
+on `UFixed8` vs `SFixed8` weight carrier and control tensor shape.  Continue at
+the native table memory / wrapper-loop contract, not another scalar descriptor
+copy.
+
+The follow-up HMXT table probe keeps the same pure-assembly patched-skel
+approach and records the memory behind the active native table pointers.  The
+first 64 output entries are contiguous `0x046a0000..0x046bf800`, the first 64
+activation entries are contiguous `0x046c9000..0x046e8800`, and entries after
+64 are adjacent wrapper/metadata words rather than a 512-entry row4-expanded
+table.  This closes the direct scalar-copy route: the custom public-QHPI table
+adapter is structurally different from the compact native table view.
 
 2026-05-08 native-field probes: on the closest native-surface flow
 (`native_nmajor_k4_lohi` plus `native_a16_nobias`), forcing descriptor

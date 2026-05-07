@@ -107,16 +107,21 @@ The parser decodes descriptor fields, mask words, table pointer samples, and
 the first two little-endian u32 words from the effective weight and bias/control
 buffers passed to the HNH kernel.
 
-Native patched-skel entry probes should use the checked-in parser as well:
+Native patched-skel entry/base-record/table probes should use the checked-in
+parser as well:
 
 ```bash
 scripts/parse_w4a16_native_entry_probe.py /tmp/qnn_loader_probe_w4a16/Y.raw
 ```
 
-Use the default `--layout crouton512` mode for the current v3 probe.  A
-pure-assembly pattern probe recovered the first-512-word internal-output to
-public-output map, so the parser now reconstructs the mask/table/weight/bias
-samples instead of relying on the older stride-only read.
+Use the default `--layout crouton512 --record-kind auto` mode for the current
+v3 entry probe, base-record probe, and table probe.  A pure-assembly pattern
+probe recovered the first-512-word internal-output to public-output map, so the
+parser now reconstructs the mask/table/weight/bias samples instead of relying on
+the older stride-only read.  `HMXP` records are HNH entry samples; `HMXB`
+records dump the prebuilt record at `base = out_desc - 0x28`; `HMXT` records
+dump the native table memory starting at the active output and activation table
+pointers.
 
 `HMX_W4A16_DESC_DUMP_TABLE_SELECT` selects which 16-entry pointer-table sample
 is written into the 256-byte dump payload:
@@ -223,7 +228,10 @@ Native entry and descriptor follow-up:
 | `/tmp/libQnnHtpV75Skel_hmx_r31_probe.so` | Patching `0x2fcd80` to write `r31` reports return address `0x03de46c`, so the current clean native artifact reaches HNH through the simple prebuilt-record wrapper call at `0x3de464`, not the earlier hypothesized `0x3dde78` call. |
 | `/tmp/libQnnHtpV75Skel_hmx_direct_pattern_endloop_probe.so` | A pure-assembly pattern probe with `:endloop0` recovers the public-output map for the first 512 internal u32 words: `public = (i % 32) * 128 + ((i // 32) // 2) * 16 + ((i // 32) & 1)`. |
 | `/tmp/libQnnHtpV75Skel_hmx_entry_probe_v3.so` | Corrected copy loops and the recovered map produce reliable native samples: mask `[0,0x700,0,0x77c,0,0,0x3ff,0,0,0,0,0,0xa0,0,control_ptr,0]`, out table `0x046a0000..0x046a7800`, act table `0x046c9000..0x046d0800`, weight words `0x0cfbead9,0xead9c7b6,0xc7b6a594,0xa5947362`, control `[1,0x401,0x20c,0]`. |
+| `/tmp/libQnnHtpV75Skel_hmx_base_record_probe.so` | Base-record probe confirms the active record pointer contract: `r31=0x031de46c`, `base=0x02d99408`, `weight=0x046c0000`, `bias=0x046c8000`, `act_desc=[0x02d99288,8,64,32,8,256]`, `out_desc=[0x02d994a0,8,64,32,8,256]`, mask `[0,0x700,0,0x77c,0,0,0x3ff,0,0,0,0,0,0xa0,0,control_ptr,0]`, and `control=0xfdd01c00`. |
+| `/tmp/libQnnHtpV75Skel_hmx_table_probe.so` | Table-memory probe confirms the active table pointers expose a compact first 64-entry view: output table `0x046a0000..0x046bf800` and activation table `0x046c9000..0x046e8800`, both contiguous by `0x800`.  Entries after 64 are adjacent wrapper/metadata memory, not another 448 entries of the custom public-QHPI row4-expanded table. |
 | `output_w4a16_import_native_sidecar_bd00_maskarg6_a0_256/` | Forcing custom `HMX_W4A16_MASK_ARG6=0xa0` to match native mask word `[12]` is a no-op for correctness: `3298/65536`, `sorted_equal=True`, best row32 roll `32:65536`, main-op `95152` cycles. |
+| `output_w4a16_import_native_sidecar_bd00_base_record_fields_256/` | Applying the visible base-record scalar fields to the imported-sidecar custom flow (`act_y=64`, `out_y=64`, `out_n_tiles=32`, `mask[12]=0xa0`) fails graph execution before a valid optrace/output.  The analyzer still records the graph-boundary mismatch: custom weight carrier `UFixed8` vs native `SFixed8`, and custom control shape `[1,1,1,1]` vs native `[1]`. |
 
 The native entry probe currently writes into the internal ConvLayer output tile;
 downstream native output ops transform that tile before `Y.raw` is emitted.  Do
@@ -242,8 +250,20 @@ The current native wrapper is simpler than the earlier `0x3ddc60` hypothesis for
 this artifact.  It enters at `0x3de3c0` with a prebuilt record pointer in `r0`;
 the HNH call at `0x3de464` passes `r0+0x28` as output descriptor, `r0+0x10` as
 activation descriptor, `memw(r0+0x8)` as weight, `memw(r0+0x80)` as control, and
-`r0+0x48` as mask.  Continue from this prebuilt-record contract before returning
-to custom layout changes.
+`r0+0x48` as mask.  The base-record probe now makes those scalar fields
+explicit, and directly applying them to the custom public-QHPI table adapter is
+not executable.  Continue by decoding the native table pointer arrays and loop
+state behind `act_table_ptr=0x02d99288` and `out_table_ptr=0x02d994a0`, not by
+copying more isolated descriptor constants.
+
+The first table-memory probe closes the obvious "copy the native scalars into
+the custom adapter" route.  At the active native table pointers, only the first
+64 entries are the compact contiguous HNH table view; reading beyond them falls
+into nearby wrapper records and other metadata.  The custom adapter currently
+expands 64 public QHPI physical blocks into 512 row4-offset HNH entries.  That
+is a different structure, so the next custom change must reproduce a named
+native compact-table/wrapper state, not splice the native `[8,64,32,8,256]`
+descriptor words into the existing 512-entry table path.
 
 Post descriptor-dump-enrichment recheck:
 
