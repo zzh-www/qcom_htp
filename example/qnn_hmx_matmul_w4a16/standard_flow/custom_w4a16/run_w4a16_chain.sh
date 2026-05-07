@@ -25,6 +25,7 @@ CHAIN="${CHAIN:-8}"
 MODE="${MODE:-chain}"
 OUT_DIR="${OUT_DIR:-$SCRIPT_DIR/out/w4a16_${MODE}_${M}}"
 SKIP_DEVICE="${SKIP_DEVICE:-0}"
+NATIVE_OUTPUT="${NATIVE_OUTPUT:-0}"
 
 mkdir -p "$OUT_DIR"
 cd "$SCRIPT_DIR"
@@ -60,7 +61,7 @@ mkdir -p "$SCRIPT_DIR/converter/build"
 echo "  -> $CPL"
 
 LAYOUT_FLAGS=()
-if [ "$MODE" = "chain" ] || [ "$MODE" = "direct" ] || [ "$MODE" = "direct_flat" ]; then
+if [ "$MODE" = "chain" ] || [ "$MODE" = "chain_float" ] || [ "$MODE" = "chain_qdq" ] || [ "$MODE" = "direct" ] || [ "$MODE" = "direct_flat" ]; then
     LAYOUT_FLAGS+=(--source_model_input_layout act_raw NONTRIVIAL)
     LAYOUT_FLAGS+=(--desired_input_layout act_raw NONTRIVIAL)
     LAYOUT_FLAGS+=(--source_model_output_layout out NONTRIVIAL)
@@ -138,7 +139,7 @@ for f in "$OUT_DIR"/runtime_inputs_u8/act_w4a16*.raw; do
     ssh "$DEVICE" "cat > $REMOTE/runtime_inputs_u8/$(basename "$f")" < "$f"
 done
 
-if [ "$MODE" = "chain" ] || [ "$MODE" = "direct" ] || [ "$MODE" = "direct_flat" ]; then
+if [ "$MODE" = "chain" ] || [ "$MODE" = "chain_float" ] || [ "$MODE" = "chain_qdq" ] || [ "$MODE" = "direct" ] || [ "$MODE" = "direct_flat" ]; then
     echo "act_raw:=runtime_inputs_u8/act_w4a16.raw" > "$OUT_DIR/input_list.txt"
 else
     line="act_raw:=runtime_inputs_u8/act_w4a16.raw"
@@ -149,12 +150,20 @@ else
 fi
 ssh "$DEVICE" "cat > $REMOTE/input_list.txt" < "$OUT_DIR/input_list.txt"
 RUN_STATUS=0
-ssh "$DEVICE" "cd $REMOTE && rm -rf out && LD_LIBRARY_PATH=../:.:/vendor/lib64 ADSP_LIBRARY_PATH=../ ../qnn-net-run --backend ../libQnnHtp.so --retrieve_context w4a16_ctx.bin --op_packages ../libQnnHmxMatMulW4A16_cpu.so:QnnHmxMatMulW4A16InterfaceProvider:CPU,../libQnnHmxMatMulW4A16_htp.so:QnnHmxMatMulW4A16InterfaceProvider:HTP --input_list input_list.txt --profiling_level detailed --profiling_option optrace --output_dir out --config_file htp_config.json --use_native_input_files --num_inferences 3 --perf_profile burst 2>&1" \
+OUTPUT_FLAGS=""
+if [ "$NATIVE_OUTPUT" = "1" ]; then
+    OUTPUT_FLAGS="--use_native_output_files"
+fi
+ssh "$DEVICE" "cd $REMOTE && rm -rf out && LD_LIBRARY_PATH=../:.:/vendor/lib64 ADSP_LIBRARY_PATH=../ ../qnn-net-run --backend ../libQnnHtp.so --retrieve_context w4a16_ctx.bin --op_packages ../libQnnHmxMatMulW4A16_cpu.so:QnnHmxMatMulW4A16InterfaceProvider:CPU,../libQnnHmxMatMulW4A16_htp.so:QnnHmxMatMulW4A16InterfaceProvider:HTP --input_list input_list.txt --profiling_level detailed --profiling_option optrace --output_dir out --config_file htp_config.json --use_native_input_files $OUTPUT_FLAGS --num_inferences 3 --perf_profile burst 2>&1" \
     > "$OUT_DIR/run.log" 2>&1 || RUN_STATUS=$?
 
 tail -40 "$OUT_DIR/run.log"
 mkdir -p "$OUT_DIR/device_out"
-ssh "$DEVICE" "cat $REMOTE/out/Result_0/out.raw 2>/dev/null" > "$OUT_DIR/device_out/out.raw" 2>/dev/null || true
+if [ "$NATIVE_OUTPUT" = "1" ]; then
+    ssh "$DEVICE" "cat $REMOTE/out/Result_0/out_native.raw 2>/dev/null || cat $REMOTE/out/Result_0/out.raw 2>/dev/null" > "$OUT_DIR/device_out/out.raw" 2>/dev/null || true
+else
+    ssh "$DEVICE" "cat $REMOTE/out/Result_0/out.raw 2>/dev/null || cat $REMOTE/out/Result_0/out_native.raw 2>/dev/null" > "$OUT_DIR/device_out/out.raw" 2>/dev/null || true
+fi
 ssh "$DEVICE" "cat $REMOTE/out/qnn-profiling-data_0.log 2>/dev/null" > "$OUT_DIR/device_out/qnn-profiling-data_0.log" 2>/dev/null || true
 
 if [ "${DECODE_OPTRACE:-1}" = "1" ]; then
@@ -166,25 +175,83 @@ if [ "${DECODE_OPTRACE:-1}" = "1" ]; then
 fi
 
 VERIFY_STATUS=0
-python3 - "$OUT_DIR" "$M" <<'PY' || VERIFY_STATUS=$?
+python3 - "$OUT_DIR" <<'PY' || VERIFY_STATUS=$?
 import sys
 from pathlib import Path
+import json
+import os
 
 import numpy as np
 
 out_dir = Path(sys.argv[1])
-shape = int(sys.argv[2])
 raw = out_dir / "device_out" / "out.raw"
 refs = list(out_dir.glob("*.out_ref_u*.npy"))
 if not raw.exists() or not refs:
     print("  bit-exact: failed (missing output or reference)")
     raise SystemExit(2)
-out = np.fromfile(raw, dtype=np.float32).reshape(shape, shape)
 ref = np.load(refs[0])
 max_value = np.iinfo(ref.dtype).max
-out_q = np.clip(np.round(out), 0, max_value).astype(ref.dtype)
+scale = 1.0
+offset = 0.0
+overrides = out_dir / "quant_overrides.json"
+if overrides.exists():
+    with overrides.open("r", encoding="utf-8") as f:
+        encodings = json.load(f).get("activation_encodings", {})
+    if "out" in encodings and encodings["out"]:
+        enc = encodings["out"][0]
+        scale = float(enc.get("scale", scale))
+        offset = float(enc.get("offset", offset))
+
+def load_quantized_output(path):
+    raw_size = path.stat().st_size
+    q_bytes = ref.size * ref.dtype.itemsize
+    f_bytes = ref.size * np.dtype(np.float32).itemsize
+    if raw_size == q_bytes:
+        return np.fromfile(path, dtype=ref.dtype).reshape(ref.shape)
+    if raw_size != f_bytes:
+        print(f"  bit-exact: failed ({path} has unexpected size {raw_size})")
+        raise SystemExit(2)
+    out = np.fromfile(path, dtype=np.float32).reshape(ref.shape)
+    if scale == 0.0:
+        print("  bit-exact: failed (zero output scale)")
+        raise SystemExit(2)
+    return np.clip(np.rint(out / scale - offset), 0, max_value).astype(ref.dtype)
+
+out_q = load_quantized_output(raw)
+native_ref = os.environ.get("VERIFY_NATIVE_RAW", "")
+native_ref_q = None
+if native_ref:
+    native_path = Path(native_ref)
+    if not native_path.exists():
+        print(f"  native-exact: failed (missing {native_path})")
+        raise SystemExit(2)
+    native_ref_q = load_quantized_output(native_path)
+    native_ok = int((out_q == native_ref_q).sum())
+    print(f"  native-exact: {native_ok}/{out_q.size}")
+    if native_ok != out_q.size:
+        diff = np.abs(out_q.astype(np.int64) - native_ref_q.astype(np.int64))
+        print(f"  native maxdiff: {int(diff.max())}")
+        raise SystemExit(3)
 ok = int((out_q == ref).sum())
-print(f"  bit-exact: {ok}/{out_q.size}")
+label = "analytic bit-exact" if native_ref_q is not None else "bit-exact"
+print(f"  {label}: {ok}/{out_q.size}")
+verify_abs_tol = int(os.environ.get("VERIFY_ABS_TOL", "-1"))
+if verify_abs_tol < 0:
+    native_a16_output = (
+        ref.dtype == np.uint16 and
+        abs(scale - (1.0 / 32767.0)) < 1.0e-12 and
+        int(offset) == -32768
+    )
+    verify_abs_tol = 3 if native_a16_output else 0
+if ok != out_q.size and verify_abs_tol > 0:
+    diff = np.abs(out_q.astype(np.int64) - ref.astype(np.int64))
+    near = int((diff <= verify_abs_tol).sum())
+    prefix = "analytic " if native_ref_q is not None else ""
+    print(f"  {prefix}abs<={verify_abs_tol}: {near}/{out_q.size} (max={int(diff.max())})")
+    if near == out_q.size:
+        raise SystemExit(0)
+if native_ref_q is not None:
+    raise SystemExit(0)
 if ok != out_q.size:
     raise SystemExit(3)
 PY

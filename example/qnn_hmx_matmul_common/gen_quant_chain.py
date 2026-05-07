@@ -69,6 +69,10 @@ def _native_a16_encoding() -> dict:
     }
 
 
+def _is_native_a16_family(family: Family) -> bool:
+    return family.act_bits == 16 and family.out_bits == 16
+
+
 def _symmetric_encoding(bits: int) -> dict:
     qmax = (1 << (bits - 1)) - 1
     return {
@@ -146,15 +150,21 @@ def _pack_w8_kmajor_split128(w_raw_kn: np.ndarray) -> np.ndarray:
     return np.concatenate(parts).astype(np.int8, copy=False)
 
 
-def _pack_w8a16_native_bias(w_raw_kn: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Pack native w8a16 bias/control records for 32-column HMX tiles."""
+def _pack_native_a16_bias(family: Family, w_raw_kn: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Pack native A16 bias/control records for 32-column HMX tiles."""
     k, n = w_raw_kn.shape
     if k % 32 or n % 32:
-        raise ValueError("native w8a16 bias pack requires K and N multiples of 32")
+        raise ValueError("native A16 bias pack requires K and N multiples of 32")
     sum_w = w_raw_kn.astype(np.int32).sum(axis=0)
     effective_i32 = (-128 * sum_w).astype(np.int32)
     packed = np.zeros((n // 32, 512), dtype=np.uint8)
-    const = np.array([0x4440, 0x8040, 0x0008, 0x4000], dtype=np.uint16).view(np.uint8)
+    if family.weight_bits == 4:
+        const_words = [0x5524, 0x8040, 0x0092, 0x4000]
+    elif family.weight_bits == 8:
+        const_words = [0x4440, 0x8040, 0x0008, 0x4000]
+    else:
+        raise ValueError("native A16 bias pack is not decoded for this weight width")
+    const = np.array(const_words, dtype=np.uint16).view(np.uint8)
     for nt in range(n // 32):
         for parity in (0, 1):
             half_base = parity * 256
@@ -255,10 +265,10 @@ def _bias_initializer(
     act_zp = 1 << (family.act_bits - 1)
     sum_w = w_raw_kn.astype(np.int32).sum(axis=0)
     if bias_layout == "native_a16":
-        if family.name != "w8a16":
-            raise ValueError("native_a16 bias layout is only valid for w8a16")
+        if not _is_native_a16_family(family):
+            raise ValueError("native_a16 bias layout is only valid for A16/U16 families")
         bias_q = np.zeros(n, dtype=np.int32)
-        bias_fold_bytes, effective_i32 = _pack_w8a16_native_bias(w_raw_kn)
+        bias_fold_bytes, effective_i32 = _pack_native_a16_bias(family, w_raw_kn)
         init = numpy_helper.from_array(
             bias_fold_bytes.view(np.int32).reshape(1, n_t, 1, 128).copy(),
             name="bias",
@@ -276,14 +286,18 @@ def _bias_initializer(
     else:
         effective_i32 = (-act_zp) * sum_w + bias_q
 
-    # The A16/W8 native convhbh deep path advances the bias pointer in 0x200
-    # byte tiles and loads from the high 0x100 half.  Keep the existing 256B
-    # payload format and mirror it into that high half for this family.
-    bias_tile_bytes = 512 if family.name == "w8a16" else 256
+    # Native A16 Conv1x1 paths prepare one 512B bias/control record per
+    # 32-output-channel tile.  The HTP graph exposes this as
+    # Int32 [1, N/32, 1, 128].
+    bias_tile_bytes = 512 if _is_native_a16_family(family) else 256
     bias_fold_bytes = np.zeros((n_t, bias_tile_bytes), dtype=np.uint8)
     if bias_layout == "zero":
         bias_i32 = bias_fold_bytes.view(np.int32)
-        bias_shape = (1, n_t, 1, 128) if family.name == "w8a16" else (1, n_t, 1, bias_tile_bytes // 4)
+        bias_shape = (
+            (1, n_t, 1, 128)
+            if _is_native_a16_family(family)
+            else (1, n_t, 1, bias_tile_bytes // 4)
+        )
         init = numpy_helper.from_array(
             bias_i32.reshape(*bias_shape).copy(),
             name="bias",
@@ -340,8 +354,8 @@ def _bias_initializer(
                         np.array([int(effective_i32[col])], np.int32).view(np.uint8)
                     )
     bias_i32 = bias_fold_bytes.view(np.int32)
-    if family.name == "w8a16":
-        # Native w8a16 lowers bias as one 512B record per N tile:
+    if _is_native_a16_family(family):
+        # Native A16 lowers bias as one 512B record per N tile:
         # chrometrace reports Int32 dims [1, N/32, 1, 128].  Keep that shape so
         # QNN's Flat4 direct layout matches the native prepared payload.
         bias_shape = (1, n_t, 1, 128)
@@ -371,9 +385,12 @@ def _make_reference_step(
 ) -> np.ndarray:
     max_out = (1 << family.out_bits) - 1
     if reference_contract == "native":
-        if family.name != "w8a16":
-            raise ValueError("native reference contract is only valid for w8a16")
-        y = ((cur.astype(np.float64) - 32768.0) @ w_raw_kn.astype(np.float64)) / 127.0
+        if not _is_native_a16_family(family):
+            raise ValueError("native reference contract is only valid for A16/U16 families")
+        qmax = (1 << (family.weight_bits - 1)) - 1
+        if qmax <= 0:
+            raise ValueError("native reference contract requires signed weights")
+        y = ((cur.astype(np.float64) - 32768.0) @ w_raw_kn.astype(np.float64)) / float(qmax)
         return np.clip(np.rint(y + 32768.0), 0, max_out).astype(_uint_dtype(family.out_bits))
     return np.clip(
         (cur.astype(np.int32) - (1 << (family.act_bits - 1))) @ w_raw_kn.astype(np.int32) + bias_q,
@@ -430,7 +447,7 @@ def generate(family: Family, args: argparse.Namespace) -> None:
     w_raw_kn = _make_weight(family, k, n, args.weight_limit)
     reference_contract = args.reference_contract
     if reference_contract == "auto":
-        reference_contract = "native" if family.name == "w8a16" and args.a16_quant_contract == "native" else "legacy"
+        reference_contract = "native" if _is_native_a16_family(family) and args.a16_quant_contract == "native" else "legacy"
     split_count = 2 if native_split_layout else 1
     split_n = n // split_count
     wt_inits = []
@@ -476,7 +493,7 @@ def generate(family: Family, args: argparse.Namespace) -> None:
     initializers = [*wt_inits, *bias_inits, scratch_init, in_reshape_dims, out_reshape_dims]
     if args.mode == "chain_qdq":
         act_q_scale = 1.0
-        if family.name == "w8a16" and args.a16_quant_contract == "native":
+        if _is_native_a16_family(family) and args.a16_quant_contract == "native":
             act_q_scale = 1.0 / 32767.0
         initializers.extend([
             numpy_helper.from_array(np.array([act_q_scale], dtype=np.float32), name="act_q_scale"),
@@ -638,7 +655,7 @@ def generate(family: Family, args: argparse.Namespace) -> None:
     model.ir_version = 8
     onnx.save(model, out_path)
 
-    if family.name == "w8a16" and args.a16_quant_contract == "native":
+    if _is_native_a16_family(family) and args.a16_quant_contract == "native":
         act_enc = _native_a16_encoding()
         out_enc = _native_a16_encoding()
     else:
