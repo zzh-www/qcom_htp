@@ -67,6 +67,20 @@ The parser decodes descriptor fields, mask words, table pointer samples, and
 the first two little-endian u32 words from the effective weight and bias/control
 buffers passed to the HNH kernel.
 
+Prepared native W4 sidecars can be imported into the standard generator flow for
+diagnostics. Extract the native 256^3 sidecar first, then pass it through
+`GEN_EXTRA_ARGS`:
+
+```bash
+dd if=example/qnn_matmul_profile/output_codex_native_w4a16_same_custom_256/ctx/conv_ctx.bin \
+  of=/tmp/native_w4a16_sidecar_256.raw bs=1 skip=$((0xd000)) count=32768 status=none
+
+GEN_EXTRA_ARGS="--bias-layout native_a16 --a16-quant-contract native \
+  --reference-contract native --final-output-rank 3d \
+  --w4-native-sidecar-raw /tmp/native_w4a16_sidecar_256.raw" \
+bash example/qnn_hmx_matmul_w4a16/standard_flow/custom_w4a16/run_w4a16_chain.sh
+```
+
 ## Current Evidence
 
 Durable native oracle:
@@ -143,6 +157,10 @@ Dead ends already checked:
 - Native no-bias control layout `[1,8,1,64]` with repeated `0x80008000`
   reduces saturation but worsens exactness (`1755/65536` in the refreshed
   comparable probe).
+- Importing the native prepared W4 sidecar through
+  `--w4-native-sidecar-raw`, while keeping current `native_a16` bias/control,
+  also worsens exactness (`3041/65536`, artifact
+  `example/qnn_matmul_profile/output_codex_w4a16_control_i32_native_sidecar_nativebias_256/`).
 - `HMX_W4A16_USE_SKEL_KERNEL` calls the external skel wrapper but preserves the
   same low exactness class.
 - `DESC_M_TILES_OVERRIDE=32` lowers custom cycles to about `12.8k`, but only
@@ -189,6 +207,15 @@ the w8a16 diagnostic style:
 
 Defaults preserve the prior runtime behavior; these hooks are for focused ABI
 probes only.
+
+`gen_quant_chain.py` also has W4A16-only diagnostics:
+
+- the fourth input is now native-shaped `control` (`Int32 [1]`) instead of the
+  old unused `scratch` (`UFixed8 [1,1,1,2048]`);
+- `--bias-layout native_a16_w4compact` emits a native-sized 2048B W4
+  bias/control tensor for dead-end checking;
+- `--w4-native-sidecar-raw <path>` imports a prepared native W4 byte stream and
+  applies the custom-op `weights_to_vtcm` carrier XOR convention.
 
 The enriched `HMX_W4A16_DESC_DUMP` payload decodes through the same Crouton16
 row-interleave pattern used by w8a16: for each 32-word group, low 16-bit halves

@@ -252,10 +252,28 @@ def _weight_initializer(
     w_raw_kn: np.ndarray,
     w4_pack_order: str,
     w4_nibble_encoding: str,
+    w4_native_sidecar_raw: str | None,
     w8_pack_order: str,
     w8_carrier_dtype: str,
 ):
     if family.weight_bits == 4:
+        if w4_native_sidecar_raw:
+            if family.name != "w4a16":
+                raise ValueError("--w4-native-sidecar-raw is currently decoded only for w4a16")
+            k, n = w_raw_kn.shape
+            if k % 2:
+                raise ValueError("native W4 sidecar import requires even K")
+            raw = np.fromfile(w4_native_sidecar_raw, dtype=np.uint8)
+            expected = (k // 2) * n
+            if raw.size != expected:
+                raise ValueError(
+                    f"native W4 sidecar byte count mismatch: got {raw.size}, want {expected}"
+                )
+            carrier = np.bitwise_xor(raw, np.uint8(0x80))
+            return numpy_helper.from_array(
+                carrier.view(np.int8).reshape(1, 1, k // 2, n).copy(),
+                name="weight",
+            )
         if w4_pack_order == "native_full_codes":
             if family.name != "w4a16":
                 raise ValueError("native_full_codes is currently decoded only for w4a16")
@@ -603,6 +621,7 @@ def generate(family: Family, args: argparse.Namespace) -> None:
             w_part,
             args.w4_pack_order,
             args.w4_nibble_encoding,
+            args.w4_native_sidecar_raw,
             args.w8_pack_order,
             args.w8_carrier_dtype,
         )
@@ -932,6 +951,11 @@ def main(family_name: str) -> None:
         default="lohi",
     )
     p.add_argument("--w4-nibble-encoding", choices=["twos", "biased"], default="twos")
+    p.add_argument(
+        "--w4-native-sidecar-raw",
+        default=None,
+        help="import a prepared native W4 sidecar byte stream for w4a16 diagnostics",
+    )
     p.add_argument("--w8-pack-order", choices=["raw", "kmajor", "kmajor_split128"], default="raw")
     p.add_argument("--w8-carrier-dtype", choices=["uint8", "int8"], default="uint8")
     p.add_argument("--a16-quant-contract", choices=["legacy", "native"], default="legacy")
