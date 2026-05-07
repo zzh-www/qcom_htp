@@ -44,6 +44,52 @@ native boundary is being copied:
 Only after a custom change can name the native boundary it is reproducing should
 it be considered an alignment attempt.
 
+## 2026-05-08 Native Path Audit
+
+Current audited conclusion: QNN native W4A16 is a layered implementation path,
+not a single tensor layout.  The verified route is:
+
+```text
+float ONNX Conv + quant_overrides
+  -> converter graph-before: UFixed16 activation, UFixed8 W4 carrier metadata
+  -> ctxgen: SFixed8 W4 sidecar, Int32 bias/control sidecar, HNH UFixed16 surface
+  -> ConvLayer_s1.opt: native wrapper builds descriptors from tensor objects
+  -> hmx_v73_convhnh1x1_stride1 / hmx_v73_convhnh1x1deep_stride1
+```
+
+The visible final HTP tensor contract is already known:
+
+```text
+activation  UFixed16 [1,8,32,256]
+weight      SFixed8  [1,1,128,256]
+bias/control Int32   [1,8,1,64]
+control     Int32    [1]
+output      UFixed16 [1,8,32,256]
+```
+
+That contract is necessary but not sufficient.  The native wrapper passes QNN
+internal tensor-object table pointers and metadata-derived descriptor fields to
+the HMX body.  Bottom mapping exposes the visible tensor type/shape but not the
+runtime values behind:
+
+- `activation.data` and `output.data`;
+- `activation.meta[0x04/0x18/0x1c/0x20]` and output counterparts;
+- the post-builder stack record at `base = r29 + 0x30`;
+- the W4 mask-helper dynamic arguments;
+- the wrapper descriptor-advance tuple `r23/r24/r27`.
+
+The post-Conv tensor-dump diagnostic proves a different boundary: QNN exposes a
+layout-restored public QHPI surface, `UFixed16 [1,256,1,256]`, to a custom op
+placed after native Conv.  It does not expose the internal HNH compute surface.
+The host output-layout sweep confirmed that converter output-layout flags do
+not move a custom diagnostic op inside `ConvLayer_s1.opt`.
+
+Therefore the next alignment evidence must be a native wrapper/descriptor
+record, or a static derivation that accounts for the same metadata fields.  A
+custom run that changes only y-stride, mask lane, row4 order, output rank, or
+public QHPI table expansion is not native-path evidence unless it names which
+field in the native wrapper record it reproduces.
+
 ## Evidence Map
 
 | Evidence | Path | What it proves |
@@ -744,6 +790,25 @@ Dead-end implication from the current probes:
   `SFixed8` QHPI carrier.
 - `desc32`, y-stride-only, pointer-offset, control-word, and one-lane mask
   sweeps should not be repeated until the full native builder state is decoded.
+
+## Runtime Descriptor Dump Attempts
+
+One direct runtime-dump attempt patched the device `libQnnHtpV75Skel.so`
+temporarily at `hmx_v73_convhnh1x1_stride1` to replace the entry with a small
+descriptor-copy stub.  The patched function fit the original symbol and local
+disassembly showed the replacement at `0x2fcd80`, but device execution did not
+produce a usable native descriptor dump:
+
+- an isolated remote-directory run completed with output byte-identical to the
+  canonical native run, indicating the patched skel was not loaded for that
+  context;
+- a parent-directory replacement path failed during backend/device creation
+  even after restoring the required backend extension configuration;
+- the original device skel was restored after the experiment.
+
+Do not repeat this exact patched-skel route as the standard path.  If native
+runtime dumping is revisited, first choose a loader-safe strategy that proves the
+patched HTP library is actually used before running the native context.
 
 ## Next Native-First Work
 

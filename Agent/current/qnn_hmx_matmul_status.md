@@ -270,6 +270,17 @@ mappings kept `HmxW4A16TensorDump` at `UFixed16 [1,256,1,256]` while native
 `q::ConvLayer_s1.opt` stayed at the internal `UFixed16 [1,8,32,256]` HNH
 boundary.  Treat public layout flags as closed for W4A16 native alignment.
 
+2026-05-08 native-first direction update: W4A16 alignment work is now gated on
+the QNN native implementation path, not another custom descriptor sweep.  The
+visible HTP contract is known (`UFixed16 [1,8,32,256]`, `SFixed8
+[1,1,128,256]`, `Int32 [1,8,1,64]`, `Int32 [1]`), but the missing state is the
+runtime `ConvLayer_s1.opt` wrapper record: QNN tensor-object table pointers,
+metadata-derived descriptor fields, W4 mask-helper arguments, and the
+`r23/r24/r27` descriptor-advance tuple.  A direct patched-skel descriptor-dump
+attempt did not produce usable runtime evidence and should not be repeated
+without first proving the patched HTP library is loaded.  See
+`Agent/handoffs/w4a16_qnn_native_path.md` before starting any new custom probe.
+
 The signed W4 carrier route is still blocked below quant-overrides.  Four
 host-only probes using an ONNX `INT8` initializer plus no weight encoding,
 8-bit offset `0`, 8-bit offset `-128`, and 4-bit offset `0` all lower the
