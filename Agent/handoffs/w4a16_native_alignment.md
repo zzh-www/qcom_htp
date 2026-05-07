@@ -174,6 +174,8 @@ Custom W4A16 evidence:
   of the old unused `UFixed8 [1,1,1,2048]` scratch tensor. This does not change
   correctness, but the standard 256^3 probe's constant-move sidecar cycles drop
   from the old class (`6717` in the refreshed pre-control artifact) to `3285`.
+  The custom wrapper still passes the local three-word control table by default;
+  direct use of the fourth QHPI input is a guarded diagnostic and is worse.
 - `OP_INPUT_LAYOUT=native` is now a standard diagnostic path for W4A16. It
   emits HMX activation/output tensors as `[1,1,M,K]` and `[1,1,M,N]`, and the
   converter lowers them through `InputSlice + ForceFormat_Crouton`. This cuts
@@ -211,6 +213,12 @@ Dead ends already checked:
 - Weight pointer offsets `64,128,256,512,1024` do not improve alignment;
   the best was `4235/65536` at offset `256`.
 - Bias/control pointer offsets `64,128,256,512,1024` do not improve alignment.
+- `HMX_W4A16_USE_CONTROL_INPUT`, which passes the fourth QHPI `control`
+  initializer pointer to the HNH body instead of the local `[1,1025,524]`
+  table, worsens the standard 256^3 native comparison to `903/65536` exact with
+  a `96943`-cycle custom main op. Default local-control behavior was restored
+  and rechecked at `4229/65536`; artifact:
+  `example/qnn_matmul_profile/output_codex_w4a16_control_input_diag_256/`.
 - Native no-bias control layout `[1,8,1,64]` with repeated `0x80008000`
   reduces saturation but worsens exactness (`1755/65536` in the refreshed
   comparable probe).
@@ -301,6 +309,7 @@ the w8a16 diagnostic style:
 - `HMX_W4A16_OUT_Y_STRIDE_WORDS_OVERRIDE`
 - `HMX_W4A16_DESC_M_TOTAL_MINUS_STEP_OVERRIDE`
 - `HMX_W4A16_DESC_K_TOTAL_BYTES_OVERRIDE`
+- `HMX_W4A16_USE_CONTROL_INPUT`
 - existing `HMX_W4A16_DESC_M_TILES_OVERRIDE`,
   `HMX_W4A16_WEIGHT_PTR_OFFSET`, and `HMX_W4A16_BIAS_PTR_OFFSET`
 
@@ -349,7 +358,7 @@ Payload sampling from
 |---|---:|
 | effective weight first two u32 | `0xf0debc9a`, `0x79563412` |
 | effective bias/control first two u32 | `0x80405524`, `0x40000092` |
-| `extra_param[0..1]` | `1`, `1025` |
+| default control words `[0..1]` | `1`, `1025` |
 
 For comparison, the native prepared W4 sidecar at
 `output_codex_native_w4a16_same_custom_256/ctx/conv_ctx.bin+0xd000` starts with
@@ -380,7 +389,9 @@ The W4A16 native HNH wrapper evidence is in
 - The deep HNH body at `0x2fdb80` reads `r5` only as `memw(r5++#0x4)` near
   `0x2fdc0c`, so the first control word is the relevant ABI for this path.
   The custom three-word `[1, 1025, 524]` table is therefore unlikely to be the
-  primary W4A16 blocker.
+  primary W4A16 blocker.  A direct-QHPI-control diagnostic is worse
+  (`903/65536`), so the native wrapper's original `r5` is not equivalent to the
+  current fourth custom-op initializer pointer.
 - Be careful decoding Hexagon packets: stores without `.new` use the old
   register value. Several apparent native builder contradictions come from
   reading same-packet stores as if they used the newly assigned register.

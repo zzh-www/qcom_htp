@@ -59,6 +59,11 @@
 #ifndef HMX_W4A16_EXTRA_PARAM2
 #define HMX_W4A16_EXTRA_PARAM2 524u
 #endif
+static constexpr uint32_t kHmxW4A16DefaultControlParam[3] = {
+    HMX_W4A16_EXTRA_PARAM0,
+    HMX_W4A16_EXTRA_PARAM1,
+    HMX_W4A16_EXTRA_PARAM2,
+};
 #ifndef HMX_W4A16_USE_ROW4_TABLES
 #define HMX_W4A16_USE_ROW4_TABLES 1
 #endif
@@ -539,8 +544,13 @@ static constexpr uint32_t kHmxW4A16MaxCopiedTableEntries = 4096;
 #else
 static constexpr uint32_t kHmxW4A16MaxCopiedTableEntries = 512;
 #endif
+#if defined(HMX_W4A16_USE_CONTROL_INPUT)
+static constexpr uint32_t kHmxW4A16PrecomputedDataSize =
+    60 + 2 * kHmxW4A16MaxCopiedTableEntries * sizeof(int32_t);
+#else
 static constexpr uint32_t kHmxW4A16PrecomputedDataSize =
     56 + 2 * kHmxW4A16MaxCopiedTableEntries * sizeof(int32_t);
+#endif
 #endif
 
 #if defined(__hexagon__) && !defined(SCALAR_ONLY) && defined(HMX_W4A16_ENABLE_QHPI_PRECOMPUTE)
@@ -576,7 +586,6 @@ static constexpr uint32_t kHmxW4A16PrecomputedDataSize =
  * descriptor ABI on stack and enters the HMX body.
  */
 static constexpr uint32_t kHmxW4A16PrecomputeMagic = 0x48385850u; /* H8XP */
-
 struct hmx_w4a16_precomputed_t {
     uint32_t magic;
     uint32_t S;
@@ -589,6 +598,9 @@ struct hmx_w4a16_precomputed_t {
     uint32_t out_entries;
     const uint8_t *bias_bytes;
     const uint8_t *wt_pack;
+#if defined(HMX_W4A16_USE_CONTROL_INPUT)
+    const uint32_t *control_param;
+#endif
     uint8_t *out_first_block;
     const int32_t *act_qhpi_table;
     const int32_t *out_qhpi_table;
@@ -620,6 +632,10 @@ static uint32_t hmx_w4a16_precompute(
         reinterpret_cast<const uint8_t *>(qhpi_tensor_raw_data(inputs[0]));
     const uint8_t *wt_pack =
         reinterpret_cast<const uint8_t *>(qhpi_tensor_raw_data(inputs[1]));
+#if defined(HMX_W4A16_USE_CONTROL_INPUT)
+    const uint32_t *control_param =
+        reinterpret_cast<const uint32_t *>(qhpi_tensor_raw_data(inputs[3]));
+#endif
     void **act_blocks = qhpi_tensor_block_table(inputs[2]);
     void **out_blocks = qhpi_tensor_block_table(outputs[0]);
     const uint32_t act_block_entries = qhpi_tensor_block_table_length(inputs[2]);
@@ -672,6 +688,9 @@ static uint32_t hmx_w4a16_precompute(
 
     pc->bias_bytes = bias_bytes;
     pc->wt_pack = wt_pack;
+#if defined(HMX_W4A16_USE_CONTROL_INPUT)
+    pc->control_param = control_param ? control_param : kHmxW4A16DefaultControlParam;
+#endif
     pc->out_first_block = reinterpret_cast<uint8_t *>(out_blocks[0]);
     pc->act_qhpi_table = act_src;
     pc->out_qhpi_table = out_src;
@@ -746,11 +765,17 @@ static uint32_t hmx_w4a16_to_u16_matmul_precomputed_kernel(
     int32_t *act_tbl_ptr = const_cast<int32_t *>(pc->act_qhpi_table);
     int32_t *out_tbl_ptr = const_cast<int32_t *>(pc->out_qhpi_table);
 
-    uint32_t extra_param[3] __attribute__((aligned(16))) = {
+#if defined(HMX_W4A16_USE_CONTROL_INPUT)
+    const uint32_t *control_param =
+        pc->control_param ? pc->control_param : kHmxW4A16DefaultControlParam;
+#else
+    uint32_t control_param_local[3] __attribute__((aligned(16))) = {
         HMX_W4A16_EXTRA_PARAM0,
         HMX_W4A16_EXTRA_PARAM1,
         HMX_W4A16_EXTRA_PARAM2,
     };
+    const uint32_t *control_param = control_param_local;
+#endif
     const hmx_conv_mask_desc_t *mask_desc = get_precomputed_mask_desc();
     const uint32_t desc_m_tiles =
 #if HMX_W4A16_USE_ROW4_TABLES
@@ -815,8 +840,12 @@ static uint32_t hmx_w4a16_to_u16_matmul_precomputed_kernel(
         store_le32(dst, 108, load_le32(effective_wt_pack, 4));
         store_le32(dst, 112, load_le32(effective_bias_bytes, 0));
         store_le32(dst, 116, load_le32(effective_bias_bytes, 4));
-        store_le32(dst, 120, extra_param[0]);
-        store_le32(dst, 124, extra_param[1]);
+        store_le32(dst, 120, control_param[0]);
+#if defined(HMX_W4A16_USE_CONTROL_INPUT)
+        store_le32(dst, 124, 0);
+#else
+        store_le32(dst, 124, control_param[1]);
+#endif
         const uint32_t *mask_words = reinterpret_cast<const uint32_t *>(mask_desc);
         for (uint32_t i = 0; i < 16; ++i) store_le32(dst, 128 + i * 4, mask_words[i]);
     }
@@ -849,7 +878,7 @@ static uint32_t hmx_w4a16_to_u16_matmul_precomputed_kernel(
         effective_wt_pack,
         effective_bias_bytes,
         mask_desc,
-        extra_param);
+        control_param);
 
 #if defined(HMX_W4A16_PROBE_CYCLES)
     uint64_t cyc_after_kernel = 0;
@@ -1141,11 +1170,18 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
      *   k_total_bytes           = N_t * 32  byte span expected by kernel setup
      *   n_act_pairs             = K_t       number of activation pointer pairs
      */
-    uint32_t extra_param[3] __attribute__((aligned(16))) = {
+#if defined(HMX_W4A16_USE_CONTROL_INPUT)
+    const uint32_t *control_param =
+        reinterpret_cast<const uint32_t *>(qhpi_tensor_raw_data(inputs[3]));
+    if (!control_param) control_param = kHmxW4A16DefaultControlParam;
+#else
+    uint32_t control_param_local[3] __attribute__((aligned(16))) = {
         HMX_W4A16_EXTRA_PARAM0,
         HMX_W4A16_EXTRA_PARAM1,
         HMX_W4A16_EXTRA_PARAM2,
     };
+    const uint32_t *control_param = control_param_local;
+#endif
     const hmx_conv_mask_desc_t *mask_desc = get_mask_desc(K_t * 32u);
     const uint32_t desc_m_tiles =
 #if HMX_W4A16_USE_ROW4_TABLES
@@ -1211,8 +1247,12 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
         store_le32(dst, 108, load_le32(effective_wt_pack, 4));
         store_le32(dst, 112, load_le32(effective_bias_bytes, 0));
         store_le32(dst, 116, load_le32(effective_bias_bytes, 4));
-        store_le32(dst, 120, extra_param[0]);
-        store_le32(dst, 124, extra_param[1]);
+        store_le32(dst, 120, control_param[0]);
+#if defined(HMX_W4A16_USE_CONTROL_INPUT)
+        store_le32(dst, 124, 0);
+#else
+        store_le32(dst, 124, control_param[1]);
+#endif
         const uint32_t *mask_words = reinterpret_cast<const uint32_t *>(mask_desc);
         for (uint32_t i = 0; i < 16; ++i) store_le32(dst, 128 + i * 4, mask_words[i]);
     }
@@ -1253,7 +1293,7 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
         effective_wt_pack,
         effective_bias_bytes,
         mask_desc,
-        extra_param);
+        control_param);
 
 #if defined(HMX_W4A16_PROBE_CYCLES)
     uint64_t cyc_after_kernel = 0;
