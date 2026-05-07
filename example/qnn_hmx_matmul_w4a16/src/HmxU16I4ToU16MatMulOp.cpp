@@ -248,7 +248,13 @@ static inline uint32_t hmx_w4a16_act_table_storage_stride(uint32_t k_t)
     (void)k_t;
     return HMX_W4A16_ACT_TABLE_STRIDE_OVERRIDE;
 #else
-    return k_t;
+    uint32_t stride = k_t;
+#if defined(HMX_W4A16_ACT_TABLE_Y_STRIDE_WORDS_OVERRIDE)
+    if (stride < HMX_W4A16_ACT_TABLE_Y_STRIDE_WORDS_OVERRIDE) {
+        stride = HMX_W4A16_ACT_TABLE_Y_STRIDE_WORDS_OVERRIDE;
+    }
+#endif
+    return stride;
 #endif
 }
 
@@ -258,7 +264,99 @@ static inline uint32_t hmx_w4a16_out_table_storage_stride(uint32_t n_t)
     (void)n_t;
     return HMX_W4A16_OUT_TABLE_STRIDE_OVERRIDE;
 #else
-    return n_t;
+    uint32_t stride = n_t;
+#if defined(HMX_W4A16_OUT_TABLE_STRIDE_DWORDS_OVERRIDE)
+    if (stride < HMX_W4A16_OUT_TABLE_STRIDE_DWORDS_OVERRIDE) {
+        stride = HMX_W4A16_OUT_TABLE_STRIDE_DWORDS_OVERRIDE;
+    }
+#endif
+#if defined(HMX_W4A16_OUT_Y_STRIDE_WORDS_OVERRIDE)
+    if (stride < HMX_W4A16_OUT_Y_STRIDE_WORDS_OVERRIDE) {
+        stride = HMX_W4A16_OUT_Y_STRIDE_WORDS_OVERRIDE;
+    }
+#endif
+    return stride;
+#endif
+}
+
+static inline uint32_t hmx_w4a16_act_desc_n_pairs(uint32_t k_t, uint32_t table_storage_stride)
+{
+#if defined(HMX_W4A16_ACT_N_PAIRS_OVERRIDE)
+    (void)k_t;
+    (void)table_storage_stride;
+    return HMX_W4A16_ACT_N_PAIRS_OVERRIDE;
+#else
+    (void)k_t;
+    return table_storage_stride;
+#endif
+}
+
+static inline uint32_t hmx_w4a16_act_desc_y_stride_words(
+    uint32_t k_t,
+    uint32_t table_storage_stride,
+    uint32_t desc_m_tiles)
+{
+#if defined(HMX_W4A16_ACT_TABLE_Y_STRIDE_WORDS_OVERRIDE)
+    (void)k_t;
+    (void)table_storage_stride;
+    (void)desc_m_tiles;
+    return HMX_W4A16_ACT_TABLE_Y_STRIDE_WORDS_OVERRIDE;
+#else
+    (void)k_t;
+    (void)table_storage_stride;
+    return desc_m_tiles;
+#endif
+}
+
+static inline uint32_t hmx_w4a16_out_desc_table_stride_dwords(
+    uint32_t n_t,
+    uint32_t table_storage_stride)
+{
+#if defined(HMX_W4A16_OUT_TABLE_STRIDE_DWORDS_OVERRIDE)
+    (void)n_t;
+    (void)table_storage_stride;
+    return HMX_W4A16_OUT_TABLE_STRIDE_DWORDS_OVERRIDE;
+#else
+    (void)n_t;
+    return table_storage_stride;
+#endif
+}
+
+static inline uint32_t hmx_w4a16_out_desc_y_stride_words(
+    uint32_t n_t,
+    uint32_t table_storage_stride,
+    uint32_t desc_m_tiles)
+{
+#if defined(HMX_W4A16_OUT_Y_STRIDE_WORDS_OVERRIDE)
+    (void)n_t;
+    (void)table_storage_stride;
+    (void)desc_m_tiles;
+    return HMX_W4A16_OUT_Y_STRIDE_WORDS_OVERRIDE;
+#else
+    (void)n_t;
+    (void)table_storage_stride;
+    return desc_m_tiles;
+#endif
+}
+
+static inline int32_t hmx_w4a16_desc_m_total_minus_step(uint32_t row4_groups)
+{
+#if defined(HMX_W4A16_DESC_M_TOTAL_MINUS_STEP_OVERRIDE)
+    (void)row4_groups;
+    return HMX_W4A16_DESC_M_TOTAL_MINUS_STEP_OVERRIDE;
+#else
+    (void)row4_groups;
+    return 8;
+#endif
+}
+
+static inline uint32_t hmx_w4a16_desc_k_total_bytes(uint32_t n_t)
+{
+#if defined(HMX_W4A16_DESC_K_TOTAL_BYTES_OVERRIDE)
+    (void)n_t;
+    return HMX_W4A16_DESC_K_TOTAL_BYTES_OVERRIDE;
+#else
+    return n_t * 32u;
 #endif
 }
 
@@ -608,19 +706,21 @@ static uint32_t hmx_w4a16_to_u16_matmul_precomputed_kernel(
 #else
         pc->M_t * 4u;
 #endif
+    const uint32_t act_table_stride = hmx_w4a16_act_table_storage_stride(pc->K_t);
+    const uint32_t out_table_stride = hmx_w4a16_out_table_storage_stride(pc->N_t);
 
     hmx_conv_out_desc_t out_desc_local __attribute__((aligned(64))) = {
         out_tbl_ptr,
-        hmx_w4a16_out_table_storage_stride(pc->N_t),
+        hmx_w4a16_out_desc_table_stride_dwords(pc->N_t, out_table_stride),
+        hmx_w4a16_out_desc_y_stride_words(pc->N_t, out_table_stride, desc_m_tiles),
         desc_m_tiles,
-        desc_m_tiles,
-        8,
-        pc->N_t * 32,
+        hmx_w4a16_desc_m_total_minus_step(pc->mt_groups),
+        hmx_w4a16_desc_k_total_bytes(pc->N_t),
     };
     hmx_conv_act_desc_t act_desc_local __attribute__((aligned(64))) = {
         act_tbl_ptr,
-        hmx_w4a16_act_table_storage_stride(pc->K_t),
-        desc_m_tiles,
+        hmx_w4a16_act_desc_n_pairs(pc->K_t, act_table_stride),
+        hmx_w4a16_act_desc_y_stride_words(pc->K_t, act_table_stride, desc_m_tiles),
     };
     const hmx_conv_out_desc_t *out_desc = &out_desc_local;
     const hmx_conv_act_desc_t *act_desc = &act_desc_local;
@@ -974,16 +1074,16 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
 
     hmx_conv_out_desc_t out_desc = {
         out_tbl_all,
-        out_table_stride,
+        hmx_w4a16_out_desc_table_stride_dwords(N_t, out_table_stride),
+        hmx_w4a16_out_desc_y_stride_words(N_t, out_table_stride, desc_m_tiles),
         desc_m_tiles,
-        desc_m_tiles,
-        8,
-        N_t * 32,
+        hmx_w4a16_desc_m_total_minus_step(mt_groups),
+        hmx_w4a16_desc_k_total_bytes(N_t),
     };
     hmx_conv_act_desc_t act_desc = {
         act_tbl_all,
-        act_table_stride,
-        desc_m_tiles,
+        hmx_w4a16_act_desc_n_pairs(K_t, act_table_stride),
+        hmx_w4a16_act_desc_y_stride_words(K_t, act_table_stride, desc_m_tiles),
     };
 
 #if defined(HMX_W4A16_DESC_DUMP)
