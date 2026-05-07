@@ -200,6 +200,21 @@ and the output physical table does not preserve the imported-sidecar
 state, especially the `r23/r24/r27` table-base advance tuple, before adding any
 new custom table-order logic.
 
+Native entry and descriptor follow-up:
+
+| Probe artifact | Result |
+|---|---|
+| isolated invalid skel in `~/qnn_loader_probe_w4a16` | Device Creation fails, proving local `libQnnHtpV75Skel.so` override is active under the isolated run command. |
+| `/tmp/libQnnHtpV75Skel_hmx_entry_probe.so` | Native run completes with `Y.raw` SHA `372fecf39290f38b9d345e1e3e3cbf2fb986ee78283946a4b87934787593a0ca` instead of canonical `147b7752a5f8c55f59c8539d65dcffe69214e01f27f157f7ccd540d9377822a8`; first output word is probe magic `0x484d5850`, so `0x2fcd80` is on the current native path. |
+| `output_w4a16_import_native_sidecar_bd00_descdump_256/` | Custom descriptor dump with the same imported sidecar reports `out_y_stride_words=256`, `act_table_y_stride_words=256`, `n_tiles_pow2=256`, `m_total_minus_step=8`, `k_total_bytes=256`, mask `[0,0x700,0,0x77c,...,0x20]`. |
+| `output_w4a16_import_native_sidecar_bd00_out_y64_256/` | Forcing only `HMX_W4A16_OUT_Y_STRIDE_WORDS_OVERRIDE=64`, based on the native entry-probe stride sample, leaves the result unchanged: `3298/65536`, `sorted_equal=True`, best row32 roll `32:65536`. |
+
+The native entry probe currently writes into the internal ConvLayer output tile;
+downstream native output ops transform that tile before `Y.raw` is emitted.  Do
+not treat the public dump as a fully linear descriptor record yet.  The next
+native probe should either invert that transform or dump from the `0x3ddc60`
+wrapper into a location that survives to public output linearly.
+
 Post descriptor-dump-enrichment recheck:
 
 | Probe artifact | Native exact | Main-op cycles | Timeline span |

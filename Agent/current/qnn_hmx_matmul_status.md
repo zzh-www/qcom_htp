@@ -170,6 +170,14 @@ custom W4A16 flow is not aligned yet: generated native-K4 packing is
 boundary differences are weight carrier `UFixed8` versus native `SFixed8` and
 custom control `Int32 [1,1,1,1]` versus native `Int32 [1]`.
 
+Follow-up native instrumentation shows the local skel override path works:
+an invalid isolated `libQnnHtpV75Skel.so` fails at Device Creation, and the
+`/tmp/libQnnHtpV75Skel_hmx_entry_probe.so` patch at `0x2fcd80` changes native
+output and writes magic `0x484d5850`.  This confirms the current native path
+enters `hmx_v73_convhnh1x1_stride1`; the remaining instrumentation problem is
+making the internal ConvLayer output-tile descriptor dump survive the post-Conv
+output transforms in a linear, parseable form.
+
 | Probe | Result | Next gate |
 |---|---|---|
 | Native QNN W4 MatMul 128^3, param bitwidth 4 | Lowers to `q::ConvLayer_s1.opt`; `weights_to_vtcm` sees `[1,1,128,64]` `SFixed8`, confirming W4 uses a 4-bit signed carrier with two output channels per byte. |

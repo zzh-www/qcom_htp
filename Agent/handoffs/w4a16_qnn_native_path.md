@@ -815,27 +815,30 @@ Dead-end implication from the current probes:
 
 ## Runtime Descriptor Dump Attempts
 
-One direct runtime-dump attempt patched the device `libQnnHtpV75Skel.so`
-temporarily at `hmx_v73_convhnh1x1_stride1` to replace the entry with a small
-descriptor-copy stub.  The patched function fit the original symbol and local
-disassembly showed the replacement at `0x2fcd80`, but device execution did not
-produce a usable native descriptor dump:
+2026-05-08 loader-safe isolated runs clarified the patched-skel path:
 
-- an isolated remote-directory run completed with output byte-identical to the
-  canonical native run, indicating the patched skel was not loaded for that
-  context;
-- a stricter isolated rerun with local `qnn-net-run`, local `libQnnHtp.so`,
-  local stub, local patched skel, `LD_LIBRARY_PATH=.:/vendor/lib64`, and
-  `ADSP_LIBRARY_PATH=.` also completed with output byte-identical to canonical
-  native (`Y.raw` SHA `4e5e02d4a958db331eeb59de59f99edd11d69a20c0d4c59cec24328aeaaa857a`)
-  and no descriptor-dump magic, so the patched entry was still not active;
-- a parent-directory replacement path failed during backend/device creation
-  even after restoring the required backend extension configuration;
-- the original device skel was restored after the experiment.
+- Replacing `~/qnn_loader_probe_w4a16/libQnnHtpV75Skel.so` with an invalid file
+  makes native context execution fail at Device Creation.  This proves the local
+  isolated skel override path is active when `LD_LIBRARY_PATH=.:/vendor/lib64`
+  and `ADSP_LIBRARY_PATH=.` are used.
+- Replacing the same isolated skel with
+  `/tmp/libQnnHtpV75Skel_hmx_entry_probe.so`, which patches
+  `hmx_v73_convhnh1x1_stride1` at `0x2fcd80`, changes the native output SHA from
+  canonical `147b7752a5f8c55f59c8539d65dcffe69214e01f27f157f7ccd540d9377822a8`
+  to `372fecf39290f38b9d345e1e3e3cbf2fb986ee78283946a4b87934787593a0ca`.
+  The first output word contains the probe magic `0x484d5850`, confirming that
+  the patched `0x2fcd80` HNH entry is on the current native path.
+- The probe writes into the internal ConvLayer output tile, and native
+  post-Conv output ops transform that tile before `Y.raw` is emitted.  Therefore
+  the public `Y.raw` dump is not yet a direct linear descriptor record.
+  A stride-sampled read still exposes useful fields, including plausible W/B
+  pointers and output descriptor scalars, but a reliable native descriptor
+  parser must either invert this output transform or patch a wrapper-visible
+  public-output location.
 
-Do not repeat this exact patched-skel route as the standard path.  If native
-runtime dumping is revisited, first choose a loader-safe strategy that proves the
-patched HTP library is actually used before running the native context.
+The earlier "patched skel was not loaded" conclusion is superseded by the
+invalid-skel loader test above.  The remaining problem is making the descriptor
+dump placement parseable, not proving that the skel override can load.
 
 ## Next Native-First Work
 
