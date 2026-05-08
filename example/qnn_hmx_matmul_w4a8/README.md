@@ -14,8 +14,12 @@ Current status:
   Converter applies generated encodings and quantizer runs without calibration
   input or a custom op package; set `PACK_4BIT_WEIGHTS=0` only for explicit
   legacy carrier probes.
-- Device builds currently define `HMX_W4A8_SKIP_KERNEL`, so the callback writes
-  the marker path until the real W4 HMX body and packed-weight ABI are validated.
+- Default device builds enter the real W4A8 HMX body.  The canonical 256^3
+  chain8 output is byte-exact against the matched native oracle
+  (`65536/65536`, maxdiff `0`).
+- Performance is not aligned.  Optrace reports custom main `162483` cycles and
+  timeline `197581`; matched native reports `q::ConvLayer_s1.opt=11546`, MatMul
+  aggregate `29765`, and timeline `48831`.
 
 Build:
 

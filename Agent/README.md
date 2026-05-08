@@ -8,7 +8,7 @@ the linked documents.
 
 | Document | Purpose |
 |---|---|
-| [w8a16 native alignment handoff](handoffs/w8a16_native_alignment.md) | Completed 256^3 `HmxU16I8ToU16MatMul` native-output and performance alignment; includes reproduction command and next-round guidance. |
+| [w8a16 native alignment handoff](handoffs/w8a16_native_alignment.md) | Current 256^3 `HmxU16I8ToU16MatMul` state: native-output exact, but kernel-entry shape and performance remain open. |
 | [w4a16 QNN native path](handoffs/w4a16_qnn_native_path.md) | Required native-first entrypoint for W4A16: Conv lowering path, tensor contracts, sidecars, optrace scopes, and skel wrapper flow. |
 | [w4a16 native alignment handoff](handoffs/w4a16_native_alignment.md) | Completed 256^3 `HmxU16I4ToU16MatMul` native-output and performance alignment, plus standard optrace artifacts and probe history. |
 | [QNN native artifact standard](current/qnn_native_artifact_standard.md) | Required DLC, context-binary, native I/O, and optrace/performance artifact flow for QNN-native references and custom-op comparisons. |
