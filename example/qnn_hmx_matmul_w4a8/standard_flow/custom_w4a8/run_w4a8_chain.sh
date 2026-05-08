@@ -52,6 +52,7 @@ python gen_w4a8_chain.py \
     --bias-scale "${BIAS_SCALE:-512.0}" \
     --w4-pack-order "${W4_PACK_ORDER:-lohi}" \
     --w4-nibble-encoding "${W4_NIBBLE_ENCODING:-twos}" \
+    --op-input-layout "${OP_INPUT_LAYOUT:-tiled}" \
     ${GEN_EXTRA_ARGS:-} \
     -o "$OUT_DIR/w4a8.onnx"
 

@@ -209,6 +209,18 @@ cycles are `162483` versus matched native kernel `11546`, and custom timeline
 is `197581` versus matched native `48831`.  Treat this as follow-up work, not a
 closed performance result.
 
+Current W4A8 follow-up uses the blackbox native-alignment loop from
+`Agent/guides/qnn_native_alignment_blackbox_handbook.md`: artifact-standard
+runs first, then lowered bottom mapping, then one-hypothesis probes.  The
+validated negative probes show that wrapper overhead and descriptor-build cost
+are not the dominant gap.  A native-layout custom surface can match native
+activation/output shape as `UFixed8 [1,8,32,256]`, but it does not materially
+move kernel cycles.  Reducing the descriptor M count to `mt_groups` moves cycles
+toward native class while breaking about half the output, including when paired
+with the native-layout surface.  Continue at native prepared sidecar bytes,
+compact table memory, and wrapper/prebuilt-record state rather than more scalar
+descriptor sweeps.
+
 ## Current W4A16 Native Reference
 
 The current clean 256^3 W4A16 native reference is:

@@ -633,7 +633,8 @@ def generate(family: Family, args: argparse.Namespace) -> None:
         raise ValueError("non-square M/K/N is currently supported only for chain=1")
 
     m, k, n = args.M, args.K, args.N
-    row_tile = 16 if family.name == "w4a8" else 32
+    w4a8_native_tiled_layout = family.name == "w4a8" and args.op_input_layout == "native"
+    row_tile = 32 if w4a8_native_tiled_layout or family.name != "w4a8" else 16
     assert m % row_tile == 0
     row_groups = m // row_tile
     chain = max(1, int(args.chain))
@@ -658,6 +659,8 @@ def generate(family: Family, args: argparse.Namespace) -> None:
     w4_native_conv_input_layout = family.name == "w4a16" and args.op_input_layout == "native_conv"
     if args.op_input_layout == "native_conv" and family.name != "w4a16":
         raise ValueError("native_conv input layout is currently a w4a16-only diagnostic")
+    if family.name == "w4a8" and args.op_input_layout not in ("tiled", "native"):
+        raise ValueError("w4a8 supports only tiled and native op input layouts")
     if family.name == "w4a16" and args.op_input_layout not in ("tiled", "native", "native_conv", "native_conv_surface"):
         raise ValueError("w4a16 supports only tiled, native, native_conv, and native_conv_surface op input layouts")
     if native_split_layout and chain != 1:

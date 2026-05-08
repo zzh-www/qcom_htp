@@ -335,7 +335,10 @@ static uint32_t hmx_w4a8_precompute(
     const uint32_t M = act_shape.dims[1] * act_shape.dims[2];
     const uint32_t K = act_shape.dims[3];
     const uint32_t N = out_shape.dims[3];
-    if (act_shape.dims[2] != 16 || M < 128 || K < 32 || N < 32) return QHPI_Success;
+    if ((act_shape.dims[2] != 16 && act_shape.dims[2] != 32) ||
+        M < 128 || K < 32 || N < 32) {
+        return QHPI_Success;
+    }
     if ((M % 16) || (K % 32) || (N % 32)) return QHPI_Success;
     init_mask_desc(g_hmx_w4a8_mask_buf, K);
 
@@ -669,7 +672,10 @@ static uint32_t hmx_w4a8_to_u8_matmul_kernel(
     const uint32_t M = act_shape.dims[1] * act_shape.dims[2];
     const uint32_t K = act_shape.dims[3];
     const uint32_t N = out_shape.dims[3];
-    if (act_shape.dims[2] != 16 || M < 128 || K < 32 || N < 32) return QHPI_Success;
+    if ((act_shape.dims[2] != 16 && act_shape.dims[2] != 32) ||
+        M < 128 || K < 32 || N < 32) {
+        return QHPI_Success;
+    }
     if ((M % 16) || (K % 32) || (N % 32)) return QHPI_Success;
 
 #if defined(HMX_W4A8_BLOCK_INFO_DUMP)
