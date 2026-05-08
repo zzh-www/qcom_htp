@@ -343,23 +343,23 @@ For the captured run:
 
 | Scope | Cycles / time |
 |---|---:|
-| HTP timeline span | `313032` cycles |
-| Sum of pid0 events | `542923` cycles |
+| HTP timeline span | `137234` cycles |
+| Sum of pid0 events | `336551` cycles |
 
 The `conv1x1` group in `optrace/summary.json` breaks down as:
 
 | Event | Cycles | Packets | Notes |
 |---|---:|---:|---|
-| `q::ConvLayer.opt.weights_to_vtcm` | `3323` | n/a | Static W4 sidecar movement. |
-| `q::ConvLayer.opt.bias_to_vtcm` | `878` | n/a | Static bias/control movement. |
-| `q::ForceFormat_Crouton` | `7341` | n/a | Conv format work. |
-| `q::ConvLayer_s1.opt` | `7893` | n/a | Closest native HMX kernel-only comparator. |
-| native `conv1x1` QNN-op aggregate | `37287` | n/a | Full native Conv group in qnn-op grouping. |
+| `q::ConvLayer.opt.weights_to_vtcm` | `2655` | n/a | Static W4 sidecar movement. |
+| `q::ConvLayer.opt.bias_to_vtcm` | `743` | n/a | Static bias/control movement. |
+| `q::ForceFormat_Crouton` | `7233` | n/a | Conv format work. |
+| `q::ConvLayer_s1.opt` | `7502` | n/a | Closest native HMX kernel-only comparator. |
+| native `conv1x1` QNN-op aggregate | `34858` | n/a | Full native Conv group in qnn-op grouping. |
 
 So there are three different performance scopes:
 
-1. Kernel-only native comparator: `q::ConvLayer_s1.opt = 7893` cycles.
-2. Native Conv group comparator: all `conv1x1` HTP events, about `37287` cycles
+1. Kernel-only native comparator: `q::ConvLayer_s1.opt = 7502` cycles.
+2. Native Conv group comparator: all `conv1x1` HTP events, about `34858` cycles
    in the qnn-profile grouped stat.
 3. End-to-end execute comparator: qnn-net-run execute stats, including input
    conversion, transposes, output dequant/export, RPC, and accelerator wait.
@@ -387,6 +387,11 @@ The flow is intentionally separate from the custom MatMul runner:
    artifact: no `--pack_4_bit_weights`, and `--preserve_io_datatype A Y` so
    the original input/output stay float while dump output `D` is exported as
    native UFixed16.
+   In this executable carrier contract, DLC inspection reports Conv `W` as
+   `sFxp_8` with `W encoding : bitwidth 4`; ctxgen then prepares the native
+   compact `SFixed8 [1,1,K/2,N]` sidecar consumed by `q::ConvLayer_s1.opt`.
+   `--pack_4_bit_weights` is useful only for inspect-only DLC probes on the
+   current SDK because ctxgen rejects the resulting `sFxp_4` Conv tensor type.
 3. `qnn-context-binary-generator` keeps the native W4 Conv lowering and adds
    one custom QHPI dump op.
 4. Device run pulls `device_out/D.raw`, decodes standard optrace into

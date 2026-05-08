@@ -490,11 +490,11 @@ Native performance reference from the current clean artifact,
 
 | Native event/view | Cycles |
 |---|---:|
-| `q::ConvLayer_s1.opt` | `7893` |
-| `q::ConvLayer.opt.weights_to_vtcm` | `3323` |
-| `q::ConvLayer.opt.bias_to_vtcm` | `878` |
-| native `conv1x1` QNN-op aggregate | `37287` |
-| native graph timeline span | `313032` |
+| `q::ConvLayer_s1.opt` | `7502` |
+| `q::ConvLayer.opt.weights_to_vtcm` | `2655` |
+| `q::ConvLayer.opt.bias_to_vtcm` | `743` |
+| native `conv1x1` QNN-op aggregate | `34858` |
+| native graph timeline span | `137234` |
 
 The default custom main op is still far slower than the native W4 kernel event.
 The native-shaped activation/output probe narrows main-op cycles to the old
@@ -546,7 +546,7 @@ Latest native-shaped loop probes:
 `DESC_M_TILES_OVERRIDE=32` identifies the native fast loop class but is not a
 semantic fix.  Combining `desc32` with physical-only tables proves the hot loop
 can run in native-class cycles (`6566`, versus the current clean native kernel
-at `7893`), but the output distribution falls back to the saturated failure
+at `7502`), but the output distribution falls back to the saturated failure
 class.  The
 `OP_INPUT_LAYOUT=native` fast probe is not a valid native HMX surface comparison
 because the custom HMX output tensor is `[1,1,256,256]`, while the real native
@@ -758,7 +758,7 @@ Dead ends already checked:
 - `HMX_W4A16_ACT_PHYSICAL_ONLY` plus `HMX_W4A16_OUT_PHYSICAL_ONLY` lowers the
   custom main op to `29385` cycles but does not improve correctness
   (`4092/65536`, maxdiff `65535`) and remains slower than the current clean
-  native `q::ConvLayer_s1.opt` (`7893` cycles). Artifact:
+  native `q::ConvLayer_s1.opt` (`7502` cycles). Artifact:
   `example/qnn_matmul_profile/output_codex_w4a16_native_nmajor_kpair_hilo_row4_nativebias_physical_tables_256/`.
 - `--bias-layout native_a16_w4compact` changes W4 bias/control to native-shaped
   `Int32 [1,8,1,64]` while preserving the current native-a16 control words. It

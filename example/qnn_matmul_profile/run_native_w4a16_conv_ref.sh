@@ -2,6 +2,13 @@
 #
 # Generate, convert, export context, run, and decode the QNN-native W4A16
 # Conv1x1 reference with native u16 input/output files.
+#
+# Env knobs:
+#   PACK_4BIT_DLC=1  generate an inspect-only DLC whose W tensor is stored as
+#                    sFxp_4.  Current HTP ctxgen rejects that Conv tensor type
+#                    on this path, so keep the default PACK_4BIT_DLC=0 for the
+#                    executable native oracle.
+#   CONVERT_ONLY=1   stop after qairt-converter, useful with PACK_4BIT_DLC=1.
 
 set -euo pipefail
 
@@ -16,6 +23,8 @@ SHAPE="${SHAPE:-256,256,256}"
 OUT_DIR="${OUT_DIR:-}"
 NUM_INFERENCES="${NUM_INFERENCES:-3}"
 SKIP_DEVICE="${SKIP_DEVICE:-0}"
+PACK_4BIT_DLC="${PACK_4BIT_DLC:-0}"
+CONVERT_ONLY="${CONVERT_ONLY:-0}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -38,6 +47,14 @@ esac
 case "$ARCH" in
     v66|v68|v69|v73|v75|v79|v81) ;;
     *) echo "unknown --arch $ARCH" >&2; exit 2 ;;
+esac
+case "$PACK_4BIT_DLC" in
+    0|1) ;;
+    *) echo "invalid PACK_4BIT_DLC=$PACK_4BIT_DLC (need 0|1)" >&2; exit 2 ;;
+esac
+case "$CONVERT_ONLY" in
+    0|1) ;;
+    *) echo "invalid CONVERT_ONLY=$CONVERT_ONLY (need 0|1)" >&2; exit 2 ;;
 esac
 
 IFS=',' read -r SHAPE_M SHAPE_K SHAPE_N <<<"$SHAPE"
@@ -189,18 +206,32 @@ python "$SCRIPT_DIR/gen_native_w4a16_conv.py" "$OUT_DIR" \
     --m "$SHAPE_M" --k "$SHAPE_K" --n "$SHAPE_N"
 build_configs
 
+CONVERTER_EXTRA_ARGS=()
+if [ "$PACK_4BIT_DLC" = "1" ]; then
+    CONVERTER_EXTRA_ARGS+=(--pack_4_bit_weights)
+    if [ "$CONVERT_ONLY" != "1" ]; then
+        echo "  [warn] PACK_4BIT_DLC=1 may be rejected by HTP ctxgen on this Conv path; use CONVERT_ONLY=1 for DLC inspection only" >&2
+    fi
+fi
+
 echo "=== qairt-converter ==="
 qairt-converter \
     -i "$OUT_DIR/conv.onnx" \
     --target_backend HTP \
     --enable_framework_trace \
     --quantization_overrides "$OUT_DIR/quant_overrides.json" \
+    "${CONVERTER_EXTRA_ARGS[@]}" \
     --source_model_input_layout A NONTRIVIAL \
     --desired_input_layout A NONTRIVIAL \
     --source_model_output_layout Y NONTRIVIAL \
     --desired_output_layout Y NONTRIVIAL \
     -o "$OUT_DIR/conv.dlc" \
     > "$OUT_DIR/convert.log" 2>&1
+
+if [ "$CONVERT_ONLY" = "1" ]; then
+    echo "=== done: converter artifacts in $OUT_DIR ==="
+    exit 0
+fi
 
 echo "=== qnn-context-binary-generator ==="
 rm -rf "$OUT_DIR/ctx"

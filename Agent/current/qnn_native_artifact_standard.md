@@ -135,9 +135,19 @@ Key facts:
 | native input | `runtime_inputs_native/A.raw`, u16, 131072 bytes |
 | native output oracle | `device_out/Y.raw`, u16, 131072 bytes |
 | context binary | `ctx/conv_ctx.bin`, 90112 bytes, SHA-256 `b48db57c34c02741ded507eda349a4ca7e094c92302d28e573eddbaeef177e91` |
-| kernel event | `q::ConvLayer_s1.opt = 7893` cycles |
-| native Conv group | `conv1x1 = 37287` cycles |
-| HTP timeline span | `313032` cycles |
+| DLC W storage | `sFxp_8` carrier with `W encoding : bitwidth 4`; this is expected for the executable native oracle |
+| kernel event | `q::ConvLayer_s1.opt = 7502` cycles |
+| native Conv group | `conv1x1 = 34858` cycles |
+| HTP timeline span | `137234` cycles |
+
+Do not treat the DLC `sFxp_8` W carrier as evidence that W4A16 was generated as
+an int8-weight oracle.  The converter records `W encoding : bitwidth 4`, and
+the HTP context preparation lowers the weight sidecar to the native compact
+`SFixed8 [1,1,K/2,N]` surface shown below.  Passing `--pack_4_bit_weights`
+makes DLC inspection show `sFxp_4`, but current HTP ctxgen rejects that Conv
+tensor type on this path with `tensor datatype 772 not supported`; use
+`PACK_4BIT_DLC=1 CONVERT_ONLY=1 run_native_w4a16_conv_ref.sh` only for
+inspect-only DLC probes, not for the standard executable reference.
 
 Its final HNH boundary is:
 
