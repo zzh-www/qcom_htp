@@ -39,18 +39,18 @@ the W4A16 native Conv kernel aggregate, which is recorded in
 | Family | Custom main cycles | Custom timeline cycles | Native kernel cycles | Native QNN-op aggregate cycles | Native timeline cycles | Perf status |
 |---|---:|---:|---:|---:|---:|---|
 | u8i8 | 10891 | 36342 | 12435 | 36922 | 53946 | matched A/W/bias chain; custom faster on timeline |
-| w4a8 | 162483 | 197581 | 11546 | 29765 | 48831 | precision aligned; performance not aligned |
+| w4a8 | 10025 | 38644 | 11546 | 29765 | 48831 | native-compact table gate closed; custom faster on timeline |
 | w8a16 | 184539 | 285461 | 30182 | 35747 | 79095 | chain8 restored to `[1,1,256,256]` custom op; shape gate open; performance not aligned |
 | w4a16 | 31419 | 77854 | 29815 | 70408 | 253245 | chain8 shape gate closed; custom kernel is native-class and timeline is faster |
 | w16a16 | n/a | n/a | 75433 | 82644 | 124593 | native-only evidence |
 
 ## Follow-Up Work
 
-- `w4a8` is only precision-aligned.  It is not performance-aligned: custom
-  chain8 main cycles are 162483 versus matched native `q::ConvLayer_s1.opt`
-  11546, and custom timeline is 197581 versus matched native 48831.  The next
-  task should investigate why the custom W4A8 path is much slower despite using
-  the native `convbnb` body and producing bit-exact output.
+- `w4a8` now uses the native-rank `[1,8,32,256]` activation/output surface and
+  32-entry physical compact source tables.  The canonical custom artifact is
+  byte-identical to matched native and is native-class on optrace: custom main
+  cycles are 10025 versus matched native `q::ConvLayer_s1.opt` 11546, and
+  custom timeline is 38644 versus matched native 48831.
 - `w8a16` has been restored to the native-rank custom-op surface requested for
   the current artifact: chain8, custom activation/output
   `UFixed16 [1,1,256,256]`, and matched-native exact output.  Native still

@@ -43,20 +43,23 @@
 #define HMX_W4A8_MASK_ARG6 0x20u
 #endif
 
-static inline uint32_t hmx_w4a8_desc_m_tiles(uint32_t m_t, uint32_t mt_groups)
+static inline uint32_t hmx_w4a8_desc_m_tiles(
+    uint32_t m_t,
+    uint32_t mt_groups,
+    bool native_compact_sources)
 {
 #if defined(HMX_W4A8_DESC_M_TILES)
     (void)m_t;
     (void)mt_groups;
+    (void)native_compact_sources;
     return HMX_W4A8_DESC_M_TILES;
-#elif defined(HMX_W4A8_NATIVE_COMPACT_SOURCE_TABLES)
-    (void)mt_groups;
-    return m_t / 2u;
 #elif defined(HMX_W4A8_DESC_USE_MT_GROUPS)
     (void)m_t;
+    (void)native_compact_sources;
     return mt_groups;
 #else
     (void)mt_groups;
+    if (native_compact_sources) return m_t / 2u;
     return m_t * 4u;
 #endif
 }
@@ -358,14 +361,9 @@ static uint32_t hmx_w4a8_precompute(
     const uint32_t N_t = N / 32;
     const uint32_t K_t = K / 32;
     const uint32_t mt_per_block = 8;
-#if defined(HMX_W4A8_NATIVE_COMPACT_SOURCE_TABLES)
-    if (act_shape.dims[2] != 32) return QHPI_Success;
-    const uint32_t row8_groups = M / 32u;
-    const uint32_t crouton_row8_blocks = row8_groups;
-#else
-    const uint32_t row8_groups = M_t * 2u;
+    const bool native_compact_sources = act_shape.dims[2] == 32;
     const uint32_t crouton_row8_blocks = hmx_w4a8_crouton_row8_blocks(M_t);
-#endif
+    const uint32_t row8_groups = native_compact_sources ? crouton_row8_blocks : M_t * 2u;
     const uint32_t mt_groups = row8_groups;
     const uint32_t physical_act_entries = crouton_row8_blocks * K_t;
     const uint32_t physical_out_entries = crouton_row8_blocks * N_t;
@@ -390,38 +388,30 @@ static uint32_t hmx_w4a8_precompute(
         out_entries <= kHmxW4A8MaxCopiedTableEntries) {
         for (uint32_t row8 = 0; row8 < row8_groups; ++row8) {
             for (uint32_t kt = 0; kt < K_t; ++kt) {
-                pc->act_table_copy[row8 * K_t + kt] =
-#if defined(HMX_W4A8_NATIVE_COMPACT_SOURCE_TABLES)
-#if defined(HMX_W4A8_NATIVE_COMPACT_DIRECT_TABLES)
-                    act_src[row8 * K_t + kt];
-#else
-                    hmx_w4a8_crouton_row32_base_ptr(act_src, row8, kt, K_t);
-#endif
-#else
+                if (native_compact_sources) {
+                    pc->act_table_copy[row8 * K_t + kt] = act_src[row8 * K_t + kt];
+                } else {
+                    pc->act_table_copy[row8 * K_t + kt] =
 #if defined(HMX_W4A8_FIRST64_ROW32_ACT_TABLE)
-                    (row8 < (M_t / 2u))
-                        ? hmx_w4a8_crouton_row32_base_ptr(act_src, row8, kt, K_t)
-                        :
+                        (row8 < (M_t / 2u))
+                            ? hmx_w4a8_crouton_row32_base_ptr(act_src, row8, kt, K_t)
+                            :
 #endif
-                    hmx_w4a8_crouton_row8_ptr(act_src, row8, kt, K_t);
-#endif
+                        hmx_w4a8_crouton_row8_ptr(act_src, row8, kt, K_t);
+                }
             }
             for (uint32_t nt = 0; nt < N_t; ++nt) {
-                pc->out_table_copy[row8 * N_t + nt] =
-#if defined(HMX_W4A8_NATIVE_COMPACT_SOURCE_TABLES)
-#if defined(HMX_W4A8_NATIVE_COMPACT_DIRECT_TABLES)
-                    out_src[row8 * N_t + nt];
-#else
-                    hmx_w4a8_crouton_row32_base_ptr(out_src, row8, nt, N_t);
-#endif
-#else
+                if (native_compact_sources) {
+                    pc->out_table_copy[row8 * N_t + nt] = out_src[row8 * N_t + nt];
+                } else {
+                    pc->out_table_copy[row8 * N_t + nt] =
 #if defined(HMX_W4A8_FIRST64_ROW32_OUT_TABLE)
-                    (row8 < (M_t / 2u))
-                        ? hmx_w4a8_crouton_row32_base_ptr(out_src, row8, nt, N_t)
-                        :
+                        (row8 < (M_t / 2u))
+                            ? hmx_w4a8_crouton_row32_base_ptr(out_src, row8, nt, N_t)
+                            :
 #endif
-                    hmx_w4a8_crouton_row8_ptr(out_src, row8, nt, N_t);
-#endif
+                        hmx_w4a8_crouton_row8_ptr(out_src, row8, nt, N_t);
+                }
             }
         }
         pc->act_qhpi_table = pc->act_table_copy;
@@ -472,7 +462,10 @@ static uint32_t hmx_w4a8_to_u8_matmul_precomputed_kernel(
 
     uint32_t extra_param[2] __attribute__((aligned(16))) = {1u, 0u};
     const hmx_conv_mask_desc_t *mask_desc = get_precomputed_mask_desc();
-    const uint32_t desc_m_t = hmx_w4a8_desc_m_tiles(pc->M_t, pc->mt_groups);
+    const bool native_compact_sources =
+        pc->mt_groups == hmx_w4a8_crouton_row8_blocks(pc->M_t);
+    const uint32_t desc_m_t =
+        hmx_w4a8_desc_m_tiles(pc->M_t, pc->mt_groups, native_compact_sources);
 
     hmx_conv_out_desc_t out_desc_local __attribute__((aligned(64))) = {
         out_tbl_ptr,
@@ -751,14 +744,9 @@ static uint32_t hmx_w4a8_to_u8_matmul_kernel(
     const uint32_t N_t = N / 32;
     const uint32_t K_t = K / 32;
     const uint32_t mt_per_block = 8;
-#if defined(HMX_W4A8_NATIVE_COMPACT_SOURCE_TABLES)
-    if (act_shape.dims[2] != 32) return QHPI_Success;
-    const uint32_t row8_groups = M / 32u;
-    const uint32_t crouton_row8_blocks = row8_groups;
-#else
-    const uint32_t row8_groups = M_t * 2u;
+    const bool native_compact_sources = act_shape.dims[2] == 32;
     const uint32_t crouton_row8_blocks = hmx_w4a8_crouton_row8_blocks(M_t);
-#endif
+    const uint32_t row8_groups = native_compact_sources ? crouton_row8_blocks : M_t * 2u;
     const uint32_t mt_groups = row8_groups;
     const uint32_t physical_act_entries = crouton_row8_blocks * K_t;
     const uint32_t physical_out_entries = crouton_row8_blocks * N_t;
@@ -803,38 +791,30 @@ static uint32_t hmx_w4a8_to_u8_matmul_kernel(
         int32_t *__restrict a_dst = act_tbl_all + row8 * K_t;
         int32_t *__restrict o_dst = out_tbl_all + row8 * N_t;
         for (uint32_t kt = 0; kt < K_t; ++kt) {
-#if defined(HMX_W4A8_NATIVE_COMPACT_SOURCE_TABLES)
-#if defined(HMX_W4A8_NATIVE_COMPACT_DIRECT_TABLES)
-            a_dst[kt] = act_src[row8 * K_t + kt];
-#else
-            a_dst[kt] = hmx_w4a8_crouton_row32_base_ptr(act_src, row8, kt, K_t);
-#endif
-#else
+            if (native_compact_sources) {
+                a_dst[kt] = act_src[row8 * K_t + kt];
+            } else {
 #if defined(HMX_W4A8_FIRST64_ROW32_ACT_TABLE)
-            a_dst[kt] = (row8 < (M_t / 2u))
-                ? hmx_w4a8_crouton_row32_base_ptr(act_src, row8, kt, K_t)
-                : hmx_w4a8_crouton_row8_ptr(act_src, row8, kt, K_t);
+                a_dst[kt] = (row8 < (M_t / 2u))
+                    ? hmx_w4a8_crouton_row32_base_ptr(act_src, row8, kt, K_t)
+                    : hmx_w4a8_crouton_row8_ptr(act_src, row8, kt, K_t);
 #else
-            a_dst[kt] = hmx_w4a8_crouton_row8_ptr(act_src, row8, kt, K_t);
+                a_dst[kt] = hmx_w4a8_crouton_row8_ptr(act_src, row8, kt, K_t);
 #endif
-#endif
+            }
         }
         for (uint32_t nt = 0; nt < N_t; ++nt) {
-#if defined(HMX_W4A8_NATIVE_COMPACT_SOURCE_TABLES)
-#if defined(HMX_W4A8_NATIVE_COMPACT_DIRECT_TABLES)
-            o_dst[nt] = out_src[row8 * N_t + nt];
-#else
-            o_dst[nt] = hmx_w4a8_crouton_row32_base_ptr(out_src, row8, nt, N_t);
-#endif
-#else
+            if (native_compact_sources) {
+                o_dst[nt] = out_src[row8 * N_t + nt];
+            } else {
 #if defined(HMX_W4A8_FIRST64_ROW32_OUT_TABLE)
-            o_dst[nt] = (row8 < (M_t / 2u))
-                ? hmx_w4a8_crouton_row32_base_ptr(out_src, row8, nt, N_t)
-                : hmx_w4a8_crouton_row8_ptr(out_src, row8, nt, N_t);
+                o_dst[nt] = (row8 < (M_t / 2u))
+                    ? hmx_w4a8_crouton_row32_base_ptr(out_src, row8, nt, N_t)
+                    : hmx_w4a8_crouton_row8_ptr(out_src, row8, nt, N_t);
 #else
-            o_dst[nt] = hmx_w4a8_crouton_row8_ptr(out_src, row8, nt, N_t);
+                o_dst[nt] = hmx_w4a8_crouton_row8_ptr(out_src, row8, nt, N_t);
 #endif
-#endif
+            }
         }
     }
 
@@ -879,10 +859,11 @@ static uint32_t hmx_w4a8_to_u8_matmul_kernel(
      *   m_total_minus_step      = 8         decoded fixed step for this path
      *   k_total_bytes           = N_t * 32  byte span expected by kernel setup
      *   n_act_pairs             = K_t       number of activation pointer pairs
-     */
+    */
     uint32_t extra_param[2] __attribute__((aligned(16))) = {1u, 0u};
     const hmx_conv_mask_desc_t *mask_desc = get_mask_desc(K);
-    const uint32_t desc_m_t = hmx_w4a8_desc_m_tiles(M_t, mt_groups);
+    const uint32_t desc_m_t =
+        hmx_w4a8_desc_m_tiles(M_t, mt_groups, native_compact_sources);
 
     hmx_conv_out_desc_t out_desc = {
         out_tbl_all,
