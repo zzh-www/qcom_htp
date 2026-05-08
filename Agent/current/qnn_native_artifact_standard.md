@@ -221,6 +221,17 @@ with the native-layout surface.  Continue at native prepared sidecar bytes,
 compact table memory, and wrapper/prebuilt-record state rather than more scalar
 descriptor sweeps.
 
+The next W4A8 native-entry probe now has a concrete BNB oracle.  Patching
+`0x2f0780` confirms the clean native path enters `hmx_v73_convbnb1x1_stride1`;
+the recovered W4A8 probe-output map is
+`public=(i//64)*2048+((i%64)//8)*64+(i%8)`.  Parsed with
+`scripts/parse_w4a16_native_entry_probe.py --layout a8crouton512 --dtype u32`,
+native BNB uses `out_desc=[table,8,32,32,8,256]`,
+`act_desc=[table,8,...]`, and 64-entry compact act/out tables.  A custom
+`desc_m_t=8` probe reaches native-class per-node kernel cycles but only covers
+about half the output, so this is table/coverage state rather than HMX body
+throughput.
+
 ## Current W4A16 Native Reference
 
 The current clean 256^3 W4A16 native reference is:

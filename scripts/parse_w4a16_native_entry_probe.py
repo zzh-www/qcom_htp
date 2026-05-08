@@ -81,6 +81,10 @@ def _crouton512_public_index(record_word: int) -> int:
     return lane * 128 + (group // 2) * 16 + (group & 1)
 
 
+def _a8crouton512_public_index(record_word: int) -> int:
+    return (record_word // 64) * 2048 + ((record_word % 64) // 8) * 64 + (record_word % 8)
+
+
 def _decode_record(public_words: list[int], layout: str, stride_words: int, count: int) -> list[int]:
     if stride_words <= 0:
         raise ValueError("--stride-words must be positive")
@@ -88,6 +92,8 @@ def _decode_record(public_words: list[int], layout: str, stride_words: int, coun
         indexes = [i * stride_words for i in range(count)]
     elif layout == "crouton512":
         indexes = [_crouton512_public_index(i) for i in range(count)]
+    elif layout == "a8crouton512":
+        indexes = [_a8crouton512_public_index(i) for i in range(count)]
     else:
         raise ValueError(f"unsupported layout: {layout}")
 
@@ -440,7 +446,8 @@ def print_human(parsed: dict[str, Any]) -> None:
         "record_prewindow": MAGIC_RECORD_PREWINDOW,
     }[kind]
     ok = "ok" if magic == expected_magic else "unexpected"
-    print(f"=== W4A16 native HNH {kind} probe: {parsed['path']} ===")
+    family = "W4A8 native BNB" if parsed["layout"] == "a8crouton512" else "W4A16 native HNH"
+    print(f"=== {family} {kind} probe: {parsed['path']} ===")
     print(
         f"dtype={parsed['dtype']} public_u32_words={parsed['public_u32_words']} "
         f"layout={parsed['layout']} stride_words={parsed['stride_words']}"
@@ -448,6 +455,8 @@ def print_human(parsed: dict[str, Any]) -> None:
     print(f"magic=0x{magic:08x} ({ok})")
     if parsed["layout"] == "crouton512":
         print("mapping=verified first-512-word internal-output to public-output map")
+    elif parsed["layout"] == "a8crouton512":
+        print("mapping=verified W4A8 first-512-word internal-output to public-output map")
     else:
         print("mapping=legacy stride mode; table samples are not validated")
     print()
@@ -699,7 +708,7 @@ def main() -> None:
     parser.add_argument("raw_path", type=Path, help="Y.raw from the hmx_entry_probe patched native run")
     parser.add_argument(
         "--layout",
-        choices=("crouton512", "stride"),
+        choices=("crouton512", "a8crouton512", "stride"),
         default="crouton512",
         help="how probe words are mapped into public Y.raw",
     )
