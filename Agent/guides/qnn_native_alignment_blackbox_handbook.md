@@ -1,30 +1,39 @@
 # QNN Native Alignment Blackbox Handbook
 
-Use this handbook when aligning a custom HMX OP with QNN native behavior.  The
-task is a blackbox reverse-engineering loop: do not start from an analytic
-formula as the oracle.  Start from a trustworthy QNN native artifact, then close
-the gap with lowered execution evidence, prepared payload bytes, and controlled
-negative probes.
+Use this handbook when aligning a custom HMX OP with QNN native behavior.  Treat
+the task as blackbox reverse engineering.  Do not start from an analytic formula
+or a plausible descriptor model as the oracle.  Start from a clean QNN native
+artifact, identify the real lowered call contract, and close the gap with
+minimal probes.
 
 ## Operating Rule
 
-The acceptance oracle is QNN native output and QNN native performance artifacts.
-Analytic math, Python reference outputs, and inferred formulas are only
-diagnostics.  A result is aligned only when the custom OP matches the native raw
-output for the same graph/input and the performance comparison comes from the
-standard `optrace/` artifact set.
+The acceptance oracle is QNN native raw output plus QNN native performance
+artifacts for the same graph, input, shape, and quantization contract.  Python
+references, inferred formulas, decoded assembly, and custom probe outputs are
+diagnostics only.
+
+A custom OP is aligned only when a fresh default run:
+
+- matches native raw output byte-for-byte;
+- passes the standard artifact gate;
+- reports optrace from the standard artifact directory;
+- compares custom main-op cycles to the comparable native kernel event, and
+  custom timeline to native timeline;
+- records any harmless boundary differences and open scope.
 
 ## Standard Artifact Gate
 
-Before using any native or custom run as evidence, require:
+Before using any run as correctness or performance evidence, require:
 
 - converted DLC generated with layout-preservation flags on every public graph
   input and output;
 - context binary generated before device execution;
-- device execution from `qnn-net-run --retrieve_context`, not a live DLC run;
+- device execution from `qnn-net-run --retrieve_context`, not live DLC;
 - native runtime I/O recorded in `native_io.json`;
-- `--use_native_input_files --use_native_output_files` for runtime comparison;
-- decoded `optrace/` directory beside the run artifact;
+- `--use_native_input_files --use_native_output_files` when comparing runtime
+  raw storage;
+- decoded `optrace/` beside the run artifact;
 - checker pass:
 
 ```bash
@@ -33,101 +42,134 @@ scripts/check_qnn_artifact_standard.py <out_dir> \
 ```
 
 Reject float runtime I/O, missing `native_io.json`, missing NONTRIVIAL layout
-flags, and ad-hoc `/tmp/_optrace*` evidence as current correctness or
-performance oracles.  Keep those artifacts only as historical diagnostics.
+flags, and ad-hoc `/tmp/_optrace*` evidence as current oracles.  Keep such
+outputs only as historical diagnostics.
 
 ## Alignment Loop
 
 1. **Define the native oracle.**
-   Generate a clean QNN native reference for the exact shape, graph, input, and
-   quantization contract.  Record raw input/output storage, context binary,
-   bottom mapping, optrace summary, and the native kernel event to compare
-   against.
+   Generate a clean native reference for the exact family, shape, chain, input,
+   weights, bias/control contract, and output storage.  Record raw input/output,
+   context binary, bottom mapping, optrace summary, and native kernel event.
 
 2. **Separate graph surface from runtime contract.**
-   QNN native graphs may expose float ONNX inputs/outputs while the runtime
-   contract is quantized native raw.  Compare against `native_io.json` and
-   pulled native output raw, not the public ONNX tensor dtype.
+   Public ONNX tensors may be float or have friendly ranks while the runtime
+   contract is quantized native raw.  Compare against `native_io.json`, pulled
+   native raw, and bottom mapping, not public ONNX dtype alone.
 
-3. **Read lowered execution first.**
-   Inspect bottom mapping and optrace before changing code.  Identify sidecar
-   nodes such as `weights_to_vtcm`, `bias_to_vtcm`, `ForceFormat_Crouton`,
-   `DmaCheckpointSet`, and the final HMX or `ConvLayer_s1.opt` event.  Compare
-   full graph timeline and kernel-only event separately.
+3. **Read lowered execution before changing code.**
+   Inspect bottom mapping and optrace.  Identify sidecars such as
+   `weights_to_vtcm`, `bias_to_vtcm`, `ForceFormat_Crouton`,
+   `DmaCheckpointSet`, input/output slices, and the final HMX or
+   `ConvLayer_s1.opt` event.  Keep kernel-only and full timeline comparisons
+   separate.
 
-4. **Extract prepared payloads.**
-   When weights, bias records, or control blocks are opaque, compare native
-   prepared sidecar bytes with generated custom bytes.  Prefer byte-for-byte
-   payload checks over pack-order guesses.
+4. **Confirm the native entry.**
+   Patch or probe the minimal native/skel entry to prove the active call path,
+   entry address, return address, and register arguments.  Do this before
+   copying descriptor fields into custom code.  A symbol name or static
+   disassembly match is not enough.
 
-5. **Run one-hypothesis probes.**
-   Change one variable at a time: pack order, source-table shape, descriptor
-   scalar, mask word, bias layout, or runtime tensor layout.  Name each artifact
-   after the hypothesis, and keep failures because they eliminate false paths.
+5. **Recover probe-output mapping.**
+   Native probes usually write into an internal tiled output, then QNN output
+   ops transform it before `Y.raw` is emitted.  First run a pattern probe and
+   invert the public-output mapping.  Do not parse descriptor/table words from a
+   public raw dump until the mapping is verified for that family and dtype.
 
-6. **Use permutation diagnostics on failed outputs.**
-   If exact compare fails, check value distributions, sorted equality, row/tile
-   rolls, and block-local rotations.  A value-preserving permutation points to
-   layout, table, or descriptor state; saturation or changed histograms point
-   toward arithmetic, scale, bias, control, or weight interpretation.
+6. **Dump the record/window contract.**
+   Use entry, base-record, table, and record-window probes to observe descriptor
+   scalars, mask/control words, pointer-table addresses, table length, adjacent
+   metadata, and payload pointers.  Prefer pure assembly-instruction probes that
+   perturb the native path as little as possible.
 
-7. **Probe native minimally.**
-   Use skel/native probes only to confirm call path, register arguments, entry
-   addresses, pointer tables, and descriptor words.  Do not rewrite input/output
-   semantics or insert C/C++ logic into the probe path; prefer the supported
-   assembly-instruction style so the probe perturbs the blackbox as little as
-   possible.
+7. **Extract prepared payloads.**
+   When weight, bias, control, or sidecar bytes are opaque, compare native
+   prepared bytes with custom-generated bytes.  Prefer byte-for-byte payload
+   checks over pack-order guesses.
 
-8. **Exclude scalar-field theories explicitly.**
-   Copy observed native descriptor fields into custom one at a time.  If the
-   output or perf does not move, stop iterating on that scalar and move back to
-   full wrapper state, table shape, payload order, or sidecar contract.
+8. **Run one-hypothesis probes.**
+   Change one variable at a time: graph surface rank, descriptor scalar,
+   source-table length, table pointer order, payload pack order, mask word,
+   bias/control layout, or runtime tensor layout.  Name each artifact after the
+   hypothesis and keep failed artifacts because they rule out false paths.
 
-9. **Close with a fresh standard rerun.**
-   After the implementation appears aligned, rerun the current HEAD through the
-   normal runner into a new artifact directory.  Require standard checker pass,
-   native-output exactness, and optrace performance evidence from that fresh
-   artifact before marking the work complete.
+9. **Use failure shape diagnostics.**
+   If exact compare fails, inspect row/tile exactness, sorted equality, value
+   distribution, row rolls, tile rolls, and block-local rotations.  A half-row
+   or every-other-block pattern usually points to table coverage or descriptor
+   loop state.  Changed histograms or saturation point toward arithmetic,
+   scale, bias, control, or payload interpretation.
+
+10. **Exclude scalar theories explicitly.**
+    Copy observed native descriptor fields one at a time.  If performance moves
+    but output is only partially correct, record the scalar as a performance
+    clue, not the solution.  Move back to table/window/payload state instead of
+    sweeping adjacent scalar values.
+
+11. **Promote only the native contract.**
+    Once a probe closes correctness and performance, integrate the native
+    contract into the default path for the accepted surface.  Keep old surfaces
+    as explicit diagnostics or fallback paths, not as silent competing defaults.
+
+12. **Close with a fresh standard rerun.**
+    Rerun current HEAD through the normal runner into the canonical artifact
+    directory.  Require checker pass, raw compare against native, optrace
+    summary, bottom mapping, and updated documentation before marking complete.
 
 ## Performance Reading
 
-Always report at least three numbers when available:
+Always report these scopes when available:
 
 - custom main-op event cycles;
 - native comparable kernel event cycles;
+- native QNN-op aggregate cycles when a single logical op lowers to sidecars;
 - native and custom full graph timeline spans.
 
 Do not compare custom main-op cycles to native full graph timeline as if they
 were the same scope.  Native QNN often includes public-surface transforms,
-format conversions, transpose/slice/concat/output nodes, and sidecar setup that
-the custom prepared path intentionally avoids.
+format conversions, slice/concat/output ops, and sidecar setup that the custom
+prepared path may avoid.
 
-## Useful Evidence Patterns
+## Evidence Patterns
 
-- Byte-identical native output means correctness is closed for that exact
-  shape/input/contract, even when analytic reference differs.
-- `sorted_equal=True` plus a best tile roll identifies layout/table ordering
-  bugs rather than arithmetic bugs.
-- A native sidecar import that fixes values but leaves a rotation points to
-  activation/output table or descriptor state.
-- A generated payload that matches an extracted native sidecar closes the pack
-  order question.
-- A native kernel event slower than custom can be legitimate if native carries a
-  generic wrapper and custom uses a specialized prepared HMX path.
+- Byte-identical native raw output closes correctness for that exact
+  shape/input/runtime contract, even when analytic reference differs.
+- A standard checker pass proves artifact hygiene, not kernel alignment by
+  itself.
+- A native entry probe that changes output proves the patched entry is live; a
+  no-op patch proves little unless paired with an invalid-skel override test.
+- A pattern probe that recovers public-output mapping is a prerequisite for
+  trustworthy descriptor parsing from `Y.raw`.
+- Record-window probes are often more reliable than entry probes for table
+  length and adjacent wrapper state.
+- Native compact tables may be shorter than a custom public-QHPI expansion; do
+  not infer table length from shape formulas.
+- A descriptor scalar can make cycles native-class while leaving output half
+  wrong.  Treat that as evidence of the loop contract, not completion.
+- `sorted_equal=True` plus a best tile roll points to layout/table ordering;
+  `sorted_equal=False` points to payload, arithmetic, bias/control, or a more
+  severe table mismatch.
+- A native kernel event slower than custom can be legitimate when native carries
+  a generic wrapper and custom uses a specialized prepared path.
 
 ## Anti-Patterns
 
-- Treating formulas as the final oracle.
-- Trusting old artifacts without checking runtime I/O, context-binary use, and
+- Treating formulas, Python references, or decoded assembly comments as the
+  final oracle.
+- Trusting old artifacts without rechecking native I/O, context-binary use, and
   layout flags.
 - Comparing float public ONNX tensors instead of native runtime raw.
-- Reading only top-level OP names and ignoring lowered sidecar events.
-- Running broad speculative probes that change multiple variables at once.
+- Reading only top-level op names and ignoring lowered sidecar events.
+- Parsing probe dumps before recovering the output transform.
+- Assuming table length from tensor shape instead of dumping the native
+  record/window.
+- Running broad probes that change descriptor, table, payload, and surface in
+  one step.
 - Deleting failed artifacts before recording what hypothesis they disproved.
-- Reporting only end-to-end time when the gap is actually in sidecar or graph
-  transform work.
-- Marking a family complete from a proxy signal such as ctxgen success, a green
-  checker, or bit-exact analytic output without native raw comparison.
+- Reporting only end-to-end time when the gap is inside the kernel event,
+  sidecar setup, or graph transforms.
+- Marking a family complete from ctxgen success, a green checker, probe-marker
+  exactness, or analytic bit-exactness.
 
 ## Completion Checklist
 
@@ -135,10 +177,14 @@ Before handing off or marking an OP aligned, record:
 
 - native oracle artifact path;
 - custom aligned artifact path;
-- exact generation/run commands;
-- output compare against native raw;
-- optrace summary for custom and native;
+- exact generation and run commands;
+- checker output for both native and custom artifacts;
+- raw output compare against native, preferably SHA256 plus `cmp`;
+- optrace summary for custom and native with scope labels;
 - bottom-mapping evidence for the final kernel path;
-- known boundary mismatches that are harmless for the accepted contract;
-- open scope outside the accepted contract, such as broader shapes, LPBQ, or
-  per-group extensions.
+- native entry, output-map, and record/window evidence used to choose the
+  contract;
+- known harmless boundary mismatches such as carrier dtype reporting or control
+  tensor shape;
+- open scope outside the accepted contract, such as broader shapes, LPBQ,
+  dynamic chain sizes, or per-group extensions.

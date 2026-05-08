@@ -1,0 +1,4 @@
+interface:
+  display_name: "HMX Inline ASM"
+  short_description: "Recover and verify Hexagon HMX inline asm"
+  default_prompt: "Use $hmx-inline-asm to recover a byte-exact readable Hexagon HMX inline-asm kernel."
