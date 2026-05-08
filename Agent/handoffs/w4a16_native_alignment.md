@@ -2,8 +2,12 @@
 
 Current status: `example/qnn_hmx_matmul_w4a16`
 (`HmxU16I4ToU16MatMul`, i4 weight x u16 activation -> u16 output) now has a
-canonical 256^3 native-contract path that is bit-exact against the clean QNN
-native oracle when built with the real HMX body.
+256^3 chain8 native-contract path that is bit-exact against the clean QNN
+native oracle when built with the real HMX body.  The shape/chain acceptance
+gate is closed: all eight custom and native kernel nodes enter with activation
+shape `UFixed16 [1,8,32,256]`, custom main cycles are `31419`, native
+`q::ConvLayer_s1.opt` aggregate is `29815`, and custom/native outputs are
+`65536/65536` exact.
 
 Acceptance rule for this family:
 
@@ -15,6 +19,10 @@ Acceptance rule for this family:
    For native W4A16 Conv, the closest kernel-only event is
    `q::ConvLayer_s1.opt`; full native graph timeline also includes
    transpose/quantize/dequantize work.
+4. Do not accept single-op W4A16 performance numbers as final.  The final
+   performance gate is chain-form custom/native comparison with the same
+   kernel-entry activation shape `(1,8,32,256)`.  The current canonical
+   artifact satisfies this for 256^3 chain8.
 
 2026-05-08 standardization update: the old
 `example/qnn_matmul_profile/output_codex_native_w4a16_same_custom_256/`
@@ -23,11 +31,16 @@ historical because they used float-sized runtime output and/or did not record
 the required converter layout-preservation flags.  Refresh the native oracle with
 `example/qnn_matmul_profile/run_native_w4a16_conv_ref.sh` before taking new
 correctness or performance numbers from QNN native.
+2026-05-09 cleanup note: most `output_codex_*`, `output_w4a16_import_*`, and
+other exploratory directories referenced later in this handoff were deleted as
+temporary artifacts.  Treat those names as historical evidence labels; the live
+canonical artifacts are `output_w4a16_aligned_e2e_256/` and
+`output_w4a16_native_ref_e2e_256/`.
 
 Current clean native oracle:
 
 ```text
-example/qnn_matmul_profile/output_native_w4a16_conv_ref_256/
+example/qnn_matmul_profile/output_w4a16_native_ref_e2e_256/
 ```
 
 This artifact uses native u16 runtime input/output, converter NONTRIVIAL layout
@@ -41,10 +54,10 @@ contract plus qnn-net-run native I/O flags.
 
 Native-path first rule: before adding new custom probes, read
 [`w4a16_qnn_native_path.md`](w4a16_qnn_native_path.md).  The canonical 256^3
-blocker is closed by matching two named native boundaries: compact source
-tables and K32-block-major/N32-inner W4 sidecar order.  Remaining work is
-broader shape coverage plus LPBQ/per-group extensions, not the canonical
-256^3 native contract.
+chain8 blocker is closed by matching two named native boundaries: compact
+source tables and K32-block-major/N32-inner W4 sidecar order, then validating
+the kernel-entry activation shape and chain-form performance.  Broader shape
+coverage plus LPBQ/per-group extensions follow after that.
 
 ## Standard Flow
 
@@ -61,10 +74,10 @@ bash example/qnn_hmx_matmul_w4a16/build_x86.sh
 Run the current aligned custom flow:
 
 ```bash
-OUT_DIR="$PWD/example/qnn_matmul_profile/output_w4a16_native_aligned_default_runner_256" \
+OUT_DIR="$PWD/example/qnn_matmul_profile/output_w4a16_aligned_e2e_256" \
 M=256 K=256 N=256 CHAIN=1 MODE=chain_qdq \
 NATIVE_OUTPUT=1 STRICT_OPTRACE=1 \
-VERIFY_NATIVE_RAW="$PWD/example/qnn_matmul_profile/output_native_w4a16_conv_ref_256/device_out/Y.raw" \
+VERIFY_NATIVE_RAW="$PWD/example/qnn_matmul_profile/output_w4a16_native_ref_e2e_256/device_out/Y.raw" \
 VERIFY_NATIVE_TRANSPOSE=1 \
 bash example/qnn_hmx_matmul_w4a16/standard_flow/custom_w4a16/run_w4a16_chain.sh
 ```
@@ -149,7 +162,7 @@ candidate 32KB region starts at `ctx/conv_ctx.bin+0xbd00`.  Importing it was the
 first proof that the compact-table path is correct:
 
 ```bash
-dd if=example/qnn_matmul_profile/output_native_w4a16_conv_ref_256/ctx/conv_ctx.bin \
+dd if=example/qnn_matmul_profile/output_w4a16_native_ref_e2e_256/ctx/conv_ctx.bin \
   of=/tmp/native_w4a16_ref256_sidecar_0xbd00.raw bs=1 skip=$((0xbd00)) count=32768 status=none
 
 GEN_EXTRA_ARGS="--bias-layout native_a16 --a16-quant-contract native \
@@ -173,10 +186,10 @@ Durable native oracle:
 
 | Artifact | Path |
 |---|---|
-| native output | `example/qnn_matmul_profile/output_native_w4a16_conv_ref_256/device_out/Y.raw` |
-| native input | `example/qnn_matmul_profile/output_native_w4a16_conv_ref_256/runtime_inputs_native/A.raw` |
-| native context | `example/qnn_matmul_profile/output_native_w4a16_conv_ref_256/ctx/conv_ctx.bin` |
-| native optrace | `example/qnn_matmul_profile/output_native_w4a16_conv_ref_256/optrace/` |
+| native output | `example/qnn_matmul_profile/output_w4a16_native_ref_e2e_256/device_out/Y.raw` |
+| native input | `example/qnn_matmul_profile/output_w4a16_native_ref_e2e_256/runtime_inputs_native/A.raw` |
+| native context | `example/qnn_matmul_profile/output_w4a16_native_ref_e2e_256/ctx/conv_ctx.bin` |
+| native optrace | `example/qnn_matmul_profile/output_w4a16_native_ref_e2e_256/optrace/` |
 | refreshed custom probe | `example/qnn_matmul_profile/output_w4a16_k4pack_vs_nativeio_256/` |
 | imported clean-native sidecar probe | `example/qnn_matmul_profile/output_w4a16_import_native_sidecar_bd00_vs_nativeio_256/` |
 
@@ -215,11 +228,10 @@ Latest native-compact-table resolution:
 | `output_w4a16_native_compact_source_tables_256/` | `HMX_W4A16_NATIVE_COMPACT_SOURCE_TABLES` plus imported clean `0xbd00` sidecar | `65536/65536` | `5179` | `44845` |
 | `output_w4a16_native_compact_generated_k4_256/` | compact source tables plus old `native_nmajor_k4_lohi` pack | `3522/65536` | `5629` | `42549` |
 | `output_w4a16_native_compact_kblock32_pack_256/` | compact source tables plus generated `native_kblock32_nmajor_k4_lohi` pack | `65536/65536` | `6808` | `64996` |
-| `output_w4a16_native_aligned_default_runner_256/` | real-kernel build plus current runner defaults | `65536/65536` | `5735` | `48480` |
-| `output_w4a16_native_aligned_completion_audit_256/` | fresh current-HEAD completion audit rerun | `65536/65536` | `5949` | `49786` |
+| `output_w4a16_aligned_e2e_256/` | current chain8 e2e runner, real HMX body, encoded QAIRT flow, native kernel-entry shape matched | `65536/65536` | `31419` | `77854` |
 
-This closes the two missing named native boundaries for the canonical 256^3
-path:
+This closes the two missing named native payload boundaries for the canonical
+256^3 path and the later chain8 shape/performance gate:
 
 - table/descriptor boundary: use the native 64-entry compact source tables
   observed by HMXT/HMXR, not the custom 512-entry row4-expanded table;
@@ -486,20 +498,19 @@ sidecar bytes, the Conv-style input transpose, or the simple low-bit
 `MASK_ARG6` candidates implied by the native builder.
 
 Native performance reference from the current clean artifact,
-`output_native_w4a16_conv_ref_256/optrace/summary.json`:
+`output_w4a16_native_ref_e2e_256/optrace/summary.json`:
 
 | Native event/view | Cycles |
 |---|---:|
-| `q::ConvLayer_s1.opt` | `7502` |
-| `q::ConvLayer.opt.weights_to_vtcm` | `2655` |
-| `q::ConvLayer.opt.bias_to_vtcm` | `743` |
-| native `conv1x1` QNN-op aggregate | `34858` |
-| native graph timeline span | `137234` |
+| `q::ConvLayer_s1.opt` chain8 aggregate | `29815` |
+| `q::ConvLayer.opt.weights_to_vtcm` | `3385` |
+| `q::ConvLayer.opt.bias_to_vtcm` | `1117` |
+| native `conv1x1_*` QNN-op aggregate | `70408` |
+| native graph timeline span | `253245` |
 
-The default custom main op is still far slower than the native W4 kernel event.
-The native-shaped activation/output probe narrows main-op cycles to the old
-physical-table class (`~29k-31k`), but it is still not correct and remains
-slower than native `q::ConvLayer_s1.opt`.
+The current custom chain8 main op is `31419` cycles and is bit-exact against
+the native chain8 output.  Earlier single-op or native-shaped activation/output
+probes below are historical diagnostics.
 
 Latest descriptor-table dump artifacts:
 

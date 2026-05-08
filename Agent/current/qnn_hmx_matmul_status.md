@@ -3,9 +3,11 @@
 ## Current Target
 
 The active custom MatMul line is the family of QNN-native quantized HMX MatMul
-packages under `example/qnn_hmx_matmul_*`.  The latest completed milestone is
-the `w4a16` 256^3 native-contract path against the standardized QNN native
-Conv oracle.
+packages under `example/qnn_hmx_matmul_*`.  The latest completed strict
+canonical milestone is W4A16 256^3 chain8 against the standardized QNN native
+Conv oracle: custom/native are bit-exact, both enter every HTP kernel with
+activation shape `(1,8,32,256)`, and performance is validated with the same
+chain-style methodology used by u8i8.
 
 Public names:
 
@@ -110,8 +112,8 @@ Current custom coverage:
 | w8a8: u8 activation x i8 weight -> u8 output, static weight, s32 folded native bias | Implemented as `HmxU8I8ToU8MatMul`; bit-exact for 256^3 chain8; kernel body aligned with native V73DEEP Conv1x1. |
 | Other w8a8 shapes | Partial. The current wrapper still has square/size assumptions and lacks native-style large-shape spill/fill tiling. |
 | w4a8 | Independent package/op/flow exists as `example/qnn_hmx_matmul_w4a8` / `HmxU8I4ToU8MatMul`; default builds no longer define `HMX_W4A8_SKIP_KERNEL`. The package embeds the native `hmx_v73_convbnb1x1deep_stride1` body, packs W4 weights as `[1,1,K,N/2]` with native K-major 32x64 tiling plus QNN sidecar sign-bit inversion, uses the W4 mask helper, and expands Crouton8 row8 pointer tables. Device correctness is bit-exact for canonical 256^3 single-kernel and chain8 runs. |
-| w8a16 | Independent package/op/flow exists as `example/qnn_hmx_matmul_w8a16` / `HmxU16I8ToU16MatMul`; converter+ctxgen native-rank `chain_qdq` flow passes and embeds native `hmx_v75_convhbh1x1deep_stride1`. The 256^3 native-contract real-kernel path is byte-identical to the saved native QNN artifact; optrace shows `dur=29842`, `pkts=4938`, `cpp=6.04`, aligned with native split kernels totaling about `30839` cycles and `5086` packets. Default builds still keep `HMX_W8A16_SKIP_KERNEL` until broader shape/split coverage is validated. |
-| w4a16 | Independent package/op/flow exists as `example/qnn_hmx_matmul_w4a16` / `HmxU16I4ToU16MatMul`; canonical 256^3 native-contract path is bit-exact against QNN native (`65536/65536`) with `HMX_W4A16_NATIVE_COMPACT_SOURCE_TABLES` and `native_kblock32_nmajor_k4_lohi` packing. Main-op cycles are native-class (`5735` custom vs `7502` native kernel event). Broader shape coverage and LPBQ/per-group extension remain open. |
+| w8a16 | Independent package/op/flow exists as `example/qnn_hmx_matmul_w8a16` / `HmxU16I8ToU16MatMul`; converter+ctxgen `chain_qdq` flow passes and embeds native `hmx_v75_convhbh1x1deep_stride1`. The current 256^3 chain8 artifact restores the native-rank custom-op surface: custom activation/output are `UFixed16 [1,1,256,256]`, output is byte-identical to matched QNN native (`65536/65536`), and chain=8 is preserved. Native still enters HTP as `UFixed16 [1,8,32,256]`, so the shape gate is open by request. Performance is not aligned: custom main is `184539` cycles and timeline `285461`, versus native `q::ConvLayer_s1.opt=30182`, MatMul aggregate `35747`, and timeline `79095`. Default builds still keep `HMX_W8A16_SKIP_KERNEL` until broader shape/split coverage is validated. |
+| w4a16 | Independent package/op/flow exists as `example/qnn_hmx_matmul_w4a16` / `HmxU16I4ToU16MatMul`; the current 256^3 chain8 native-contract path is bit-exact against QNN native (`65536/65536`) with `HMX_W4A16_NATIVE_COMPACT_SOURCE_TABLES` and `native_kblock32_nmajor_k4_lohi` packing. Bottom mapping shows all eight custom and native kernel-entry activation tensors are `UFixed16 [1,8,32,256]`. Chain8 optrace reports custom main `31419` cycles versus native `q::ConvLayer_s1.opt` aggregate `29815`, with custom timeline `77854` versus native timeline `253245`. Residual boundary reporting differences are weight carrier `UFixed8` vs native `SFixed8` and control `[1,1,1,1]` vs native `[1]`. |
 | w16a16 | Independent package/op/flow exists as `example/qnn_hmx_matmul_w16a16` / `HmxU16I16ToU16MatMul`; converter+ctxgen smoke passes with `u16` activation/output/weight carrier. It embeds the native `hmx_v73_convhhh1x1_stride1` aligned path plus unaligned branch target slice; real A16/W16 QHPI/descriptor and bias/scale contract remain the compute gate. |
 | Batch/rank/transpose semantics | Not the first implementation goal. Add only as generator/precompute normalization around the quantized Conv1d-family kernels. |
 
@@ -133,8 +135,9 @@ Plan:
 
 Near-term milestone: support static MatMul/FullyConnected-as-Conv1d `w8a8` with per-tensor activation, per-channel signed symmetric static weights, folded s32 native bias, no transpose in the hot callback, and arbitrary M/K/N within the current HMX tiling constraints. Then implement `w4a8` on the same prepared-state architecture.
 
-Broader quantized-kernel roadmap status: not complete.  Do not conflate the
-now-aligned `w8a16` 256^3 milestone with the full-family acceptance rule:
+Broader quantized-kernel roadmap status: not complete.  Do not conflate a
+single 256^3 precision milestone, such as the current `w8a16` chain8
+artifact, with the full-family acceptance rule:
 
 1. implementation: each target family has an independent quantized inference
    kernel path, default build is non-`SKIP_KERNEL`, and the hot callback only
@@ -157,27 +160,48 @@ comparators only.  Those runs used float-sized runtime output and/or did not
 record the required NONTRIVIAL layout flags.  Regenerate W4A16 native Conv
 references with `example/qnn_matmul_profile/run_native_w4a16_conv_ref.sh`
 before using QNN native output or performance as the current oracle.
+After the 2026-05-09 cleanup, `output_codex_*`, `output_w4a16_import_*`, and
+other probe directories named below are historical labels only.  The live
+artifact set for aligned families is the paired custom/native directory set
+under `example/qnn_matmul_profile/`: `output_u8i8_{aligned,native_ref}_e2e_256`,
+`output_w4a8_{aligned,native_ref}_e2e_256`,
+`output_w8a16_{aligned,native_ref}_e2e_256`, and
+`output_w4a16_{aligned,native_ref}_e2e_256`.  `output_w16a16_native_ref_e2e_256`
+is also kept as native-only evidence because the custom W16A16 package still
+uses the marker path and is not an aligned pair.
 The quantized custom runners now follow the u8i8 standard gate too: generators
-emit `runtime_input_list.txt` and `native_io.json`, and runner artifact checks
+emit `runtime_input_list.txt`, `quant_overrides.json`, and `native_io.json`.
+Converter consumes those encodings and quantizer runs in fallback/save mode,
+without `--input_list` or custom `--op_package_lib`, so QAIRT does not execute
+custom ops through the CPU backend during quantization.  Runner artifact checks
 require native I/O, NONTRIVIAL layout flags, and non-float runtime storage.
+For native references, same-shape random tensors are no longer accepted as a
+comparison oracle.  The native graph must reuse the custom artifact's exact
+runtime input, logical weights, folded/effective bias, and chain topology.
+`example/qnn_matmul_profile/run_matched_native_a8_ref.sh` is the current A8
+implementation of this rule.
 
 Current standardized W4A16 native oracle:
-`example/qnn_matmul_profile/output_native_w4a16_conv_ref_256/`.  It uses
+`example/qnn_matmul_profile/output_w4a16_native_ref_e2e_256/`.  It uses
 native u16 runtime input/output, `--retrieve_context`, converter NONTRIVIAL
-layout flags on A/Y, and the full `optrace/` artifact set.  Its native
-`q::ConvLayer_s1.opt` event is `7502` cycles, `conv1x1` QNN-op aggregate is
-`34858` cycles, and the graph timeline span is `137234` cycles.  The current
-canonical custom W4A16 native-contract path is aligned for 256^3 when built
-with `HMX_W4A16_NATIVE_COMPACT_SOURCE_TABLES` and the real HMX body:
-`W4_PACK_ORDER=native_kblock32_nmajor_k4_lohi`, native A16 bias/control, and
-`MODE=chain_qdq` produce `65536/65536` exact against this oracle.  The latest
-standard artifact is
-`example/qnn_matmul_profile/output_w4a16_native_aligned_default_runner_256/`:
-custom main op `5735` cycles, timeline `48480` cycles, native kernel event
-`7502` cycles.  A fresh current-HEAD completion audit rerun at
-`example/qnn_matmul_profile/output_w4a16_native_aligned_completion_audit_256/`
-also passes the standard checker and reports `65536/65536`, main op `5949`
-cycles, and timeline `49786` cycles.  Remaining graph-boundary differences are
+layout flags on A/Y, and the full `optrace/` artifact set.  New W4 native DLC
+exports should use `example/qnn_matmul_profile/export_native_w4a16_quantized_dlc.sh`,
+which runs QAIRT quantizer with W4 weights, A16 activations, and
+`--pack_4_bit_weights` so DLC inspection reports `W: sFxp_4`.  The executable
+native Conv oracle uses the encoding-driven converter plus
+`qairt-quantizer --enable_float_fallback`, avoiding CPU quantization simulation
+while keeping the `sFxp_8` W4 carrier that HTP ctxgen accepts.  Its native
+`q::ConvLayer_s1.opt` aggregate is `29815` cycles across eight Conv kernels,
+the `conv1x1_*` QNN-op aggregate is `70408` cycles, and the graph timeline span
+is `253245` cycles.  The current custom W4A16 native-contract path is aligned
+for 256^3 chain8 when built with `HMX_W4A16_NATIVE_COMPACT_SOURCE_TABLES` and
+the real HMX body: `W4_PACK_ORDER=native_kblock32_nmajor_k4_lohi`, native A16
+bias/control, `MODE=chain_qdq`, and `CHAIN=8` produce `65536/65536` exact
+against this oracle.  The latest standard artifact is
+`example/qnn_matmul_profile/output_w4a16_aligned_e2e_256/`:
+custom main op `31419` cycles and timeline `77854` cycles.  All eight custom
+and native HTP kernel-entry activation tensors are `UFixed16 [1,8,32,256]`.
+Remaining graph-boundary differences are
 weight carrier
 `UFixed8` versus native `SFixed8` and custom control `Int32 [1,1,1,1]` versus
 native `Int32 [1]`; generated payload bytes and output semantics now match.
@@ -194,9 +218,11 @@ output transforms in a linear, parseable form.
 |---|---|---|
 | Native QNN W4 MatMul 128^3, param bitwidth 4 | Lowers to `q::ConvLayer_s1.opt`; `weights_to_vtcm` sees `[1,1,128,64]` `SFixed8`, confirming W4 uses a 4-bit signed carrier with two output channels per byte. |
 | Native QNN W4 same-weight probe | DLC stores full N-major 4-bit codes, then ctxgen lowers through `weights_to_vtcm` to the packed `[1,1,128,64]` native payload. Custom full-float fallback becomes Float16 and fails QHPI kernel matching; custom full-int8/QLinear probes stay `UFixed8 [1,1,128,128]`, so they do not reach the native W4 packer. |
-| Custom w4a16 256^3 native-contract probe | Current native-aligned flow is `HMX_W4A16_NATIVE_COMPACT_SOURCE_TABLES` plus `native_kblock32_nmajor_k4_lohi` W4 packing, `native_a16` bias/control, `MODE=chain_qdq`, and the real HMX body. It is bit-exact against `output_native_w4a16_conv_ref_256/device_out/Y.raw` (`65536/65536`, maxdiff `0`) with custom main op `5735` cycles versus native `q::ConvLayer_s1.opt=7502`. The fix reproduces two named native boundaries: 64-entry compact source tables instead of the old 512-entry row4-expanded custom tables, and K32-block-major/N32-inner W4 sidecar chunk order. Remaining differences are graph-boundary carrier reporting (`UFixed8` vs native `SFixed8`) and control tensor shape reporting; they do not affect canonical payload bytes or output. |
-| Custom w4a8 256^3 default precompute, native `convbnb` body, packed `[1,1,K,N/2]`, twos-complement lo/hi nibbles, W4 mask helper | Device correctness is bit-exact for both single-kernel and chain8 runs (`65536/65536`). Custom chain8 perf observed `HmxU8I4ToU8MatMul` hot avg `dur=19005`, `pkts=2229`, `cpp=8.526`; native W4 same-shape perf compare is still required before closing the strict Goal. |
-| Custom w8a16 256^3 native-rank `chain_qdq` graph | Ctxgen passes and device execution reaches the HMX body. The fast default descriptor uses mask `arg1=0x70b`, `n_tiles_pow2=row4_groups*4` (`256` at 256^3), and `m_total_minus_step=8`. Output is byte-identical to `output_codex_native_w8a16_custom_full_256/device_out/out.raw`. The analytic native-contract reference is only diagnostic (`22057/65536` exact and `65536/65536` within `abs<=3`). Optrace reports `dur=29842`, `pkts=4938`, `cpp=6.04`, aligned with native split `ConvLayer_s1.opt` total `30839` cycles and about `5086` packets. |
+| Custom w4a16 256^3 chain8 native-contract probe | Current flow is `HMX_W4A16_NATIVE_COMPACT_SOURCE_TABLES` plus `native_kblock32_nmajor_k4_lohi` W4 packing, `native_a16` bias/control, `MODE=chain_qdq`, `CHAIN=8`, and the real HMX body. It is bit-exact against `output_w4a16_native_ref_e2e_256/device_out/Y.raw` (`65536/65536`, maxdiff `0`). Custom main is `31419` cycles and timeline is `77854`; native chain8 reports `q::ConvLayer_s1.opt=29815`, `conv1x1_*` aggregate `70408`, and timeline `253245`. Both custom and native have eight kernel nodes with activation `UFixed16 [1,8,32,256]`. | Canonical 256^3 shape/chain gate is closed. Residual non-blocking boundary differences are custom weight carrier `UFixed8` vs native `SFixed8`, and custom control `[1,1,1,1]` vs native `[1]`. |
+| Native w8a8 / u8i8 256^3 matched reference | Current artifact is `output_u8i8_native_ref_e2e_256/`, generated by `run_matched_native_a8_ref.sh` from `output_u8i8_aligned_e2e_256/` with the same input, logical W, effective bias, and chain8 topology. It is bit-exact against custom output (`65536/65536`, maxdiff `0`). Optrace reports native `q::ConvLayer_s1.opt=12435`, MatMul aggregate `36922`, and timeline `53946`; custom reports main `10891` and timeline `36342`. |
+| Custom w4a8 256^3 default precompute, native `convbnb` body, packed `[1,1,K,N/2]`, twos-complement lo/hi nibbles, W4 mask helper | Device correctness is bit-exact for both single-kernel and chain8 runs (`65536/65536`). Current native artifact is `output_w4a8_native_ref_e2e_256/`, generated by `run_matched_native_a8_ref.sh` from the custom artifact with the same input, logical W, effective bias, and chain8 topology. It is bit-exact against custom output (`65536/65536`, maxdiff `0`). Performance is not aligned: custom chain8 main is `162483`, timeline `197581`; matched native reports `q::ConvLayer_s1.opt=11546`, MatMul aggregate `29765`, timeline `48831`. | Follow-up: investigate the custom W4A8 performance gap before treating the family as closed. Start from wrapper/descriptor overhead, W4 packed sidecar layout, row8 pointer table expansion, chain scheduling, and whether custom QHPI is repeatedly paying setup that native amortizes. |
+| Native w16a16 256^3 reference | Current artifact is `output_w16a16_native_ref_e2e_256/`, generated by `profile_all.sh` with `w16a16`, native I/O, context binary execution, NONTRIVIAL A/Y layout flags, encoded quantization overrides, and decoded `optrace/`. Optrace reports `q::ConvLayer_s1.opt=75433`, MatMul aggregate `82644`, and timeline `124593`. This is native-only evidence; the custom W16A16 path remains marker-only. |
+| Custom w8a16 256^3 chain8 native-rank graph | Ctxgen passes and device execution reaches the HMX body. Output is byte-identical to matched native `output_w8a16_native_ref_e2e_256/device_out/Y.raw` (`65536/65536`, maxdiff `0`). The analytic native-contract reference is only diagnostic (`52003/65536`, maxdiff `65535`). Custom and native both have eight kernel nodes, but custom uses activation/output `UFixed16 [1,1,256,256]` while native uses `UFixed16 [1,8,32,256]`; the shape gate is open by current request. Performance is not aligned: custom main is `184539`, timeline `285461`; matched native reports `q::ConvLayer_s1.opt=30182`, MatMul aggregate `35747`, timeline `79095`. |
 
 Latest W4A16 continuation notes: `HMX_W4A16_MASK_ARG2=128` is also a no-op
 (`4229/65536`, `93932` cycles).  `DESC_M_TILES_OVERRIDE=32` reaches native-class
@@ -413,14 +439,23 @@ prepared custom weight tensor as `UFixed8` (`data_type=1032`) with dims
 Do not repeat param-encoding sweeps until the converter/custom-op contract can
 actually expose a signed QHPI tensor.
 
-Latest w8a16 probes on 2026-05-07:
+Latest w8a16 probes on 2026-05-07, superseded by the 2026-05-09 chain8
+native-rank artifact for acceptance:
 
-- The native-rank `MODE=chain_qdq --op-input-layout native --final-output-rank 3d` path is now the reference custom flow. With real HMX enabled through `-UHMX_W8A16_SKIP_KERNEL -DHMX_W8A16_ALLOW_UNVALIDATED_KERNEL`, the source defaults produce output byte-identical to `example/qnn_matmul_profile/output_codex_native_w8a16_custom_full_256/device_out/out.raw` (`65536/65536`, maxdiff `0`). Treat that QNN native artifact as the oracle; the analytic native-contract reference is only a diagnostic cross-check (`22057/65536` exact and `65536/65536` within `abs<=3`, `max=3`).
-- The production descriptor fix is the combination `HMX_W8A16_MASK_ARG1=0x70b`, `n_tiles_pow2=row4_groups*4`, and `m_total_minus_step=8`. The earlier `m_total_minus_step=456` workaround was correct but slow (`dur=185183`, about `35178` packets); the fast default profiles at `dur=29842`, `pkts=4938`, `cpp=6.04`.
-- Native QNN for the comparable 256^3 artifact lowers to two 128-channel `q::ConvLayer_s1.opt` HMX kernels (`17675` and `13164` cycles, total `30839`; about `5086` packets). Use that split-kernel total as the closest kernel-only target for the single custom node.
+- The current acceptance artifact uses `MODE=chain_qdq OP_INPUT_LAYOUT=native
+  CHAIN=8` with matched native generation.  It is bit-exact and restores custom
+  activation/output to `UFixed16 [1,1,256,256]`, while native HTP still enters
+  as `UFixed16 [1,8,32,256]`.  Performance is not aligned (`184539` custom main
+  versus `30182` native `q::ConvLayer_s1.opt` aggregate).  The strict tiled
+  shape probe remains a diagnostic: it closed the `[1,8,32,256]` shape gate but
+  regressed to `507368` custom main cycles.
+
+- Earlier native-rank `MODE=chain_qdq --op-input-layout native --final-output-rank 3d` path: with real HMX enabled through `-UHMX_W8A16_SKIP_KERNEL -DHMX_W8A16_ALLOW_UNVALIDATED_KERNEL`, the source defaults produced output byte-identical to the then-current native artifact.  It was useful for descriptor recovery and is now the restored custom-op surface, with updated chain8 matched-native artifacts and current optrace numbers recorded above.
+- Historical descriptor fix for that native-rank path was the combination `HMX_W8A16_MASK_ARG1=0x70b`, `n_tiles_pow2=row4_groups*4`, and `m_total_minus_step=8`. The earlier `m_total_minus_step=456` workaround was correct but slow (`dur=185183`, about `35178` packets); the native-rank fast profile was `dur=29196`, `pkts=4938`, `cpp=5.91`.
+- Historical native QNN for the comparable single-op 256^3 artifact lowered to two 128-channel `q::ConvLayer_s1.opt` HMX kernels (`18930` and `13160` cycles, total `32090`; `5086` packets). The current matched chain8 native artifact instead reports `q::ConvLayer_s1.opt=30182` across eight native MatMul nodes.
 - Full-range native w8a16 weight layout is now validated. For `output_codex_w8a16_256/w8a16/ctx/matmul_w8a16_ctx.bin`, the native `shflSWeights [1,1,256,256]` payload contains the same 32x32 K-major W8 stream as the validated u8i8 packer at `0x9100`; custom `--w8-pack-order kmajor` embeds the same stream at `0xa000`. The older K-major regression only applied to special low-pattern/compact probes, not ordinary full W8.
 - Native A16 quantization is symmetric QUInt16 with zero offset `32768` and step `1/32767`. Direct UINT16 custom inputs ignore quant overrides, but `chain_qdq --a16-quant-contract native` preserves the native metadata through `ForceFormat_Crouton`.
-- Native full-range output is not the old saturated integer reference. It is approximately `round(((A_u16 - 32768) @ W_i8) / 127 + 32768)` clipped to u16, but that formula is only a reference model. Future native-contract custom probes must compare primarily to a real QNN native output artifact such as `output_codex_native_w8a16_custom_full_256/device_out/out.raw`; formula/tolerance checks are secondary diagnostics.
+- Native full-range output is not the old saturated integer reference. It is approximately `round(((A_u16 - 32768) @ W_i8) / 127 + 32768)` clipped to u16, but that formula is only a reference model. Future native-contract custom probes must compare primarily to a real QNN native output artifact such as `output_w8a16_native_ref_e2e_256/device_out/Y.raw`; formula/tolerance checks are secondary diagnostics.
 - Native w8a16 bias/control bytes are decoded for the full-W8 path. Each 32-output-channel tile is a 512B record: two 256B halves for even and odd channels; every lane starts with u16 `[0x4440, 0x8040, 0x0008, 0x4000]`, and the variable i32 lane value is `-128 * sum(W[:, n])`. `--bias-layout native_a16` reproduces `native_bias_0x19100.bin` byte-for-byte.
 - Matching W8 bytes, native A16 metadata, and decoded native bias is still not sufficient in the old tiled custom graph: `output_codex_w8a16_chain_qdq_native_contract_kmajor_nativebias_256` reaches the HMX body but only matches native `2774/65536`; its `ForceFormat_Crouton` writes only `131072` bytes, while native A16 writes `1048576`.
 - A native-rank single custom graph (`--op-input-layout native --final-output-rank 3d`) now executes on device. Output-only mode writes the expected marker pattern through a `[1,1,256,256]` internal custom output reshaped to `[1,256,256]`, so the older failure was the graph-output/export rank boundary, not native-rank allocation itself.

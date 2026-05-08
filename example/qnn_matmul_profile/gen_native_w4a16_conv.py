@@ -67,7 +67,12 @@ def main() -> None:
     parser.add_argument("--m", type=int, default=256)
     parser.add_argument("--k", type=int, default=256)
     parser.add_argument("--n", type=int, default=256)
+    parser.add_argument("--chain", type=int, default=1)
     args = parser.parse_args()
+    if args.chain < 1:
+        raise ValueError("--chain must be >= 1")
+    if args.chain != 1 and args.k != args.n:
+        raise ValueError("native W4A16 Conv chain requires K == N between Conv nodes")
 
     os.makedirs(args.out_dir, exist_ok=True)
     native_dir = os.path.join(args.out_dir, "runtime_inputs_native")
@@ -85,15 +90,23 @@ def main() -> None:
     a = helper.make_tensor_value_info("A", TensorProto.FLOAT, [1, args.k, 1, args.m])
     y = helper.make_tensor_value_info("Y", TensorProto.FLOAT, [1, args.n, 1, args.m])
     w_init = numpy_helper.from_array(w_conv, name="W")
-    node = helper.make_node(
-        "Conv",
-        ["A", "W"],
-        ["Y"],
-        name="conv1x1",
-        pads=[0, 0, 0, 0],
-        strides=[1, 1],
-    )
-    graph = helper.make_graph([node], "native_w4a16_conv", [a], [y], [w_init])
+    nodes = []
+    value_infos = []
+    prev = "A"
+    for i in range(args.chain):
+        out_name = "Y" if i == args.chain - 1 else f"Y_{i}"
+        nodes.append(helper.make_node(
+            "Conv",
+            [prev, "W"],
+            [out_name],
+            name=f"conv1x1_{i}" if args.chain > 1 else "conv1x1",
+            pads=[0, 0, 0, 0],
+            strides=[1, 1],
+        ))
+        if i < args.chain - 1:
+            value_infos.append(helper.make_tensor_value_info(out_name, TensorProto.FLOAT, [1, args.n, 1, args.m]))
+        prev = out_name
+    graph = helper.make_graph(nodes, "native_w4a16_conv", [a], [y], [w_init], value_info=value_infos)
     model = helper.make_model(
         graph,
         producer_name="qnn_native_w4a16_conv_ref",
@@ -110,6 +123,8 @@ def main() -> None:
         },
         "param_encodings": {"W": [_w4_encoding()]},
     }
+    for i in range(args.chain - 1):
+        overrides["activation_encodings"][f"Y_{i}"] = [_a16_encoding()]
     with open(os.path.join(args.out_dir, "quant_overrides.json"), "w", encoding="utf-8") as f:
         json.dump(overrides, f, indent=2)
 
@@ -131,6 +146,7 @@ def main() -> None:
                 "conv_input_shape": [1, args.k, 1, args.m],
                 "conv_output_shape": [1, args.n, 1, args.m],
                 "logical_matmul_shape_mkn": [args.m, args.k, args.n],
+                "chain": args.chain,
                 "activation_encoding": _a16_encoding(),
                 "weight_encoding": _w4_encoding(),
             },
@@ -139,7 +155,7 @@ def main() -> None:
         )
     np.save(os.path.join(args.out_dir, "actRaw_u16.npy"), act_mk)
     np.save(os.path.join(args.out_dir, "wRaw_KN.npy"), w_kn)
-    print(f"  wrote native W4A16 Conv ref: {args.out_dir}")
+    print(f"  wrote native W4A16 Conv ref: {args.out_dir} (chain={args.chain})")
 
 
 if __name__ == "__main__":

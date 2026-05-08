@@ -332,12 +332,16 @@ def _native_perf_summary(native_out_dir: Path | None) -> dict[str, Any] | None:
         return None
     by_htp = summary.get("by_htp_type_cycles", {})
     by_qnn = summary.get("by_qnn_op_cycles", {})
+    conv_qnn_cycles = sum(
+        int(cycles) for name, cycles in by_qnn.items()
+        if str(name) == "conv1x1" or str(name).startswith("conv1x1_")
+    )
     return {
         "out_dir": str(native_out_dir),
         "kernel_convlayer_s1_cycles": int(by_htp.get("q::ConvLayer_s1.opt", 0)),
         "weights_to_vtcm_cycles": int(by_htp.get("q::ConvLayer.opt.weights_to_vtcm", 0)),
         "bias_to_vtcm_cycles": int(by_htp.get("q::ConvLayer.opt.bias_to_vtcm", 0)),
-        "conv1x1_qnn_op_cycles": int(by_qnn.get("conv1x1", 0)),
+        "conv1x1_qnn_op_cycles": conv_qnn_cycles,
         "totals": summary.get("totals", {}),
     }
 

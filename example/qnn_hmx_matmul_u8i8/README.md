@@ -45,6 +45,12 @@ Drop `SKIP_DEVICE=1` when the target device is available.  The runner writes
 `native_io.json`, native output, and decoded optrace artifacts under its
 `OUT_DIR`; perf decode reads that standard artifact set:
 
+The standard conversion path is `qairt-converter -> qairt-quantizer`.
+Custom-op quantization is encoding-driven: the generated
+`quant_overrides.json` is applied in converter, then quantizer runs without
+calibration input or a custom op package so it does not execute the custom op
+through CPU backend.
+
 ```bash
 python scripts/perf_hmx_u8i8_matmul.py \
   example/qnn_hmx_matmul_u8i8/standard_flow/custom_u8i8/out/u8i8_chain_256

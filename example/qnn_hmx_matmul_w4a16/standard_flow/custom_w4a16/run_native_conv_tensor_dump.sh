@@ -12,6 +12,8 @@ EXAMPLE_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 # shellcheck disable=SC1091
 source "$ROOT_DIR/scripts/env.sh" >/dev/null
 # shellcheck disable=SC1091
+source "$ROOT_DIR/scripts/qairt_quant_flow.sh"
+# shellcheck disable=SC1091
 source "$ROOT_DIR/.venv/bin/activate"
 
 export PYTHONPATH="$QNN_SDK_ROOT/lib/python"
@@ -23,6 +25,7 @@ NATIVE_DIR="${NATIVE_DIR:-$ROOT_DIR/example/qnn_matmul_profile/output_codex_nati
 OUT_DIR="${OUT_DIR:-$SCRIPT_DIR/out/native_conv_tensor_dump_256}"
 SKIP_DEVICE="${SKIP_DEVICE:-0}"
 NUM_INFERENCES="${NUM_INFERENCES:-3}"
+PACK_4BIT_WEIGHTS="${PACK_4BIT_WEIGHTS:-1}"
 NATIVE_DIR="$(realpath -m "$NATIVE_DIR")"
 OUT_DIR="$(realpath -m "$OUT_DIR")"
 
@@ -56,7 +59,7 @@ mkdir -p "$SCRIPT_DIR/converter/build"
     "$SCRIPT_DIR/converter/ConverterOpPackage.cpp"
 echo "  -> $CPL"
 
-echo "=== [3/5] qairt-converter ==="
+echo "=== [3/5] qairt-converter -> qairt-quantizer ==="
 "$QNN_SDK_ROOT/bin/x86_64-linux-clang/qairt-converter" \
     -i "$OUT_DIR/native_conv_tensor_dump.onnx" \
     --target_backend HTP \
@@ -65,12 +68,19 @@ echo "=== [3/5] qairt-converter ==="
     --op_package_config QnnHmxMatMulW4A16Package.xml \
     --converter_op_package_lib "$CPL" \
     --quantization_overrides "$OUT_DIR/quant_overrides.json" \
-    -o "$OUT_DIR/native_conv_tensor_dump.dlc" \
+    -o "$OUT_DIR/native_conv_tensor_dump_encoded.dlc" \
     2>&1 | tee "$OUT_DIR/convert.log" | tail -8
+qairt_quantize_encoded_dlc \
+    "$OUT_DIR/native_conv_tensor_dump_encoded.dlc" \
+    "$OUT_DIR/native_conv_tensor_dump.dlc" \
+    16 4 32 "$PACK_4BIT_WEIGHTS" \
+    "$OUT_DIR/quantize.log"
+tail -8 "$OUT_DIR/quantize.log"
 
 echo "=== [4/5] qnn-context-binary-generator ==="
 rm -rf "$OUT_DIR/ctx"
 mkdir -p "$OUT_DIR/ctx"
+rm -f "$OUT_DIR"/*_schematic.bin "$OUT_DIR"/schematic.bin "$OUT_DIR"/model_schematic.bin
 (
     cd "$OUT_DIR"
     "$QNN_SDK_ROOT/bin/x86_64-linux-clang/qnn-context-binary-generator" \

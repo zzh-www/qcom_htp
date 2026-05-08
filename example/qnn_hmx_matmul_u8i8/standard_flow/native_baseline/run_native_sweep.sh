@@ -5,6 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 source "$ROOT_DIR/scripts/env.sh" >/dev/null
+source "$ROOT_DIR/scripts/qairt_quant_flow.sh"
 source "$ROOT_DIR/.venv/bin/activate"
 export PYTHONPATH=$QNN_SDK_ROOT/lib/python
 export PATH=$ANDROID_NDK_ROOT:$PATH
@@ -32,8 +33,6 @@ for cmd in "${iter_cmds[@]}"; do
   cd "$OUT_DIR"
   cp -f "$SCRIPT_DIR/htp_config.json" "$SCRIPT_DIR/htp_backend_ext.json" .
 
-  cp -f "$SCRIPT_DIR/baseline_s512_w8a8_existing/quant_overrides.json" .
-
   $QNN_SDK_ROOT/bin/x86_64-linux-clang/qairt-converter \
       -i model.onnx \
       --quantization_overrides quant_overrides.json \
@@ -41,7 +40,9 @@ for cmd in "${iter_cmds[@]}"; do
       --desired_input_layout A NONTRIVIAL \
       --source_model_output_layout Y NONTRIVIAL \
       --desired_output_layout Y NONTRIVIAL \
-      -o model.dlc 2>&1 | tee _convert.log | tail -5
+      -o model_encoded.dlc 2>&1 | tee _convert.log | tail -5
+  qairt_quantize_encoded_dlc model_encoded.dlc model.dlc 8 8 32 0 _quantize.log
+  tail -5 _quantize.log
 
   rm -rf ctx
   $QNN_SDK_ROOT/bin/x86_64-linux-clang/qnn-context-binary-generator \

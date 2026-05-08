@@ -1033,6 +1033,7 @@ def generate(family: Family, args: argparse.Namespace) -> None:
                 "expected_native_output_storage": _uint_storage(family.out_bits),
                 "expected_native_output_bytes": int(out_ref.size * np.dtype(_uint_dtype(family.out_bits)).itemsize),
                 "shape_mkn": [m, k, n],
+                "chain": chain,
                 "graph_input_shape": graph_act_shape,
                 "graph_output_shape": graph_out_shape,
                 "op_input_layout": args.op_input_layout,

@@ -26,6 +26,8 @@
 # Environment:
 #   NUM_INFERENCES=20     inferences per qnn-net-run invocation
 #   NATIVE_IO=1           use qnn-net-run native input/output files
+#   FLAT_OUT=0            write one config directly to OUT_DIR instead of
+#                         OUT_DIR/<config>; requires exactly one config
 #   DEVICE_DIR=...        remote working dir (default: adb => /data/local/tmp/qnn_run,
 #                                                     ssh => ~/qnn_run)
 #   SOC_ID=...            override HTP soc_id if auto-pick is wrong for the chip
@@ -35,6 +37,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 # shellcheck disable=SC1091
 source "$ROOT_DIR/scripts/env.sh" >/dev/null
+# shellcheck disable=SC1091
+source "$ROOT_DIR/scripts/qairt_quant_flow.sh"
 
 # ---- defaults ---------------------------------------------------------------
 DEVICE="${DEVICE:-oneplus}"
@@ -43,6 +47,7 @@ ARCH="${ARCH:-v75}"
 OUT_DIR="${OUT_DIR:-$PWD/output}"
 CONFIGS="${CONFIGS:-fp16 w16a16 w8a16 w8a8 w4a16 w4a8 w4a4}"
 SHAPE="${SHAPE:-32,32,32}"   # M,K,N
+FLAT_OUT="${FLAT_OUT:-0}"
 
 # ---- parse flags (flags override env) ---------------------------------------
 while [[ $# -gt 0 ]]; do
@@ -84,6 +89,13 @@ if [ -z "${DEVICE_DIR:-}" ]; then
 fi
 mkdir -p "$OUT_DIR"
 OUT_DIR="$(cd "$OUT_DIR" && pwd)"
+if [ "$FLAT_OUT" = "1" ]; then
+    config_count=$(set -- $CONFIGS; echo "$#")
+    if [ "$config_count" != "1" ]; then
+        echo "FLAT_OUT=1 requires exactly one config; got: $CONFIGS" >&2
+        exit 2
+    fi
+fi
 
 # Per-arch QNN SocModel enum (from tools/qnn-sdk/include/QNN/QnnTypes.h).
 # This is NOT the hardware soc revision id (/sys/devices/soc0/soc_id);
@@ -255,7 +267,7 @@ convert_and_ctx() {
     local name="$1" cfg_dir="$2"
     local onnx="$cfg_dir/matmul.onnx"
     local dlc="$cfg_dir/matmul.dlc"
-    local quant="$cfg_dir/quant_overrides.json"
+    local encoded_dlc="$cfg_dir/matmul_encoded.dlc"
 
     echo "  [$name] convert ONNX -> DLC"
     local -a conv_args=(
@@ -266,20 +278,42 @@ convert_and_ctx() {
         --desired_input_layout A NONTRIVIAL
         --source_model_output_layout Y NONTRIVIAL
         --desired_output_layout Y NONTRIVIAL
-        -o "$dlc"
     )
     if [ "$name" = "fp16" ]; then
         conv_args+=(--float_bitwidth 16)
+        conv_args+=(-o "$dlc")
+        if ! qairt-converter "${conv_args[@]}" > "$cfg_dir/_convert.log" 2>&1; then
+            echo "    [FAIL] qairt-converter (see $cfg_dir/_convert.log)"
+            return 1
+        fi
     else
-        conv_args+=(--quantization_overrides "$quant")
+        local act_bits weight_bits
         case "$name" in
-            w4*) conv_args+=(--pack_4_bit_weights) ;;
+            w16a16) act_bits=16; weight_bits=16 ;;
+            w8a16) act_bits=16; weight_bits=8 ;;
+            w8a8) act_bits=8; weight_bits=8 ;;
+            w4a16) act_bits=16; weight_bits=4 ;;
+            w4a8) act_bits=8; weight_bits=4 ;;
+            w4a4) act_bits=4; weight_bits=4 ;;
+            *) echo "    [FAIL] unknown quantized config $name" >&2; return 1 ;;
         esac
-    fi
-
-    if ! qairt-converter "${conv_args[@]}" > "$cfg_dir/_convert.log" 2>&1; then
-        echo "    [FAIL] qairt-converter (see $cfg_dir/_convert.log)"
-        return 1
+        conv_args+=(--quantization_overrides "$cfg_dir/quant_overrides.json")
+        conv_args+=(-o "$encoded_dlc")
+        if ! qairt-converter "${conv_args[@]}" > "$cfg_dir/_convert.log" 2>&1; then
+            echo "    [FAIL] qairt-converter (see $cfg_dir/_convert.log)"
+            return 1
+        fi
+        local pack_4bit=0
+        case "$name" in
+            w4*) pack_4bit=1 ;;
+        esac
+        if ! qairt_quantize_encoded_dlc \
+                "$encoded_dlc" "$dlc" \
+                "$act_bits" "$weight_bits" 32 "$pack_4bit" \
+                "$cfg_dir/_quantize.log"; then
+            echo "    [FAIL] qairt-quantizer (see $cfg_dir/_quantize.log)"
+            return 1
+        fi
     fi
 
     echo "  [$name] generate context binary + schematic"
@@ -382,7 +416,11 @@ build_device_configs
 ensure_device_libs
 
 for name in $CONFIGS; do
-    cfg_dir="$OUT_DIR/$name"
+    if [ "$FLAT_OUT" = "1" ]; then
+        cfg_dir="$OUT_DIR"
+    else
+        cfg_dir="$OUT_DIR/$name"
+    fi
     mkdir -p "$cfg_dir"
 
     echo "=== $name ==="
@@ -394,10 +432,12 @@ for name in $CONFIGS; do
     postprocess     "$name" "$cfg_dir" || continue
 done
 
-echo
-echo "=== Summary (device=$DEVICE, arch=$ARCH, shape=${SHAPE_M}x${SHAPE_K}x${SHAPE_N}) ==="
-# Primary summary — QHAS with the profiler-reader UNK fixup applied.
-python "$SCRIPT_DIR/parse_qhas.py" "$OUT_DIR" || true
-echo
-echo "--- matmul event breakdown (first-inference chrometrace) ---"
-python "$SCRIPT_DIR/parse_chrometrace.py" "$OUT_DIR" || true
+if [ "$FLAT_OUT" != "1" ]; then
+    echo
+    echo "=== Summary (device=$DEVICE, arch=$ARCH, shape=${SHAPE_M}x${SHAPE_K}x${SHAPE_N}) ==="
+    # Primary summary — QHAS with the profiler-reader UNK fixup applied.
+    python "$SCRIPT_DIR/parse_qhas.py" "$OUT_DIR" || true
+    echo
+    echo "--- matmul event breakdown (first-inference chrometrace) ---"
+    python "$SCRIPT_DIR/parse_chrometrace.py" "$OUT_DIR" || true
+fi

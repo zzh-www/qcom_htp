@@ -11,6 +11,8 @@ EXAMPLE_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 # shellcheck disable=SC1091
 source "$ROOT_DIR/scripts/env.sh" >/dev/null
 # shellcheck disable=SC1091
+source "$ROOT_DIR/scripts/qairt_quant_flow.sh"
+# shellcheck disable=SC1091
 source "$ROOT_DIR/.venv/bin/activate"
 
 export PYTHONPATH="$QNN_SDK_ROOT/lib/python"
@@ -22,7 +24,7 @@ M="${M:-256}"
 K="${K:-256}"
 N="${N:-256}"
 CHAIN="${CHAIN:-8}"
-MODE="${MODE:-chain}"
+MODE="${MODE:-chain_qdq}"
 OUT_DIR="${OUT_DIR:-$SCRIPT_DIR/out/w8a16_${MODE}_${M}}"
 SKIP_DEVICE="${SKIP_DEVICE:-0}"
 NATIVE_OUTPUT="${NATIVE_OUTPUT:-1}"
@@ -47,6 +49,12 @@ python gen_w8a16_chain.py \
     --chain "$CHAIN" --mode "$MODE" \
     --M "$M" --K "$K" --N "$N" \
     --bias-scale "${BIAS_SCALE:-512.0}" \
+    --bias-layout "${BIAS_LAYOUT:-native_a16}" \
+    --a16-quant-contract "${A16_QUANT_CONTRACT:-native}" \
+    --reference-contract "${REFERENCE_CONTRACT:-native}" \
+    --final-output-rank "${FINAL_OUTPUT_RANK:-3d}" \
+    --op-input-layout "${OP_INPUT_LAYOUT:-native}" \
+    --w8-pack-order "${W8_PACK_ORDER:-kmajor}" \
     ${GEN_EXTRA_ARGS:-} \
     -o "$OUT_DIR/w8a16.onnx"
 
@@ -76,18 +84,25 @@ else
     done
 fi
 
-echo "=== [3/4] qairt-converter ==="
+echo "=== [3/4] qairt-converter -> qairt-quantizer ==="
 "$QNN_SDK_ROOT/bin/x86_64-linux-clang/qairt-converter" \
     -i "$OUT_DIR/w8a16.onnx" \
     --op_package_config QnnHmxMatMulW8A16Package.xml \
     --converter_op_package_lib "$CPL" \
     --quantization_overrides "$OUT_DIR/quant_overrides.json" \
     "${LAYOUT_FLAGS[@]}" \
-    -o "$OUT_DIR/w8a16.dlc" \
+    -o "$OUT_DIR/w8a16_encoded.dlc" \
     2>&1 | tee "$OUT_DIR/convert.log" | tail -5
+qairt_quantize_encoded_dlc \
+    "$OUT_DIR/w8a16_encoded.dlc" \
+    "$OUT_DIR/w8a16.dlc" \
+    16 8 32 0 \
+    "$OUT_DIR/quantize.log"
+tail -5 "$OUT_DIR/quantize.log"
 
 echo "=== [4/4] qnn-context-binary-generator ==="
 rm -rf "$OUT_DIR/ctx"
+rm -f ./*_schematic.bin ./schematic.bin ./model_schematic.bin
 "$QNN_SDK_ROOT/bin/x86_64-linux-clang/qnn-context-binary-generator" \
     --backend "$QNN_SDK_ROOT/lib/x86_64-linux-clang/libQnnHtp.so" \
     --dlc_path "$OUT_DIR/w8a16.dlc" \
@@ -99,14 +114,14 @@ rm -rf "$OUT_DIR/ctx"
     --profiling_option optrace \
     --save_backend_op_mapping \
     2>&1 | tee "$OUT_DIR/ctxgen.log" | tail -5
-
-if [ -f "$SCRIPT_DIR/w8a16_schematic.bin" ]; then
-    mv "$SCRIPT_DIR/w8a16_schematic.bin" "$OUT_DIR/ctx/w8a16_schematic.bin"
-fi
+for f in "$SCRIPT_DIR"/*_schematic.bin "$SCRIPT_DIR"/schematic.bin "$SCRIPT_DIR"/model_schematic.bin; do
+    [ -f "$f" ] || continue
+    mv "$f" "$OUT_DIR/ctx/$(basename "$f")"
+done
 
 MAPPING_JSON="$OUT_DIR/ctx/w8a16_ctx_bottom_mapping.json"
 if [ ! -f "$MAPPING_JSON" ]; then
-    MAPPING_JSON="$OUT_DIR/ctx/w8a16_bottom_mapping.json"
+    MAPPING_JSON="$(find "$OUT_DIR/ctx" -maxdepth 1 -name '*bottom_mapping.json' -print -quit)"
 fi
 python3 - "$MAPPING_JSON" <<'PY' || true
 import json

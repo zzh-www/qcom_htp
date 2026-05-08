@@ -78,4 +78,23 @@ with open(os.path.join(OUT, "native_io.json"), "w") as f:
         indent=2,
     )
 
+sym8 = {
+    "bitwidth": 8,
+    "dtype": "int",
+    "is_symmetric": "True",
+    "scale": 0.007874015748031496,
+    "offset": -128,
+    "min": -1.0,
+    "max": 1.0,
+}
+with open(os.path.join(OUT, "quant_overrides.json"), "w") as f:
+    json.dump(
+        {
+            "activation_encodings": {"A": [sym8], "Y": [sym8]},
+            "param_encodings": {"W": [sym8]},
+        },
+        f,
+        indent=2,
+    )
+
 print(f"  size={M} -> {OUT}/model.onnx + inputs")

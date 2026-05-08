@@ -13,6 +13,10 @@ Current status:
 - Device builds currently define `HMX_W16A16_SKIP_KERNEL`, so the callback writes
   the marker path until the real A16/W16 HMX body and packing contract are
   validated.
+- The standard conversion path is encoding-driven
+  `qairt-converter -> qairt-quantizer`: converter applies generated encodings,
+  then quantizer runs without calibration input or a custom op package so CPU
+  backend never executes the custom op during quantization.
 
 Build:
 

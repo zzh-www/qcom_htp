@@ -43,6 +43,7 @@ Flags (each has an env-var fallback in parens):
 
 Other env-only knobs:
 - `NUM_INFERENCES=20`  inferences per `qnn-net-run` invocation
+- `FLAT_OUT=1`         require exactly one config and write directly to `OUT_DIR`
 - `DEVICE_DIR`         remote workdir (defaults: ssh→`~/qnn_run`, adb→`/data/local/tmp/qnn_run`)
 - `SOC_ID`             override HTP soc_id if the arch→id default is wrong for your chip
 
@@ -61,6 +62,23 @@ bash example/qnn_matmul_profile/profile_all.sh --connect adb --device R9WW --arc
 # Only fp16 + w8a8 on oneplus (faster debug)
 bash example/qnn_matmul_profile/profile_all.sh --configs "fp16 w8a8"
 
+# Regenerate the matched u8i8 native ref from the custom artifact
+CHAIN=8 NUM_INFERENCES=3 \
+bash example/qnn_matmul_profile/run_matched_native_a8_ref.sh \
+  --family u8i8 \
+  --custom-dir "$PWD/example/qnn_matmul_profile/output_u8i8_aligned_e2e_256" \
+  --out-dir "$PWD/example/qnn_matmul_profile/output_u8i8_native_ref_e2e_256"
+
+# Regenerate the matched w4a8 native ref from the custom artifact
+CHAIN=8 NUM_INFERENCES=3 \
+bash example/qnn_matmul_profile/run_matched_native_a8_ref.sh \
+  --family w4a8 \
+  --custom-dir "$PWD/example/qnn_matmul_profile/output_w4a8_aligned_e2e_256" \
+  --out-dir "$PWD/example/qnn_matmul_profile/output_w4a8_native_ref_e2e_256"
+
+# Export the native W4A16 quantized DLC only, using QAIRT quantizer and packed int4 weights
+bash example/qnn_matmul_profile/export_native_w4a16_quantized_dlc.sh --shape 256,256,256
+
 # Size sweep across 32 / 128 / 256 / 512 (one run each)
 bash example/qnn_matmul_profile/bench_sweep.sh 32 128 256 512 -- --configs "fp16 w16a16 w8a16 w8a8"
 
@@ -68,20 +86,36 @@ bash example/qnn_matmul_profile/bench_sweep.sh 32 128 256 512 -- --configs "fp16
 bash example/qnn_matmul_profile/bench_repeat.sh 5 -- --shape 512,512,512 --configs "fp16 w8a8"
 ```
 
-Artifacts land under `$OUT_DIR/<config>/` (default `$PWD/output/<config>/`):
+Artifacts land under `$OUT_DIR/<config>/` (default `$PWD/output/<config>/`),
+or directly under `$OUT_DIR/` when `FLAT_OUT=1`:
 - `matmul.onnx` — generated source graph
 - `quant_overrides.json` — activation/weight/output encodings
-- `matmul.dlc` — converted QNN graph
-- `schematic.bin` — topology for chrometrace mapping
-- `profile.log` — raw optrace from device
-- `chrometrace.json` — per-op cycle breakdown
+- `matmul_encoded.dlc` — intermediate DLC with converter-applied encodings for quantized configs
+- `matmul.dlc` — final QNN graph; quantized configs are produced by `qairt-quantizer --enable_float_fallback`
+- `_quantize.log` — quantizer log for quantized configs
+- `ctx/*schematic.bin` — topology for chrometrace mapping
+- `device_out/qnn-profiling-data_0.log` — raw optrace from device
+- `device_out/Y.raw` — native output raw
+- `optrace/chrometrace.json` — per-op cycle breakdown
 
 `$OUT_DIR/summary.json` consolidates everything programmatically.
+
+A8 custom/native comparisons must use `run_matched_native_a8_ref.sh`, not a
+random same-shape `profile_all.sh` run.  The matched runner reads the custom
+artifact's native input, logical weight matrix, effective folded bias, and chain
+length, then emits a QNN-native MatMul+Add chain with the same contract.
+
+The W4A16 DLC-only export lands under
+`example/qnn_matmul_profile/output_native_w4a16_qairt_quantizer_<M>/` by
+default.  It writes `conv_float.dlc`, `conv_w4a16_quantized.dlc`,
+`quantize.log`, and `dlc_info.txt`; the default quantized DLC uses
+`--pack_4_bit_weights`, so `dlc_info.txt` should show `W (data type: sFxp_4)`.
 
 ### Environment overrides
 
 - `CONFIGS=...`     space-separated list (default: fp16 w16a16 w8a16 w8a8 w4a16 w4a8 w4a4)
 - `NUM_INFERENCES=20`   iterations per run (amortizes one-shot noise)
+- `FLAT_OUT=1`      direct one-config output into `OUT_DIR`
 - `OUT_DIR=...`     artifact root (default `/tmp/qnn_profile`)
 - `SSH_HOST=...`    device alias (default `oneplus`)
 - `DEVICE_DIR=...`  remote workdir (default `~/qnn_run`)
@@ -99,6 +133,7 @@ the Android hw revision id):
 | int16 × int16 | `q::ConvLayer.opt.bias_to_vtcm` (native int16, NOT fp16 emul) |
 | int16 × int8  | `q::ConvLayer_s1.opt` |
 | int8  × int8  | `q::ConvLayer.opt.weights_to_vtcm` |
+| int8  × int4  | `q::ConvLayer_s1.opt` with packed W4 DLC |
 | fp16  × int8  | (weight-only quant, not exercised here) |
 
 > **Warning about soc_id**: the Android hw revision id
@@ -110,10 +145,12 @@ the Android hw revision id):
 > misleading conclusions about "no native int16 support". The script's
 > `ARCH_SOCID` table uses the right QNN enum values.
 
-**Unsupported at QNN MatMul-op level:**
-- `w4a16`, `w4a8`: HMX has a 4-bit weight path (`weight.n`) but QNN
-  exposes it only via Conv2D+LPBQ, not MatMul. Returns
-  `QNN_TENSOR_ERROR_INVALID_TENSOR_PARAM` at compose time.
+**Unsupported or special-cased at QNN MatMul-op level:**
+- `w4a16`: current executable native oracle uses the dedicated Conv reference
+  flow in `run_native_w4a16_conv_ref.sh`.  Use `CHAIN=8` or `--chain 8` for
+  the canonical 256^3 custom/native acceptance run; use
+  `export_native_w4a16_quantized_dlc.sh` when the requested artifact is only
+  the packed W4 DLC.
 - `w4a4`: rejected by the quantizer with
   `Activation bitwidth conversion from 8 to 4 is not supported`.
 
@@ -173,8 +210,9 @@ them with `bench_repeat.sh` or `bench_sweep.sh` when you need fresh numbers.
 ## Files
 
 ```
-gen_onnx.py            — per-config ONNX + quant_overrides + input emitter (M/K/N configurable)
-profile_all.sh         — E2E driver (convert → ctxgen → device run → parse)
+gen_onnx.py            — per-config ONNX + input emitter (M/K/N configurable); quant_overrides.json is retained for carrier probes
+export_native_w4a16_quantized_dlc.sh — QAIRT converter+quantizer path for packed W4A16 native DLC export
+profile_all.sh         — E2E driver (convert → quantize for non-fp16 → ctxgen → device run → parse)
 parse_qhas.py          — **recommended**. Read chrometrace_qnn_htp_analysis_summary.json → timeline_cycles, graph_execute_us, HMX util%, HMX/HVX cycles per config. **Fixes the QNN profiler-reader UNK bug** by (a) mapping TID 256→HMX / 512-515→HVX when htp_resources says `type=UNK`, (b) rebuilding I/O counters from chrometrace_htp.json when QHAS reports 0. Prints `fixup=T/I` when recovery kicked in.
 parse_chrometrace.py   — aggregate chrometrace (first-inference matmul_1 event breakdown) — partial metric, use QHAS instead for dtype comparisons
 parse_profile_log.py   — extract matmul_1:OpId cycles across all N iterations — useful for per-dtype scaling analysis only

@@ -1,29 +1,33 @@
 #!/usr/bin/env bash
 #
-# Generate, convert, export context, run, and decode the QNN-native W4A16
-# Conv1x1 reference with native u16 input/output files.
+# Generate, convert, quantize metadata, export context, run, and decode the
+# QNN-native W4A16 Conv1x1 reference with native u16 input/output files.
 #
 # Env knobs:
-#   PACK_4BIT_DLC=1  generate an inspect-only DLC whose W tensor is stored as
-#                    sFxp_4.  Current HTP ctxgen rejects that Conv tensor type
-#                    on this path, so keep the default PACK_4BIT_DLC=0 for the
-#                    executable native oracle.
-#   CONVERT_ONLY=1   stop after qairt-converter, useful with PACK_4BIT_DLC=1.
+#   PACK_4BIT_DLC=1  pass --pack_4_bit_weights to qairt-quantizer. The
+#                    executable encoded oracle keeps QNN's sFxp_8 carrier with
+#                    W4 encodings because packed Conv W tensors are rejected by
+#                    HTP ctxgen on this path.
+#   CONVERT_ONLY=1   stop after qairt-quantizer metadata processing.
+#   CHAIN=8          emit a Conv chain with the same W reused at each step.
 
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 # shellcheck disable=SC1091
 source "$ROOT_DIR/scripts/env.sh" >/dev/null
+# shellcheck disable=SC1091
+source "$ROOT_DIR/scripts/qairt_quant_flow.sh"
 
 DEVICE="${DEVICE:-oneplus}"
 CONNECT="${CONNECT:-ssh}"
 ARCH="${ARCH:-v75}"
 SHAPE="${SHAPE:-256,256,256}"
+CHAIN="${CHAIN:-1}"
 OUT_DIR="${OUT_DIR:-}"
 NUM_INFERENCES="${NUM_INFERENCES:-3}"
 SKIP_DEVICE="${SKIP_DEVICE:-0}"
-PACK_4BIT_DLC="${PACK_4BIT_DLC:-0}"
+PACK_4BIT_DLC="${PACK_4BIT_DLC:-1}"
 CONVERT_ONLY="${CONVERT_ONLY:-0}"
 
 while [[ $# -gt 0 ]]; do
@@ -32,6 +36,7 @@ while [[ $# -gt 0 ]]; do
         --connect|-c) CONNECT="$2"; shift 2 ;;
         --arch|-a) ARCH="$2"; shift 2 ;;
         --shape) SHAPE="$2"; shift 2 ;;
+        --chain) CHAIN="$2"; shift 2 ;;
         --out-dir) OUT_DIR="$2"; shift 2 ;;
         --skip-device) SKIP_DEVICE=1; shift ;;
         --help|-h)
@@ -56,6 +61,10 @@ case "$CONVERT_ONLY" in
     0|1) ;;
     *) echo "invalid CONVERT_ONLY=$CONVERT_ONLY (need 0|1)" >&2; exit 2 ;;
 esac
+if ! [[ "$CHAIN" =~ ^[0-9]+$ ]] || [ "$CHAIN" -lt 1 ]; then
+    echo "invalid CHAIN=$CHAIN (need positive integer)" >&2
+    exit 2
+fi
 
 IFS=',' read -r SHAPE_M SHAPE_K SHAPE_N <<<"$SHAPE"
 if [ -z "${SHAPE_M:-}" ] || [ -z "${SHAPE_K:-}" ] || [ -z "${SHAPE_N:-}" ]; then
@@ -200,36 +209,35 @@ EOF
     remote_push "$QNN/lib/aarch64-android/libQnnHtpNetRunExtensions.so" "libQnnHtpNetRunExtensions.so"
 }
 
-echo "=== native W4A16 Conv ref: device=$DEVICE via $CONNECT arch=$ARCH shape=${SHAPE_M}x${SHAPE_K}x${SHAPE_N} ==="
+echo "=== native W4A16 Conv ref: device=$DEVICE via $CONNECT arch=$ARCH shape=${SHAPE_M}x${SHAPE_K}x${SHAPE_N} chain=$CHAIN ==="
 
 python "$SCRIPT_DIR/gen_native_w4a16_conv.py" "$OUT_DIR" \
-    --m "$SHAPE_M" --k "$SHAPE_K" --n "$SHAPE_N"
+    --m "$SHAPE_M" --k "$SHAPE_K" --n "$SHAPE_N" \
+    --chain "$CHAIN"
 build_configs
 
-CONVERTER_EXTRA_ARGS=()
-if [ "$PACK_4BIT_DLC" = "1" ]; then
-    CONVERTER_EXTRA_ARGS+=(--pack_4_bit_weights)
-    if [ "$CONVERT_ONLY" != "1" ]; then
-        echo "  [warn] PACK_4BIT_DLC=1 may be rejected by HTP ctxgen on this Conv path; use CONVERT_ONLY=1 for DLC inspection only" >&2
-    fi
-fi
-
-echo "=== qairt-converter ==="
+echo "=== qairt-converter: ONNX + encodings -> encoded DLC ==="
 qairt-converter \
     -i "$OUT_DIR/conv.onnx" \
     --target_backend HTP \
     --enable_framework_trace \
     --quantization_overrides "$OUT_DIR/quant_overrides.json" \
-    "${CONVERTER_EXTRA_ARGS[@]}" \
     --source_model_input_layout A NONTRIVIAL \
     --desired_input_layout A NONTRIVIAL \
     --source_model_output_layout Y NONTRIVIAL \
     --desired_output_layout Y NONTRIVIAL \
-    -o "$OUT_DIR/conv.dlc" \
+    -o "$OUT_DIR/conv_encoded.dlc" \
     > "$OUT_DIR/convert.log" 2>&1
 
+echo "=== qairt-quantizer: encoded DLC -> executable W4A16 DLC ==="
+qairt_quantize_encoded_dlc \
+    "$OUT_DIR/conv_encoded.dlc" \
+    "$OUT_DIR/conv.dlc" \
+    16 4 32 "$PACK_4BIT_DLC" \
+    "$OUT_DIR/quantize.log"
+
 if [ "$CONVERT_ONLY" = "1" ]; then
-    echo "=== done: converter artifacts in $OUT_DIR ==="
+    echo "=== done: converter/quantizer artifacts in $OUT_DIR ==="
     exit 0
 fi
 

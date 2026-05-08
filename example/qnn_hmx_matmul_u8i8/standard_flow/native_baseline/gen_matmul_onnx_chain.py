@@ -217,4 +217,7 @@ with open(os.path.join(OUT, "quant_overrides.json"), "w") as f:
 
 print(f"  size={M} chain={chain} -> {OUT}/model.onnx + inputs")
 print(f"  graph: {chain} × MatMul (shared W), input [1,{M},{K}] → output [1,{M},{N}]")
-print(f"  quant_overrides.json: int8 sym for A, Y, Y_0..Y_{chain-2} ({chain+1} tensors total)")
+if chain > 1:
+    print(f"  quant_overrides.json: int8 sym for A, Y, Y_0..Y_{chain-2} ({chain+1} tensors total)")
+else:
+    print("  quant_overrides.json: int8 sym for A and Y (2 tensors total)")

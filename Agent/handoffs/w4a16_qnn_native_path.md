@@ -3,25 +3,34 @@
 This note describes the native QNN implementation path for the canonical
 256^3 W4A16 artifact:
 
-`example/qnn_matmul_profile/output_native_w4a16_conv_ref_256/`
+`example/qnn_matmul_profile/output_w4a16_native_ref_e2e_256/`
 
 Use this as the first reference before changing the custom
 `HmxU16I4ToU16MatMul` path.  The custom op should be aligned to this native
-path, not to an analytic formula.
+path, not to an analytic formula.  The current custom evidence is chain8
+bit-exact, and the shape/performance acceptance gate is closed for the
+canonical 256^3 case: all eight custom and native HTP kernels enter with
+activation `UFixed16 [1,8,32,256]`.
 
 The older
 `example/qnn_matmul_profile/output_codex_native_w4a16_same_custom_256/`
 artifact is historical only: it used float runtime input/output and did not
 record the required layout-preservation converter flags.
+After the 2026-05-09 cleanup, later `output_codex_*` and
+`output_w4a16_import_*` probe names in this note are historical labels rather
+than live directories.  The live native/custom artifacts are
+`output_w4a16_native_ref_e2e_256/` and `output_w4a16_aligned_e2e_256/`.
 
 ## Current Direction
 
 Treat W4A16 as a native-implementation analysis task before treating it as a
-custom-op tuning task.  The current output mismatch is not explained by the
-math reference, and the embedded deep HMX body is already byte-identical to the
-native skel slice.  The unresolved part is the QNN native route into that body:
-converter/ctxgen carrier lowering, runtime tensor-object metadata, descriptor
-builder state, mask-helper arguments, and wrapper descriptor-table looping.
+custom-op tuning task.  The old output mismatch was not explained by the math
+reference, and the embedded deep HMX body is already byte-identical to the
+native skel slice.  The current canonical 256^3 route is decoded enough for
+acceptance: converter/ctxgen carrier lowering, compact source tables,
+K32-block-major/N32-inner W4 sidecar order, kernel-entry shape, and chain-form
+performance are all recorded in the standard artifacts.  Keep using native
+evidence first for broader shape, LPBQ/per-group, or carrier-signature work.
 
 Until those native fields are decoded or dumped, do not spend more cycles on
 single-field descriptor, mask, control-word, or row4-order sweeps.  A future
@@ -337,29 +346,29 @@ native context contract.
 
 The standard native optrace directory is:
 
-`example/qnn_matmul_profile/output_native_w4a16_conv_ref_256/optrace/`
+`example/qnn_matmul_profile/output_w4a16_native_ref_e2e_256/optrace/`
 
 For the captured run:
 
 | Scope | Cycles / time |
 |---|---:|
-| HTP timeline span | `137234` cycles |
-| Sum of pid0 events | `336551` cycles |
+| HTP timeline span | `253245` cycles |
+| Sum of pid0 events | `498391` cycles |
 
 The `conv1x1` group in `optrace/summary.json` breaks down as:
 
 | Event | Cycles | Packets | Notes |
 |---|---:|---:|---|
-| `q::ConvLayer.opt.weights_to_vtcm` | `2655` | n/a | Static W4 sidecar movement. |
-| `q::ConvLayer.opt.bias_to_vtcm` | `743` | n/a | Static bias/control movement. |
-| `q::ForceFormat_Crouton` | `7233` | n/a | Conv format work. |
-| `q::ConvLayer_s1.opt` | `7502` | n/a | Closest native HMX kernel-only comparator. |
-| native `conv1x1` QNN-op aggregate | `34858` | n/a | Full native Conv group in qnn-op grouping. |
+| `q::ConvLayer.opt.weights_to_vtcm` | `3385` | n/a | Static W4 sidecar movement. |
+| `q::ConvLayer.opt.bias_to_vtcm` | `1117` | n/a | Static bias/control movement. |
+| `q::ForceFormat_Crouton` | `8442` | n/a | Conv format work. |
+| `q::ConvLayer_s1.opt` | `29815` | n/a | Aggregate native HMX kernel-only comparator across chain8. |
+| native `conv1x1_*` QNN-op aggregate | `70408` | n/a | Full native Conv group in qnn-op grouping. |
 
 So there are three different performance scopes:
 
-1. Kernel-only native comparator: `q::ConvLayer_s1.opt = 7502` cycles.
-2. Native Conv group comparator: all `conv1x1` HTP events, about `34858` cycles
+1. Kernel-only native comparator: `q::ConvLayer_s1.opt = 29815` cycles.
+2. Native Conv group comparator: all `conv1x1_*` HTP events, about `70408` cycles
    in the qnn-profile grouped stat.
 3. End-to-end execute comparator: qnn-net-run execute stats, including input
    conversion, transposes, output dequant/export, RPC, and accelerator wait.
@@ -383,15 +392,13 @@ The flow is intentionally separate from the custom MatMul runner:
 1. `gen_native_conv_tensor_dump.py` clones the canonical native `conv.onnx`,
    keeps the original Conv output `Y`, appends a side-branch
    `hmx::HmxW4A16TensorDump(Y -> D)`, and copies native input/quant files.
-2. `qairt-converter` uses the same native W4 carrier contract as the canonical
-   artifact: no `--pack_4_bit_weights`, and `--preserve_io_datatype A Y` so
-   the original input/output stay float while dump output `D` is exported as
-   native UFixed16.
-   In this executable carrier contract, DLC inspection reports Conv `W` as
-   `sFxp_8` with `W encoding : bitwidth 4`; ctxgen then prepares the native
-   compact `SFixed8 [1,1,K/2,N]` sidecar consumed by `q::ConvLayer_s1.opt`.
-   `--pack_4_bit_weights` is useful only for inspect-only DLC probes on the
-   current SDK because ctxgen rejects the resulting `sFxp_4` Conv tensor type.
+2. The conversion stage now follows the encoding-driven QAIRT two-stage
+   policy for custom-op diagnostics: `qairt-converter --quantization_overrides`
+   writes the cloned native encodings, then `qairt-quantizer
+   --enable_float_fallback` saves the final DLC without calibration input or a
+   custom op package.  `--preserve_io_datatype A Y` remains on the converter
+   step for this diagnostic graph.  DLC inspection should report Conv `W` as
+   `sFxp_4`; unpacked `sFxp_8` carrier artifacts are legacy probes only.
 3. `qnn-context-binary-generator` keeps the native W4 Conv lowering and adds
    one custom QHPI dump op.
 4. Device run pulls `device_out/D.raw`, decodes standard optrace into

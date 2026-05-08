@@ -15,22 +15,23 @@ Current status:
 - Native-contract diagnostics now use `--a16-quant-contract native`,
   `MODE=chain_qdq`, `--w8-pack-order kmajor`, and `--bias-layout native_a16`.
   Direct `MODE=chain` `UINT16` input ignores the activation quant override;
-  `chain_qdq` preserves the native `ForceFormat_Crouton` metadata.  A single
-  native-rank custom output executes when the internal `[1,1,M,N]` tensor is
-  reshaped to a final 3D graph output with `--final-output-rank 3d`.
-- The 256^3 native-contract single-op path is aligned with native QNN when the
-  real kernel gate is opened: custom output is byte-identical to
-  `output_codex_native_w8a16_custom_full_256/device_out/out.raw`, and the
-  analytic native-contract reference is only a diagnostic sanity check.
-  The fast descriptor uses mask `arg1=0x70b`, `n_tiles_pow2=row4_groups*4`
-  (`256` for 256^3), and `m_total_minus_step=8`.
-- Optrace for the default real-kernel 256^3 path reports
-  `HmxU16I8ToU16MatMul dur=29842, pkts=4938, cpp=6.04`; the comparable native
-  split `ConvLayer_s1.opt` kernels total about `30839` cycles and `5086`
-  packets.
+  `chain_qdq` preserves the native `ForceFormat_Crouton` metadata.
+- The current canonical 256^3 chain8 artifact restores the native-rank custom
+  op surface: custom activation/output are `UFixed16 [1,1,256,256]`, output is
+  byte-identical to `output_w8a16_native_ref_e2e_256/device_out/Y.raw`, and the
+  graph keeps `CHAIN=8`.
+- Performance is not aligned.  Optrace reports custom main `184539` cycles and
+  timeline `285461`; matched native reports `q::ConvLayer_s1.opt=30182`, MatMul
+  aggregate `35747`, and timeline `79095`.  Native still enters HTP as
+  `UFixed16 [1,8,32,256]`; the strict tiled shape probe matched that shape but
+  regressed to `507368` custom main cycles, so it is diagnostic only.
 - Native split remains a graph-execution blocker independent of the callback:
   split-concat and split-separate graphs still fail even with
   `HMX_W8A16_EARLY_RETURN`.
+- The standard conversion path is encoding-driven
+  `qairt-converter -> qairt-quantizer`: converter applies generated encodings,
+  then quantizer runs without calibration input or a custom op package so CPU
+  backend never executes the custom op during quantization.
 
 Build:
 
@@ -54,9 +55,8 @@ EXTRA_DEFS="-UHMX_W8A16_SKIP_KERNEL -DHMX_W8A16_ALLOW_UNVALIDATED_KERNEL" \
 bash ../../build.sh
 EXTRA_DEFS="-UHMX_W8A16_SKIP_KERNEL -DHMX_W8A16_ALLOW_UNVALIDATED_KERNEL" \
 bash ../../build_x86.sh
-VERIFY_NATIVE_RAW="$PWD/../../../qnn_matmul_profile/output_codex_native_w8a16_custom_full_256/device_out/out.raw" \
-M=256 K=256 N=256 CHAIN=1 MODE=chain_qdq \
-GEN_EXTRA_ARGS="--op-input-layout native --final-output-rank 3d --a16-quant-contract native --w8-pack-order kmajor --bias-layout native_a16 --reference-contract native" \
+VERIFY_NATIVE_RAW="$PWD/../../../qnn_matmul_profile/output_w8a16_native_ref_e2e_256/device_out/Y.raw" \
+M=256 K=256 N=256 CHAIN=8 MODE=chain_qdq OP_INPUT_LAYOUT=native \
 bash run_w8a16_chain.sh
 ```
 
