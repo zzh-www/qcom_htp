@@ -1,11 +1,11 @@
 # w8a16 Native Alignment Handoff
 
 Current status: `example/qnn_hmx_matmul_w8a16`
-(`HmxU16I8ToU16MatMul`, i8 weight x u16 activation -> u16 output) is
-restored to the native-rank `[1,1,256,256]` custom-op surface while preserving
-the canonical 256^3 chain8 graph.  It is bit-exact against the matched QNN
-native oracle, but kernel-entry shape and performance are not aligned: native
-enters HTP as `UFixed16 [1,8,32,256]`.
+(`HmxU16I8ToU16MatMul`, i8 weight x u16 activation -> u16 output) is aligned
+for the canonical 256^3 chain8 graph.  Custom and native both enter the HTP
+kernel with activation/output `UFixed16 [1,8,32,256]`, the custom output is
+byte-identical to the matched QNN native oracle, and kernel/timeline
+performance is native-class.
 
 Final acceptance rule:
 
@@ -23,9 +23,9 @@ Current verified result:
 | Check | Custom | Native | Status |
 |---|---:|---:|---|
 | output vs native artifact | `65536/65536`, maxdiff `0` | oracle | aligned |
-| kernel-entry activation/output shape | `UFixed16 [1,1,256,256]` on 8 nodes | `UFixed16 [1,8,32,256]` on 8 nodes | open by current request |
-| HMX kernel cycles | `184539` | `30182` | not aligned |
-| HTP graph timeline span | `285461` | `79095` | not aligned |
+| kernel-entry activation/output shape | `UFixed16 [1,8,32,256]` on 8 nodes | `UFixed16 [1,8,32,256]` on 8 nodes | aligned |
+| HMX kernel cycles | `30871` | `30182` | aligned |
+| HTP graph timeline span | `80217` | `79095` | aligned |
 
 Durable artifacts:
 
@@ -42,39 +42,33 @@ The solution path that mattered:
    verifier now re-quantizes using `quant_overrides.json`. When
    `VERIFY_NATIVE_RAW` is set, native byte equality is the primary pass/fail
    check and analytic output is only printed as a diagnostic.
-2. Current final artifact uses the executable native-rank graph:
-   `MODE=chain_qdq --op-input-layout native --final-output-rank 3d
+2. Current final artifact uses the executable native-tiled graph:
+   `MODE=chain_qdq --op-input-layout tiled --final-output-rank 3d
    --a16-quant-contract native --w8-pack-order kmajor --bias-layout native_a16
    --reference-contract native`.
 3. Keep the validated native data contracts: full-W8 K-major 32x32 tile order,
    native A16 output encoding, native-shaped 512B bias records, and the
    three-word control table `[1, 1025, 524]`.
-4. The actual semantic fix was descriptor/mask alignment, not another data
-   packing tweak:
-   `HMX_W8A16_MASK_ARG1=0x70b`, `n_tiles_pow2=row4_groups*4`,
-   `m_total_minus_step=8`.
-5. The temporary `m_total_minus_step=456` workaround proved the row coverage
-   hypothesis but was slow (`185183` cycles, about `35178` packets). Replacing
-   it with `n_tiles_pow2=row4_groups*4` restored correctness for the
-   native-rank `[1,1,256,256]` custom path.  Under the strict
-   `[1,8,32,256]` shape gate, performance regressed to `507368` cycles; the
-   restored native-rank chain8 artifact is faster at `184539` cycles but still
-   far from native `30182`.
-6. Preserve guarded builds. Default build scripts still define
-   `HMX_W8A16_SKIP_KERNEL`; real-kernel validation must explicitly pass
-   `EXTRA_DEFS="-UHMX_W8A16_SKIP_KERNEL -DHMX_W8A16_ALLOW_UNVALIDATED_KERNEL"`.
+4. The final performance fix was descriptor/table-contract alignment, not
+   another data packing tweak.  Native-class cycles require physical Crouton
+   table entries and `n_tiles_pow2=M_t*4`.  The obsolete row-expanded probes
+   were deleted after proving only that over-expanded tables can be correct but
+   non-native in packet count.
+5. Treat old native-rank, wrapper-bundle, descriptor-dump, and table-window
+   probe artifacts as superseded.  Their retained conclusion is only that the
+   aligned tiled physical-table contract is the native-class default.
+6. Default build scripts now compile the real HMX body.  `HMX_W8A16_SKIP_KERNEL`
+   remains available only as an explicit diagnostic override.
 
 Reproduction command:
 
 ```bash
-EXTRA_DEFS="-UHMX_W8A16_SKIP_KERNEL -DHMX_W8A16_ALLOW_UNVALIDATED_KERNEL" \
 bash example/qnn_hmx_matmul_w8a16/build.sh
-EXTRA_DEFS="-UHMX_W8A16_SKIP_KERNEL -DHMX_W8A16_ALLOW_UNVALIDATED_KERNEL" \
 bash example/qnn_hmx_matmul_w8a16/build_x86.sh
 
 VERIFY_NATIVE_RAW="$PWD/example/qnn_matmul_profile/output_w8a16_native_ref_e2e_256/device_out/Y.raw" \
 OUT_DIR="$PWD/example/qnn_matmul_profile/output_w8a16_aligned_e2e_256" \
-M=256 K=256 N=256 CHAIN=8 MODE=chain_qdq OP_INPUT_LAYOUT=native \
+M=256 K=256 N=256 CHAIN=8 MODE=chain_qdq \
 bash example/qnn_hmx_matmul_w8a16/standard_flow/custom_w8a16/run_w8a16_chain.sh
 ```
 
@@ -89,11 +83,10 @@ Next-round guidance:
 - Do not repeat the w8a16 dead ends unless new evidence appears: signed W8
   carrier flipping, bias-only sweeps, low-pattern native artifacts, direct raw
   output, `Layout_Any` / `Layout_Custom`, old `0x700` mask sweeps, or
-  high-`m_total` production candidates.
-- Current follow-up: recover native-class performance for the restored
-  `[1,1,256,256]` chain8 custom path, then decide whether to re-close the
-  `[1,8,32,256]` kernel-entry shape gate.  The strict tiled shape path is
-  bit-exact but pays much more table/descriptor work in the custom main event.
-- Native split-N public QHPI output remains a separate graph-contract issue:
-  one `[1,1,256,256]` custom output plus final-3D export works; two
-  `[1,1,256,128]` custom outputs still fail before useful callback semantics.
+  high-`m_total` production candidates.  The old local probe artifacts were
+  removed; regenerate them only with a new hypothesis and a fresh artifact name.
+- Current follow-up: extend the aligned tiled contract beyond the canonical
+  256^3 chain8 case.  Split-N public QHPI output and broader shape coverage are
+  still separate graph-contract issues.
+- Native split-N public QHPI output remains a separate graph-contract issue and
+  is outside the cleaned canonical artifact set.

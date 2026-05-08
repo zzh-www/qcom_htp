@@ -16,7 +16,7 @@ python3 scripts/check_qnn_artifact_standard.py <dir> \
 |---|---|---|---:|---:|---|
 | u8i8 | `output_u8i8_aligned_e2e_256/` | matched QNN native raw, same A/W/effective bias/chain | 65536 / 65536 | 0 | native bit-exact |
 | w4a8 | `output_w4a8_aligned_e2e_256/` | matched QNN native raw, same A/W/effective bias/chain | 65536 / 65536 | 0 | native bit-exact |
-| w8a16 | `output_w8a16_aligned_e2e_256/` | matched QNN native raw, same A/W/chain | 65536 / 65536 | 0 | native bit-exact; custom restored to native-rank `[1,1,256,256]`; performance not aligned |
+| w8a16 | `output_w8a16_aligned_e2e_256/` | matched QNN native raw, same A/W/chain | 65536 / 65536 | 0 | native bit-exact; custom/native activation and output are `UFixed16 [1,8,32,256]`; performance aligned |
 | w4a16 | `output_w4a16_aligned_e2e_256/` | chain8 QNN native Conv raw, transposed to custom public layout | 65536 / 65536 | 0 | native bit-exact |
 | w16a16 | not aligned yet | `output_w16a16_native_ref_e2e_256/` only | n/a | n/a | native-only evidence |
 
@@ -40,7 +40,7 @@ the W4A16 native Conv kernel aggregate, which is recorded in
 |---|---:|---:|---:|---:|---:|---|
 | u8i8 | 10891 | 36342 | 12435 | 36922 | 53946 | matched A/W/bias chain; custom faster on timeline |
 | w4a8 | 10025 | 38644 | 11546 | 29765 | 48831 | native-compact table gate closed; custom faster on timeline |
-| w8a16 | 184539 | 285461 | 30182 | 35747 | 79095 | chain8 restored to `[1,1,256,256]` custom op; shape gate open; performance not aligned |
+| w8a16 | 30871 | 80217 | 30182 | 35747 | 79095 | chain8 native-tiled gate closed; custom/native kernel-entry activation and output match |
 | w4a16 | 31419 | 77854 | 29815 | 70408 | 253245 | chain8 shape gate closed; custom kernel is native-class and timeline is faster |
 | w16a16 | n/a | n/a | 75433 | 82644 | 124593 | native-only evidence |
 
@@ -51,14 +51,12 @@ the W4A16 native Conv kernel aggregate, which is recorded in
   byte-identical to matched native and is native-class on optrace: custom main
   cycles are 10025 versus matched native `q::ConvLayer_s1.opt` 11546, and
   custom timeline is 38644 versus matched native 48831.
-- `w8a16` has been restored to the native-rank custom-op surface requested for
-  the current artifact: chain8, custom activation/output
-  `UFixed16 [1,1,256,256]`, and matched-native exact output.  Native still
-  enters `q::ConvLayer_s1.opt` as `UFixed16 [1,8,32,256]`, so the kernel-entry
-  shape gate is open.  Performance is also not aligned: custom main cycles are
-  184539 versus native `q::ConvLayer_s1.opt` aggregate 30182.  The strict
-  tiled `[1,8,32,256]` probe proved shape alignment but regressed to 507368
-  custom main cycles, so keep it as a diagnostic, not the current artifact.
+- `w8a16` now uses the native tiled custom-op surface for the current artifact:
+  chain8, custom/native activation and output `UFixed16 [1,8,32,256]`, and
+  matched-native exact output.  Performance is aligned: custom main cycles are
+  30871 versus native `q::ConvLayer_s1.opt` 30182, with custom timeline 80217
+  versus native 79095.  The older native-rank and strict-tiled probe artifacts
+  were removed after their conclusions were folded into the handoff.
 - `w4a16` now uses chain8 on both sides.  Bottom mapping shows all eight custom
   `HmxU16I4ToU16MatMul` nodes and all eight native `q::ConvLayer_s1.opt` nodes
   enter with activation `UFixed16 [1,8,32,256]`.  Remaining boundary differences

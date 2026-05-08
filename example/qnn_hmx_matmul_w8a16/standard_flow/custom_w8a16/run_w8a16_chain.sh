@@ -53,7 +53,7 @@ python gen_w8a16_chain.py \
     --a16-quant-contract "${A16_QUANT_CONTRACT:-native}" \
     --reference-contract "${REFERENCE_CONTRACT:-native}" \
     --final-output-rank "${FINAL_OUTPUT_RANK:-3d}" \
-    --op-input-layout "${OP_INPUT_LAYOUT:-native}" \
+    --op-input-layout "${OP_INPUT_LAYOUT:-tiled}" \
     --w8-pack-order "${W8_PACK_ORDER:-kmajor}" \
     ${GEN_EXTRA_ARGS:-} \
     -o "$OUT_DIR/w8a16.onnx"

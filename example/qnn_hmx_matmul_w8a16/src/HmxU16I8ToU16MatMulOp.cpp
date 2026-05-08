@@ -82,11 +82,6 @@
 #define HMX_W8A16_BIAS_PTR_OFFSET 0
 #endif
 
-#if defined(__hexagon__) && !defined(HMX_W8A16_SKIP_KERNEL) && \
-    !defined(HMX_W8A16_ALLOW_UNVALIDATED_KERNEL)
-#error "w8a16 HMX body is not validated yet; keep HMX_W8A16_SKIP_KERNEL until the family-specific body is wired."
-#endif
-
 /*
  * These descriptor structs are the native skel ABI, not a new C++ API.
  * Their field order and offsets were chosen to match what the replicated
@@ -232,8 +227,8 @@ static inline uint32_t hmx_w8a16_desc_m_tiles(uint32_t m_t, uint32_t row4_groups
     (void)m_t;
     return row4_groups;
 #else
-    (void)m_t;
-    return row4_groups * 4;
+    (void)row4_groups;
+    return m_t * 4;
 #endif
 }
 
@@ -731,20 +726,20 @@ static uint32_t hmx_w8a16_precompute(
         int32_t *__restrict o_dst = pc->out_table_copy + row4 * out_table_stride;
         for (uint32_t kt = 0; kt < K_t; ++kt) {
             a_dst[kt] =
-#if defined(HMX_W8A16_ACT_PHYSICAL_ONLY)
-                hmx_w8a16_crouton_row4_physical_ptr(act_src, row4, kt, K_t);
-#else
+#if defined(HMX_W8A16_EXPAND_LOGICAL_ROW4_TABLES)
                 hmx_w8a16_crouton_logical_or_compact_ptr(
                     act_src, blocks, row4_groups, row4, kt, K_t);
+#else
+                hmx_w8a16_crouton_row4_physical_ptr(act_src, row4, kt, K_t);
 #endif
         }
         for (uint32_t nt = 0; nt < N_t; ++nt) {
             o_dst[nt] =
-#if defined(HMX_W8A16_OUT_PHYSICAL_ONLY)
-                hmx_w8a16_crouton_row4_physical_ptr(out_src, row4, nt, N_t);
-#else
+#if defined(HMX_W8A16_EXPAND_LOGICAL_ROW4_TABLES)
                 hmx_w8a16_crouton_logical_or_compact_ptr(
                     out_src, out_block_entries, row4_groups, row4, nt, N_t);
+#else
+                hmx_w8a16_crouton_row4_physical_ptr(out_src, row4, nt, N_t);
 #endif
         }
     }
@@ -1114,9 +1109,11 @@ static uint32_t hmx_w8a16_to_u16_matmul_kernel(
     }
 
     /*
-     * QNN's Crouton_16 block table stores one row4 slice for all M tiles in
-     * each physical block.  The native V73DEEP descriptor wants one logical
-     * pointer-table row per row4 tile, so 256^3 becomes:
+     * QNN's Crouton_16 block table stores row4 phases in physical blocks.
+     * The native W8A16 contract keeps physical row4 pointers and lets the HMX
+     * body advance through M tiles with n_tiles_pow2=M_t*4.  We still materialize
+     * the repeated table rows once so the hot path sees a dense descriptor table.
+     * For 256^3:
      *
      *   M_t=8 -> row4_groups=64
      *   act entries = row4_groups * K_t = 64 * 8 = 512
@@ -1163,9 +1160,9 @@ static uint32_t hmx_w8a16_to_u16_matmul_kernel(
      *   | ptr0 | ptr1 | ptr2 | ptr3 | ... |
      *   +------+------+------+------+-----+
      *
-     * Same physical block pointers, expanded to logical row4 addresses and
-     * copied to wrapper-owned storage. On Hexagon these are 32-bit pointers,
-     * hence the int32_t tables. For the canonical 256^3 case:
+     * Same physical block pointers, copied to wrapper-owned storage. On Hexagon
+     * these are 32-bit pointers, hence the int32_t tables. For the canonical
+     * 256^3 case:
      *
      *   S=256, M_t=N_t=K_t=8
      *   row4_groups=64
@@ -1173,19 +1170,20 @@ static uint32_t hmx_w8a16_to_u16_matmul_kernel(
      *   diagnostic stride overrides may insert gaps between row4 rows
      */
     /*
-     * Crouton16 stores each row4 slice for all M tiles in one physical block.
-     * Build the native table as logical row4 pointers by adding the per-M-tile
-     * offset inside that block.
+     * Crouton16 stores row4 phases in physical blocks. The aligned W8A16
+     * contract passes those physical pointers; the older
+     * HMX_W8A16_EXPAND_LOGICAL_ROW4_TABLES diagnostic adds per-M-tile offsets
+     * and requires a much larger descriptor loop count.
      */
     for (uint32_t row4 = 0; row4 < row4_groups; ++row4) {
         int32_t *__restrict a_dst = act_tbl_all + row4 * act_table_stride;
         int32_t *__restrict o_dst = out_tbl_all + row4 * out_table_stride;
         for (uint32_t kt = 0; kt < K_t; ++kt) {
-#if defined(HMX_W8A16_ACT_PHYSICAL_ONLY)
-            a_dst[kt] = hmx_w8a16_crouton_row4_physical_ptr(act_src, row4, kt, K_t);
-#else
+#if defined(HMX_W8A16_EXPAND_LOGICAL_ROW4_TABLES)
             a_dst[kt] = hmx_w8a16_crouton_logical_or_compact_ptr(
                 act_src, blocks, row4_groups, row4, kt, K_t);
+#else
+            a_dst[kt] = hmx_w8a16_crouton_row4_physical_ptr(act_src, row4, kt, K_t);
 #endif
         }
         for (uint32_t nt = 0; nt < N_t; ++nt) {
@@ -1196,11 +1194,11 @@ static uint32_t hmx_w8a16_to_u16_matmul_kernel(
                 o_dst[nt] = static_cast<int32_t>(ptr);
                 continue;
             }
-#if defined(HMX_W8A16_OUT_PHYSICAL_ONLY)
-            o_dst[nt] = hmx_w8a16_crouton_row4_physical_ptr(out_src, row4, nt, N_t);
-#else
+#if defined(HMX_W8A16_EXPAND_LOGICAL_ROW4_TABLES)
             o_dst[nt] = hmx_w8a16_crouton_logical_or_compact_ptr(
                 out_src, out_block_entries, row4_groups, row4, nt, N_t);
+#else
+            o_dst[nt] = hmx_w8a16_crouton_row4_physical_ptr(out_src, row4, nt, N_t);
 #endif
         }
     }
@@ -1228,7 +1226,7 @@ static uint32_t hmx_w8a16_to_u16_matmul_kernel(
      *     +0x00 out_tile_ptr_table       -> out_tbl_all
      *     +0x04 out_table_stride_dwords  =  N_t
      *     +0x08 out_y_stride_words       =  N_t
-     *     +0x0c n_tiles_pow2             =  row4_groups * 4
+     *     +0x0c n_tiles_pow2             =  M_t * 4
      *     +0x10 m_total_minus_step       =  8
      *     +0x14 k_total_bytes            =  N_t * 32
      *
@@ -1244,8 +1242,7 @@ static uint32_t hmx_w8a16_to_u16_matmul_kernel(
      *
      *   out_table_stride_dwords = N_t       next N tile pointer in same M group
      *   out_y_stride_words      = N_t       next row4 output-table stride
-     *   n_tiles_pow2            = row4_groups * 4
-     *                                      native loop/count selector
+     *   n_tiles_pow2            = M_t * 4   native loop/count selector
      *   m_total_minus_step      = 8         decoded fixed step for this path
      *   k_total_bytes           = N_t * 32  byte span expected by kernel setup
      *   n_act_pairs             = K_t       number of activation pointer pairs

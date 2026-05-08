@@ -44,7 +44,6 @@ HEX_FLAGS=(
     -mhvx -mhvx-length=128B -mhmx "-m$ARCH"
     -DUSE_OS_QURT -DPREPARE_DISABLED
     -DHMX_W8A16_ENABLE_QHPI_PRECOMPUTE
-    -DHMX_W8A16_SKIP_KERNEL
     "-DTHIS_PKG_NAME=$PACKAGE_NAME"
     -I "$QNN_SDK_ROOT/include/QNN"
     -I "$HEXAGON_SDK_ROOT/rtos/qurt/compute$ARCH/include/qurt"
