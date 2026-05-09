@@ -1182,13 +1182,13 @@ out_u8[m,n] =
   )
 ```
 
-这个结论不是只看源码推出来的。重建脚本：
+这个结论不是只看源码推出来的。通用 A8 drain 重建脚本：
 
 ```text
-scripts/reconstruct_u8i8_drain.py
+scripts/reconstruct_hmx_u8_drain.py
 ```
 
-会从当前 artifact 读取：
+对 U8I8，它会从当前 artifact 读取：
 
 ```text
 runtime_inputs_u8/act_u8i8.raw
@@ -1204,12 +1204,20 @@ device_out/out.raw
 raw_acc -> drain_in -> scale/baseline -> out_u8
 ```
 
+典型命令：
+
+```bash
+python3 scripts/reconstruct_hmx_u8_drain.py \
+  example/qnn_matmul_profile/output_u8i8_aligned_e2e_256
+```
+
 当前 `256^3, CHAIN=8` 的重建结果：
 
 ```text
 effective matches saved file: True
 reconstructed == ref:        True
 reconstructed == device:     True
+reconstructed == native:     True
 final sha256:
   09ea6b13f2f1c80438c473f450590ae6440cecd13598c912b9daad3fd0bf093b
 ```
@@ -1609,6 +1617,36 @@ custom W4A16 output vs Python analytic model:
 路径，而不是 Python 的 `round(acc/7 + 32768)`。差异很可能来自 HMX drain
 内部的定点 rounding、lane pairing、saturate 顺序或 control word 细节。
 
+现在用工具固定这个差异分布：
+
+```bash
+python3 scripts/analyze_a16_drain_delta.py \
+  example/qnn_matmul_profile/output_w4a16_aligned_e2e_256
+
+python3 scripts/analyze_a16_drain_delta.py \
+  example/qnn_matmul_profile/output_w8a16_aligned_e2e_256
+```
+
+当前结果说明两件事：
+
+```text
+W4A16:
+  custom_vs_native:   65536/65536
+  custom_vs_analytic: 63422/65536
+  abs<=3:             63643/65536
+  major signed deltas: -36, -65535, +65535
+
+W8A16:
+  custom_vs_native:   65536/65536
+  custom_vs_analytic: 52003/65536
+  abs<=3:             52014/65536
+```
+
+所以 A16 当前最可靠的 oracle 是 native output，不是外部 analytic formula。
+`analyze_a16_drain_delta.py` 的价值在于把差异按 signed delta、N32 tile、
+row32 tile 和 saturation crossing 拆开，后续继续破解 `cvt.uh` rounding /
+control word 时可以直接看差异是否被某个假设消掉。
+
 #### 当前边界
 
 W4A16 这条链路目前可以可靠说明到这里：
@@ -1661,6 +1699,38 @@ mxmem(r10,r11):cm = cvt
 中间的 HMX convert packet 仍有 raw `.word` 保留，所以本文不把它写成已经完整
 decode 的 `cvt.ub` mnemonic。更稳妥的说法是：这条 path 的外部语义和输出
 contract 是 U8 drain，`cvt` 最终被写到 Crouton_8 output。
+
+现在有一个专门的 packet inventory 工具来固定这条边界：
+
+```bash
+python3 scripts/analyze_w4a8_cvt_packets.py
+```
+
+它从 W4A8 `.inc` 里抽取 accumulator conversion/writeback 周围的 raw packet。
+当前结果是：
+
+```text
+pre_store_cvt_tail:  10
+post_bias_cvt_tail:   2
+post_store_tail:     12
+
+repeated cvt-like words:
+  0x75594000
+  0x10bf40f6
+  0x10bf40f8
+  0x5cdf68f6
+  0x5cdf68f8
+
+plain cvt.ub = acc(rX) candidate words:
+  0xa6f7d710 ... 0xa6ffd710
+  matches in W4A8 raw inventory: {}
+```
+
+这说明 W4A8 的 raw groups 不是随机未知字节，而是稳定出现在
+`bias = mxmem2(r3)` 和 `mxmem(...):cm = cvt` 附近的 mixed HMX/control
+模板。并且这些 raw `a6..dc/dd` word 不等于 plain `cvt.ub = acc(rX)` 的
+已汇编候选编码。因此结论也更精确：W4A8 是 U8 drain 语义，但 exact
+BNB-specific `cvt` mnemonic 仍保持未声明，直到能 byte-prove 对应 asm。
 
 数值链路和 U8I8 很接近，只是 weight 侧从 I8 byte 变成 signed I4 nibble：
 
@@ -1727,10 +1797,16 @@ drain_in[m0,n0]:
 
 当前 `256^3, CHAIN=8` 的实测重建结果：
 
+```bash
+python3 scripts/reconstruct_hmx_u8_drain.py \
+  example/qnn_matmul_profile/output_w4a8_aligned_e2e_256
+```
+
 ```text
 effective matches formula:      True
 reconstructed == ref:           True
 reconstructed == custom device: True
+reconstructed == native:        True
 custom device == native device: True
 native compare:                 65536/65536, maxdiff 0
 final sha256:
@@ -2081,7 +2157,11 @@ optrace 口径。它们不包含 `InputSlice`、`OutputSlice`、`ForceFormat`、
 `weights_to_vtcm` 等整图开销，但仍包含 kernel wrapper、descriptor glue、
 HMX body entry/exit、accumulator drain 和 profiling envelope。
 
-数据来自当前磁盘上的 `optrace/summary.json`：
+数据来自当前磁盘上的 `optrace/summary.json`，现在可用脚本直接复现：
+
+```bash
+python3 scripts/summarize_hmx_perf.py
+```
 
 | Pair | W8 custom main | W4 custom main | W4/W8 custom cycles | Custom packets/event | W8 native kernel | W4 native kernel | W4/W8 native cycles |
 |---|---:|---:|---:|---:|---:|---:|---:|
