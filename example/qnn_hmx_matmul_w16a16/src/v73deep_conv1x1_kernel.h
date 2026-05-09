@@ -5,8 +5,9 @@
  *   r0 = od ptr, r1 = ad ptr, r2 = wt ptr, r3 = bias ptr,
  *   r4 = mask desc ptr, r5 = extra_param ptr.
  *
- * The included .inc file is an exact byte slice from libQnnHtpV75Skel.so for
- * this quantized family. Regenerate it with scripts/extract_hmx_kernel_bytes.py.
+ * The included .inc file is a hybrid readable asm/word replica of the native
+ * W16A16 slice from libQnnHtpV75Skel.so. Byte-proven packets are written as
+ * inline asm; unknown HMX or branch-sensitive packets remain raw words.
  */
 
 #ifndef V73DEEP_CONV1X1_KERNEL_H
