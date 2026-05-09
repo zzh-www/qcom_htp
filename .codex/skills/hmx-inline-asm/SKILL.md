@@ -20,11 +20,16 @@ Hexagon inline asm without changing the native bytes.
    internal branch targets instead of absolute addresses.
 4. Infer HMX unknowns by assembling candidate mnemonics with:
    `clang-19 -target hexagon -mcpu=hexagonv75 -mhmx`.
-5. Verify the whole function, not only individual instructions, by compiling a
+5. For `cvt`/drain packets, prove the whole packet, not only the HMX word.
+   Branch/control slots often encode label distance in the same packet as the
+   HMX conversion, so add local labels at the real native target address and
+   assemble `cmp/jump/cvt` together.
+6. Verify the whole function, not only individual instructions, by compiling a
    temporary C wrapper, extracting `.text`, and comparing against the native
    slice byte-for-byte.
-6. Update adjacent comments or headers when the `.inc` changes from raw `.byte`
-   form to readable inline asm.
+7. Update adjacent comments, headers, and any analysis scripts whose conclusions
+   mention the raw packets. Stale "unknown" conclusions are bugs once a mnemonic
+   is byte-proven.
 
 ## Guardrails
 
@@ -32,6 +37,9 @@ Hexagon inline asm without changing the native bytes.
   identical to the native slice.
 - Do not trust `<unknown>` packet boundaries from public objdump blindly. A
   single undecoded HMX word can cause the whole packet to print as unknown.
+- Do not mark a raw-drain cleanup complete while the `cvt` word is only
+  explained in comments. It is complete only when the file contains readable
+  HMX mnemonics and the whole native slice still matches byte-for-byte.
 - Keep raw-byte regeneration commands in comments so the readable form can be
   replaced with a byte fallback if needed.
 - Use the repo's existing labels and comment style from neighboring
@@ -54,6 +62,15 @@ python3 .codex/skills/hmx-inline-asm/scripts/verify_hexagon_inline_asm.py \
   --inc example/qnn_hmx_matmul_w4a16/src/v73deep_conv1x1_kernel.inc \
   --so tools/qnn-sdk/lib/hexagon-v75/unsigned/libQnnHtpV75Skel.so \
   --vma 0x2fdb80 --size 804
+```
+
+Verify the W4A8 BNB slice:
+
+```bash
+python3 .codex/skills/hmx-inline-asm/scripts/verify_hexagon_inline_asm.py \
+  --inc example/qnn_hmx_matmul_w4a8/src/v73deep_conv1x1_kernel.inc \
+  --so tools/qnn-sdk/lib/hexagon-v75/unsigned/libQnnHtpV75Skel.so \
+  --vma 0x2f0780 --size 2624
 ```
 
 ## References

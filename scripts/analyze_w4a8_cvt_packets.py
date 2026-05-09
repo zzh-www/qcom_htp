@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Summarize W4A8 BNB raw cvt/writeback packet groups.
+"""Summarize W4A8 BNB cvt/writeback packet groups.
 
-The W4A8 inline-asm replica intentionally keeps several mixed HMX/control
-packets as raw .word directives.  This helper extracts the raw groups around
-the accumulator conversion/writeback path so the dataflow document can cite a
-stable packet inventory without pretending that every HMX word is decoded.
+The W4A8 inline-asm replica still keeps operand-load/control subsets as raw
+.word directives, but the accumulator conversion tail has been promoted to
+byte-proven HMX mnemonics.  This helper reports both the remaining raw groups
+around the writeback path and the decoded scaled cvt instructions.
 """
 
 from __future__ import annotations
@@ -32,10 +32,19 @@ PLAIN_CVT_UB_ACC_WORDS = {
     "r30": "0xa6fed710",
     "r31": "0xa6ffd710",
 }
+SCALED_CVT_UB_ACC_WORDS = {
+    # Assembled with clang-19 -target hexagon -mcpu=hexagonv75 -mhmx:
+    #   { cvt.ub = acc(rX):sc0/sc1 }
+    "r27:sc0": "0xa6fbdc10",
+    "r27:sc1": "0xa6fbdd10",
+    "r31:sc0": "0xa6ffdc10",
+    "r31:sc1": "0xa6ffdd10",
+}
 
 
 WORD_RE = re.compile(r"\.word\s+([^\\]+)\\n")
 ADDR_RE = re.compile(r"@0x([0-9a-fA-F]+)")
+SCALED_CVT_RE = re.compile(r"cvt\.ub = acc\(r(27|31)\):sc([01])")
 
 
 def _words_from_line(line: str) -> tuple[str, ...]:
@@ -97,6 +106,7 @@ def extract_groups(inc: Path) -> list[dict[str, Any]]:
 
 
 def build_report(inc: Path) -> dict[str, Any]:
+    text = inc.read_text(encoding="utf-8")
     groups = extract_groups(inc)
     word_counter = Counter(word for group in groups for word in group["words"])
     pattern_counter = Counter(tuple(group["words"]) for group in groups)
@@ -109,6 +119,21 @@ def build_report(inc: Path) -> dict[str, Any]:
     plain_cvt_matches = {
         reg: word for reg, word in PLAIN_CVT_UB_ACC_WORDS.items() if word_counter[word]
     }
+    scaled_cvt_counter = Counter(
+        f"r{reg}:sc{scale}" for reg, scale in SCALED_CVT_RE.findall(text)
+    )
+    if cvt_like_words:
+        conclusion = [
+            "W4A8 BNB still has raw cvt-like control words in the writeback path.",
+            "The raw groups consistently sit between bias/control loads and mxmem(...):cm = cvt stores.",
+            "The remaining raw cvt-like words should not be described as decoded mnemonics.",
+        ]
+    else:
+        conclusion = [
+            "W4A8 BNB accumulator conversion packets are now byte-proven readable asm.",
+            "The decoded scaled conversion forms are cvt.ub = acc(r27/r31):sc0/sc1.",
+            "Remaining raw groups are branch/control subsets around the store path; no raw 0x92 HMX load or raw 0xa6 drain word remains.",
+        ]
     return {
         "inc": str(inc),
         "native_slice": {
@@ -126,12 +151,9 @@ def build_report(inc: Path) -> dict[str, Any]:
         "cvt_like_words": cvt_like_words,
         "plain_cvt_ub_acc_words": PLAIN_CVT_UB_ACC_WORDS,
         "plain_cvt_ub_acc_matches": plain_cvt_matches,
-        "conclusion": [
-            "W4A8 BNB keeps cvt/writeback mixed HMX/control packets raw.",
-            "The raw groups consistently sit between bias/control loads and mxmem(...):cm = cvt stores.",
-            "The raw a6..dc/dd words do not match plain cvt.ub = acc(rX) encodings assembled with clang-19.",
-            "The stable output evidence is U8 drain semantics; exact cvt mnemonic remains intentionally undeclared.",
-        ],
+        "scaled_cvt_ub_acc_words": SCALED_CVT_UB_ACC_WORDS,
+        "scaled_cvt_ub_acc_counts": dict(scaled_cvt_counter),
+        "conclusion": conclusion,
     }
 
 
@@ -152,6 +174,10 @@ def print_report(report: dict[str, Any]) -> None:
     print("\n[plain cvt.ub = acc(rX) comparison]")
     print("  assembled candidate words: " + ", ".join(report["plain_cvt_ub_acc_words"].values()))
     print(f"  matches in W4A8 raw inventory: {report['plain_cvt_ub_acc_matches']}")
+    print("\n[scaled cvt.ub = acc(rX):scY mnemonics]")
+    print("  assembled candidate words: " + ", ".join(report["scaled_cvt_ub_acc_words"].values()))
+    for name, count in sorted(report["scaled_cvt_ub_acc_counts"].items()):
+        print(f"  {name}: {count}")
     print("\n[first groups]")
     for group in report["groups"][:12]:
         print(

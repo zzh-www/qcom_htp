@@ -103,35 +103,44 @@
   "r26 = add(r26,#-2);\n"
   "r6 = memw(r1++#8);\n"
   "r23 = memw(r1+#4) }\n"
-  /* unknown/HMX raw block @0x2f0870..0x2f0890
+  /* native packet group @0x2f0870..0x2f0890
    *   0x2f0870: <unknown>
    *   0x2f087c: <unknown>
    *   0x2f0880: <unknown>
    *   0x2f088c: <unknown>
    * Purpose: inner MAC feed; load activation/weight HMX operands for the current K step.
-   * Encoding note: the .word below is the residual raw subset for this native packet/group; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
-  ".word 0xb0484008, 0xfd094718, 0x920658ed, 0x9208f946, 0xe2198028, 0x7f004000, 0x921758ed, 0x9208f946\n"
+  "{ r8 = add(r8,#0x400);\n"
+  "if (p0) r25:24 = combine(r9,r7);\n"
+  "activation.ub = mxmem(r6,r24):cm;\n"
+  "weight.n = mxmem(r8,r25):2x }\n"
+  "{ r8 += add(r25,#1);\n"
+  "nop;\n"
+  "activation.ub = mxmem(r23,r24):cm;\n"
+  "weight.n = mxmem(r8,r25):2x }:endloop0\n"
   /* decoded packet @0x2f0890..0x2f08a0
    *   0x2f0890: { loop0(0x2f0860,r28)
    *   0x2f0894: r24 = or(r7,#28)
    *   0x2f0898: if (!p1) jump:nt 0x2f08b0
    *   0x2f089c: nop }
    * Purpose: initialize or restart hardware loop0 for the current K/output tile body.
-   * Encoding note: the .word below is the residual raw subset for this native packet/group; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
   ".word 0x601c5d00, 0x76874398, 0x5c204110\n"
   /* asm packet split from known decoded raw words. */
   "{ nop }\n"
   /* asm packet from comment; words preserved. */
   "{ r6 = memw(r1++#4) }\n"
-  /* unknown/HMX raw block @0x2f08a4..0x2f08b0
+  /* native packet group @0x2f08a4..0x2f08b0
    *   0x2f08a4: <unknown>
    *   0x2f08ac: <unknown>
    * Purpose: inner MAC feed; load activation/weight HMX operands for the current K step.
-   * Encoding note: the .word below is the residual raw subset for this native packet/group; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
-  ".word 0xe2094028, 0x920647ed, 0x9208e946\n"
+  "{ r8 += add(r9,#1);\n"
+  "activation.ub = mxmem(r6,r7):cm;\n"
+  "weight.n = mxmem(r8,r9):2x }\n"
   /* asm packet from comment; words preserved. */
   "{ r31 = asl(r30,#8);\n"
   "r27:26 = combine(r8,r4);\n"
@@ -145,18 +154,21 @@
    */
   ".word 0x707e4019, 0x5c204020, 0xfb03df03\n"
   /* asm packet from matched decoded packet; words preserved. */
+  "Lhmx_2f08cc:\n"
   "{ r3 = add(r3,#0x100);\n"
   "r25 = add(r25,#-0x1);\n"
   "r31 = memw(r5++#0x4);\n"
   "bias = mxmem2(r3) }\n"
   /* asm packet from comment; words preserved. */
   "{ r31 = or(r31,#1) }\n"
-  /* unknown/HMX raw block @0x2f08e0..0x2f08ec
+  /* native packet group @0x2f08e0..0x2f08ec
    *   0x2f08e0: <unknown>
    * Purpose: accumulator conversion/writeback tail; stores or finalizes cvt output for this tile.
-   * Encoding note: the .word below is the residual raw subset for this native packet/group; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
-  ".word 0x75594000, 0x5cdf68f6, 0xa6ffdd10\n"
+  "{ p0 = cmp.gt(r25,#0);\n"
+  "if (p0.new) jump:nt Lhmx_2f08cc;\n"
+  "cvt.ub = acc(r31):sc1 }\n"
   /* asm packet from comment; words preserved. */
   "{ r5 -= asl(r30,#2);\n"
   "r3 -= asl(r30,#9);\n"
@@ -175,6 +187,7 @@
   /* asm packet split from known decoded raw words.
    * Purpose: output-column setup; advance bias/window state before the following cvt store.
    */
+  "Lhmx_2f0900:\n"
   "{ r3 = add(r3,#0x100);\n"
   "r25 = add(r25,#-0x1);\n"
   "r31 = memw(r5++#0x4);\n"
@@ -183,16 +196,18 @@
    * Purpose: handles predicate/address update and cvt writeback for this output tile;
    * kept raw because mixed branch/HMX words re-encode differently as asm.
    */
-  ".word 0x75594000, 0x5cdf68f8, 0xa6ffdc10\n"
+  "{ p0 = cmp.gt(r25,#0);\n"
+  "if (p0.new) jump:nt Lhmx_2f0900;\n"
+  "cvt.ub = acc(r31):sc0 }\n"
   /* asm packet from comment; words preserved. */
   "{ r5 -= asl(r30,#2);\n"
   "r3 -= asl(r30,#8);\n"
   "r10 = memw(r0++m0) }\n"
-  /* unknown/HMX raw block @0x2f0928..0x2f0934
+  /* native packet group @0x2f0928..0x2f0934
    *   0x2f0928: <unknown>
    * Purpose: restore the output-store lane/mask limit before the following
    * cvt writeback; kept raw because the packet tail is not byte-proven asm.
-   * Encoding note: the .word below is the residual raw subset for this native packet/group; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
   ".word 0x78017ff9, 0x7f008000\n"
   /* asm packet split from known decoded raw words.
@@ -244,7 +259,7 @@
    *   0x2f0998: r17 = add(r17,#-8)
    *   0x2f099c: nop }
    * Purpose: initialize or restart hardware loop0 for the current K/output tile body.
-   * Encoding note: the .word below is the residual raw subset for this native packet/group; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
   ".word 0x60144100, 0xf5135200, 0xbff17f11\n"
   /* asm packet split from known decoded raw words. */
@@ -254,27 +269,33 @@
   "p0 = cmp.gt(r13,#32);\n"
   "r25 = r30;\n"
   "r6 = memw(r1++#4) }\n"
-  /* unknown/HMX raw block @0x2f09b0..0x2f09d0
+  /* native packet group @0x2f09b0..0x2f09d0
    *   0x2f09b0: <unknown>
    *   0x2f09bc: <unknown>
    *   0x2f09c0: <unknown>
    * Purpose: HMX operand load; feed activation/weight/bias data into the next MAC or cvt packet.
-   * Encoding note: the .word below is the residual raw subset for this native packet/group; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
-  ".word 0x5c204022, 0xfb035f03, 0x920647ed, 0x9202e946\n"
+  "{ if (!p0) jump:nt Lhmx_2f09f4;\n"
+  "if (p0) r3 = add(r3,r31);\n"
+  "activation.ub = mxmem(r6,r7):cm;\n"
+  "weight.n = mxmem(r2,r9):2x }\n"
   /* asm packet split from known decoded raw words. */
+  "Lhmx_2f09c0:\n"
   "{ r3 = add(r3,#0x100);\n"
   "r25 = add(r25,#-0x1);\n"
   "r31 = memw(r5++#0x4);\n"
   "bias = mxmem2(r3) }\n"
   /* asm packet from comment; words preserved. */
   "{ r31 = or(r31,#1) }\n"
-  /* unknown/HMX raw block @0x2f09d4..0x2f09e0
+  /* native packet group @0x2f09d4..0x2f09e0
    *   0x2f09d4: <unknown>
    * Purpose: accumulator conversion/writeback tail; stores or finalizes cvt output for this tile.
-   * Encoding note: the .word below is the residual raw subset for this native packet/group; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
-  ".word 0x75594000, 0x5cdf68f6, 0xa6ffdd10\n"
+  "{ p0 = cmp.gt(r25,#0);\n"
+  "if (p0.new) jump:nt Lhmx_2f09c0;\n"
+  "cvt.ub = acc(r31):sc1 }\n"
   /* asm packet from comment; words preserved. */
   "{ r5 -= asl(r30,#2);\n"
   "r3 -= asl(r30,#9);\n"
@@ -293,6 +314,7 @@
   /* asm packet split from known decoded raw words.
    * Purpose: output-column setup; advance bias/window state before the following cvt store.
    */
+  "Lhmx_2f09f4:\n"
   "{ r3 = add(r3,#0x100);\n"
   "r25 = add(r25,#-0x1);\n"
   "r31 = memw(r5++#0x4);\n"
@@ -301,12 +323,14 @@
    * Purpose: handles predicate/address update and cvt writeback for this output tile;
    * kept raw because mixed branch/HMX words re-encode differently as asm.
    */
-  ".word 0x75594000, 0x5cdf68f8, 0xa6ffdc10\n"
+  "{ p0 = cmp.gt(r25,#0);\n"
+  "if (p0.new) jump:nt Lhmx_2f09f4;\n"
+  "cvt.ub = acc(r31):sc0 }\n"
   /* asm packet from comment; words preserved. */
   "{ r5 -= asl(r30,#2);\n"
   "r3 -= asl(r30,#8);\n"
   "r10 = memw(r0++m0) }\n"
-  /* unknown/HMX raw block @0x2f0a1c..0x2f0a24
+  /* native packet group @0x2f0a1c..0x2f0a24
    *   0x2f0a1c: <unknown>
    * Purpose: native packet padding before the following cvt writeback path;
    * kept raw because the HMX packet boundary is not byte-proven asm.
@@ -415,7 +439,7 @@
    *   0x2f0b1c: nop
    *   0x2f0b20: nop }
    * Purpose: initialize or restart hardware loop0 for the current K/output tile body.
-   * Encoding note: the .word below is the residual raw subset for this native packet/group; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
   ".word 0x601c4418, 0xed185e18\n"
   /* asm packet split from known decoded raw words. */
@@ -446,15 +470,20 @@
   /* asm packet from comment; words preserved. */
   "{ r6 = memw(r1++#8);\n"
   "r23 = memw(r1+#4) }\n"
-  /* unknown/HMX raw block @0x2f0b68..0x2f0b80
+  /* native packet group @0x2f0b68..0x2f0b80
    *   0x2f0b68: <unknown>
    *   0x2f0b70: <unknown>
    *   0x2f0b74: <unknown>
    *   0x2f0b7c: <unknown>
    * Purpose: HMX operand load; feed activation/weight/bias data into the next MAC or cvt packet.
-   * Encoding note: the .word below is the residual raw subset for this native packet/group; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
-  ".word 0xf3085808, 0x920647ed, 0x9208e943, 0xf3089808, 0x921747ed, 0x9208e943\n"
+  "{ r8 = add(r8,r24);\n"
+  "activation.ub = mxmem(r6,r7):cm;\n"
+  "weight.n = mxmem(r8,r9):2x:deep }\n"
+  "{ r8 = add(r8,r24);\n"
+  "activation.ub = mxmem(r23,r7):cm;\n"
+  "weight.n = mxmem(r8,r9):2x:deep }:endloop0\n"
   /* decoded packet @0x2f0b80..0x2f0b90
    *   0x2f0b80: { loop0(0x2f0b60,r28)
    *   0x2f0b84: r23 = r26
@@ -465,32 +494,38 @@
   ".word 0x601c5e00, 0x707a4017, 0x754d4400, 0x5c20c10e\n"
   /* asm packet from comment; words preserved. */
   "{ r6 = memw(r1++#4) }\n"
-  /* unknown/HMX raw block @0x2f0b94..0x2f0b9c
+  /* native packet group @0x2f0b94..0x2f0b9c
    *   0x2f0b94: <unknown>
    *   0x2f0b98: <unknown>
    * Purpose: HMX operand load; feed activation/weight/bias data into the next MAC or cvt packet.
    */
-  ".word 0x920647ed, 0x9208e943\n"
+  "{ activation.ub = mxmem(r6,r7):cm;\n"
+  "weight.n = mxmem(r8,r9):2x:deep }\n"
   /* decoded packet @0x2f0b9c..0x2f0ba4
    *   0x2f0b9c: { if (!p0) jump:nt 0x2f0bd4
    *   0x2f0ba0: if (p0) r3 = add(r3,r31) }
    * Purpose: branch-sensitive control transfer; raw form preserves native target encoding.
    */
   ".word 0x5c20401c, 0xfb03df03\n"
-  /* unknown/HMX raw block @0x2f0ba4..0x2f0bb4
+  /* native packet group @0x2f0ba4..0x2f0bb4
    *   0x2f0ba4: <unknown>
    * Purpose: HMX operand load; feed activation/weight/bias data into the next MAC or cvt packet.
-   * Encoding note: the .word below is the residual raw subset for this native packet/group; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
-  ".word 0xb0036003, 0xbff77ff7, 0x9b85403b, 0x9203c3fe\n"
+  "Lhmx_2f0ba4:\n"
+  "{ r3 = add(r3,#0x100);\n"
+  "r23 = add(r23,#-1);\n"
+  "r27 = memw(r5++#4);\n"
+  "bias = mxmem2(r3) }\n"
   /* asm packet from comment; words preserved. */
   "{ r27 = or(r27,#1) }\n"
-  /* unknown/HMX raw block @0x2f0bb8..0x2f0bc0
+  /* native packet group @0x2f0bb8..0x2f0bc0
    *   0x2f0bb8: <unknown>
    * Purpose: accumulator conversion/writeback tail; stores or finalizes cvt output for this tile.
-   * Encoding note: the .word below is the residual raw subset for this native packet/group; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
-  ".word 0x10bf40f6, 0xa6fbdd10\n"
+  "{ p0 = cmp.gt(r23,#0); if (p0.new) jump:nt Lhmx_2f0ba4;\n"
+  "cvt.ub = acc(r27):sc1 }\n"
   /* asm packet from comment; words preserved. */
   "{ r5 -= asl(r26,#2);\n"
   "r3 -= asl(r26,#9);\n"
@@ -510,17 +545,23 @@
    * Purpose: advances output/bias state and controls the next store or loop step;
    * kept raw because these HMX/control words are not byte-proven asm.
    */
-  ".word 0xb0036003, 0xbff77ff7, 0x9b85403b, 0x9203c3fe, 0x10bf40f8, 0xa6fbdc10\n"
+  "Lhmx_2f0bd4:\n"
+  "{ r3 = add(r3,#0x100);\n"
+  "r23 = add(r23,#-1);\n"
+  "r27 = memw(r5++#4);\n"
+  "bias = mxmem2(r3) }\n"
+  "{ p0 = cmp.gt(r23,#0); if (p0.new) jump:nt Lhmx_2f0bd4;\n"
+  "cvt.ub = acc(r27):sc0 }\n"
   /* asm packet from comment; words preserved. */
   "{ r5 -= asl(r26,#2);\n"
   "p0 = cmp.gt(r13,#64);\n"
   "if (p0.new) r3 = add(r3,r31);\n"
   "r10 = memw(r0+#0) }\n"
-  /* unknown/HMX raw block @0x2f0bfc..0x2f0c1c
+  /* native packet group @0x2f0bfc..0x2f0c1c
    *   0x2f0bfc: <unknown>
    *   0x2f0c0c: <unknown>
    * Purpose: branch-sensitive HMX/control packet; selects the next inner-loop or epilogue path.
-   * Encoding note: the .word below is the residual raw subset for this native packet/group; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
   ".word 0x707a4017, 0xfb3f4383, 0x5c204022\n"
   /* asm packet split from known decoded raw words.
@@ -531,25 +572,30 @@
    * Purpose: advances output/bias state and controls the next store or loop step;
    * kept raw because these HMX/control words are not byte-proven asm.
    */
-  ".word 0xb0036003, 0xbff77ff7, 0x9b85403b, 0x9203c3fe\n"
+  "Lhmx_2f0c0c:\n"
+  "{ r3 = add(r3,#0x100);\n"
+  "r23 = add(r23,#-1);\n"
+  "r27 = memw(r5++#4);\n"
+  "bias = mxmem2(r3) }\n"
   /* asm packet from comment; words preserved. */
   "{ r27 = or(r27,#1) }\n"
-  /* unknown/HMX raw block @0x2f0c20..0x2f0c28
+  /* native packet group @0x2f0c20..0x2f0c28
    *   0x2f0c20: <unknown>
    * Purpose: accumulator conversion/writeback tail; stores or finalizes cvt output for this tile.
-   * Encoding note: the .word below is the residual raw subset for this native packet/group; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
-  ".word 0x10bf40f6, 0xa6fbdc10\n"
+  "{ p0 = cmp.gt(r23,#0); if (p0.new) jump:nt Lhmx_2f0c0c;\n"
+  "cvt.ub = acc(r27):sc0 }\n"
   /* asm packet from comment; words preserved. */
   "{ r5 -= asl(r26,#2);\n"
   "r23 = r26;\n"
   "r10 = memw(r0+#8) }\n"
-  /* unknown/HMX raw block @0x2f0c34..0x2f0c58
+  /* native packet group @0x2f0c34..0x2f0c58
    *   0x2f0c34: <unknown>
    *   0x2f0c40: <unknown>
    *   0x2f0c50: <unknown>
    * Purpose: predicate/address update around the HMX output-store path.
-   * Encoding note: the .word below is the residual raw subset for this native packet/group; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
   ".word 0x754d4c00, 0xfb3f6383\n"
   /* asm packet split from known decoded raw words.
@@ -560,7 +606,13 @@
    * Purpose: advances output/bias state and controls the next store or loop step;
    * kept raw because these HMX/control words are not byte-proven asm.
    */
-  ".word 0xb0036003, 0xbff77ff7, 0x9b85403b, 0x9203c3fe, 0x10bf40f8, 0xa6fbdd10\n"
+  "Lhmx_2f0c40:\n"
+  "{ r3 = add(r3,#0x100);\n"
+  "r23 = add(r23,#-1);\n"
+  "r27 = memw(r5++#4);\n"
+  "bias = mxmem2(r3) }\n"
+  "{ p0 = cmp.gt(r23,#0); if (p0.new) jump:nt Lhmx_2f0c40;\n"
+  "cvt.ub = acc(r27):sc1 }\n"
   /* decoded packet @0x2f0c58..0x2f0c60
    *   0x2f0c58: { p0 = cmp.gt(r13,#96)
    *   0x2f0c5c: if (!p0.new) jump:nt 0x2f0c68 }
@@ -626,7 +678,7 @@
    *   0x2f0cd8: r30 = add(r30,#-8)
    *   0x2f0cdc: nop }
    * Purpose: initialize or restart hardware loop0 for the current K/output tile body.
-   * Encoding note: the .word below is the residual raw subset for this native packet/group; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
   ".word 0x60144100, 0xf5135200, 0xbffe7f1e\n"
   /* asm packet split from known decoded raw words. */
@@ -635,22 +687,31 @@
   "{ p0 = cmp.gt(r13,#32);\n"
   "r23 = r26;\n"
   "r6 = memw(r1++#4) }\n"
-  /* unknown/HMX raw block @0x2f0cec..0x2f0d0c
+  /* native packet group @0x2f0cec..0x2f0d0c
    *   0x2f0cec: <unknown>
    *   0x2f0cf8: <unknown>
    *   0x2f0cfc: <unknown>
    * Purpose: HMX operand load; feed activation/weight/bias data into the next MAC or cvt packet.
-   * Encoding note: the .word below is the residual raw subset for this native packet/group; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
-  ".word 0xfb035f03, 0x5c204020, 0x920647ed, 0x9202e943, 0xb0036003, 0xbff77ff7, 0x9b85403b, 0x9203c3fe\n"
+  "{ if (p0) r3 = add(r3,r31);\n"
+  "if (!p0) jump:nt Lhmx_2f0d2c;\n"
+  "activation.ub = mxmem(r6,r7):cm;\n"
+  "weight.n = mxmem(r2,r9):2x:deep }\n"
+  "Lhmx_2f0cfc:\n"
+  "{ r3 = add(r3,#0x100);\n"
+  "r23 = add(r23,#-1);\n"
+  "r27 = memw(r5++#4);\n"
+  "bias = mxmem2(r3) }\n"
   /* asm packet from comment; words preserved. */
   "{ r27 = or(r27,#1) }\n"
-  /* unknown/HMX raw block @0x2f0d10..0x2f0d18
+  /* native packet group @0x2f0d10..0x2f0d18
    *   0x2f0d10: <unknown>
    * Purpose: accumulator conversion/writeback tail; stores or finalizes cvt output for this tile.
-   * Encoding note: the .word below is the residual raw subset for this native packet/group; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
-  ".word 0x10bf40f6, 0xa6fbdd10\n"
+  "{ p0 = cmp.gt(r23,#0); if (p0.new) jump:nt Lhmx_2f0cfc;\n"
+  "cvt.ub = acc(r27):sc1 }\n"
   /* asm packet from comment; words preserved. */
   "{ r5 -= asl(r26,#2);\n"
   "r3 -= asl(r26,#9);\n"
@@ -670,17 +731,23 @@
    * Purpose: advances output/bias state and controls the next store or loop step;
    * kept raw because these HMX/control words are not byte-proven asm.
    */
-  ".word 0xb0036003, 0xbff77ff7, 0x9b85403b, 0x9203c3fe, 0x10bf40f8, 0xa6fbdc10\n"
+  "Lhmx_2f0d2c:\n"
+  "{ r3 = add(r3,#0x100);\n"
+  "r23 = add(r23,#-1);\n"
+  "r27 = memw(r5++#4);\n"
+  "bias = mxmem2(r3) }\n"
+  "{ p0 = cmp.gt(r23,#0); if (p0.new) jump:nt Lhmx_2f0d2c;\n"
+  "cvt.ub = acc(r27):sc0 }\n"
   /* asm packet from comment; words preserved. */
   "{ r5 -= asl(r26,#2);\n"
   "p0 = cmp.gt(r13,#64);\n"
   "if (p0.new) r3 = add(r3,r31);\n"
   "r10 = memw(r0+#0) }\n"
-  /* unknown/HMX raw block @0x2f0d54..0x2f0d74
+  /* native packet group @0x2f0d54..0x2f0d74
    *   0x2f0d54: <unknown>
    *   0x2f0d64: <unknown>
    * Purpose: branch-sensitive HMX/control packet; selects the next inner-loop or epilogue path.
-   * Encoding note: the .word below is the residual raw subset for this native packet/group; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
   ".word 0x707a4017, 0xfb3f4383, 0x5c204022\n"
   /* asm packet split from known decoded raw words.
@@ -691,25 +758,30 @@
    * Purpose: advances output/bias state and controls the next store or loop step;
    * kept raw because these HMX/control words are not byte-proven asm.
    */
-  ".word 0xb0036003, 0xbff77ff7, 0x9b85403b, 0x9203c3fe\n"
+  "Lhmx_2f0d64:\n"
+  "{ r3 = add(r3,#0x100);\n"
+  "r23 = add(r23,#-1);\n"
+  "r27 = memw(r5++#4);\n"
+  "bias = mxmem2(r3) }\n"
   /* asm packet from comment; words preserved. */
   "{ r27 = or(r27,#1) }\n"
-  /* unknown/HMX raw block @0x2f0d78..0x2f0d80
+  /* native packet group @0x2f0d78..0x2f0d80
    *   0x2f0d78: <unknown>
    * Purpose: accumulator conversion/writeback tail; stores or finalizes cvt output for this tile.
-   * Encoding note: the .word below is the residual raw subset for this native packet/group; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
-  ".word 0x10bf40f6, 0xa6fbdc10\n"
+  "{ p0 = cmp.gt(r23,#0); if (p0.new) jump:nt Lhmx_2f0d64;\n"
+  "cvt.ub = acc(r27):sc0 }\n"
   /* asm packet from comment; words preserved. */
   "{ r5 -= asl(r26,#2);\n"
   "r23 = r26;\n"
   "r10 = memw(r0+#8) }\n"
-  /* unknown/HMX raw block @0x2f0d8c..0x2f0db0
+  /* native packet group @0x2f0d8c..0x2f0db0
    *   0x2f0d8c: <unknown>
    *   0x2f0d98: <unknown>
    *   0x2f0da8: <unknown>
    * Purpose: predicate/address update around the HMX output-store path.
-   * Encoding note: the .word below is the residual raw subset for this native packet/group; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
   ".word 0x754d4c00, 0xfb3f6383\n"
   /* asm packet split from known decoded raw words.
@@ -720,7 +792,13 @@
    * Purpose: advances output/bias state and controls the next store or loop step;
    * kept raw because these HMX/control words are not byte-proven asm.
    */
-  ".word 0xb0036003, 0xbff77ff7, 0x9b85403b, 0x9203c3fe, 0x10bf40f8, 0xa6fbdd10\n"
+  "Lhmx_2f0d98:\n"
+  "{ r3 = add(r3,#0x100);\n"
+  "r23 = add(r23,#-1);\n"
+  "r27 = memw(r5++#4);\n"
+  "bias = mxmem2(r3) }\n"
+  "{ p0 = cmp.gt(r23,#0); if (p0.new) jump:nt Lhmx_2f0d98;\n"
+  "cvt.ub = acc(r27):sc1 }\n"
   /* decoded packet @0x2f0db0..0x2f0db8
    *   0x2f0db0: { p0 = cmp.gt(r13,#96)
    *   0x2f0db4: if (!p0.new) jump:nt 0x2f0dc0 }
@@ -841,7 +919,7 @@
    *   0x2f0ed8: nop
    *   0x2f0edc: nop }
    * Purpose: initialize or restart hardware loop0 for the current K/output tile body.
-   * Encoding note: the .word below is the residual raw subset for this native packet/group; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
   ".word 0x601c4300, 0xed185e18\n"
   /* asm packet split from known decoded raw words. */
@@ -863,15 +941,20 @@
   /* asm packet from comment; words preserved. */
   "{ r6 = memw(r1++#8);\n"
   "r23 = memw(r1+#4) }\n"
-  /* unknown/HMX raw block @0x2f0f08..0x2f0f20
+  /* native packet group @0x2f0f08..0x2f0f20
    *   0x2f0f08: <unknown>
    *   0x2f0f10: <unknown>
    *   0x2f0f14: <unknown>
    *   0x2f0f1c: <unknown>
    * Purpose: HMX operand load; feed activation/weight/bias data into the next MAC or cvt packet.
-   * Encoding note: the .word below is the residual raw subset for this native packet/group; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
-  ".word 0xf3085808, 0x920647ed, 0x9208e943, 0xf3089808, 0x921747ed, 0x9208e943\n"
+  "{ r8 = add(r8,r24);\n"
+  "activation.ub = mxmem(r6,r7):cm;\n"
+  "weight.n = mxmem(r8,r9):2x:deep }\n"
+  "{ r8 = add(r8,r24);\n"
+  "activation.ub = mxmem(r23,r7):cm;\n"
+  "weight.n = mxmem(r8,r9):2x:deep }:endloop0\n"
   /* decoded packet @0x2f0f20..0x2f0f30
    *   0x2f0f20: { loop0(0x2f0f00,r28)
    *   0x2f0f24: r23 = r26
@@ -882,32 +965,38 @@
   ".word 0x601c5e00, 0x707a4017, 0x754d4400, 0x5c20c10e\n"
   /* asm packet from comment; words preserved. */
   "{ r6 = memw(r1++#4) }\n"
-  /* unknown/HMX raw block @0x2f0f34..0x2f0f3c
+  /* native packet group @0x2f0f34..0x2f0f3c
    *   0x2f0f34: <unknown>
    *   0x2f0f38: <unknown>
    * Purpose: HMX operand load; feed activation/weight/bias data into the next MAC or cvt packet.
    */
-  ".word 0x920647ed, 0x9208e943\n"
+  "{ activation.ub = mxmem(r6,r7):cm;\n"
+  "weight.n = mxmem(r8,r9):2x:deep }\n"
   /* decoded packet @0x2f0f3c..0x2f0f44
    *   0x2f0f3c: { if (!p0) jump:nt 0x2f0f74
    *   0x2f0f40: if (p0) r3 = add(r3,r31) }
    * Purpose: branch-sensitive control transfer; raw form preserves native target encoding.
    */
   ".word 0x5c20401c, 0xfb03df03\n"
-  /* unknown/HMX raw block @0x2f0f44..0x2f0f54
+  /* native packet group @0x2f0f44..0x2f0f54
    *   0x2f0f44: <unknown>
    * Purpose: HMX operand load; feed activation/weight/bias data into the next MAC or cvt packet.
-   * Encoding note: the .word below is the residual raw subset for this native packet/group; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
-  ".word 0xb0036003, 0xbff77ff7, 0x9b85403b, 0x9203c3fe\n"
+  "Lhmx_2f0f44:\n"
+  "{ r3 = add(r3,#0x100);\n"
+  "r23 = add(r23,#-1);\n"
+  "r27 = memw(r5++#4);\n"
+  "bias = mxmem2(r3) }\n"
   /* asm packet from comment; words preserved. */
   "{ r27 = or(r27,#1) }\n"
-  /* unknown/HMX raw block @0x2f0f58..0x2f0f60
+  /* native packet group @0x2f0f58..0x2f0f60
    *   0x2f0f58: <unknown>
    * Purpose: accumulator conversion/writeback tail; stores or finalizes cvt output for this tile.
-   * Encoding note: the .word below is the residual raw subset for this native packet/group; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
-  ".word 0x10bf40f6, 0xa6fbdd10\n"
+  "{ p0 = cmp.gt(r23,#0); if (p0.new) jump:nt Lhmx_2f0f44;\n"
+  "cvt.ub = acc(r27):sc1 }\n"
   /* asm packet from comment; words preserved. */
   "{ r5 -= asl(r26,#2);\n"
   "r3 -= asl(r26,#9);\n"
@@ -927,17 +1016,23 @@
    * Purpose: advances output/bias state and controls the next store or loop step;
    * kept raw because these HMX/control words are not byte-proven asm.
    */
-  ".word 0xb0036003, 0xbff77ff7, 0x9b85403b, 0x9203c3fe, 0x10bf40f8, 0xa6fbdc10\n"
+  "Lhmx_2f0f74:\n"
+  "{ r3 = add(r3,#0x100);\n"
+  "r23 = add(r23,#-1);\n"
+  "r27 = memw(r5++#4);\n"
+  "bias = mxmem2(r3) }\n"
+  "{ p0 = cmp.gt(r23,#0); if (p0.new) jump:nt Lhmx_2f0f74;\n"
+  "cvt.ub = acc(r27):sc0 }\n"
   /* asm packet from comment; words preserved. */
   "{ r5 -= asl(r26,#2);\n"
   "p0 = cmp.gt(r13,#64);\n"
   "if (p0.new) r3 = add(r3,r31);\n"
   "r10 = memw(r0+#0) }\n"
-  /* unknown/HMX raw block @0x2f0f9c..0x2f0fbc
+  /* native packet group @0x2f0f9c..0x2f0fbc
    *   0x2f0f9c: <unknown>
    *   0x2f0fac: <unknown>
    * Purpose: branch-sensitive HMX/control packet; selects the next inner-loop or epilogue path.
-   * Encoding note: the .word below is the residual raw subset for this native packet/group; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
   ".word 0x707a4017, 0xfb3f4383, 0x5c204022\n"
   /* asm packet split from known decoded raw words.
@@ -948,25 +1043,30 @@
    * Purpose: advances output/bias state and controls the next store or loop step;
    * kept raw because these HMX/control words are not byte-proven asm.
    */
-  ".word 0xb0036003, 0xbff77ff7, 0x9b85403b, 0x9203c3fe\n"
+  "Lhmx_2f0fac:\n"
+  "{ r3 = add(r3,#0x100);\n"
+  "r23 = add(r23,#-1);\n"
+  "r27 = memw(r5++#4);\n"
+  "bias = mxmem2(r3) }\n"
   /* asm packet from comment; words preserved. */
   "{ r27 = or(r27,#1) }\n"
-  /* unknown/HMX raw block @0x2f0fc0..0x2f0fc8
+  /* native packet group @0x2f0fc0..0x2f0fc8
    *   0x2f0fc0: <unknown>
    * Purpose: accumulator conversion/writeback tail; stores or finalizes cvt output for this tile.
-   * Encoding note: the .word below is the residual raw subset for this native packet/group; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
-  ".word 0x10bf40f6, 0xa6fbdc10\n"
+  "{ p0 = cmp.gt(r23,#0); if (p0.new) jump:nt Lhmx_2f0fac;\n"
+  "cvt.ub = acc(r27):sc0 }\n"
   /* asm packet from comment; words preserved. */
   "{ r5 -= asl(r26,#2);\n"
   "r23 = r26;\n"
   "r10 = memw(r0+#8) }\n"
-  /* unknown/HMX raw block @0x2f0fd4..0x2f0ff8
+  /* native packet group @0x2f0fd4..0x2f0ff8
    *   0x2f0fd4: <unknown>
    *   0x2f0fe0: <unknown>
    *   0x2f0ff0: <unknown>
    * Purpose: predicate/address update around the HMX output-store path.
-   * Encoding note: the .word below is the residual raw subset for this native packet/group; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
   ".word 0x754d4c00, 0xfb3f6383\n"
   /* asm packet split from known decoded raw words.
@@ -977,7 +1077,13 @@
    * Purpose: advances output/bias state and controls the next store or loop step;
    * kept raw because these HMX/control words are not byte-proven asm.
    */
-  ".word 0xb0036003, 0xbff77ff7, 0x9b85403b, 0x9203c3fe, 0x10bf40f8, 0xa6fbdd10\n"
+  "Lhmx_2f0fe0:\n"
+  "{ r3 = add(r3,#0x100);\n"
+  "r23 = add(r23,#-1);\n"
+  "r27 = memw(r5++#4);\n"
+  "bias = mxmem2(r3) }\n"
+  "{ p0 = cmp.gt(r23,#0); if (p0.new) jump:nt Lhmx_2f0fe0;\n"
+  "cvt.ub = acc(r27):sc1 }\n"
   /* decoded packet @0x2f0ff8..0x2f1000
    *   0x2f0ff8: { p0 = cmp.gt(r13,#96)
    *   0x2f0ffc: if (!p0.new) jump:nt 0x2f1008 }
@@ -1032,7 +1138,7 @@
    *   0x2f1058: r30 = add(r30,#-8)
    *   0x2f105c: nop }
    * Purpose: initialize or restart hardware loop0 for the current K/output tile body.
-   * Encoding note: the .word below is the residual raw subset for this native packet/group; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
   ".word 0x60144100, 0xf5135200, 0xbffe7f1e\n"
   /* asm packet split from known decoded raw words. */
@@ -1041,22 +1147,31 @@
   "{ p0 = cmp.gt(r13,#32);\n"
   "r23 = r26;\n"
   "r6 = memw(r1++#4) }\n"
-  /* unknown/HMX raw block @0x2f106c..0x2f108c
+  /* native packet group @0x2f106c..0x2f108c
    *   0x2f106c: <unknown>
    *   0x2f1078: <unknown>
    *   0x2f107c: <unknown>
    * Purpose: HMX operand load; feed activation/weight/bias data into the next MAC or cvt packet.
-   * Encoding note: the .word below is the residual raw subset for this native packet/group; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
-  ".word 0xfb035f03, 0x5c204020, 0x920647ed, 0x9202e943, 0xb0036003, 0xbff77ff7, 0x9b85403b, 0x9203c3fe\n"
+  "{ if (p0) r3 = add(r3,r31);\n"
+  "if (!p0) jump:nt Lhmx_2f10ac;\n"
+  "activation.ub = mxmem(r6,r7):cm;\n"
+  "weight.n = mxmem(r2,r9):2x:deep }\n"
+  "Lhmx_2f107c:\n"
+  "{ r3 = add(r3,#0x100);\n"
+  "r23 = add(r23,#-1);\n"
+  "r27 = memw(r5++#4);\n"
+  "bias = mxmem2(r3) }\n"
   /* asm packet from comment; words preserved. */
   "{ r27 = or(r27,#1) }\n"
-  /* unknown/HMX raw block @0x2f1090..0x2f1098
+  /* native packet group @0x2f1090..0x2f1098
    *   0x2f1090: <unknown>
    * Purpose: accumulator conversion/writeback tail; stores or finalizes cvt output for this tile.
-   * Encoding note: the .word below is the residual raw subset for this native packet/group; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
-  ".word 0x10bf40f6, 0xa6fbdd10\n"
+  "{ p0 = cmp.gt(r23,#0); if (p0.new) jump:nt Lhmx_2f107c;\n"
+  "cvt.ub = acc(r27):sc1 }\n"
   /* asm packet from comment; words preserved. */
   "{ r5 -= asl(r26,#2);\n"
   "r3 -= asl(r26,#9);\n"
@@ -1076,17 +1191,23 @@
    * Purpose: advances output/bias state and controls the next store or loop step;
    * kept raw because these HMX/control words are not byte-proven asm.
    */
-  ".word 0xb0036003, 0xbff77ff7, 0x9b85403b, 0x9203c3fe, 0x10bf40f8, 0xa6fbdc10\n"
+  "Lhmx_2f10ac:\n"
+  "{ r3 = add(r3,#0x100);\n"
+  "r23 = add(r23,#-1);\n"
+  "r27 = memw(r5++#4);\n"
+  "bias = mxmem2(r3) }\n"
+  "{ p0 = cmp.gt(r23,#0); if (p0.new) jump:nt Lhmx_2f10ac;\n"
+  "cvt.ub = acc(r27):sc0 }\n"
   /* asm packet from comment; words preserved. */
   "{ r5 -= asl(r26,#2);\n"
   "p0 = cmp.gt(r13,#64);\n"
   "if (p0.new) r3 = add(r3,r31);\n"
   "r10 = memw(r0+#0) }\n"
-  /* unknown/HMX raw block @0x2f10d4..0x2f10f4
+  /* native packet group @0x2f10d4..0x2f10f4
    *   0x2f10d4: <unknown>
    *   0x2f10e4: <unknown>
    * Purpose: branch-sensitive HMX/control packet; selects the next inner-loop or epilogue path.
-   * Encoding note: the .word below is the residual raw subset for this native packet/group; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
   ".word 0x707a4017, 0xfb3f4383, 0x5c204022\n"
   /* asm packet split from known decoded raw words.
@@ -1097,25 +1218,30 @@
    * Purpose: advances output/bias state and controls the next store or loop step;
    * kept raw because these HMX/control words are not byte-proven asm.
    */
-  ".word 0xb0036003, 0xbff77ff7, 0x9b85403b, 0x9203c3fe\n"
+  "Lhmx_2f10e4:\n"
+  "{ r3 = add(r3,#0x100);\n"
+  "r23 = add(r23,#-1);\n"
+  "r27 = memw(r5++#4);\n"
+  "bias = mxmem2(r3) }\n"
   /* asm packet from comment; words preserved. */
   "{ r27 = or(r27,#1) }\n"
-  /* unknown/HMX raw block @0x2f10f8..0x2f1100
+  /* native packet group @0x2f10f8..0x2f1100
    *   0x2f10f8: <unknown>
    * Purpose: accumulator conversion/writeback tail; stores or finalizes cvt output for this tile.
-   * Encoding note: the .word below is the residual raw subset for this native packet/group; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
-  ".word 0x10bf40f6, 0xa6fbdc10\n"
+  "{ p0 = cmp.gt(r23,#0); if (p0.new) jump:nt Lhmx_2f10e4;\n"
+  "cvt.ub = acc(r27):sc0 }\n"
   /* asm packet from comment; words preserved. */
   "{ r5 -= asl(r26,#2);\n"
   "r23 = r26;\n"
   "r10 = memw(r0+#8) }\n"
-  /* unknown/HMX raw block @0x2f110c..0x2f1130
+  /* native packet group @0x2f110c..0x2f1130
    *   0x2f110c: <unknown>
    *   0x2f1118: <unknown>
    *   0x2f1128: <unknown>
    * Purpose: predicate/address update around the HMX output-store path.
-   * Encoding note: the .word below is the residual raw subset for this native packet/group; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
   ".word 0x754d4c00, 0xfb3f6383\n"
   /* asm packet split from known decoded raw words.
@@ -1126,7 +1252,13 @@
    * Purpose: advances output/bias state and controls the next store or loop step;
    * kept raw because these HMX/control words are not byte-proven asm.
    */
-  ".word 0xb0036003, 0xbff77ff7, 0x9b85403b, 0x9203c3fe, 0x10bf40f8, 0xa6fbdd10\n"
+  "Lhmx_2f1118:\n"
+  "{ r3 = add(r3,#0x100);\n"
+  "r23 = add(r23,#-1);\n"
+  "r27 = memw(r5++#4);\n"
+  "bias = mxmem2(r3) }\n"
+  "{ p0 = cmp.gt(r23,#0); if (p0.new) jump:nt Lhmx_2f1118;\n"
+  "cvt.ub = acc(r27):sc1 }\n"
   /* decoded packet @0x2f1130..0x2f1138
    *   0x2f1130: { p0 = cmp.gt(r13,#96)
    *   0x2f1134: if (!p0.new) jump:nt 0x2f1140 }
