@@ -27,6 +27,7 @@ ARM_CXX="$NDK_BIN/clang++"
 
 PACKAGE_NAME="QnnHmxMatMulW16A16Package"
 ARCH="${ARCH:-v75}"
+W16A16_KERNEL_PROFILE="${W16A16_KERNEL_PROFILE:-skip}"
 
 OUT_HTP="$SCRIPT_DIR/build/hexagon-$ARCH"
 OUT_ARM="$SCRIPT_DIR/build/aarch64"
@@ -37,14 +38,40 @@ SRCS=(
     "$SCRIPT_DIR/src/HmxU16I16ToU16MatMulOp.cpp"
 )
 
+PROFILE_DEFS=()
+case "$W16A16_KERNEL_PROFILE" in
+    skip)
+        PROFILE_DEFS+=(-DHMX_W16A16_SKIP_KERNEL)
+        ;;
+    accepted)
+        PROFILE_DEFS+=(
+            -UHMX_W16A16_SKIP_KERNEL
+            -DHMX_W16A16_ACCEPTED_NATIVE_RECORD_256
+            -DHMX_W16A16_NATIVE_RECORD_256_PROFILE
+        )
+        ;;
+    native_record_256)
+        PROFILE_DEFS+=(
+            -UHMX_W16A16_SKIP_KERNEL
+            -DHMX_W16A16_ALLOW_UNVALIDATED_KERNEL
+            -DHMX_W16A16_NATIVE_RECORD_256_PROFILE
+        )
+        ;;
+    *)
+        echo "ERROR: unknown W16A16_KERNEL_PROFILE='$W16A16_KERNEL_PROFILE' (expected skip, accepted, or native_record_256)" >&2
+        exit 1
+        ;;
+esac
+
 echo "=== Building QnnHmxMatMulW16A16Package (arch=$ARCH) ==="
+echo "profile: $W16A16_KERNEL_PROFILE"
 
 HEX_FLAGS=(
     -O2 -fPIC
     -mhvx -mhvx-length=128B -mhmx "-m$ARCH"
     -DUSE_OS_QURT -DPREPARE_DISABLED
     -DHMX_W16A16_ENABLE_QHPI_PRECOMPUTE
-    -DHMX_W16A16_SKIP_KERNEL
+    "${PROFILE_DEFS[@]}"
     "-DTHIS_PKG_NAME=$PACKAGE_NAME"
     -I "$QNN_SDK_ROOT/include/QNN"
     -I "$HEXAGON_SDK_ROOT/rtos/qurt/compute$ARCH/include/qurt"
@@ -70,6 +97,7 @@ ARM_FLAGS=(
     --sysroot="$NDK_BIN/../sysroot"
     -stdlib=libc++
     -D__HVXDBL__ -DUSE_OS_LINUX -DANDROID -DPREPARE_DISABLED
+    "${PROFILE_DEFS[@]}"
     "-DTHIS_PKG_NAME=$PACKAGE_NAME"
     -I "$QNN_SDK_ROOT/include/QNN"
     -fomit-frame-pointer -fvisibility=default

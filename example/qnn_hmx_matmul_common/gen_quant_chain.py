@@ -639,6 +639,8 @@ def generate(family: Family, args: argparse.Namespace) -> None:
     row_groups = m // row_tile
     chain = max(1, int(args.chain))
     w4_native_conv_surface_layout = family.name == "w4a16" and args.op_input_layout == "native_conv_surface"
+    w16_native_layout = family.name == "w16a16" and args.op_input_layout in ("native", "native_split")
+    w16_native_split_layout = family.name == "w16a16" and args.op_input_layout == "native_split"
     native_act_layout = (
         family.name == "w8a16" and args.op_input_layout in (
             "native",
@@ -647,15 +649,17 @@ def generate(family: Family, args: argparse.Namespace) -> None:
             "native_in_tiled_out_split",
             "native_in_row4_out",
         )
-    ) or (family.name == "w4a16" and args.op_input_layout == "native") or w4_native_conv_surface_layout
+    ) or (family.name == "w4a16" and args.op_input_layout == "native") or w4_native_conv_surface_layout or w16_native_layout
     native_out_layout = (
         family.name == "w8a16" and args.op_input_layout in ("native", "native_split")
-    ) or (family.name == "w4a16" and args.op_input_layout == "native") or w4_native_conv_surface_layout
+    ) or (family.name == "w4a16" and args.op_input_layout == "native") or w4_native_conv_surface_layout or w16_native_layout
     native_op_layout = native_act_layout or native_out_layout
-    native_split_layout = family.name == "w8a16" and args.op_input_layout in (
-        "native_split",
-        "native_in_tiled_out_split",
-    )
+    native_split_layout = (
+        family.name == "w8a16" and args.op_input_layout in (
+            "native_split",
+            "native_in_tiled_out_split",
+        )
+    ) or w16_native_split_layout
     w4_native_conv_input_layout = family.name == "w4a16" and args.op_input_layout == "native_conv"
     if args.op_input_layout == "native_conv" and family.name != "w4a16":
         raise ValueError("native_conv input layout is currently a w4a16-only diagnostic")
@@ -709,24 +713,73 @@ def generate(family: Family, args: argparse.Namespace) -> None:
     for split_idx in range(split_count):
         col0 = split_idx * split_n
         col1 = col0 + split_n
-        w_part = w_raw_kn[:, col0:col1]
-        wt_part = _weight_initializer(
-            family,
-            w_part,
-            args.w4_pack_order,
-            args.w4_nibble_encoding,
-            args.w4_native_sidecar_raw,
-            args.w8_pack_order,
-            args.w8_carrier_dtype,
-        )
+        w_part = w_raw_kn if w16_native_split_layout else w_raw_kn[:, col0:col1]
+        bias_w_part = w_raw_kn[:, col0:col1]
+        if family.name == "w16a16" and args.w16_weight_carrier_dtype in ("int8", "uint8"):
+            w16_payload_shape = w_part.shape
+            if args.w16_weight_sidecar_raw:
+                raw = np.fromfile(args.w16_weight_sidecar_raw, dtype=np.uint8)
+                expected = int(np.prod(w_part.shape))
+                if raw.size == expected * split_count:
+                    raw = raw[split_idx * expected:(split_idx + 1) * expected]
+                elif split_count == 1 and raw.size == expected * 2:
+                    # Diagnostic import for the tiled public surface with
+                    # HMX_W16A16_INTERNAL_SPLIT_N128.  QNN's native lowering
+                    # stores two full 64K QInt8 sidecars for N[0:128] and
+                    # N[128:256]; the wrapper derives N from the output/bias
+                    # contract, so the weight tensor can over-carry both raw
+                    # sidecars without changing the public output shape.
+                    w16_payload_shape = (w_part.shape[0], w_part.shape[1] * 2)
+                if raw.size != expected:
+                    if not (split_count == 1 and raw.size == expected * 2):
+                        raise ValueError(
+                            f"W16 sidecar raw byte count mismatch: got {raw.size}, want {expected}"
+                        )
+                signed_w16_payload = raw.view(np.int8).reshape(w16_payload_shape)
+            elif args.w16_weight_pack_order == "clip":
+                signed_w16_payload = np.clip(w_part, -128, 127).astype(np.int8)
+            elif args.w16_weight_pack_order == "hi8":
+                signed_w16_payload = (w_part.astype(np.int32) >> 8).astype(np.int8)
+            elif args.w16_weight_pack_order == "lo8":
+                signed_w16_payload = w_part.astype(np.int8)
+            else:
+                raise ValueError(f"unsupported W16 8-bit pack order: {args.w16_weight_pack_order}")
+            if args.w16_weight_carrier_dtype == "uint8":
+                signed_w16_payload = signed_w16_payload.view(np.uint8)
+            wt_part = numpy_helper.from_array(
+                signed_w16_payload.reshape(1, 1, *w16_payload_shape),
+                name="weight",
+            )
+        else:
+            wt_part = _weight_initializer(
+                family,
+                w_part,
+                args.w4_pack_order,
+                args.w4_nibble_encoding,
+                args.w4_native_sidecar_raw,
+                args.w8_pack_order,
+                args.w8_carrier_dtype,
+            )
         bias_part, bias_q_part, effective_i32_part = _bias_initializer(
             family,
-            w_part,
+            bias_w_part,
             args.bias_scale,
             args.bias_baseline,
             args.bias_layout,
             args.bias_fold,
         )
+        if family.name == "w16a16" and args.w16_bias_sidecar_raw:
+            raw = np.fromfile(args.w16_bias_sidecar_raw, dtype=np.uint8)
+            bias_shape = tuple(int(dim) for dim in bias_part.dims)
+            expected = int(np.prod(bias_shape)) * np.dtype(np.int32).itemsize
+            if raw.size == expected * split_count:
+                raw = raw[split_idx * expected:(split_idx + 1) * expected]
+            if raw.size != expected:
+                raise ValueError(
+                    f"W16 bias sidecar raw byte count mismatch: got {raw.size}, want {expected}"
+                )
+            bias_payload = raw.view(np.int32).reshape(bias_shape)
+            bias_part = numpy_helper.from_array(bias_payload.copy(), name=bias_part.name)
         if native_split_layout:
             wt_part.name = f"weight_{split_idx}"
             bias_part.name = f"bias_{split_idx}"
@@ -739,6 +792,13 @@ def generate(family: Family, args: argparse.Namespace) -> None:
     if family.name == "w4a16":
         scratch_input_name = "control"
         scratch_init = numpy_helper.from_array(np.array([1], dtype=np.int32), name=scratch_input_name)
+    elif family.name == "w16a16" and args.w16_scratch_sidecar_raw:
+        raw = np.fromfile(args.w16_scratch_sidecar_raw, dtype=np.uint8)
+        scratch_input_name = "scratch"
+        scratch_init = numpy_helper.from_array(
+            raw.reshape(1, 1, 1, raw.size).copy(),
+            name=scratch_input_name,
+        )
     else:
         scratch_input_name = "scratch"
         scratch_init = numpy_helper.from_array(
@@ -972,6 +1032,12 @@ def generate(family: Family, args: argparse.Namespace) -> None:
         param_encodings = {"bias": [bias_enc]}
     if family.weight_bits == 4:
         param_encodings["weight"] = [_symmetric_encoding(4)]
+    if family.name == "w16a16" and args.w16_weight_carrier_dtype == "int8":
+        if native_split_layout:
+            for split_idx in range(split_count):
+                param_encodings[f"weight_{split_idx}"] = [_symmetric_encoding(8)]
+        else:
+            param_encodings["weight"] = [_symmetric_encoding(8)]
 
     overrides = {
         "activation_encodings": activation_encodings,
@@ -1115,6 +1181,11 @@ def main(family_name: str) -> None:
     )
     p.add_argument("--w8-pack-order", choices=["raw", "kmajor", "kmajor_split128"], default="raw")
     p.add_argument("--w8-carrier-dtype", choices=["uint8", "int8"], default="uint8")
+    p.add_argument("--w16-weight-carrier-dtype", choices=["uint16", "int8", "uint8"], default="uint16")
+    p.add_argument("--w16-weight-pack-order", choices=["clip", "hi8", "lo8"], default="clip")
+    p.add_argument("--w16-weight-sidecar-raw", default=None)
+    p.add_argument("--w16-bias-sidecar-raw", default=None)
+    p.add_argument("--w16-scratch-sidecar-raw", default=None)
     p.add_argument("--a16-quant-contract", choices=["legacy", "native"], default="legacy")
     p.add_argument("--reference-contract", choices=["auto", "legacy", "native"], default="auto")
     p.add_argument("--final-output-rank", choices=["4d", "3d"], default="4d")

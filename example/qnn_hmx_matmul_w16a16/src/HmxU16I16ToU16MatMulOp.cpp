@@ -30,9 +30,48 @@
 #define STRINGIZE(X) STRINGIZE_DETAIL(X)
 #define THIS_PKG_NAME_STR STRINGIZE(THIS_PKG_NAME)
 
+#if defined(HMX_W16A16_ACCEPTED_NATIVE_RECORD_256) && !defined(HMX_W16A16_NATIVE_RECORD_256_PROFILE)
+#define HMX_W16A16_NATIVE_RECORD_256_PROFILE
+#endif
+
+#if defined(HMX_W16A16_NATIVE_RECORD_256_PROFILE)
+#ifndef HMX_W16A16_INTERNAL_SPLIT_N128
+#define HMX_W16A16_INTERNAL_SPLIT_N128
+#endif
+#ifndef HMX_W16A16_QHPI_WEIGHT8
+#define HMX_W16A16_QHPI_WEIGHT8
+#endif
+#ifndef HMX_W16A16_NATIVE_RECORD_FIELDS
+#define HMX_W16A16_NATIVE_RECORD_FIELDS
+#endif
+#ifndef HMX_W16A16_MASK_ARG1
+#define HMX_W16A16_MASK_ARG1 0x70bu
+#endif
+#ifndef HMX_W16A16_MASK_ARG5
+#define HMX_W16A16_MASK_ARG5 0x80u
+#endif
+#endif
+
 #if defined(__hexagon__) && !defined(HMX_W16A16_SKIP_KERNEL) && \
-    !defined(HMX_W16A16_ALLOW_UNVALIDATED_KERNEL)
+    !defined(HMX_W16A16_ALLOW_UNVALIDATED_KERNEL) && \
+    !defined(HMX_W16A16_ACCEPTED_NATIVE_RECORD_256)
 #error "w16a16 HMX body is not validated yet; keep HMX_W16A16_SKIP_KERNEL until the family-specific body is wired."
+#endif
+
+#ifndef HMX_W16A16_MASK_ARG1
+#define HMX_W16A16_MASK_ARG1 0x700u
+#endif
+#ifndef HMX_W16A16_MASK_ARG2
+#define HMX_W16A16_MASK_ARG2 0u
+#endif
+#ifndef HMX_W16A16_MASK_ARG3
+#define HMX_W16A16_MASK_ARG3 0u
+#endif
+#ifndef HMX_W16A16_MASK_ARG4
+#define HMX_W16A16_MASK_ARG4 0u
+#endif
+#ifndef HMX_W16A16_MASK_ARG5
+#define HMX_W16A16_MASK_ARG5 0x20u
 #endif
 
 /*
@@ -118,6 +157,183 @@ static uint32_t square_size_from_crouton_blocks(uint32_t blocks)
     }
 }
 
+static bool hmx_w16a16_tile_counts_from_shapes(
+    const QHPI_Tensor *act,
+    const QHPI_Tensor *weight,
+    const QHPI_Tensor *out,
+    uint32_t act_blocks,
+    uint32_t *M_t,
+    uint32_t *N_t,
+    uint32_t *K_t)
+{
+    uint32_t M = 0;
+    uint32_t K = 0;
+    uint32_t N = 0;
+    if (act) {
+        const QHPI_Shape a = qhpi_tensor_shape(act);
+        if (a.rank == 4) {
+            M = a.dims[1] * a.dims[2];
+            K = a.dims[3];
+        } else if (a.rank == 3) {
+            M = a.dims[1];
+            K = a.dims[2];
+        }
+    }
+    if (out) {
+        const QHPI_Shape o = qhpi_tensor_shape(out);
+        if (o.rank == 4) {
+            N = o.dims[3];
+        } else if (o.rank == 3) {
+            N = o.dims[2];
+        }
+    }
+    if (weight && N == 0) {
+        const QHPI_Shape w = qhpi_tensor_shape(weight);
+        if (w.rank == 4) {
+            if (K == 0) K = w.dims[2];
+            N = w.dims[3];
+        }
+    }
+    if (M == 0 || K == 0 || N == 0) {
+        const uint32_t S = square_size_from_crouton_blocks(act_blocks);
+        M = S;
+        K = S;
+        N = S;
+    }
+    if (M < 128 || K < 128 || N < 32 || (M % 32) || (K % 32) || (N % 32)) {
+        return false;
+    }
+    *M_t = M / 32;
+    *K_t = K / 32;
+    *N_t = N / 32;
+    return true;
+}
+
+static inline uint32_t hmx_w16a16_required_table_entries(
+    uint32_t row4_groups,
+    uint32_t logical_tiles,
+    uint32_t table_storage_stride)
+{
+    if (row4_groups == 0 || logical_tiles == 0 || table_storage_stride < logical_tiles) {
+        return 0;
+    }
+    return (row4_groups - 1u) * table_storage_stride + logical_tiles;
+}
+
+static inline uint32_t hmx_w16a16_crouton_row4_groups(uint32_t m_t)
+{
+    return m_t * 8u;
+}
+
+static inline uint32_t hmx_w16a16_crouton_row4_block_index(
+    uint32_t row4_tile,
+    uint32_t kn_tile,
+    uint32_t kn_tiles)
+{
+#if defined(HMX_W16A16_ROW4_BLOCK_OFFSET)
+    return (row4_tile >> 3u) * kn_tiles + kn_tile;
+#else
+    return (row4_tile & 7u) * kn_tiles + kn_tile;
+#endif
+}
+
+static inline int32_t hmx_w16a16_crouton_row4_physical_ptr(
+    const int32_t *block_table,
+    uint32_t row4_tile,
+    uint32_t kn_tile,
+    uint32_t kn_tiles)
+{
+#if defined(HMX_W16A16_ROW4_BLOCK_OFFSET)
+    return block_table[hmx_w16a16_crouton_row4_block_index(row4_tile, kn_tile, kn_tiles)] +
+        static_cast<int32_t>((row4_tile & 7u) * 256u);
+#else
+    return block_table[hmx_w16a16_crouton_row4_block_index(row4_tile, kn_tile, kn_tiles)];
+#endif
+}
+
+static inline uint32_t hmx_w16a16_k_total_bytes(uint32_t n_tiles, uint32_t k_tiles)
+{
+#if defined(HMX_W16A16_K_TOTAL_BYTES_OVERRIDE)
+    (void)n_tiles;
+    (void)k_tiles;
+    return HMX_W16A16_K_TOTAL_BYTES_OVERRIDE;
+#elif defined(HMX_W16A16_NATIVE_RECORD_FIELDS)
+    (void)n_tiles;
+    (void)k_tiles;
+    return 128u;
+#else
+#if defined(HMX_W16A16_K_TOTAL_BYTES_SCALE_K)
+    return n_tiles * k_tiles * 32u;
+#else
+    (void)k_tiles;
+    return n_tiles * 32u;
+#endif
+#endif
+}
+
+static inline uint32_t hmx_w16a16_act_table_stride(uint32_t m_tiles, uint32_t k_tiles)
+{
+#if defined(HMX_W16A16_ACT_STRIDE_M32)
+    (void)k_tiles;
+    return m_tiles * 4u;
+#else
+    (void)m_tiles;
+    return k_tiles;
+#endif
+}
+
+static inline uint32_t hmx_w16a16_act_desc_y_stride(uint32_t fallback)
+{
+#if defined(HMX_W16A16_ACT_DESC_Y_STRIDE_OVERRIDE)
+    (void)fallback;
+    return HMX_W16A16_ACT_DESC_Y_STRIDE_OVERRIDE;
+#elif defined(HMX_W16A16_NATIVE_RECORD_FIELDS)
+    (void)fallback;
+    return 512u;
+#else
+    return fallback;
+#endif
+}
+
+static inline uint32_t hmx_w16a16_out_y_stride(uint32_t fallback)
+{
+#if defined(HMX_W16A16_OUT_Y_STRIDE_OVERRIDE)
+    (void)fallback;
+    return HMX_W16A16_OUT_Y_STRIDE_OVERRIDE;
+#elif defined(HMX_W16A16_NATIVE_RECORD_FIELDS)
+    (void)fallback;
+    return 256u;
+#else
+    return fallback;
+#endif
+}
+
+static inline uint32_t hmx_w16a16_out_n_tiles_pow2(uint32_t fallback)
+{
+#if defined(HMX_W16A16_OUT_N_TILES_POW2_OVERRIDE)
+    (void)fallback;
+    return HMX_W16A16_OUT_N_TILES_POW2_OVERRIDE;
+#elif defined(HMX_W16A16_NATIVE_RECORD_FIELDS)
+    (void)fallback;
+    return 256u;
+#else
+    return fallback;
+#endif
+}
+
+static inline int32_t hmx_w16a16_out_m_total_minus_step(int32_t fallback)
+{
+#if defined(HMX_W16A16_OUT_M_TOTAL_MINUS_STEP_OVERRIDE)
+    (void)fallback;
+    return HMX_W16A16_OUT_M_TOTAL_MINUS_STEP_OVERRIDE;
+#elif defined(HMX_W16A16_NATIVE_RECORD_FIELDS)
+    (void)fallback;
+    return 1;
+#else
+    return fallback;
+#endif
+}
+
 #if defined(__hexagon__)
 static inline void store_le32(uint8_t *dst, uint32_t offset, uint32_t value)
 {
@@ -128,11 +344,18 @@ static inline void store_le32(uint8_t *dst, uint32_t offset, uint32_t value)
 }
 
 static uint32_t g_hmx_w16a16_mask_buf[16] __attribute__((aligned(16)));
+static uint32_t g_hmx_w16a16_extra_param[2] __attribute__((aligned(16))) = {1u, 1536u};
 
 static void init_mask_desc(uint32_t *mask_buf)
 {
     for (uint32_t i = 0; i < 16; ++i) mask_buf[i] = 0;
-    set_hmx_params_conv1x1(mask_buf, 0x700, 0, 0, 0, 0x20);
+    set_hmx_params_conv1x1(
+        mask_buf,
+        HMX_W16A16_MASK_ARG1,
+        HMX_W16A16_MASK_ARG2,
+        HMX_W16A16_MASK_ARG3,
+        HMX_W16A16_MASK_ARG4,
+        HMX_W16A16_MASK_ARG5);
 }
 
 static const hmx_conv_mask_desc_t *get_mask_desc()
@@ -146,6 +369,10 @@ static const hmx_conv_mask_desc_t *get_mask_desc()
     static int initialized = 0;
     if (!initialized) {
         init_mask_desc(g_hmx_w16a16_mask_buf);
+#if defined(HMX_W16A16_NATIVE_RECORD_FIELDS)
+        g_hmx_w16a16_mask_buf[14] =
+            static_cast<uint32_t>(reinterpret_cast<uintptr_t>(g_hmx_w16a16_extra_param));
+#endif
         initialized = 1;
     }
     return reinterpret_cast<const hmx_conv_mask_desc_t *>(g_hmx_w16a16_mask_buf);
@@ -156,12 +383,102 @@ static const hmx_conv_mask_desc_t *get_precomputed_mask_desc()
     return reinterpret_cast<const hmx_conv_mask_desc_t *>(g_hmx_w16a16_mask_buf);
 }
 
+static inline const hmx_conv_mask_desc_t *hmx_w16a16_maybe_patch_mask_extra(
+    const hmx_conv_mask_desc_t *mask_desc,
+    uint32_t *mask_storage,
+    const uint32_t *extra_param)
+{
+#if defined(HMX_W16A16_MASK_EXTRA_PTR_WORD) || defined(HMX_W16A16_NATIVE_RECORD_FIELDS)
+    const uint32_t *src = reinterpret_cast<const uint32_t *>(mask_desc);
+    for (uint32_t i = 0; i < 16; ++i) mask_storage[i] = src[i];
+    mask_storage[14] = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(extra_param));
+    return reinterpret_cast<const hmx_conv_mask_desc_t *>(mask_storage);
+#else
+    (void)mask_storage;
+    (void)extra_param;
+    return mask_desc;
+#endif
+}
+
+static inline void hmx_w16a16_enter_kernel(
+    const hmx_conv_out_desc_t *out_desc,
+    const hmx_conv_act_desc_t *act_desc,
+    const uint8_t *wt_pack,
+    const uint8_t *bias_bytes,
+    const hmx_conv_mask_desc_t *mask_desc,
+    const uint32_t *extra_param)
+{
+    our_v73deep_kernel(out_desc, act_desc, wt_pack, bias_bytes, mask_desc, extra_param);
+}
+
+static inline void hmx_w16a16_enter_kernel_maybe_split_n128(
+    const hmx_conv_out_desc_t *out_desc,
+    const hmx_conv_act_desc_t *act_desc,
+    const uint8_t *wt_pack,
+    const uint8_t *bias_bytes,
+    const hmx_conv_mask_desc_t *mask_desc,
+    const uint32_t *extra_param,
+    uint32_t mt_groups,
+    uint32_t N_t,
+    uint32_t K_t,
+    const int32_t *precomputed_split_out_tables = nullptr)
+{
+#if defined(HMX_W16A16_INTERNAL_SPLIT_N128)
+    constexpr uint32_t kSplitNTiles = 4;
+    if (N_t >= kSplitNTiles && (N_t % kSplitNTiles) == 0 &&
+        out_desc->out_table_stride_dwords >= N_t) {
+        int32_t out_tbl_split[1024] __attribute__((aligned(64)));
+        const uint32_t split_entries = mt_groups * kSplitNTiles;
+        if (split_entries > 0 && split_entries <= 1024) {
+            const uint32_t split_weight_bytes = K_t * kSplitNTiles * 2048u;
+            const uint32_t split_bias_bytes = kSplitNTiles * 512u;
+            for (uint32_t split = 0; split < N_t / kSplitNTiles; ++split) {
+                const int32_t *split_table = precomputed_split_out_tables ?
+                    precomputed_split_out_tables + split * split_entries : out_tbl_split;
+                if (!precomputed_split_out_tables) {
+                    for (uint32_t rg = 0; rg < mt_groups; ++rg) {
+                        int32_t *dst = out_tbl_split + rg * kSplitNTiles;
+                        const int32_t *src = out_desc->out_tile_ptr_table +
+                            rg * out_desc->out_table_stride_dwords + split * kSplitNTiles;
+                        for (uint32_t nt = 0; nt < kSplitNTiles; ++nt) dst[nt] = src[nt];
+                    }
+                }
+                hmx_conv_out_desc_t split_out_desc = *out_desc;
+                split_out_desc.out_tile_ptr_table = const_cast<int32_t *>(split_table);
+                split_out_desc.out_table_stride_dwords = kSplitNTiles;
+                split_out_desc.out_y_stride_words =
+                    hmx_w16a16_out_y_stride(kSplitNTiles);
+                split_out_desc.n_tiles_pow2 =
+                    hmx_w16a16_out_n_tiles_pow2(split_out_desc.n_tiles_pow2);
+                split_out_desc.m_total_minus_step =
+                    hmx_w16a16_out_m_total_minus_step(split_out_desc.m_total_minus_step);
+                split_out_desc.k_total_bytes =
+                    hmx_w16a16_k_total_bytes(kSplitNTiles, K_t);
+                hmx_w16a16_enter_kernel(
+                    &split_out_desc,
+                    act_desc,
+                    wt_pack + split * split_weight_bytes,
+                    bias_bytes + split * split_bias_bytes,
+                    mask_desc,
+                    extra_param);
+            }
+            return;
+        }
+    }
+#else
+    (void)mt_groups;
+    (void)N_t;
+    (void)K_t;
+#endif
+    hmx_w16a16_enter_kernel(out_desc, act_desc, wt_pack, bias_bytes, mask_desc, extra_param);
+}
+
 #endif
 
 #if defined(HMX_W16A16_ENABLE_QHPI_PRECOMPUTE)
-static constexpr uint32_t kHmxW16A16MaxCopiedTableEntries = 64;
+static constexpr uint32_t kHmxW16A16MaxCopiedTableEntries = 1024;
 static constexpr uint32_t kHmxW16A16PrecomputedDataSize =
-    56 + 2 * kHmxW16A16MaxCopiedTableEntries * sizeof(int32_t);
+    64 + 3 * kHmxW16A16MaxCopiedTableEntries * sizeof(int32_t);
 #endif
 
 #if defined(__hexagon__) && !defined(SCALAR_ONLY) && defined(HMX_W16A16_ENABLE_QHPI_PRECOMPUTE)
@@ -213,8 +530,11 @@ struct hmx_w16a16_precomputed_t {
     uint8_t *out_first_block;
     const int32_t *act_qhpi_table;
     const int32_t *out_qhpi_table;
+    const int32_t *split_out_qhpi_table;
+    uint32_t split_out_entries;
     int32_t act_table_copy[kHmxW16A16MaxCopiedTableEntries];
     int32_t out_table_copy[kHmxW16A16MaxCopiedTableEntries];
+    int32_t split_out_table_copy[kHmxW16A16MaxCopiedTableEntries];
 };
 
 static_assert(sizeof(hmx_w16a16_precomputed_t) == kHmxW16A16PrecomputedDataSize,
@@ -242,24 +562,33 @@ static uint32_t hmx_w16a16_precompute(
         reinterpret_cast<const uint8_t *>(qhpi_tensor_raw_data(inputs[0]));
     const uint8_t *wt_pack =
         reinterpret_cast<const uint8_t *>(qhpi_tensor_raw_data(inputs[1]));
+#if defined(HMX_W16A16_WEIGHT_FROM_SCRATCH)
+    wt_pack = reinterpret_cast<const uint8_t *>(qhpi_tensor_raw_data(inputs[3]));
+#endif
     void **act_blocks = qhpi_tensor_block_table(inputs[2]);
     void **out_blocks = qhpi_tensor_block_table(outputs[0]);
     const uint32_t blocks = qhpi_tensor_block_table_length(inputs[2]);
     if (!bias_bytes || !wt_pack || !act_blocks || !out_blocks) return QHPI_Success;
 
-    const uint32_t S = square_size_from_crouton_blocks(blocks);
-    if (S < 128) return QHPI_Success;
-
-    const uint32_t M_t = S / 32;
-    const uint32_t N_t = S / 32;
-    const uint32_t K_t = S / 32;
+    uint32_t M_t = 0;
+    uint32_t N_t = 0;
+    uint32_t K_t = 0;
+    if (!hmx_w16a16_tile_counts_from_shapes(
+            inputs[2], inputs[1], outputs[0], blocks, &M_t, &N_t, &K_t)) {
+        return QHPI_Success;
+    }
+    const uint32_t S = M_t * 32;
     const uint32_t block_rows = (S / 4) < 64 ? (S / 4) : 64;
     const uint32_t mt_per_block = block_rows / 32;
     if (mt_per_block == 0) return QHPI_Success;
 
-    const uint32_t mt_groups = (mt_per_block == 2) ? (M_t >> 1) : M_t;
-    const uint32_t act_entries = mt_groups * K_t;
-    const uint32_t out_entries = mt_groups * N_t;
+    const uint32_t mt_groups = hmx_w16a16_crouton_row4_groups(M_t);
+    const uint32_t act_table_stride = hmx_w16a16_act_table_stride(M_t, K_t);
+    const uint32_t out_table_stride = N_t;
+    const uint32_t act_entries =
+        hmx_w16a16_required_table_entries(mt_groups, K_t, act_table_stride);
+    const uint32_t out_entries =
+        hmx_w16a16_required_table_entries(mt_groups, N_t, out_table_stride);
     if (act_entries > 1024 || out_entries > 1024) {
         return QHPI_Success;
     }
@@ -274,8 +603,35 @@ static uint32_t hmx_w16a16_precompute(
     pc->out_qhpi_table = out_src;
     if (act_entries <= kHmxW16A16MaxCopiedTableEntries &&
         out_entries <= kHmxW16A16MaxCopiedTableEntries) {
-        for (uint32_t i = 0; i < act_entries; ++i) pc->act_table_copy[i] = act_src[i];
-        for (uint32_t i = 0; i < out_entries; ++i) pc->out_table_copy[i] = out_src[i];
+        for (uint32_t row4 = 0; row4 < mt_groups; ++row4) {
+            int32_t *a_dst = pc->act_table_copy + row4 * act_table_stride;
+            int32_t *o_dst = pc->out_table_copy + row4 * out_table_stride;
+            for (uint32_t kt = 0; kt < K_t; ++kt) {
+                a_dst[kt] = hmx_w16a16_crouton_row4_physical_ptr(act_src, row4, kt, K_t);
+            }
+            for (uint32_t nt = 0; nt < N_t; ++nt) {
+                o_dst[nt] = hmx_w16a16_crouton_row4_physical_ptr(out_src, row4, nt, N_t);
+            }
+        }
+        constexpr uint32_t kSplitNTiles = 4;
+        if (N_t >= kSplitNTiles && (N_t % kSplitNTiles) == 0 &&
+            out_table_stride >= N_t) {
+            const uint32_t split_entries = mt_groups * kSplitNTiles;
+            const uint32_t total_split_entries = split_entries * (N_t / kSplitNTiles);
+            if (total_split_entries <= kHmxW16A16MaxCopiedTableEntries) {
+                for (uint32_t split = 0; split < N_t / kSplitNTiles; ++split) {
+                    int32_t *split_base = pc->split_out_table_copy + split * split_entries;
+                    for (uint32_t rg = 0; rg < mt_groups; ++rg) {
+                        const int32_t *src = pc->out_table_copy +
+                            rg * out_table_stride + split * kSplitNTiles;
+                        int32_t *dst = split_base + rg * kSplitNTiles;
+                        for (uint32_t nt = 0; nt < kSplitNTiles; ++nt) dst[nt] = src[nt];
+                    }
+                }
+                pc->split_out_qhpi_table = pc->split_out_table_copy;
+                pc->split_out_entries = split_entries;
+            }
+        }
         pc->act_qhpi_table = pc->act_table_copy;
         pc->out_qhpi_table = pc->out_table_copy;
     }
@@ -322,21 +678,25 @@ static uint32_t hmx_w16a16_to_u16_matmul_precomputed_kernel(
     int32_t *act_tbl_ptr = const_cast<int32_t *>(pc->act_qhpi_table);
     int32_t *out_tbl_ptr = const_cast<int32_t *>(pc->out_qhpi_table);
 
-    uint32_t extra_param[2] __attribute__((aligned(16))) = {1u, 0u};
+    const uint32_t *extra_param = g_hmx_w16a16_extra_param;
     const hmx_conv_mask_desc_t *mask_desc = get_precomputed_mask_desc();
+#if !defined(HMX_W16A16_NATIVE_RECORD_FIELDS)
+    uint32_t mask_local[16] __attribute__((aligned(16)));
+    mask_desc = hmx_w16a16_maybe_patch_mask_extra(mask_desc, mask_local, extra_param);
+#endif
 
     hmx_conv_out_desc_t out_desc_local __attribute__((aligned(64))) = {
         out_tbl_ptr,
         pc->N_t,
-        pc->M_t * 4,
-        pc->M_t * 4,
-        8,
-        pc->N_t * 32,
+        hmx_w16a16_out_y_stride(pc->N_t),
+        hmx_w16a16_out_n_tiles_pow2(pc->M_t * 4),
+        hmx_w16a16_out_m_total_minus_step(8),
+        hmx_w16a16_k_total_bytes(pc->N_t, pc->K_t),
     };
     hmx_conv_act_desc_t act_desc_local __attribute__((aligned(64))) = {
         act_tbl_ptr,
         pc->K_t,
-        pc->M_t * 4,
+        hmx_w16a16_act_desc_y_stride(pc->K_t),
     };
     const hmx_conv_out_desc_t *out_desc = &out_desc_local;
     const hmx_conv_act_desc_t *act_desc = &act_desc_local;
@@ -367,6 +727,9 @@ static uint32_t hmx_w16a16_to_u16_matmul_precomputed_kernel(
 #endif
 
 #if defined(HMX_W16A16_SKIP_KERNEL)
+#if defined(HMX_W16A16_SKIP_NO_WRITE)
+    return QHPI_Success;
+#endif
     if (pc->out_first_block) {
         uint8_t *dst = pc->out_first_block;
         for (uint32_t i = 0; i < 16; ++i) dst[i] = 0;
@@ -386,13 +749,17 @@ static uint32_t hmx_w16a16_to_u16_matmul_precomputed_kernel(
      * table discovery happened at graph load.  The custom op event now starts
      * at the tiny native descriptor stitching boundary.
      */
-    our_v73deep_kernel(
+    hmx_w16a16_enter_kernel_maybe_split_n128(
         out_desc,
         act_desc,
         pc->wt_pack,
         pc->bias_bytes,
         mask_desc,
-        extra_param);
+        extra_param,
+        pc->mt_groups,
+        pc->N_t,
+        pc->K_t,
+        pc->split_out_qhpi_table);
 
 #if defined(HMX_W16A16_PROBE_CYCLES)
     uint64_t cyc_after_kernel = 0;
@@ -532,6 +899,9 @@ static uint32_t hmx_w16a16_to_u16_matmul_kernel(
         reinterpret_cast<const uint8_t *>(qhpi_tensor_raw_data(inputs[0]));
     const uint8_t *wt_pack =
         reinterpret_cast<const uint8_t *>(qhpi_tensor_raw_data(inputs[1]));
+#if defined(HMX_W16A16_WEIGHT_FROM_SCRATCH)
+    wt_pack = reinterpret_cast<const uint8_t *>(qhpi_tensor_raw_data(inputs[3]));
+#endif
     void **act_blocks = qhpi_tensor_block_table(inputs[2]);
     void **out_blocks = qhpi_tensor_block_table(outputs[0]);
     const uint32_t blocks = qhpi_tensor_block_table_length(inputs[2]);
@@ -551,12 +921,14 @@ static uint32_t hmx_w16a16_to_u16_matmul_kernel(
      *
      * The current generated flow is square-only, so all three are S/32.
      */
-    const uint32_t S = square_size_from_crouton_blocks(blocks);
-    if (S < 128) return QHPI_Success;
-
-    const uint32_t M_t = S / 32;
-    const uint32_t N_t = S / 32;
-    const uint32_t K_t = S / 32;
+    uint32_t M_t = 0;
+    uint32_t N_t = 0;
+    uint32_t K_t = 0;
+    if (!hmx_w16a16_tile_counts_from_shapes(
+            inputs[2], inputs[1], outputs[0], blocks, &M_t, &N_t, &K_t)) {
+        return QHPI_Success;
+    }
+    const uint32_t S = M_t * 32;
     const uint32_t block_rows = (S / 4) < 64 ? (S / 4) : 64;
     const uint32_t mt_per_block = block_rows / 32;
     if (mt_per_block == 0) return QHPI_Success;
@@ -566,13 +938,17 @@ static uint32_t hmx_w16a16_to_u16_matmul_kernel(
      * block for the C8 path.  The native V73DEEP descriptor wants one pointer
      * table row per such group, so 256^3 becomes:
      *
-     *   M_t=8, mt_per_block=2 -> mt_groups=4
-     *   act entries = mt_groups * K_t = 4 * 8 = 32
-     *   out entries = mt_groups * N_t = 4 * 8 = 32
+     *   M_t=8 -> row4_groups=64
+     *   act entries = row4_groups * K_t = 64 * 8 = 512
+     *   out entries = row4_groups * N_t = 64 * 8 = 512
      */
-    const uint32_t mt_groups = (mt_per_block == 2) ? (M_t >> 1) : M_t;
-    const uint32_t act_entries = mt_groups * K_t;
-    const uint32_t out_entries = mt_groups * N_t;
+    const uint32_t mt_groups = hmx_w16a16_crouton_row4_groups(M_t);
+    const uint32_t act_table_stride = hmx_w16a16_act_table_stride(M_t, K_t);
+    const uint32_t out_table_stride = N_t;
+    const uint32_t act_entries =
+        hmx_w16a16_required_table_entries(mt_groups, K_t, act_table_stride);
+    const uint32_t out_entries =
+        hmx_w16a16_required_table_entries(mt_groups, N_t, out_table_stride);
     if (act_entries > 1024 || out_entries > 1024) return QHPI_Success;
 
 #if defined(HMX_W16A16_PROBE_CYCLES)
@@ -606,47 +982,17 @@ static uint32_t hmx_w16a16_to_u16_matmul_kernel(
      * 32-bit pointers, hence the int32_t tables. For the canonical 256^3 case:
      *
      *   S=256, M_t=N_t=K_t=8
-     *   entries per table = mt_groups * K_t = 4 * 8 = 32
-     *   32 pointers * 4 bytes = 128 bytes = one HVX_Vector
+     *   row4_groups = M_t * 8 = 64
+     *   entries per table = row4_groups * K_t = 64 * 8 = 512
      */
-#if defined(__hexagon__)
-    if (mt_per_block == 2 && K_t == 8 && N_t == 8) {
-        // Keep the canonical 256^3 C8 path as a pair of 128B HVX copies.
-        // Scalarizing these table copies costs about 80 extra hot-op packets.
-        HVX_Vector act_vec;
-        HVX_Vector out_vec;
-        std::memcpy(&act_vec, act_blocks, sizeof(HVX_Vector));
-        std::memcpy(&out_vec, out_blocks, sizeof(HVX_Vector));
-        std::memcpy(act_tbl_all, &act_vec, sizeof(HVX_Vector));
-        std::memcpy(out_tbl_all, &out_vec, sizeof(HVX_Vector));
-    } else
-#endif
-    if (mt_per_block == 2) {
-        /*
-         * Generic C8 grouped fallback.  It preserves the same table order as
-         * QNN gives us, but copies group-by-group so non-256 square sizes still
-         * produce a contiguous native table.
-         */
-        for (uint32_t rg = 0; rg < mt_groups; ++rg) {
-            const int32_t *__restrict a_src = act_src + rg * K_t;
-            const int32_t *__restrict o_src = out_src + rg * N_t;
-            int32_t *__restrict a_dst = act_tbl_all + rg * K_t;
-            int32_t *__restrict o_dst = out_tbl_all + rg * N_t;
-            for (uint32_t kt = 0; kt < K_t; ++kt) a_dst[kt] = a_src[kt];
-            for (uint32_t nt = 0; nt < N_t; ++nt) o_dst[nt] = o_src[nt];
+    for (uint32_t row4 = 0; row4 < mt_groups; ++row4) {
+        int32_t *__restrict a_dst = act_tbl_all + row4 * act_table_stride;
+        int32_t *__restrict o_dst = out_tbl_all + row4 * out_table_stride;
+        for (uint32_t kt = 0; kt < K_t; ++kt) {
+            a_dst[kt] = hmx_w16a16_crouton_row4_physical_ptr(act_src, row4, kt, K_t);
         }
-    } else {
-        /*
-         * Smaller shapes can have only one 32-row tile per block.  In that case
-         * the native table is indexed directly by M tile instead of M-pair group.
-         */
-        for (uint32_t rg = 0; rg < M_t; ++rg) {
-            const int32_t *__restrict a_src = act_src + rg * K_t;
-            const int32_t *__restrict o_src = out_src + rg * N_t;
-            int32_t *__restrict a_dst = act_tbl_all + rg * K_t;
-            int32_t *__restrict o_dst = out_tbl_all + rg * N_t;
-            for (uint32_t kt = 0; kt < K_t; ++kt) a_dst[kt] = a_src[kt];
-            for (uint32_t nt = 0; nt < N_t; ++nt) o_dst[nt] = o_src[nt];
+        for (uint32_t nt = 0; nt < N_t; ++nt) {
+            o_dst[nt] = hmx_w16a16_crouton_row4_physical_ptr(out_src, row4, nt, N_t);
         }
     }
 
@@ -672,7 +1018,7 @@ static uint32_t hmx_w16a16_to_u16_matmul_kernel(
      *   out_desc
      *     +0x00 out_tile_ptr_table       -> out_tbl_all
      *     +0x04 out_table_stride_dwords  =  N_t
-     *     +0x08 out_y_stride_words       =  M_t * 4
+     *     +0x08 out_y_stride_words       =  N_t
      *     +0x0c n_tiles_pow2             =  M_t * 4
      *     +0x10 m_total_minus_step       =  8
      *     +0x14 k_total_bytes            =  N_t * 32
@@ -686,60 +1032,70 @@ static uint32_t hmx_w16a16_to_u16_matmul_kernel(
      * The constants below are copied from the decoded native Conv1x1 path:
      *
      *   out_table_stride_dwords = N_t       next N tile pointer in same M group
-     *   out_y_stride_words      = M_t * 4   y stride after native <<2 scaling
+     *   out_y_stride_words      = N_t       next row4 output-table stride
      *   n_tiles_pow2            = M_t * 4   native loop/count selector
      *   m_total_minus_step      = 8         decoded fixed step for this path
      *   k_total_bytes           = N_t * 32  byte span expected by kernel setup
      *   n_act_pairs             = K_t       number of activation pointer pairs
      */
-    uint32_t extra_param[2] __attribute__((aligned(16))) = {1u, 0u};
+    uint32_t extra_param[2] __attribute__((aligned(16))) = {1u, 1536u};
     const hmx_conv_mask_desc_t *mask_desc = get_mask_desc();
+    uint32_t mask_local[16] __attribute__((aligned(16)));
+    mask_desc = hmx_w16a16_maybe_patch_mask_extra(mask_desc, mask_local, extra_param);
 
     hmx_conv_out_desc_t out_desc = {
         out_tbl_all,
-        N_t,
-        M_t * 4,
-        M_t * 4,
-        8,
-        N_t * 32,
+        out_table_stride,
+        hmx_w16a16_out_y_stride(out_table_stride),
+        hmx_w16a16_out_n_tiles_pow2(M_t * 4),
+        hmx_w16a16_out_m_total_minus_step(8),
+        hmx_w16a16_k_total_bytes(N_t, K_t),
     };
     hmx_conv_act_desc_t act_desc = {
         act_tbl_all,
         K_t,
-        M_t * 4,
+        hmx_w16a16_act_desc_y_stride(act_table_stride),
     };
 
 #if defined(HMX_W16A16_DESC_DUMP)
     /*
-     * Descriptor dump mode writes the derived ABI state into the first output
-     * block and returns before HMX compute.  Use this when validating that QNN's
-     * tensor/block metadata was translated into the expected native descriptor.
+     * Descriptor dump mode writes the derived ABI state into every observed
+     * output block and returns before HMX compute.  The public output path
+     * untile/slices Crouton storage, so writing only out_blocks[0] can hide the
+     * marker in public raw.  Duplicating the compact 128B payload across blocks
+     * makes the diagnostic visible without changing normal builds.
      */
-    if (out_blocks[0]) {
-        uint8_t *dst = reinterpret_cast<uint8_t *>(out_blocks[0]);
-        for (uint32_t i = 0; i < 128; ++i) dst[i] = 0;
-        store_le32(dst, 0, 0x48385844u); /* H8XD */
-        store_le32(dst, 4, S);
-        store_le32(dst, 8, M_t);
-        store_le32(dst, 12, N_t);
-        store_le32(dst, 16, K_t);
-        store_le32(dst, 20, mt_per_block);
-        store_le32(dst, 24, reinterpret_cast<uintptr_t>(act_tbl_all));
-        store_le32(dst, 28, reinterpret_cast<uintptr_t>(out_tbl_all));
-        store_le32(dst, 32, out_desc.out_table_stride_dwords);
-        store_le32(dst, 36, out_desc.out_y_stride_words);
-        store_le32(dst, 40, out_desc.n_tiles_pow2);
-        store_le32(dst, 44, static_cast<uint32_t>(out_desc.m_total_minus_step));
-        store_le32(dst, 48, out_desc.k_total_bytes);
-        store_le32(dst, 52, act_desc.n_act_pairs);
-        store_le32(dst, 56, act_desc.act_table_y_stride_words);
-        const uint32_t *mask_words = reinterpret_cast<const uint32_t *>(mask_desc);
-        for (uint32_t i = 0; i < 16; ++i) store_le32(dst, 64 + i * 4, mask_words[i]);
+    uint8_t payload[128] __attribute__((aligned(16)));
+    for (uint32_t i = 0; i < 128; ++i) payload[i] = 0;
+    store_le32(payload, 0, 0x48385844u); /* H8XD */
+    store_le32(payload, 4, S);
+    store_le32(payload, 8, M_t);
+    store_le32(payload, 12, N_t);
+    store_le32(payload, 16, K_t);
+    store_le32(payload, 20, mt_per_block);
+    store_le32(payload, 24, reinterpret_cast<uintptr_t>(act_tbl_all));
+    store_le32(payload, 28, reinterpret_cast<uintptr_t>(out_tbl_all));
+    store_le32(payload, 32, out_desc.out_table_stride_dwords);
+    store_le32(payload, 36, out_desc.out_y_stride_words);
+    store_le32(payload, 40, out_desc.n_tiles_pow2);
+    store_le32(payload, 44, static_cast<uint32_t>(out_desc.m_total_minus_step));
+    store_le32(payload, 48, out_desc.k_total_bytes);
+    store_le32(payload, 52, act_desc.n_act_pairs);
+    store_le32(payload, 56, act_desc.act_table_y_stride_words);
+    const uint32_t *mask_words = reinterpret_cast<const uint32_t *>(mask_desc);
+    for (uint32_t i = 0; i < 16; ++i) store_le32(payload, 64 + i * 4, mask_words[i]);
+    for (uint32_t block = 0; block < blocks; ++block) {
+        if (!out_blocks[block]) continue;
+        uint8_t *dst = reinterpret_cast<uint8_t *>(out_blocks[block]);
+        for (uint32_t i = 0; i < 128; ++i) dst[i] = payload[i];
     }
     return QHPI_Success;
 #endif
 
 #if defined(HMX_W16A16_SKIP_KERNEL)
+#if defined(HMX_W16A16_SKIP_NO_WRITE)
+    return QHPI_Success;
+#endif
     /*
      * Skip mode proves the custom-op callback, tensor extraction, and output
      * write path are alive while avoiding the HMX body.  A successful device run
@@ -767,7 +1123,16 @@ static uint32_t hmx_w16a16_to_u16_matmul_kernel(
      * V73DEEP kernel body; the C++ wrapper does not inspect accumulators or
      * implement matmul arithmetic.
      */
-    our_v73deep_kernel(&out_desc, &act_desc, wt_pack, bias_bytes, mask_desc, extra_param);
+    hmx_w16a16_enter_kernel_maybe_split_n128(
+        &out_desc,
+        &act_desc,
+        wt_pack,
+        bias_bytes,
+        mask_desc,
+        extra_param,
+        mt_groups,
+        N_t,
+        K_t);
 
 #if defined(HMX_W16A16_PROBE_CYCLES)
     uint64_t cyc_after_kernel = 0;
@@ -787,7 +1152,13 @@ static uint32_t hmx_w16a16_to_u16_matmul_kernel(
 
 static QHPI_Tensor_Signature_v1 sig_inputs[] = {
     {QHPI_Int32,  QHPI_Layout_Flat4,      QHPI_Storage_Direct,   QHPI_MemLoc_TCM_Only},
+#if defined(HMX_W16A16_QHPI_SIGNED_WEIGHT8)
+    {QHPI_QInt8,  QHPI_Layout_Flat4,      QHPI_Storage_Direct,   QHPI_MemLoc_TCM_Only},
+#elif defined(HMX_W16A16_QHPI_WEIGHT8)
+    {QHPI_QUInt8, QHPI_Layout_Flat4,      QHPI_Storage_Direct,   QHPI_MemLoc_TCM_Only},
+#else
     {QHPI_QUInt16, QHPI_Layout_Flat4,      QHPI_Storage_Direct,   QHPI_MemLoc_TCM_Only},
+#endif
     {QHPI_QUInt16, QHPI_Layout_Crouton_16, QHPI_Storage_Indirect, QHPI_MemLoc_TCM_Only},
     {QHPI_QUInt8, QHPI_Layout_Flat4,      QHPI_Storage_Direct,   QHPI_MemLoc_TCM_Only},
 };

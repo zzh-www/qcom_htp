@@ -8,6 +8,7 @@ the linked documents.
 
 | Document | Purpose |
 |---|---|
+| [w16a16 native alignment plan](handoffs/w16a16_native_alignment_plan.md) | Plan for aligning `HmxU16I16ToU16MatMul`: native oracle, split-N kernel surface, body verification, probes, and acceptance gates. |
 | [w8a16 native alignment handoff](handoffs/w8a16_native_alignment.md) | Current 256^3 `HmxU16I8ToU16MatMul` state: native-output exact, but kernel-entry shape and performance remain open. |
 | [w4a16 QNN native path](handoffs/w4a16_qnn_native_path.md) | Required native-first entrypoint for W4A16: Conv lowering path, tensor contracts, sidecars, optrace scopes, and skel wrapper flow. |
 | [w4a16 native alignment handoff](handoffs/w4a16_native_alignment.md) | Completed 256^3 `HmxU16I4ToU16MatMul` native-output and performance alignment, plus standard optrace artifacts and probe history. |

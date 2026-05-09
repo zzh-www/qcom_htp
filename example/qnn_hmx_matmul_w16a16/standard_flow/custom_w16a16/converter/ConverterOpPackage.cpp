@@ -8,6 +8,14 @@
 #define EXPORT_API __attribute__((visibility("default")))
 #endif
 
+#if defined(HMX_W16A16_ACCEPTED_NATIVE_RECORD_256) && !defined(HMX_W16A16_NATIVE_RECORD_256_PROFILE)
+#define HMX_W16A16_NATIVE_RECORD_256_PROFILE
+#endif
+
+#if defined(HMX_W16A16_NATIVE_RECORD_256_PROFILE) && !defined(HMX_W16A16_QHPI_WEIGHT8)
+#define HMX_W16A16_QHPI_WEIGHT8
+#endif
+
 static inline uint32_t *tensor_dims(Qnn_Tensor_t *t)
 {
     switch (t->version) {
@@ -49,13 +57,18 @@ EXPORT_API Qnn_ErrorHandle_t HmxU16I16ToU16MatMulShapeInference(Qnn_OpConfig_t *
 
     uint32_t *w = tensor_dims(&op->v1.inputTensors[1]);
     uint32_t *a = tensor_dims(&op->v1.inputTensors[2]);
+    uint32_t *b = tensor_dims(&op->v1.inputTensors[0]);
     uint32_t *o = tensor_dims(&op->v1.outputTensors[0]);
     if (!w || !a || !o) return QNN_OP_PACKAGE_ERROR_INVALID_INFO;
 
     o[0] = 1;
     o[1] = a[1];
-    o[2] = 32;
-    o[3] = w[3];
+    o[2] = a[2];
+    if (b && tensor_rank(&op->v1.inputTensors[0]) == 4 && b[3] == 128) {
+        o[3] = b[1] * 32;
+    } else {
+        o[3] = w[3];
+    }
     return QNN_SUCCESS;
 }
 
@@ -64,7 +77,13 @@ EXPORT_API Qnn_ErrorHandle_t HmxU16I16ToU16MatMulDataTypeInference(Qnn_OpConfig_
     if (!op || op->v1.numOfOutputs < 1) return QNN_OP_PACKAGE_ERROR_INVALID_INFO;
     if (op->v1.numOfInputs >= 4) {
         set_tensor_dtype(&op->v1.inputTensors[0], QNN_DATATYPE_SFIXED_POINT_32);
+#if defined(HMX_W16A16_QHPI_SIGNED_WEIGHT8)
+        set_tensor_dtype(&op->v1.inputTensors[1], QNN_DATATYPE_SFIXED_POINT_8);
+#elif defined(HMX_W16A16_QHPI_WEIGHT8)
+        set_tensor_dtype(&op->v1.inputTensors[1], QNN_DATATYPE_UFIXED_POINT_8);
+#else
         set_tensor_dtype(&op->v1.inputTensors[1], QNN_DATATYPE_SFIXED_POINT_16);
+#endif
         set_tensor_dtype(&op->v1.inputTensors[2], QNN_DATATYPE_UFIXED_POINT_16);
         set_tensor_dtype(&op->v1.inputTensors[3], QNN_DATATYPE_UFIXED_POINT_8);
     }
