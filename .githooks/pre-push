@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+#
+# Required local pre-push gate for this repo.
+
+set -euo pipefail
+
+ROOT_DIR="$(git rev-parse --show-toplevel)"
+cd "$ROOT_DIR"
+
+if [ "${ARTIFACT_ONLY:-0}" = "1" ]; then
+    cat >&2 <<'EOF'
+ERROR: pre-push must run the full device E2E gate.
+       ARTIFACT_ONLY=1 is only allowed for manual local smoke tests, not push.
+EOF
+    exit 1
+fi
+
+echo "=== qcom_htp pre-push: running full QNN kernel E2E CI ==="
+echo "    tests/qnn_kernel_e2e/run_all.sh"
+tests/qnn_kernel_e2e/run_all.sh
+
+echo "=== qcom_htp pre-push: CI passed ==="
