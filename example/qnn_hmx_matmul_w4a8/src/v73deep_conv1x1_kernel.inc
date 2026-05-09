@@ -6,11 +6,10 @@
    * Comments retain decoded instructions where available. The remaining raw
    * words are mixed HMX-store/control tails whose readable spelling is not
    * accepted by the current assembler.
-   * Residual raw .word audit: decoded branch/loop/jump packets, native zero
-   * padding, and byte-proven `jumpr`/`:endloop0`/`:endloop1` packets were
-   * promoted to asm. Remaining raw words are the mixed HMX-store/control
-   * tails whose native `p0.new` control word is rejected by the public
-   * assembler when written as standalone readable asm.
+   * Residual raw .word audit: all known W4A8 branch, loop, jump, padding,
+   * HMX load, accumulator drain, and mixed HMX-store/control tails have
+   * been promoted to byte-proven readable asm. No actual .word directives
+   * remain in this slice.
    * Source: scripts/extract_hmx_kernel_bytes.py + public decode comments. */
   /* asm packet from comment; words preserved. */
   "{ r28 = #12;\n"
@@ -129,7 +128,7 @@
    *   0x2f0880: <unknown>
    *   0x2f088c: <unknown>
    * Purpose: inner MAC feed; load activation/weight HMX operands for the current K step.
-   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: packet has been promoted to byte-proven readable asm.
    */
   "{ r8 = add(r8,#0x400);\n"
   "if (p0) r25:24 = combine(r9,r7);\n"
@@ -145,7 +144,7 @@
    *   0x2f0898: if (!p1) jump:nt 0x2f08b0
    *   0x2f089c: nop }
    * Purpose: initialize or restart hardware loop0 for the current K/output tile body.
-   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: packet has been promoted to byte-proven readable asm.
    */
   "{ loop0(Lhmx_2f0860,r28);\n"
   "r24 = or(r7,#28);\n"
@@ -157,7 +156,7 @@
    *   0x2f08a4: <unknown>
    *   0x2f08ac: <unknown>
    * Purpose: inner MAC feed; load activation/weight HMX operands for the current K step.
-   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: packet has been promoted to byte-proven readable asm.
    */
   "{ r8 += add(r9,#1);\n"
   "activation.ub = mxmem(r6,r7):cm;\n"
@@ -188,7 +187,7 @@
   /* native packet group @0x2f08e0..0x2f08ec
    *   0x2f08e0: <unknown>
    * Purpose: accumulator conversion/writeback tail; stores or finalizes cvt output for this tile.
-   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: packet has been promoted to byte-proven readable asm.
    */
   "{ p0 = cmp.gt(r25,#0);\n"
   "if (p0.new) jump:nt Lhmx_2f08cc;\n"
@@ -202,7 +201,7 @@
    *   0x2f08fc: <unknown>
    *   0x2f0900: <unknown>
    *   0x2f0910: <unknown>
-   * Purpose: packet was split below into byte-proven asm plus residual raw tail; this header describes the original native HMX packet group.
+   * Purpose: packet has been split below into byte-proven readable asm; this header describes the original native HMX packet group.
    */
   /* asm packet split from known decoded raw words.
    * Purpose: output writeback; commit converted accumulator data to the current output tile.
@@ -231,7 +230,7 @@
    *   0x2f0928: <unknown>
    * Purpose: restore the output-store lane/mask limit before the following
    * cvt writeback; byte-proven as an :endloop1 packet with the HMX store.
-   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: packet has been promoted to byte-proven readable asm.
    */
   "{ r25 = #1023;\n"
   "nop;\n"
@@ -287,7 +286,7 @@
    *   0x2f0998: r17 = add(r17,#-8)
    *   0x2f099c: nop }
    * Purpose: initialize or restart hardware loop0 for the current K/output tile body.
-   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: packet has been promoted to byte-proven readable asm.
    */
   "Lhmx_2f0990:\n"
   "{ loop0(Lhmx_2f09a0,r20);\n"
@@ -305,7 +304,7 @@
    *   0x2f09bc: <unknown>
    *   0x2f09c0: <unknown>
    * Purpose: HMX operand load; feed activation/weight/bias data into the next MAC or cvt packet.
-   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: packet has been promoted to byte-proven readable asm.
    */
   "{ if (!p0) jump:nt Lhmx_2f09f4;\n"
   "if (p0) r3 = add(r3,r31);\n"
@@ -322,7 +321,7 @@
   /* native packet group @0x2f09d4..0x2f09e0
    *   0x2f09d4: <unknown>
    * Purpose: accumulator conversion/writeback tail; stores or finalizes cvt output for this tile.
-   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: packet has been promoted to byte-proven readable asm.
    */
   "{ p0 = cmp.gt(r25,#0);\n"
   "if (p0.new) jump:nt Lhmx_2f09c0;\n"
@@ -336,7 +335,7 @@
    *   0x2f09f0: <unknown>
    *   0x2f09f4: <unknown>
    *   0x2f0a04: <unknown>
-   * Purpose: packet was split below into byte-proven asm plus residual raw tail; this header describes the original native HMX packet group.
+   * Purpose: packet has been split below into byte-proven readable asm; this header describes the original native HMX packet group.
    */
   /* asm packet split from known decoded raw words.
    * Purpose: output writeback; commit converted accumulator data to the current output tile.
@@ -476,7 +475,7 @@
    *   0x2f0b1c: nop
    *   0x2f0b20: nop }
    * Purpose: initialize or restart hardware loop0 for the current K/output tile body.
-   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: packet has been promoted to byte-proven readable asm.
    */
   "{ loop0(Lhmx_2f0b60,r28);\n"
   "r24 = mpyi(r24,r30);\n"
@@ -519,7 +518,7 @@
    *   0x2f0b74: <unknown>
    *   0x2f0b7c: <unknown>
    * Purpose: HMX operand load; feed activation/weight/bias data into the next MAC or cvt packet.
-   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: packet has been promoted to byte-proven readable asm.
    */
   "{ r8 = add(r8,r24);\n"
   "activation.ub = mxmem(r6,r7):cm;\n"
@@ -558,7 +557,7 @@
   /* native packet group @0x2f0ba4..0x2f0bb4
    *   0x2f0ba4: <unknown>
    * Purpose: HMX operand load; feed activation/weight/bias data into the next MAC or cvt packet.
-   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: packet has been promoted to byte-proven readable asm.
    */
   "Lhmx_2f0ba4:\n"
   "{ r3 = add(r3,#0x100);\n"
@@ -570,7 +569,7 @@
   /* native packet group @0x2f0bb8..0x2f0bc0
    *   0x2f0bb8: <unknown>
    * Purpose: accumulator conversion/writeback tail; stores or finalizes cvt output for this tile.
-   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: packet has been promoted to byte-proven readable asm.
    */
   "{ p0 = cmp.gt(r23,#0); if (p0.new) jump:nt Lhmx_2f0ba4;\n"
   "cvt.ub = acc(r27):sc1 }\n"
@@ -583,15 +582,15 @@
    *   0x2f0bd0: <unknown>
    *   0x2f0bd4: <unknown>
    *   0x2f0be4: <unknown>
-   * Purpose: packet was split below into byte-proven asm plus residual raw tail; this header describes the original native HMX packet group.
+   * Purpose: packet has been split below into byte-proven readable asm; this header describes the original native HMX packet group.
    */
   /* asm packet split from known decoded raw words.
    * Purpose: output writeback; commit converted accumulator data to the current output tile.
    */
   "{ mxmem(r10,r11):cm = cvt }\n"
-  /* remaining raw tail paired with the preceding cvt output store.
-   * Purpose: advances output/bias state and controls the next store or loop step;
-   * kept raw because these HMX/control words are not byte-proven asm.
+  /* byte-proven mixed HMX-store/control packet.
+   * Purpose: advances output/bias state, conditionally rolls back the address update,
+   * and controls the next store or loop step.
    */
   "Lhmx_2f0bd4:\n"
   "{ r3 = add(r3,#0x100);\n"
@@ -609,16 +608,15 @@
    *   0x2f0bfc: <unknown>
    *   0x2f0c0c: <unknown>
    * Purpose: branch-sensitive HMX/control packet; selects the next inner-loop or epilogue path.
-   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: packet has been promoted to byte-proven readable asm.
    */
-  ".word 0x707a4017, 0xfb3f4383, 0x5c204022\n"
-  /* asm packet split from known decoded raw words.
-   * Purpose: output writeback; commit converted accumulator data to the current output tile.
-   */
-  "{ mxmem(r10,r11):cm = cvt }\n"
-  /* remaining raw tail paired with the preceding cvt output store.
-   * Purpose: advances output/bias state and controls the next store or loop step;
-   * kept raw because these HMX/control words are not byte-proven asm.
+  "{ r23 = r26;\n"
+  "if (!p0) r3 = sub(r3,r31);\n"
+  "if (!p0) jump:nt Lhmx_2f0c40;\n"
+  "mxmem(r10,r11):cm = cvt }\n"
+  /* byte-proven mixed HMX-store/control packet.
+   * Purpose: advances output/bias state, conditionally rolls back the address update,
+   * and controls the next store or loop step.
    */
   "Lhmx_2f0c0c:\n"
   "{ r3 = add(r3,#0x100);\n"
@@ -630,7 +628,7 @@
   /* native packet group @0x2f0c20..0x2f0c28
    *   0x2f0c20: <unknown>
    * Purpose: accumulator conversion/writeback tail; stores or finalizes cvt output for this tile.
-   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: packet has been promoted to byte-proven readable asm.
    */
   "{ p0 = cmp.gt(r23,#0); if (p0.new) jump:nt Lhmx_2f0c0c;\n"
   "cvt.ub = acc(r27):sc0 }\n"
@@ -643,16 +641,14 @@
    *   0x2f0c40: <unknown>
    *   0x2f0c50: <unknown>
    * Purpose: predicate/address update around the HMX output-store path.
-   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: packet has been promoted to byte-proven readable asm.
    */
-  ".word 0x754d4c00, 0xfb3f6383\n"
-  /* asm packet split from known decoded raw words.
-   * Purpose: output writeback; commit converted accumulator data to the current output tile.
-   */
-  "{ mxmem(r10,r11):cm = cvt }\n"
-  /* remaining raw tail paired with the preceding cvt output store.
-   * Purpose: advances output/bias state and controls the next store or loop step;
-   * kept raw because these HMX/control words are not byte-proven asm.
+  "{ p0 = cmp.gt(r13,#96);\n"
+  "if (!p0.new) r3 = sub(r3,r31);\n"
+  "mxmem(r10,r11):cm = cvt }\n"
+  /* byte-proven mixed HMX-store/control packet.
+   * Purpose: advances output/bias state, conditionally rolls back the address update,
+   * and controls the next store or loop step.
    */
   "Lhmx_2f0c40:\n"
   "{ r3 = add(r3,#0x100);\n"
@@ -733,7 +729,7 @@
    *   0x2f0cd8: r30 = add(r30,#-8)
    *   0x2f0cdc: nop }
    * Purpose: initialize or restart hardware loop0 for the current K/output tile body.
-   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: packet has been promoted to byte-proven readable asm.
    */
   "Lhmx_2f0cd0:\n"
   "{ loop0(Lhmx_2f0ce0,r20);\n"
@@ -750,7 +746,7 @@
    *   0x2f0cf8: <unknown>
    *   0x2f0cfc: <unknown>
    * Purpose: HMX operand load; feed activation/weight/bias data into the next MAC or cvt packet.
-   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: packet has been promoted to byte-proven readable asm.
    */
   "{ if (p0) r3 = add(r3,r31);\n"
   "if (!p0) jump:nt Lhmx_2f0d2c;\n"
@@ -766,7 +762,7 @@
   /* native packet group @0x2f0d10..0x2f0d18
    *   0x2f0d10: <unknown>
    * Purpose: accumulator conversion/writeback tail; stores or finalizes cvt output for this tile.
-   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: packet has been promoted to byte-proven readable asm.
    */
   "{ p0 = cmp.gt(r23,#0); if (p0.new) jump:nt Lhmx_2f0cfc;\n"
   "cvt.ub = acc(r27):sc1 }\n"
@@ -779,15 +775,15 @@
    *   0x2f0d28: <unknown>
    *   0x2f0d2c: <unknown>
    *   0x2f0d3c: <unknown>
-   * Purpose: packet was split below into byte-proven asm plus residual raw tail; this header describes the original native HMX packet group.
+   * Purpose: packet has been split below into byte-proven readable asm; this header describes the original native HMX packet group.
    */
   /* asm packet split from known decoded raw words.
    * Purpose: output writeback; commit converted accumulator data to the current output tile.
    */
   "{ mxmem(r10,r11):cm = cvt }\n"
-  /* remaining raw tail paired with the preceding cvt output store.
-   * Purpose: advances output/bias state and controls the next store or loop step;
-   * kept raw because these HMX/control words are not byte-proven asm.
+  /* byte-proven mixed HMX-store/control packet.
+   * Purpose: advances output/bias state, conditionally rolls back the address update,
+   * and controls the next store or loop step.
    */
   "Lhmx_2f0d2c:\n"
   "{ r3 = add(r3,#0x100);\n"
@@ -805,16 +801,15 @@
    *   0x2f0d54: <unknown>
    *   0x2f0d64: <unknown>
    * Purpose: branch-sensitive HMX/control packet; selects the next inner-loop or epilogue path.
-   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: packet has been promoted to byte-proven readable asm.
    */
-  ".word 0x707a4017, 0xfb3f4383, 0x5c204022\n"
-  /* asm packet split from known decoded raw words.
-   * Purpose: output writeback; commit converted accumulator data to the current output tile.
-   */
-  "{ mxmem(r10,r11):cm = cvt }\n"
-  /* remaining raw tail paired with the preceding cvt output store.
-   * Purpose: advances output/bias state and controls the next store or loop step;
-   * kept raw because these HMX/control words are not byte-proven asm.
+  "{ r23 = r26;\n"
+  "if (!p0) r3 = sub(r3,r31);\n"
+  "if (!p0) jump:nt Lhmx_2f0d98;\n"
+  "mxmem(r10,r11):cm = cvt }\n"
+  /* byte-proven mixed HMX-store/control packet.
+   * Purpose: advances output/bias state, conditionally rolls back the address update,
+   * and controls the next store or loop step.
    */
   "Lhmx_2f0d64:\n"
   "{ r3 = add(r3,#0x100);\n"
@@ -826,7 +821,7 @@
   /* native packet group @0x2f0d78..0x2f0d80
    *   0x2f0d78: <unknown>
    * Purpose: accumulator conversion/writeback tail; stores or finalizes cvt output for this tile.
-   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: packet has been promoted to byte-proven readable asm.
    */
   "{ p0 = cmp.gt(r23,#0); if (p0.new) jump:nt Lhmx_2f0d64;\n"
   "cvt.ub = acc(r27):sc0 }\n"
@@ -839,16 +834,14 @@
    *   0x2f0d98: <unknown>
    *   0x2f0da8: <unknown>
    * Purpose: predicate/address update around the HMX output-store path.
-   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: packet has been promoted to byte-proven readable asm.
    */
-  ".word 0x754d4c00, 0xfb3f6383\n"
-  /* asm packet split from known decoded raw words.
-   * Purpose: output writeback; commit converted accumulator data to the current output tile.
-   */
-  "{ mxmem(r10,r11):cm = cvt }\n"
-  /* remaining raw tail paired with the preceding cvt output store.
-   * Purpose: advances output/bias state and controls the next store or loop step;
-   * kept raw because these HMX/control words are not byte-proven asm.
+  "{ p0 = cmp.gt(r13,#96);\n"
+  "if (!p0.new) r3 = sub(r3,r31);\n"
+  "mxmem(r10,r11):cm = cvt }\n"
+  /* byte-proven mixed HMX-store/control packet.
+   * Purpose: advances output/bias state, conditionally rolls back the address update,
+   * and controls the next store or loop step.
    */
   "Lhmx_2f0d98:\n"
   "{ r3 = add(r3,#0x100);\n"
@@ -987,7 +980,7 @@
    *   0x2f0ed8: nop
    *   0x2f0edc: nop }
    * Purpose: initialize or restart hardware loop0 for the current K/output tile body.
-   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: packet has been promoted to byte-proven readable asm.
    */
   "{ loop0(Lhmx_2f0f00,r28);\n"
   "r24 = mpyi(r24,r30);\n"
@@ -1021,7 +1014,7 @@
    *   0x2f0f14: <unknown>
    *   0x2f0f1c: <unknown>
    * Purpose: HMX operand load; feed activation/weight/bias data into the next MAC or cvt packet.
-   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: packet has been promoted to byte-proven readable asm.
    */
   "{ r8 = add(r8,r24);\n"
   "activation.ub = mxmem(r6,r7):cm;\n"
@@ -1060,7 +1053,7 @@
   /* native packet group @0x2f0f44..0x2f0f54
    *   0x2f0f44: <unknown>
    * Purpose: HMX operand load; feed activation/weight/bias data into the next MAC or cvt packet.
-   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: packet has been promoted to byte-proven readable asm.
    */
   "Lhmx_2f0f44:\n"
   "{ r3 = add(r3,#0x100);\n"
@@ -1072,7 +1065,7 @@
   /* native packet group @0x2f0f58..0x2f0f60
    *   0x2f0f58: <unknown>
    * Purpose: accumulator conversion/writeback tail; stores or finalizes cvt output for this tile.
-   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: packet has been promoted to byte-proven readable asm.
    */
   "{ p0 = cmp.gt(r23,#0); if (p0.new) jump:nt Lhmx_2f0f44;\n"
   "cvt.ub = acc(r27):sc1 }\n"
@@ -1085,15 +1078,15 @@
    *   0x2f0f70: <unknown>
    *   0x2f0f74: <unknown>
    *   0x2f0f84: <unknown>
-   * Purpose: packet was split below into byte-proven asm plus residual raw tail; this header describes the original native HMX packet group.
+   * Purpose: packet has been split below into byte-proven readable asm; this header describes the original native HMX packet group.
    */
   /* asm packet split from known decoded raw words.
    * Purpose: output writeback; commit converted accumulator data to the current output tile.
    */
   "{ mxmem(r10,r11):cm = cvt }\n"
-  /* remaining raw tail paired with the preceding cvt output store.
-   * Purpose: advances output/bias state and controls the next store or loop step;
-   * kept raw because these HMX/control words are not byte-proven asm.
+  /* byte-proven mixed HMX-store/control packet.
+   * Purpose: advances output/bias state, conditionally rolls back the address update,
+   * and controls the next store or loop step.
    */
   "Lhmx_2f0f74:\n"
   "{ r3 = add(r3,#0x100);\n"
@@ -1111,16 +1104,15 @@
    *   0x2f0f9c: <unknown>
    *   0x2f0fac: <unknown>
    * Purpose: branch-sensitive HMX/control packet; selects the next inner-loop or epilogue path.
-   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: packet has been promoted to byte-proven readable asm.
    */
-  ".word 0x707a4017, 0xfb3f4383, 0x5c204022\n"
-  /* asm packet split from known decoded raw words.
-   * Purpose: output writeback; commit converted accumulator data to the current output tile.
-   */
-  "{ mxmem(r10,r11):cm = cvt }\n"
-  /* remaining raw tail paired with the preceding cvt output store.
-   * Purpose: advances output/bias state and controls the next store or loop step;
-   * kept raw because these HMX/control words are not byte-proven asm.
+  "{ r23 = r26;\n"
+  "if (!p0) r3 = sub(r3,r31);\n"
+  "if (!p0) jump:nt Lhmx_2f0fe0;\n"
+  "mxmem(r10,r11):cm = cvt }\n"
+  /* byte-proven mixed HMX-store/control packet.
+   * Purpose: advances output/bias state, conditionally rolls back the address update,
+   * and controls the next store or loop step.
    */
   "Lhmx_2f0fac:\n"
   "{ r3 = add(r3,#0x100);\n"
@@ -1132,7 +1124,7 @@
   /* native packet group @0x2f0fc0..0x2f0fc8
    *   0x2f0fc0: <unknown>
    * Purpose: accumulator conversion/writeback tail; stores or finalizes cvt output for this tile.
-   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: packet has been promoted to byte-proven readable asm.
    */
   "{ p0 = cmp.gt(r23,#0); if (p0.new) jump:nt Lhmx_2f0fac;\n"
   "cvt.ub = acc(r27):sc0 }\n"
@@ -1145,16 +1137,14 @@
    *   0x2f0fe0: <unknown>
    *   0x2f0ff0: <unknown>
    * Purpose: predicate/address update around the HMX output-store path.
-   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: packet has been promoted to byte-proven readable asm.
    */
-  ".word 0x754d4c00, 0xfb3f6383\n"
-  /* asm packet split from known decoded raw words.
-   * Purpose: output writeback; commit converted accumulator data to the current output tile.
-   */
-  "{ mxmem(r10,r11):cm = cvt }\n"
-  /* remaining raw tail paired with the preceding cvt output store.
-   * Purpose: advances output/bias state and controls the next store or loop step;
-   * kept raw because these HMX/control words are not byte-proven asm.
+  "{ p0 = cmp.gt(r13,#96);\n"
+  "if (!p0.new) r3 = sub(r3,r31);\n"
+  "mxmem(r10,r11):cm = cvt }\n"
+  /* byte-proven mixed HMX-store/control packet.
+   * Purpose: advances output/bias state, conditionally rolls back the address update,
+   * and controls the next store or loop step.
    */
   "Lhmx_2f0fe0:\n"
   "{ r3 = add(r3,#0x100);\n"
@@ -1224,7 +1214,7 @@
    *   0x2f1058: r30 = add(r30,#-8)
    *   0x2f105c: nop }
    * Purpose: initialize or restart hardware loop0 for the current K/output tile body.
-   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: packet has been promoted to byte-proven readable asm.
    */
   "Lhmx_2f1050:\n"
   "{ loop0(Lhmx_2f1060,r20);\n"
@@ -1241,7 +1231,7 @@
    *   0x2f1078: <unknown>
    *   0x2f107c: <unknown>
    * Purpose: HMX operand load; feed activation/weight/bias data into the next MAC or cvt packet.
-   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: packet has been promoted to byte-proven readable asm.
    */
   "{ if (p0) r3 = add(r3,r31);\n"
   "if (!p0) jump:nt Lhmx_2f10ac;\n"
@@ -1257,7 +1247,7 @@
   /* native packet group @0x2f1090..0x2f1098
    *   0x2f1090: <unknown>
    * Purpose: accumulator conversion/writeback tail; stores or finalizes cvt output for this tile.
-   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: packet has been promoted to byte-proven readable asm.
    */
   "{ p0 = cmp.gt(r23,#0); if (p0.new) jump:nt Lhmx_2f107c;\n"
   "cvt.ub = acc(r27):sc1 }\n"
@@ -1270,15 +1260,15 @@
    *   0x2f10a8: <unknown>
    *   0x2f10ac: <unknown>
    *   0x2f10bc: <unknown>
-   * Purpose: packet was split below into byte-proven asm plus residual raw tail; this header describes the original native HMX packet group.
+   * Purpose: packet has been split below into byte-proven readable asm; this header describes the original native HMX packet group.
    */
   /* asm packet split from known decoded raw words.
    * Purpose: output writeback; commit converted accumulator data to the current output tile.
    */
   "{ mxmem(r10,r11):cm = cvt }\n"
-  /* remaining raw tail paired with the preceding cvt output store.
-   * Purpose: advances output/bias state and controls the next store or loop step;
-   * kept raw because these HMX/control words are not byte-proven asm.
+  /* byte-proven mixed HMX-store/control packet.
+   * Purpose: advances output/bias state, conditionally rolls back the address update,
+   * and controls the next store or loop step.
    */
   "Lhmx_2f10ac:\n"
   "{ r3 = add(r3,#0x100);\n"
@@ -1296,16 +1286,15 @@
    *   0x2f10d4: <unknown>
    *   0x2f10e4: <unknown>
    * Purpose: branch-sensitive HMX/control packet; selects the next inner-loop or epilogue path.
-   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: packet has been promoted to byte-proven readable asm.
    */
-  ".word 0x707a4017, 0xfb3f4383, 0x5c204022\n"
-  /* asm packet split from known decoded raw words.
-   * Purpose: output writeback; commit converted accumulator data to the current output tile.
-   */
-  "{ mxmem(r10,r11):cm = cvt }\n"
-  /* remaining raw tail paired with the preceding cvt output store.
-   * Purpose: advances output/bias state and controls the next store or loop step;
-   * kept raw because these HMX/control words are not byte-proven asm.
+  "{ r23 = r26;\n"
+  "if (!p0) r3 = sub(r3,r31);\n"
+  "if (!p0) jump:nt Lhmx_2f1118;\n"
+  "mxmem(r10,r11):cm = cvt }\n"
+  /* byte-proven mixed HMX-store/control packet.
+   * Purpose: advances output/bias state, conditionally rolls back the address update,
+   * and controls the next store or loop step.
    */
   "Lhmx_2f10e4:\n"
   "{ r3 = add(r3,#0x100);\n"
@@ -1317,7 +1306,7 @@
   /* native packet group @0x2f10f8..0x2f1100
    *   0x2f10f8: <unknown>
    * Purpose: accumulator conversion/writeback tail; stores or finalizes cvt output for this tile.
-   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: packet has been promoted to byte-proven readable asm.
    */
   "{ p0 = cmp.gt(r23,#0); if (p0.new) jump:nt Lhmx_2f10e4;\n"
   "cvt.ub = acc(r27):sc0 }\n"
@@ -1330,16 +1319,14 @@
    *   0x2f1118: <unknown>
    *   0x2f1128: <unknown>
    * Purpose: predicate/address update around the HMX output-store path.
-   * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
+   * Encoding note: packet has been promoted to byte-proven readable asm.
    */
-  ".word 0x754d4c00, 0xfb3f6383\n"
-  /* asm packet split from known decoded raw words.
-   * Purpose: output writeback; commit converted accumulator data to the current output tile.
-   */
-  "{ mxmem(r10,r11):cm = cvt }\n"
-  /* remaining raw tail paired with the preceding cvt output store.
-   * Purpose: advances output/bias state and controls the next store or loop step;
-   * kept raw because these HMX/control words are not byte-proven asm.
+  "{ p0 = cmp.gt(r13,#96);\n"
+  "if (!p0.new) r3 = sub(r3,r31);\n"
+  "mxmem(r10,r11):cm = cvt }\n"
+  /* byte-proven mixed HMX-store/control packet.
+   * Purpose: advances output/bias state, conditionally rolls back the address update,
+   * and controls the next store or loop step.
    */
   "Lhmx_2f1118:\n"
   "{ r3 = add(r3,#0x100);\n"

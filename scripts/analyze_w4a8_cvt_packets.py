@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Summarize W4A8 BNB cvt/writeback packet groups.
 
-The W4A8 inline-asm replica still keeps a small set of mixed HMX-store/control
-tails as raw .word directives, but the activation/weight loads, accumulator
-conversion, pure branch/loop control, and padding paths have been promoted to
-byte-proven asm.  This helper reports the remaining raw groups around the
-writeback path and the decoded scaled cvt instructions.
+The W4A8 inline-asm replica has promoted the activation/weight loads,
+accumulator conversion, pure branch/loop control, padding paths, and mixed
+HMX-store/control tails to byte-proven asm.  This helper reports any raw
+writeback groups that regress back into the file and the decoded scaled cvt
+instructions.
 """
 
 from __future__ import annotations
@@ -131,10 +131,10 @@ def build_report(inc: Path) -> dict[str, Any]:
         ]
     else:
         conclusion = [
-            "W4A8 BNB accumulator conversion packets are now byte-proven readable asm.",
+            "W4A8 BNB accumulator conversion packets are byte-proven readable asm.",
             "The decoded scaled conversion forms are cvt.ub = acc(r27/r31):sc0/sc1.",
-            "Pure branch/loop control and padding are now readable asm/.space.",
-            "Remaining raw groups are mixed HMX-store/control tails with p0.new control words that clang-19 rejects as standalone asm; no raw 0x92 HMX load or raw 0xa6 drain word remains.",
+            "Pure branch/loop control, padding, and mixed HMX-store/control tails are readable asm/.space.",
+            "No raw writeback groups remain; no raw 0x92 HMX load or raw 0xa6 drain word remains.",
         ]
     return {
         "inc": str(inc),
