@@ -17,9 +17,10 @@ Current status:
 - Default device builds enter the real W4A8 HMX body.  The canonical 256^3
   chain8 output is byte-exact against the matched native oracle
   (`65536/65536`, maxdiff `0`).
-- Performance is not aligned.  Optrace reports custom main `162483` cycles and
-  timeline `197581`; matched native reports `q::ConvLayer_s1.opt=11546`, MatMul
-  aggregate `29765`, and timeline `48831`.
+- Performance is aligned for the canonical 256^3 chain8 artifact.  Optrace
+  reports custom main `10025` cycles and timeline `38644`; matched native
+  reports `q::ConvLayer_s1.opt=11546`, MatMul aggregate `29765`, and timeline
+  `48831`.
 
 Build:
 
