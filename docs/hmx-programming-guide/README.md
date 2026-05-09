@@ -60,6 +60,12 @@ example/qnn_hmx_matmul_u8i8/
 docs/qnn_custom_op_matmul_e2e.md
 ```
 
+混合精度 HMX MatMul 的数据流和 accumulator/drain 说明在：
+
+```text
+docs/hmx_mixed_precision_matmul_dataflow.md
+```
+
 这份指南只保留当前 QNN native 对齐实践里的有效主线：真正快的设计不是让 HMX 在运行时理解数据，而是让 HMX 一进来就面对已经准备好的 TCM/VTCM 状态。
 
 ## 当前结果
