@@ -836,15 +836,42 @@ embedded `.inc` 是从 `libQnnHtpV75Skel.so` 的 `0x2f0780` slice 复刻来的
 
 ```text
 byte-proven:
-  wrapper ABI、branch/loop 边界、部分普通 Hexagon 指令、部分 drain/store 路线
+  wrapper ABI
+  branch / loop / jump 控制流
+  native padding -> .space
+  activation.ub / weight.n HMX load
+  bias = mxmem2(...)
+  cvt.ub = acc(...):sc0/sc1
+  mxmem(...):cm = cvt
+  mixed HMX-store/control tail
 
-仍保留 raw words:
-  branch-sensitive packets
-  native padding
-  尚未 byte-proven 的 unknown HMX packets
+实际 `.word` directive:
+  0
 ```
 
-所以本文不把 W4A8 写成一张完整 mnemonic 清单。更稳妥的抽象是：
+注意这里的 “public objdump 仍显示 `<unknown>`” 和 “我们的 `.inc` 仍保留
+raw word” 是两件事。当前 `.inc` 已经没有实际 `.word` 指令；只是注释里还
+保留原生 packet group 的地址和 `<unknown>` 现象，方便追溯 public objdump
+为什么会失败。
+
+最容易误读的是 mixed HMX-store/control tail。用
+`hexagon-llvm-objdump --show-packet-decode-fail` 才能看到普通槽位：
+
+```text
+{ r23 = r26;
+  if (!p0) r3 = sub(r3,r31);
+  if (!p0) jump:nt ...
+  mxmem(r10,r11):cm = cvt }
+
+{ p0 = cmp.gt(r13,#96);
+  if (!p0.new) r3 = sub(r3,r31);
+  mxmem(r10,r11):cm = cvt }
+```
+
+这里不是 `add`。它是在前面乐观推进了 `r3 += r31` 后，根据谓词把 output/bias
+地址回滚到当前 store path。这个细节是 W4A8 drain/writeback 控制流的一部分。
+
+因此 W4A8 可以写成一张完整的实现轮廓：
 
 ```text
 输入:
@@ -860,7 +887,9 @@ byte-proven:
   + K-major 32x64 W4 nibble-packed weight stream
   + convw4b1x1 mask/routing
   -> accumulator banks
-  -> U8 drain/store into Crouton_8 output blocks
+  -> cvt.ub = acc(r27/r31):sc0/sc1
+  -> mxmem(...):cm = cvt
+  -> U8 Crouton_8 output blocks
 ```
 
 `convbnb` 这个名字本身就是一个很好的数据流标签：
@@ -1688,49 +1717,70 @@ U8 activation tile
 
 这里要先划清证据边界。当前 W4A8 `.inc` 是
 `hmx_v73_convbnb1x1_stride1` 在 V75 skel `0x2f0780` 的 `2624` 字节
-replica，已经和 native slice byte-identical。静态文本里能稳定看到：
+replica，已经和 native slice byte-identical。当前静态文本已经不再只是
+“外部语义可推断”：主要 HMX load、convert、store 和 mixed control tail 都
+已经是 byte-proven readable asm。
 
 ```text
+activation.ub = mxmem(...):cm
+weight.n      = mxmem(...):2x / :2x:deep
 bias = mxmem2(r3)
-...
+cvt.ub = acc(r27):sc0 / :sc1
+cvt.ub = acc(r31):sc0 / :sc1
 mxmem(r10,r11):cm = cvt
 ```
 
-中间的 HMX convert packet 仍有 raw `.word` 保留，所以本文不把它写成已经完整
-decode 的 `cvt.ub` mnemonic。更稳妥的说法是：这条 path 的外部语义和输出
-contract 是 U8 drain，`cvt` 最终被写到 Crouton_8 output。
+所以这里可以明确写成 BNB-specific `cvt.ub` drain，而不是只说
+“U8-equivalent cvt/drain”。它和 plain U8I8 的 `cvt.ub = acc(rX)` 不同：
+W4A8 使用带 `:sc0/:sc1` 的 scaled drain route。
 
-现在有一个专门的 packet inventory 工具来固定这条边界：
+专门的 packet inventory 工具现在用来防止 raw packet 回归：
 
 ```bash
 python3 scripts/analyze_w4a8_cvt_packets.py
 ```
 
-它从 W4A8 `.inc` 里抽取 accumulator conversion/writeback 周围的 raw packet。
 当前结果是：
 
 ```text
-pre_store_cvt_tail:  10
-post_bias_cvt_tail:   2
-post_store_tail:     12
+class counts:
+  <empty>
 
-repeated cvt-like words:
-  0x75594000
-  0x10bf40f6
-  0x10bf40f8
-  0x5cdf68f6
-  0x5cdf68f8
+repeated raw patterns:
+  <empty>
 
 plain cvt.ub = acc(rX) candidate words:
   0xa6f7d710 ... 0xa6ffd710
   matches in W4A8 raw inventory: {}
+
+scaled cvt.ub = acc(rX):scY:
+  r27:sc0 = 8
+  r27:sc1 = 8
+  r31:sc0 = 2
+  r31:sc1 = 2
 ```
 
-这说明 W4A8 的 raw groups 不是随机未知字节，而是稳定出现在
-`bias = mxmem2(r3)` 和 `mxmem(...):cm = cvt` 附近的 mixed HMX/control
-模板。并且这些 raw `a6..dc/dd` word 不等于 plain `cvt.ub = acc(rX)` 的
-已汇编候选编码。因此结论也更精确：W4A8 是 U8 drain 语义，但 exact
-BNB-specific `cvt` mnemonic 仍保持未声明，直到能 byte-prove 对应 asm。
+这说明两件事：
+
+1. W4A8 的 drain 不是 plain `cvt.ub = acc(rX)`；它是 scaled
+   `cvt.ub = acc(r27/r31):sc0/sc1`。
+2. 之前残留的 mixed HMX/control template 已经解成完整 packet。关键普通槽位是
+   条件 `sub(r3,r31)` 回滚：
+
+```text
+{ r23 = r26;
+  if (!p0) r3 = sub(r3,r31);
+  if (!p0) jump:nt ...
+  mxmem(r10,r11):cm = cvt }
+
+{ p0 = cmp.gt(r13,#96);
+  if (!p0.new) r3 = sub(r3,r31);
+  mxmem(r10,r11):cm = cvt }
+```
+
+它的作用是：前面根据 `r13` 先把 `r3` 推到下一个 output/bias window；
+当谓词说明当前 store path 不应该走那段 window 时，用 `sub(r3,r31)` 回滚。
+这条控制流和 HMX store 在同一个 packet 里，必须整包 byte-prove。
 
 数值链路和 U8I8 很接近，只是 weight 侧从 I8 byte 变成 signed I4 nibble：
 
@@ -2055,14 +2105,17 @@ native slice:
   hmx_v73_convbnb1x1_stride1 at 0x2f0780
 
 当前状态:
-  2624-byte hybrid readable asm/word replica
-  byte-proven packets promoted to asm
-  unknown HMX / branch-sensitive packets remain raw words
+  2624-byte readable asm replica
+  whole-slice byte-identical against native
+  no actual .word directives remain
 
 关键路线:
   byte activation/output surface
   nibble-packed W4 weight stream
-  U8 drain/store semantics
+  weight.n load route
+  scaled cvt.ub = acc(...):sc0/sc1
+  mixed store/control packet uses conditional sub rollback
+  mxmem(...):cm = cvt store
 ```
 
 U8I8 body：

@@ -160,7 +160,7 @@ def build_report(inc: Path) -> dict[str, Any]:
 
 
 def print_report(report: dict[str, Any]) -> None:
-    print("=== W4A8 cvt/writeback raw packet inventory ===")
+    print("=== W4A8 cvt/writeback packet regression inventory ===")
     print(f"inc: {report['inc']}")
     ns = report["native_slice"]
     print(f"native slice: {ns['so']} @ {ns['vma']} size={ns['size']}")
@@ -175,7 +175,7 @@ def print_report(report: dict[str, Any]) -> None:
     print("  " + ", ".join(report["cvt_like_words"]))
     print("\n[plain cvt.ub = acc(rX) comparison]")
     print("  assembled candidate words: " + ", ".join(report["plain_cvt_ub_acc_words"].values()))
-    print(f"  matches in W4A8 raw inventory: {report['plain_cvt_ub_acc_matches']}")
+    print(f"  matches in remaining W4A8 raw inventory: {report['plain_cvt_ub_acc_matches']}")
     print("\n[scaled cvt.ub = acc(rX):scY mnemonics]")
     print("  assembled candidate words: " + ", ".join(report["scaled_cvt_ub_acc_words"].values()))
     for name, count in sorted(report["scaled_cvt_ub_acc_counts"].items()):

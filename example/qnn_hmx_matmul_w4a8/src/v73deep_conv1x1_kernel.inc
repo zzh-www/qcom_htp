@@ -1,11 +1,10 @@
-  /* 2624 bytes -- hybrid readable asm/word replica of tools/qnn-sdk/lib/hexagon-v75/unsigned/libQnnHtpV75Skel.so
+  /* 2624 bytes -- readable asm replica of tools/qnn-sdk/lib/hexagon-v75/unsigned/libQnnHtpV75Skel.so
    * 0x2f0780 `hmx_v73_convbnb1x1_stride1 wrapper/deep contiguous slice`.
    * This slice spans the native wrapper and selected following body bytes;
    * branch targets may point outside the embedded range; byte-proven local
    * labels or `.set` symbols preserve the native branch encodings.
-   * Comments retain decoded instructions where available. The remaining raw
-   * words are mixed HMX-store/control tails whose readable spelling is not
-   * accepted by the current assembler.
+   * Comments retain original native packet-group boundaries, including where
+   * public objdump still prints <unknown> for HMX packets.
    * Residual raw .word audit: all known W4A8 branch, loop, jump, padding,
    * HMX load, accumulator drain, and mixed HMX-store/control tails have
    * been promoted to byte-proven readable asm. No actual .word directives
