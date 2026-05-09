@@ -15,6 +15,8 @@ Hexagon inline asm without changing the native bytes.
 2. Get disassembly from every available source:
    - public `llvm-objdump` for ordinary Hexagon instructions;
    - Qualcomm `hexagon-llvm-objdump` for packet boundaries and raw words;
+   - `hexagon-llvm-objdump --show-packet-decode-fail` for failed HMX packets,
+     because it can still decode the ordinary slots hidden inside `<unknown>`;
    - nearby checked-in slices under `Agent/qnn_re/` for decoded HMX idioms.
 3. Preserve packet boundaries. Convert one packet at a time, using labels for
    internal branch targets instead of absolute addresses.
@@ -24,6 +26,9 @@ Hexagon inline asm without changing the native bytes.
    Branch/control slots often encode label distance in the same packet as the
    HMX conversion, so add local labels at the real native target address and
    assemble `cmp/jump/cvt` together.
+   For mixed HMX-store/control tails, decode ordinary slots with
+   `--show-packet-decode-fail` before guessing mnemonics; W4A8 BNB `fb3f...`
+   words are conditional `sub(r3,r31)` rollback operations, not `add`.
 6. Verify the whole function, not only individual instructions, by compiling a
    temporary C wrapper, extracting `.text`, and comparing against the native
    slice byte-for-byte.
@@ -37,6 +42,10 @@ Hexagon inline asm without changing the native bytes.
   identical to the native slice.
 - Do not trust `<unknown>` packet boundaries from public objdump blindly. A
   single undecoded HMX word can cause the whole packet to print as unknown.
+- Do not trust a semantically plausible control-slot guess when the packet has
+  an HMX store. Use `--show-packet-decode-fail` and then assemble the entire
+  mixed packet; standalone control words can decode differently from the
+  packet form.
 - Do not mark a raw-drain cleanup complete while the `cvt` word is only
   explained in comments. It is complete only when the file contains readable
   HMX mnemonics and the whole native slice still matches byte-for-byte.
