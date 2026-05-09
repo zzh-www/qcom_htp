@@ -105,6 +105,49 @@ control words in the same packet. For example:
 Without `:endloop0`, the HMX load words may still look right while the ordinary
 Hexagon control word differs.
 
+## W4A8 BNB Control And Padding Cleanup
+
+Pure branch, loop, jump, and native zero padding packets in
+`hmx_v73_convbnb1x1_stride1` are byte-proven readable asm now. Use real local
+labels for every in-slice target, and use `.set` for the one backward target
+outside the embedded slice:
+
+```asm
+.set Lhmx_2f02c0, . - 0x4d0
+{ p0 = bitsclr(r12,r28);
+  if (!p0.new) jump:nt Lhmx_2f02c0;
+  r7:6 = memd(r4+#8);
+  r11:10 = memd(r4+#0) }
+```
+
+Do not use absolute numeric target addresses in inline asm; clang will encode
+the relocation differently. Padding between contiguous native slices can be
+represented as `.space <bytes>, 0`.
+
+Two packet-shape details matter in this slice:
+
+```asm
+{ r25 = #1023;
+  nop;
+  mxmem(r10,r11):cm = cvt } :endloop1
+
+{ nop;
+  mxmem(r10,r11):cm = cvt } :endloop0
+```
+
+The remaining raw W4A8 BNB groups are not pure branch/control packets. They are
+mixed HMX-store/control tails such as:
+
+```asm
+.word 0x707a4017, 0xfb3f4383, 0x5c204022
+.word 0x754d4c00, 0xfb3f6383
+```
+
+Public objdump describes these as ordinary control operations around
+`mxmem(...):cm = cvt`, but the `fb3f...` words use a native `p0.new` form that
+clang-19 rejects when written as standalone asm. Keep these raw until there is
+a byte-proven assembler spelling for the mixed HMX/control packet.
+
 ## Packet-Level Pattern
 
 Public objdump may print this whole packet as `<unknown>`:

@@ -1,14 +1,16 @@
   /* 2624 bytes -- hybrid readable asm/word replica of tools/qnn-sdk/lib/hexagon-v75/unsigned/libQnnHtpV75Skel.so
    * 0x2f0780 `hmx_v73_convbnb1x1_stride1 wrapper/deep contiguous slice`.
    * This slice spans the native wrapper and selected following body bytes;
-   * branch targets may point outside the embedded range, so raw words are
-   * preserved while packet comments provide the readable map.
-   * Comments retain decoded instructions where available; <unknown> blocks
-   * remain raw words until their HMX mnemonics are byte-proven.
-   * Residual raw .word audit: all decoded `jumpr` and `:endloop0/1` packets
-   * that assemble byte-identically were promoted to asm. Remaining raw words
-   * are branch/loop packets, native zero padding, or unknown HMX packets whose
-   * current packet mnemonics are not byte-proven.
+   * branch targets may point outside the embedded range; byte-proven local
+   * labels or `.set` symbols preserve the native branch encodings.
+   * Comments retain decoded instructions where available. The remaining raw
+   * words are mixed HMX-store/control tails whose readable spelling is not
+   * accepted by the current assembler.
+   * Residual raw .word audit: decoded branch/loop/jump packets, native zero
+   * padding, and byte-proven `jumpr`/`:endloop0`/`:endloop1` packets were
+   * promoted to asm. Remaining raw words are the mixed HMX-store/control
+   * tails whose native `p0.new` control word is rejected by the public
+   * assembler when written as standalone readable asm.
    * Source: scripts/extract_hmx_kernel_bytes.py + public decode comments. */
   /* asm packet from comment; words preserved. */
   "{ r28 = #12;\n"
@@ -22,14 +24,20 @@
    *   0x2f079c: r11:10 = memd(r4+#0) }
    * Purpose: loop/variant control; updates predicate and branches to the selected tile path.
    */
-  ".word 0xc78c5c00, 0x5cfe6898, 0x91c44026, 0x91c4c00a\n"
+  ".set Lhmx_2f02c0, . - 0x4d0\n"
+  "{ p0 = bitsclr(r12,r28);\n"
+  "if (!p0.new) jump:nt Lhmx_2f02c0;\n"
+  "r7:6 = memd(r4+#8);\n"
+  "r11:10 = memd(r4+#0) }\n"
   /* decoded packet @0x2f07a0..0x2f07ac
    *   0x2f07a0: { p1 = tstbit(r12,#5)
    *   0x2f07a4: immext(#1664)
    *   0x2f07a8: if (p1.new) jump:t 0x2f0e40 }
-   * Purpose: long-range dispatch/guard branch; raw form prevents assembler from re-encoding target reach.
+   * Purpose: long-range dispatch/guard branch; byte-proven local label preserves target reach.
    */
-  ".word 0x850c4501, 0x0000401a, 0x5c00d940\n"
+  "{ p1 = tstbit(r12,#5);\n"
+  "immext(#1664);\n"
+  "if (p1.new) jump:t Lhmx_2f0e40 }\n"
   /* asm packet from comment; words preserved. */
   "{ nop;\n"
   "nop;\n"
@@ -74,9 +82,12 @@
    *   0x2f0824: nop
    *   0x2f0828: nop
    *   0x2f082c: r30 = memw(r5++#4) }
-   * Purpose: branch-sensitive control transfer; raw form preserves native target encoding.
+   * Purpose: branch-sensitive control transfer; byte-proven local label preserves native target encoding.
    */
-  ".word 0x5c2040b0, 0x7f004000, 0x7f004000, 0x9b85c03e\n"
+  "{ if (!p0) jump:nt Lhmx_2f0980;\n"
+  "nop;\n"
+  "nop;\n"
+  "r30 = memw(r5++#4) }\n"
   /* decoded packet @0x2f0830..0x2f0840
    *   0x2f0830: { loop0(0x2f0860,r28)
    *   0x2f0834: r26 = r4
@@ -84,8 +95,12 @@
    *   0x2f083c: r25 = #1023 }
    * Purpose: initialize or restart hardware loop0 for the current K/output tile body.
    */
-  ".word 0x601c4300, 0x7064401a, 0x76874398, 0x7801fff9\n"
+  "{ loop0(Lhmx_2f0860,r28);\n"
+  "r26 = r4;\n"
+  "r24 = or(r7,#28);\n"
+  "r25 = #1023 }\n"
   /* asm packet from comment; words preserved. */
+  "Lhmx_2f0840:\n"
   "{ r17 = r12;\n"
   "nop;\n"
   "nop;\n"
@@ -97,8 +112,13 @@
    *   0x2f085c: r8 = r2 }
    * Purpose: initialize or restart hardware loop1 for the current output-row tile body.
    */
-  ".word 0x60344100, 0xf5135200, 0xbff17f11, 0x7062c008\n"
+  "Lhmx_2f0850:\n"
+  "{ loop1(Lhmx_2f0860,r20);\n"
+  "r1:0 = combine(r19,r18);\n"
+  "r17 = add(r17,#-8);\n"
+  "r8 = r2 }\n"
   /* asm packet from comment; words preserved. */
+  "Lhmx_2f0860:\n"
   "{ p0 = cmp.eq(r26,#2);\n"
   "r26 = add(r26,#-2);\n"
   "r6 = memw(r1++#8);\n"
@@ -127,9 +147,10 @@
    * Purpose: initialize or restart hardware loop0 for the current K/output tile body.
    * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
-  ".word 0x601c5d00, 0x76874398, 0x5c204110\n"
-  /* asm packet split from known decoded raw words. */
-  "{ nop }\n"
+  "{ loop0(Lhmx_2f0860,r28);\n"
+  "r24 = or(r7,#28);\n"
+  "if (!p1) jump:nt Lhmx_2f08b0;\n"
+  "nop }\n"
   /* asm packet from comment; words preserved. */
   "{ r6 = memw(r1++#4) }\n"
   /* native packet group @0x2f08a4..0x2f08b0
@@ -142,6 +163,7 @@
   "activation.ub = mxmem(r6,r7):cm;\n"
   "weight.n = mxmem(r8,r9):2x }\n"
   /* asm packet from comment; words preserved. */
+  "Lhmx_2f08b0:\n"
   "{ r31 = asl(r30,#8);\n"
   "r27:26 = combine(r8,r4);\n"
   "r8 = r2;\n"
@@ -150,9 +172,11 @@
    *   0x2f08c0: { r25 = r30
    *   0x2f08c4: if (!p0) jump:nt 0x2f0900
    *   0x2f08c8: if (p0) r3 = add(r3,r31) }
-   * Purpose: branch-sensitive control transfer; raw form preserves native target encoding.
+   * Purpose: branch-sensitive control transfer; byte-proven local label preserves native target encoding.
    */
-  ".word 0x707e4019, 0x5c204020, 0xfb03df03\n"
+  "{ r25 = r30;\n"
+  "if (!p0) jump:nt Lhmx_2f0900;\n"
+  "if (p0) r3 = add(r3,r31) }\n"
   /* asm packet from matched decoded packet; words preserved. */
   "Lhmx_2f08cc:\n"
   "{ r3 = add(r3,#0x100);\n"
@@ -192,9 +216,9 @@
   "r25 = add(r25,#-0x1);\n"
   "r31 = memw(r5++#0x4);\n"
   "bias = mxmem2(r3) }\n"
-  /* remaining raw tail after byte-proven bias/window setup.
+  /* byte-proven conversion tail after bias/window setup.
    * Purpose: handles predicate/address update and cvt writeback for this output tile;
-   * kept raw because mixed branch/HMX words re-encode differently as asm.
+   * assembled as one packet so the predicate branch and cvt word stay byte-identical.
    */
   "{ p0 = cmp.gt(r25,#0);\n"
   "if (p0.new) jump:nt Lhmx_2f0900;\n"
@@ -206,21 +230,21 @@
   /* native packet group @0x2f0928..0x2f0934
    *   0x2f0928: <unknown>
    * Purpose: restore the output-store lane/mask limit before the following
-   * cvt writeback; kept raw because the packet tail is not byte-proven asm.
+   * cvt writeback; byte-proven as an :endloop1 packet with the HMX store.
    * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
-  ".word 0x78017ff9, 0x7f008000\n"
-  /* asm packet split from known decoded raw words.
-   * Purpose: output writeback; commit converted accumulator data to the current output tile.
-   */
-  "{ mxmem(r10,r11):cm = cvt }\n"
+  "{ r25 = #1023;\n"
+  "nop;\n"
+  "mxmem(r10,r11):cm = cvt } :endloop1\n"
   /* decoded packet @0x2f0934..0x2f0940
    *   0x2f0934: { r19 = add(r19,r15)
    *   0x2f0938: r18 = add(r18,r16)
    *   0x2f093c: p0 = cmp.gt(r17,#0); if (p0.new) jump:nt 0x2f0850 }
    * Purpose: loop/variant control; updates predicate and branches to the selected tile path.
    */
-  ".word 0xf3134f13, 0xf3125012, 0x10b9c08e\n"
+  "{ r19 = add(r19,r15);\n"
+  "r18 = add(r18,r16);\n"
+  "p0 = cmp.gt(r17,#0); if (p0.new) jump:nt Lhmx_2f0850 }\n"
   /* asm packet from comment; words preserved. */
   "{ r3 += asl(r30,#9);\n"
   "r13 = add(r13,#-64);\n"
@@ -233,12 +257,15 @@
    *   0x2f095c: if (p0.new) jump:t 0x2f0840 }
    * Purpose: loop/variant control; updates predicate and branches to the selected tile path.
    */
-  ".word 0x707b4002, 0xb00e410e, 0x754d4000, 0x5cdff878\n"
+  "{ r2 = r27;\n"
+  "r14 = add(r14,#8);\n"
+  "p0 = cmp.gt(r13,#0);\n"
+  "if (p0.new) jump:t Lhmx_2f0840 }\n"
   /* decoded packet @0x2f0960..0x2f0964
    *   0x2f0960: { jump 0x2f0a50 }
-   * Purpose: branch-sensitive control transfer; raw form preserves native target encoding.
+   * Purpose: branch-sensitive control transfer; byte-proven local label preserves native target encoding.
    */
-  ".word 0x5800c078\n"
+  "{ jump Lhmx_2f0a50 }\n"
   /* asm packet from comment; words preserved. */
   "{ nop;\n"
   "nop;\n"
@@ -249,6 +276,7 @@
   "nop;\n"
   "nop }\n"
   /* asm packet from comment; words preserved. */
+  "Lhmx_2f0980:\n"
   "{ r17 = r12;\n"
   "nop;\n"
   "nop;\n"
@@ -261,10 +289,13 @@
    * Purpose: initialize or restart hardware loop0 for the current K/output tile body.
    * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
-  ".word 0x60144100, 0xf5135200, 0xbff17f11\n"
-  /* asm packet split from known decoded raw words. */
-  "{ nop }\n"
+  "Lhmx_2f0990:\n"
+  "{ loop0(Lhmx_2f09a0,r20);\n"
+  "r1:0 = combine(r19,r18);\n"
+  "r17 = add(r17,#-8);\n"
+  "nop }\n"
   /* asm packet from comment; words preserved. */
+  "Lhmx_2f09a0:\n"
   "{ r31 = asl(r30,#8);\n"
   "p0 = cmp.gt(r13,#32);\n"
   "r25 = r30;\n"
@@ -319,9 +350,9 @@
   "r25 = add(r25,#-0x1);\n"
   "r31 = memw(r5++#0x4);\n"
   "bias = mxmem2(r3) }\n"
-  /* remaining raw tail after byte-proven bias/window setup.
+  /* byte-proven conversion tail after bias/window setup.
    * Purpose: handles predicate/address update and cvt writeback for this output tile;
-   * kept raw because mixed branch/HMX words re-encode differently as asm.
+   * assembled as one packet so the predicate branch and cvt word stay byte-identical.
    */
   "{ p0 = cmp.gt(r25,#0);\n"
   "if (p0.new) jump:nt Lhmx_2f09f4;\n"
@@ -333,20 +364,19 @@
   /* native packet group @0x2f0a1c..0x2f0a24
    *   0x2f0a1c: <unknown>
    * Purpose: native packet padding before the following cvt writeback path;
-   * kept raw because the HMX packet boundary is not byte-proven asm.
+   * byte-proven as an :endloop0 nop plus HMX store packet.
    */
-  ".word 0x7f008000\n"
-  /* asm packet split from known decoded raw words.
-   * Purpose: output writeback; commit converted accumulator data to the current output tile.
-   */
-  "{ mxmem(r10,r11):cm = cvt }\n"
+  "{ nop;\n"
+  "mxmem(r10,r11):cm = cvt } :endloop0\n"
   /* decoded packet @0x2f0a24..0x2f0a30
    *   0x2f0a24: { r19 = add(r19,r15)
    *   0x2f0a28: r18 = add(r18,r16)
    *   0x2f0a2c: p0 = cmp.gt(r17,#0); if (p0.new) jump:nt 0x2f0990 }
    * Purpose: loop/variant control; updates predicate and branches to the selected tile path.
    */
-  ".word 0xf3134f13, 0xf3125012, 0x10b9c0b6\n"
+  "{ r19 = add(r19,r15);\n"
+  "r18 = add(r18,r16);\n"
+  "p0 = cmp.gt(r17,#0); if (p0.new) jump:nt Lhmx_2f0990 }\n"
   /* asm packet from comment; words preserved. */
   "{ r3 += asl(r30,#9);\n"
   "r13 = add(r13,#-64);\n"
@@ -359,8 +389,12 @@
    *   0x2f0a4c: if (p0.new) jump:t 0x2f0980 }
    * Purpose: loop/variant control; updates predicate and branches to the selected tile path.
    */
-  ".word 0xe2094022, 0xb00e410e, 0x754d4000, 0x5cdff8a0\n"
+  "{ r2 += add(r9,#1);\n"
+  "r14 = add(r14,#8);\n"
+  "p0 = cmp.gt(r13,#0);\n"
+  "if (p0.new) jump:t Lhmx_2f0980 }\n"
   /* asm packet from matched decoded packet; words preserved. */
+  "Lhmx_2f0a50:\n"
   "{ r31:30 = memd(r29+#0x30);\n"
   "mxclracc }\n"
   /* asm packet from comment; words preserved. */
@@ -380,7 +414,7 @@
   /* decoded packet @0x2f0a70..0x2f0a80
    * Purpose: native padding/alignment between contiguous embedded code slices.
    */
-  ".word 0x00000000, 0x00000000, 0x00000000, 0x00000000\n"
+  ".space 16, 0\n"
   /* asm packet from comment; words preserved. */
   "{ r29 = add(r29,#-64);\n"
   "r7:6 = memd(r4+#8);\n"
@@ -430,9 +464,12 @@
    *   0x2f0b08: r24 = add(r24,#128)
    *   0x2f0b0c: r19:18 = combine(r1,r0)
    *   0x2f0b10: if (!p0) jump:nt 0x2f0cc0 }
-   * Purpose: branch-sensitive control transfer; raw form preserves native target encoding.
+   * Purpose: branch-sensitive control transfer; byte-proven local label preserves native target encoding.
    */
-  ".word 0x8c144334, 0xb0185018, 0xf5014012, 0x5c20c0de\n"
+  "{ r20 = lsr(r20,#3);\n"
+  "r24 = add(r24,#128);\n"
+  "r19:18 = combine(r1,r0);\n"
+  "if (!p0) jump:nt Lhmx_2f0cc0 }\n"
   /* decoded packet @0x2f0b14..0x2f0b24
    *   0x2f0b14: { loop0(0x2f0b60,r28)
    *   0x2f0b18: r24 = mpyi(r24,r30)
@@ -441,20 +478,21 @@
    * Purpose: initialize or restart hardware loop0 for the current K/output tile body.
    * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
-  ".word 0x601c4418, 0xed185e18\n"
-  /* asm packet split from known decoded raw words. */
-  "{ nop;\n"
-  "nop }\n"
-  /* asm packet from comment; words preserved. */
-  "{ nop;\n"
+  "{ loop0(Lhmx_2f0b60,r28);\n"
+  "r24 = mpyi(r24,r30);\n"
   "nop;\n"
   "nop }\n"
   /* asm packet from comment; words preserved. */
   "{ nop;\n"
   "nop;\n"
+  "nop }\n"
+  /* asm packet from comment; words preserved. */
+  "{ nop;\n"
+  "nop;\n"
   "nop;\n"
   "nop }\n"
   /* asm packet from comment; words preserved. */
+  "Lhmx_2f0b40:\n"
   "{ r30 = r12;\n"
   "r14 = add(r18,#16);\n"
   "r21 = r3;\n"
@@ -466,8 +504,13 @@
    *   0x2f0b5c: r8 = r2 }
    * Purpose: initialize or restart hardware loop1 for the current output-row tile body.
    */
-  ".word 0x60344100, 0xf5135200, 0xbffe7f1e, 0x7062c008\n"
+  "Lhmx_2f0b50:\n"
+  "{ loop1(Lhmx_2f0b60,r20);\n"
+  "r1:0 = combine(r19,r18);\n"
+  "r30 = add(r30,#-8);\n"
+  "r8 = r2 }\n"
   /* asm packet from comment; words preserved. */
+  "Lhmx_2f0b60:\n"
   "{ r6 = memw(r1++#8);\n"
   "r23 = memw(r1+#4) }\n"
   /* native packet group @0x2f0b68..0x2f0b80
@@ -491,7 +534,10 @@
    *   0x2f0b8c: if (!p1) jump:nt 0x2f0b9c }
    * Purpose: initialize or restart hardware loop0 for the current K/output tile body.
    */
-  ".word 0x601c5e00, 0x707a4017, 0x754d4400, 0x5c20c10e\n"
+  "{ loop0(Lhmx_2f0b60,r28);\n"
+  "r23 = r26;\n"
+  "p0 = cmp.gt(r13,#32);\n"
+  "if (!p1) jump:nt Lhmx_2f0b9c }\n"
   /* asm packet from comment; words preserved. */
   "{ r6 = memw(r1++#4) }\n"
   /* native packet group @0x2f0b94..0x2f0b9c
@@ -504,9 +550,11 @@
   /* decoded packet @0x2f0b9c..0x2f0ba4
    *   0x2f0b9c: { if (!p0) jump:nt 0x2f0bd4
    *   0x2f0ba0: if (p0) r3 = add(r3,r31) }
-   * Purpose: branch-sensitive control transfer; raw form preserves native target encoding.
+   * Purpose: branch-sensitive control transfer; byte-proven local label preserves native target encoding.
    */
-  ".word 0x5c20401c, 0xfb03df03\n"
+  "Lhmx_2f0b9c:\n"
+  "{ if (!p0) jump:nt Lhmx_2f0bd4;\n"
+  "if (p0) r3 = add(r3,r31) }\n"
   /* native packet group @0x2f0ba4..0x2f0bb4
    *   0x2f0ba4: <unknown>
    * Purpose: HMX operand load; feed activation/weight/bias data into the next MAC or cvt packet.
@@ -618,7 +666,8 @@
    *   0x2f0c5c: if (!p0.new) jump:nt 0x2f0c68 }
    * Purpose: loop/variant control; updates predicate and branches to the selected tile path.
    */
-  ".word 0x754d4c00, 0x5c20c808\n"
+  "{ p0 = cmp.gt(r13,#96);\n"
+  "if (!p0.new) jump:nt Lhmx_2f0c68 }\n"
   /* asm packet from comment; words preserved. */
   "{ r10 = memw(r0+#12) }\n"
   /* asm packet from matched decoded packet; words preserved. */
@@ -627,8 +676,9 @@
    *   0x2f0c68: { r5 -= asl(r26,#2)
    *   0x2f0c6c: r8 = r2
    *   0x2f0c70: r3 = r21; r0 = add(r0,r17) } :endloop1
-   */
+  */
   /* asm packet from decoded raw words; byte-proven. */
+  "Lhmx_2f0c68:\n"
   "{ r5 -= asl(r26,#2);\n"
   "r8 = r2;\n"
   "r3 = r21; r0 = add(r0,r17) } :endloop1\n"
@@ -639,7 +689,10 @@
    *   0x2f0c80: if (p0.new) jump:nt 0x2f0b50 }
    * Purpose: loop/variant control; updates predicate and branches to the selected tile path.
    */
-  ".word 0xf3134f13, 0xf3125012, 0x755e4000, 0x5cdfe86e\n"
+  "{ r19 = add(r19,r15);\n"
+  "r18 = add(r18,r16);\n"
+  "p0 = cmp.gt(r30,#0);\n"
+  "if (p0.new) jump:nt Lhmx_2f0b50 }\n"
   /* asm packet from comment; words preserved. */
   "{ r3 += asl(r31,#2);\n"
   "r19:18 = combine(r25,r14);\n"
@@ -656,18 +709,20 @@
    *   0x2f0ca8: if (p2.new) jump:t 0x2f0b40 }
    * Purpose: loop/variant control; updates predicate and branches to the selected tile path.
    */
-  ".word 0x754d4002, 0x5cdffa4e\n"
+  "{ p2 = cmp.gt(r13,#0);\n"
+  "if (p2.new) jump:t Lhmx_2f0b40 }\n"
   /* decoded packet @0x2f0cac..0x2f0cb0
    *   0x2f0cac: { jump 0x2f0e00 }
-   * Purpose: branch-sensitive control transfer; raw form preserves native target encoding.
+   * Purpose: branch-sensitive control transfer; byte-proven local label preserves native target encoding.
    */
-  ".word 0x5800c0aa\n"
+  "{ jump Lhmx_2f0e00 }\n"
   /* asm packet from comment; words preserved. */
   "{ nop;\n"
   "nop;\n"
   "nop;\n"
   "nop }\n"
   /* asm packet from comment; words preserved. */
+  "Lhmx_2f0cc0:\n"
   "{ r30 = r12;\n"
   "r14 = add(r18,#16);\n"
   "r21 = r3;\n"
@@ -680,10 +735,13 @@
    * Purpose: initialize or restart hardware loop0 for the current K/output tile body.
    * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
-  ".word 0x60144100, 0xf5135200, 0xbffe7f1e\n"
-  /* asm packet split from known decoded raw words. */
-  "{ nop }\n"
+  "Lhmx_2f0cd0:\n"
+  "{ loop0(Lhmx_2f0ce0,r20);\n"
+  "r1:0 = combine(r19,r18);\n"
+  "r30 = add(r30,#-8);\n"
+  "nop }\n"
   /* asm packet from comment; words preserved. */
+  "Lhmx_2f0ce0:\n"
   "{ p0 = cmp.gt(r13,#32);\n"
   "r23 = r26;\n"
   "r6 = memw(r1++#4) }\n"
@@ -804,7 +862,8 @@
    *   0x2f0db4: if (!p0.new) jump:nt 0x2f0dc0 }
    * Purpose: loop/variant control; updates predicate and branches to the selected tile path.
    */
-  ".word 0x754d4c00, 0x5c20c808\n"
+  "{ p0 = cmp.gt(r13,#96);\n"
+  "if (!p0.new) jump:nt Lhmx_2f0dc0 }\n"
   /* asm packet from comment; words preserved. */
   "{ r10 = memw(r0+#12) }\n"
   /* asm packet from matched decoded packet; words preserved. */
@@ -812,8 +871,9 @@
   /* decoded packet @0x2f0dc0..0x2f0dc8
    *   0x2f0dc0: { r5 -= asl(r26,#2)
    *   0x2f0dc4: r3 = r21; r0 = add(r0,r17) } :endloop0
-   */
+  */
   /* asm packet from decoded raw words; byte-proven. */
+  "Lhmx_2f0dc0:\n"
   "{ r5 -= asl(r26,#2);\n"
   "r3 = r21; r0 = add(r0,r17) } :endloop0\n"
   /* decoded packet @0x2f0dc8..0x2f0dd8
@@ -823,7 +883,10 @@
    *   0x2f0dd4: if (p0.new) jump:nt 0x2f0cd0 }
    * Purpose: loop/variant control; updates predicate and branches to the selected tile path.
    */
-  ".word 0xf3134f13, 0xf3125012, 0x755e4000, 0x5cdfe884\n"
+  "{ r19 = add(r19,r15);\n"
+  "r18 = add(r18,r16);\n"
+  "p0 = cmp.gt(r30,#0);\n"
+  "if (p0.new) jump:nt Lhmx_2f0cd0 }\n"
   /* asm packet from comment; words preserved. */
   "{ r3 += asl(r31,#2);\n"
   "r19:18 = combine(r25,r14);\n"
@@ -840,8 +903,10 @@
    *   0x2f0dfc: if (p2.new) jump:t 0x2f0cc0 }
    * Purpose: loop/variant control; updates predicate and branches to the selected tile path.
    */
-  ".word 0x754d4002, 0x5cdffa64\n"
+  "{ p2 = cmp.gt(r13,#0);\n"
+  "if (p2.new) jump:t Lhmx_2f0cc0 }\n"
   /* asm packet from matched decoded packet; words preserved. */
+  "Lhmx_2f0e00:\n"
   "{ r31:30 = memd(r29+#0x30);\n"
   "mxclracc }\n"
   /* asm packet from comment; words preserved. */
@@ -861,8 +926,9 @@
   /* decoded packet @0x2f0e20..0x2f0e40
    * Purpose: native padding/alignment between contiguous embedded code slices.
    */
-  ".word 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000\n"
+  ".space 32, 0\n"
   /* asm packet from comment; words preserved. */
+  "Lhmx_2f0e40:\n"
   "{ r29 = add(r29,#-56);\n"
   "r7:6 = memd(r4+#8);\n"
   "r11:10 = memd(r4+#0) }\n"
@@ -910,9 +976,11 @@
    *   0x2f0ec4: { r20 = lsr(r20,#3)
    *   0x2f0ec8: r19:18 = combine(r1,r0)
    *   0x2f0ecc: if (!p0) jump:nt 0x2f1040 }
-   * Purpose: branch-sensitive control transfer; raw form preserves native target encoding.
+   * Purpose: branch-sensitive control transfer; byte-proven local label preserves native target encoding.
    */
-  ".word 0x8c144334, 0xf5014012, 0x5c20c0be\n"
+  "{ r20 = lsr(r20,#3);\n"
+  "r19:18 = combine(r1,r0);\n"
+  "if (!p0) jump:nt Lhmx_2f1040 }\n"
   /* decoded packet @0x2f0ed0..0x2f0ee0
    *   0x2f0ed0: { loop0(0x2f0f00,r28)
    *   0x2f0ed4: r24 = mpyi(r24,r30)
@@ -921,11 +989,12 @@
    * Purpose: initialize or restart hardware loop0 for the current K/output tile body.
    * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
-  ".word 0x601c4300, 0xed185e18\n"
-  /* asm packet split from known decoded raw words. */
-  "{ nop;\n"
+  "{ loop0(Lhmx_2f0f00,r28);\n"
+  "r24 = mpyi(r24,r30);\n"
+  "nop;\n"
   "nop }\n"
   /* asm packet from comment; words preserved. */
+  "Lhmx_2f0ee0:\n"
   "{ r30 = r12;\n"
   "r14 = add(r18,#16);\n"
   "r21 = r3;\n"
@@ -937,8 +1006,13 @@
    *   0x2f0efc: r8 = r2 }
    * Purpose: initialize or restart hardware loop1 for the current output-row tile body.
    */
-  ".word 0x60344100, 0xf5135200, 0xbffe7f1e, 0x7062c008\n"
+  "Lhmx_2f0ef0:\n"
+  "{ loop1(Lhmx_2f0f00,r20);\n"
+  "r1:0 = combine(r19,r18);\n"
+  "r30 = add(r30,#-8);\n"
+  "r8 = r2 }\n"
   /* asm packet from comment; words preserved. */
+  "Lhmx_2f0f00:\n"
   "{ r6 = memw(r1++#8);\n"
   "r23 = memw(r1+#4) }\n"
   /* native packet group @0x2f0f08..0x2f0f20
@@ -962,7 +1036,10 @@
    *   0x2f0f2c: if (!p1) jump:nt 0x2f0f3c }
    * Purpose: initialize or restart hardware loop0 for the current K/output tile body.
    */
-  ".word 0x601c5e00, 0x707a4017, 0x754d4400, 0x5c20c10e\n"
+  "{ loop0(Lhmx_2f0f00,r28);\n"
+  "r23 = r26;\n"
+  "p0 = cmp.gt(r13,#32);\n"
+  "if (!p1) jump:nt Lhmx_2f0f3c }\n"
   /* asm packet from comment; words preserved. */
   "{ r6 = memw(r1++#4) }\n"
   /* native packet group @0x2f0f34..0x2f0f3c
@@ -975,9 +1052,11 @@
   /* decoded packet @0x2f0f3c..0x2f0f44
    *   0x2f0f3c: { if (!p0) jump:nt 0x2f0f74
    *   0x2f0f40: if (p0) r3 = add(r3,r31) }
-   * Purpose: branch-sensitive control transfer; raw form preserves native target encoding.
+   * Purpose: branch-sensitive control transfer; byte-proven local label preserves native target encoding.
    */
-  ".word 0x5c20401c, 0xfb03df03\n"
+  "Lhmx_2f0f3c:\n"
+  "{ if (!p0) jump:nt Lhmx_2f0f74;\n"
+  "if (p0) r3 = add(r3,r31) }\n"
   /* native packet group @0x2f0f44..0x2f0f54
    *   0x2f0f44: <unknown>
    * Purpose: HMX operand load; feed activation/weight/bias data into the next MAC or cvt packet.
@@ -1089,7 +1168,8 @@
    *   0x2f0ffc: if (!p0.new) jump:nt 0x2f1008 }
    * Purpose: loop/variant control; updates predicate and branches to the selected tile path.
    */
-  ".word 0x754d4c00, 0x5c20c808\n"
+  "{ p0 = cmp.gt(r13,#96);\n"
+  "if (!p0.new) jump:nt Lhmx_2f1008 }\n"
   /* asm packet from comment; words preserved. */
   "{ r10 = memw(r0+#12) }\n"
   /* asm packet from matched decoded packet; words preserved. */
@@ -1098,8 +1178,9 @@
    *   0x2f1008: { r5 -= asl(r26,#2)
    *   0x2f100c: r8 = r2
    *   0x2f1010: r3 = r21; r0 = add(r0,r17) } :endloop1
-   */
+  */
   /* asm packet from decoded raw words; byte-proven. */
+  "Lhmx_2f1008:\n"
   "{ r5 -= asl(r26,#2);\n"
   "r8 = r2;\n"
   "r3 = r21; r0 = add(r0,r17) } :endloop1\n"
@@ -1110,7 +1191,10 @@
    *   0x2f1020: if (p0.new) jump:nt 0x2f0ef0 }
    * Purpose: loop/variant control; updates predicate and branches to the selected tile path.
    */
-  ".word 0xf3134f13, 0xf3125012, 0x755e4000, 0x5cdfe86e\n"
+  "{ r19 = add(r19,r15);\n"
+  "r18 = add(r18,r16);\n"
+  "p0 = cmp.gt(r30,#0);\n"
+  "if (p0.new) jump:nt Lhmx_2f0ef0 }\n"
   /* asm packet from comment; words preserved. */
   "{ r3 += asl(r31,#2);\n"
   "r2 += add(r9,#1);\n"
@@ -1121,13 +1205,15 @@
    *   0x2f1038: if (p2.new) jump:t 0x2f0ee0 }
    * Purpose: loop/variant control; updates predicate and branches to the selected tile path.
    */
-  ".word 0x754d4002, 0x5cdffa56\n"
+  "{ p2 = cmp.gt(r13,#0);\n"
+  "if (p2.new) jump:t Lhmx_2f0ee0 }\n"
   /* decoded packet @0x2f103c..0x2f1040
    *   0x2f103c: { jump 0x2f1170 }
-   * Purpose: branch-sensitive control transfer; raw form preserves native target encoding.
+   * Purpose: branch-sensitive control transfer; byte-proven local label preserves native target encoding.
    */
-  ".word 0x5800c09a\n"
+  "{ jump Lhmx_2f1170 }\n"
   /* asm packet from comment; words preserved. */
+  "Lhmx_2f1040:\n"
   "{ r30 = r12;\n"
   "r14 = add(r18,#16);\n"
   "r21 = r3;\n"
@@ -1140,10 +1226,13 @@
    * Purpose: initialize or restart hardware loop0 for the current K/output tile body.
    * Encoding note: residual raw words remain only where .word directives are still present; byte-proven pieces may be emitted as asm nearby.
    */
-  ".word 0x60144100, 0xf5135200, 0xbffe7f1e\n"
-  /* asm packet split from known decoded raw words. */
-  "{ nop }\n"
+  "Lhmx_2f1050:\n"
+  "{ loop0(Lhmx_2f1060,r20);\n"
+  "r1:0 = combine(r19,r18);\n"
+  "r30 = add(r30,#-8);\n"
+  "nop }\n"
   /* asm packet from comment; words preserved. */
+  "Lhmx_2f1060:\n"
   "{ p0 = cmp.gt(r13,#32);\n"
   "r23 = r26;\n"
   "r6 = memw(r1++#4) }\n"
@@ -1264,7 +1353,8 @@
    *   0x2f1134: if (!p0.new) jump:nt 0x2f1140 }
    * Purpose: loop/variant control; updates predicate and branches to the selected tile path.
    */
-  ".word 0x754d4c00, 0x5c20c808\n"
+  "{ p0 = cmp.gt(r13,#96);\n"
+  "if (!p0.new) jump:nt Lhmx_2f1140 }\n"
   /* asm packet from comment; words preserved. */
   "{ r10 = memw(r0+#12) }\n"
   /* asm packet from matched decoded packet; words preserved. */
@@ -1272,8 +1362,9 @@
   /* decoded packet @0x2f1140..0x2f1148
    *   0x2f1140: { r5 -= asl(r26,#2)
    *   0x2f1144: r3 = r21; r0 = add(r0,r17) } :endloop0
-   */
+  */
   /* asm packet from decoded raw words; byte-proven. */
+  "Lhmx_2f1140:\n"
   "{ r5 -= asl(r26,#2);\n"
   "r3 = r21; r0 = add(r0,r17) } :endloop0\n"
   /* decoded packet @0x2f1148..0x2f1158
@@ -1283,7 +1374,10 @@
    *   0x2f1154: if (p0.new) jump:nt 0x2f1050 }
    * Purpose: loop/variant control; updates predicate and branches to the selected tile path.
    */
-  ".word 0xf3134f13, 0xf3125012, 0x755e4000, 0x5cdfe884\n"
+  "{ r19 = add(r19,r15);\n"
+  "r18 = add(r18,r16);\n"
+  "p0 = cmp.gt(r30,#0);\n"
+  "if (p0.new) jump:nt Lhmx_2f1050 }\n"
   /* asm packet from comment; words preserved. */
   "{ r2 += add(r9,#1);\n"
   "r3 += asl(r31,#2);\n"
@@ -1294,8 +1388,10 @@
    *   0x2f116c: if (p2.new) jump:t 0x2f1040 }
    * Purpose: loop/variant control; updates predicate and branches to the selected tile path.
    */
-  ".word 0x754d4002, 0x5cdffa6c\n"
+  "{ p2 = cmp.gt(r13,#0);\n"
+  "if (p2.new) jump:t Lhmx_2f1040 }\n"
   /* asm packet from matched decoded packet; words preserved. */
+  "Lhmx_2f1170:\n"
   "{ r31:30 = memd(r29+#0x30);\n"
   "mxclracc }\n"
   /* asm packet from comment; words preserved. */
@@ -1315,4 +1411,4 @@
   /* decoded packet @0x2f1190..0x2f11c0
    * Purpose: native padding/alignment between contiguous embedded code slices.
    */
-  ".word 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000\n"
+  ".space 48, 0\n"
