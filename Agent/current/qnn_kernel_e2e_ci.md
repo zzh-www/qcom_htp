@@ -6,8 +6,10 @@ This is the required CI gate for the canonical QNN HMX MatMul kernels:
 |---|---|
 | `u8i8` | `tests/qnn_kernel_e2e/test_u8i8_e2e.sh` |
 | `w4a8` | `tests/qnn_kernel_e2e/test_w4a8_e2e.sh` |
+| `w4a8_lpbq` | `tests/qnn_kernel_e2e/test_w4a8_lpbq_e2e.sh` |
 | `w8a16` | `tests/qnn_kernel_e2e/test_w8a16_e2e.sh` |
 | `w4a16` | `tests/qnn_kernel_e2e/test_w4a16_e2e.sh` |
+| `w4a16_lpbq` | `tests/qnn_kernel_e2e/test_w4a16_lpbq_e2e.sh` |
 | `w16a16` | `tests/qnn_kernel_e2e/test_w16a16_e2e.sh` |
 
 Run the full gate before every formal code commit or push:
@@ -31,6 +33,10 @@ flow, then validates the custom artifact against the retained native reference.
 It checks the repo-standard artifact layout, native I/O, NONTRIVIAL layout
 flags, non-float runtime storage, bit-exact custom/native output, and optrace
 evidence that the expected custom HMX op executed.
+For W4 LPBQ entries, it also verifies that `quant_overrides.json` uses QAIRT
+v1.0.0 LPBQ metadata for the `weight` tensor (`compressed_bw=4`,
+`block_size=32`) so a symmetric W4 run cannot accidentally satisfy the LPBQ CI
+case.
 For W16A16, cycle-budget analysis is recorded as diagnostics but is not a
 push-blocking check because repeated device runs can move across the narrow
 native-cycle threshold; output exactness, scoped accepted profile, justified

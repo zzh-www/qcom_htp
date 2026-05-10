@@ -14,7 +14,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 usage() {
     cat <<'EOF'
 Usage:
-  scripts/run_qnn_kernel_e2e_ci.sh all|u8i8|w4a8|w8a16|w4a16|w16a16
+  scripts/run_qnn_kernel_e2e_ci.sh all|u8i8|w4a8|w4a8_lpbq|w8a16|w4a16|w4a16_lpbq|w16a16
 
 Environment:
   DEVICE=oneplus                  SSH target for qnn-net-run device execution.
@@ -31,7 +31,7 @@ fi
 
 KERNEL="$1"
 if [ "$KERNEL" = "all" ]; then
-    for item in u8i8 w4a8 w8a16 w4a16 w16a16; do
+    for item in u8i8 w4a8 w4a8_lpbq w8a16 w4a16 w4a16_lpbq w16a16; do
         "$0" "$item"
     done
     exit 0
@@ -57,6 +57,7 @@ case "$KERNEL" in
         RUN_ENV=(M=256 K=256 N=256 CHAIN=8 MODE=chain)
         TRANSPOSE_FLAG=()
         W16_FLAG=()
+        LPBQ_FLAG=()
         ;;
     w4a8)
         EXAMPLE_DIR="$ROOT_DIR/example/qnn_hmx_matmul_w4a8"
@@ -72,6 +73,23 @@ case "$KERNEL" in
         RUN_ENV=(M=256 K=256 N=256 CHAIN=8 MODE=chain)
         TRANSPOSE_FLAG=()
         W16_FLAG=()
+        LPBQ_FLAG=()
+        ;;
+    w4a8_lpbq)
+        EXAMPLE_DIR="$ROOT_DIR/example/qnn_hmx_matmul_w4a8"
+        RUN_SCRIPT="$EXAMPLE_DIR/standard_flow/custom_w4a8/run_w4a8_chain.sh"
+        RETAINED_CUSTOM="$PROFILE_DIR/output_w4a8_lpbq_e2e_256"
+        NATIVE_DIR="$PROFILE_DIR/output_w4a8_native_ref_e2e_256"
+        CI_CUSTOM="$OUT_ROOT/output_w4a8_lpbq_ci_e2e_256"
+        HTP_TYPE="QnnHmxMatMulW4A8Package::HmxU8I4ToU8MatMul"
+        QNN_PREFIX="hmx_w4a8_chain"
+        EXPECTED_QNN_OPS=8
+        DTYPE="uint8"
+        BUILD_ENV=(LPBQ_ONLY=1)
+        RUN_ENV=(M=256 K=256 N=256 CHAIN=8 MODE=chain W4_ENCODING=lpbq)
+        TRANSPOSE_FLAG=()
+        W16_FLAG=()
+        LPBQ_FLAG=(--expect-lpbq)
         ;;
     w8a16)
         EXAMPLE_DIR="$ROOT_DIR/example/qnn_hmx_matmul_w8a16"
@@ -87,6 +105,7 @@ case "$KERNEL" in
         RUN_ENV=(M=256 K=256 N=256 CHAIN=8 MODE=chain_qdq OP_INPUT_LAYOUT=tiled VERIFY_NATIVE_RAW="$NATIVE_DIR/device_out/Y.raw")
         TRANSPOSE_FLAG=()
         W16_FLAG=()
+        LPBQ_FLAG=()
         ;;
     w4a16)
         EXAMPLE_DIR="$ROOT_DIR/example/qnn_hmx_matmul_w4a16"
@@ -102,6 +121,23 @@ case "$KERNEL" in
         RUN_ENV=(M=256 K=256 N=256 CHAIN=8 MODE=chain_qdq OP_INPUT_LAYOUT=tiled VERIFY_NATIVE_RAW="$NATIVE_DIR/device_out/Y.raw" VERIFY_NATIVE_TRANSPOSE=1)
         TRANSPOSE_FLAG=(--native-transpose-2d)
         W16_FLAG=()
+        LPBQ_FLAG=()
+        ;;
+    w4a16_lpbq)
+        EXAMPLE_DIR="$ROOT_DIR/example/qnn_hmx_matmul_w4a16"
+        RUN_SCRIPT="$EXAMPLE_DIR/standard_flow/custom_w4a16/run_w4a16_chain.sh"
+        RETAINED_CUSTOM="$PROFILE_DIR/output_w4a16_lpbq_e2e_256"
+        NATIVE_DIR="$PROFILE_DIR/output_w4a16_native_ref_e2e_256"
+        CI_CUSTOM="$OUT_ROOT/output_w4a16_lpbq_ci_e2e_256"
+        HTP_TYPE="QnnHmxMatMulW4A16Package::HmxU16I4ToU16MatMul"
+        QNN_PREFIX="hmx_w4a16_chain"
+        EXPECTED_QNN_OPS=8
+        DTYPE="uint16"
+        BUILD_ENV=(LPBQ_ONLY=1)
+        RUN_ENV=(M=256 K=256 N=256 CHAIN=8 MODE=chain_qdq OP_INPUT_LAYOUT=tiled W4_ENCODING=lpbq VERIFY_NATIVE_RAW="$NATIVE_DIR/device_out/Y.raw" VERIFY_NATIVE_TRANSPOSE=1)
+        TRANSPOSE_FLAG=(--native-transpose-2d)
+        W16_FLAG=()
+        LPBQ_FLAG=(--expect-lpbq)
         ;;
     w16a16)
         EXAMPLE_DIR="$ROOT_DIR/example/qnn_hmx_matmul_w16a16"
@@ -117,6 +153,7 @@ case "$KERNEL" in
         RUN_ENV=(M=256 K=256 N=256 CHAIN=1 MODE=chain_qdq W16A16_KERNEL_PROFILE=accepted W16A16_NATIVE_ORACLE_DIR="$NATIVE_DIR" VERIFY_NATIVE_RAW="$NATIVE_DIR/device_out/Y.raw")
         TRANSPOSE_FLAG=()
         W16_FLAG=(--w16-accepted)
+        LPBQ_FLAG=()
         ;;
     *)
         echo "ERROR: unknown kernel '$KERNEL'" >&2
@@ -149,4 +186,5 @@ uv run python "$ROOT_DIR/scripts/validate_qnn_kernel_e2e.py" \
     --expected-qnn-ops "$EXPECTED_QNN_OPS" \
     --dtype "$DTYPE" \
     "${TRANSPOSE_FLAG[@]}" \
-    "${W16_FLAG[@]}"
+    "${W16_FLAG[@]}" \
+    "${LPBQ_FLAG[@]}"

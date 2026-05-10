@@ -121,6 +121,48 @@ def _validate_w16_profile(custom_dir: Path) -> list[str]:
     return errors
 
 
+def _validate_lpbq_profile(custom_dir: Path) -> list[str]:
+    errors: list[str] = []
+    overrides = _load_json(custom_dir / "quant_overrides.json")
+    if overrides.get("version") != "1.0.0":
+        errors.append(f"LPBQ quant_overrides version={overrides.get('version')!r}, expected '1.0.0'")
+
+    params = overrides.get("param_encodings", [])
+    if not isinstance(params, list):
+        errors.append("LPBQ quant_overrides param_encodings is not a v1 list")
+        return errors
+
+    weight = next((enc for enc in params if isinstance(enc, dict) and enc.get("name") == "weight"), None)
+    if weight is None:
+        errors.append("LPBQ quant_overrides missing weight encoding")
+        return errors
+
+    expected = {
+        "enc_type": "LPBQ",
+        "dtype": "INT",
+        "bw": 8,
+        "compressed_bw": 4,
+        "block_size": 32,
+        "is_sym": True,
+    }
+    for key, value in expected.items():
+        if weight.get(key) != value:
+            errors.append(f"LPBQ weight {key}={weight.get(key)!r}, expected {value!r}")
+
+    scales = weight.get("scale")
+    per_block = weight.get("per_block_int_scale")
+    if not isinstance(scales, list) or not scales:
+        errors.append("LPBQ weight scale list is missing or empty")
+    if not isinstance(per_block, list) or not per_block:
+        errors.append("LPBQ weight per_block_int_scale list is missing or empty")
+    elif isinstance(scales, list) and scales and len(per_block) != len(scales):
+        errors.append(
+            "LPBQ weight per_block_int_scale channel count does not match scale count: "
+            f"{len(per_block)} != {len(scales)}"
+        )
+    return errors
+
+
 def _dtype(name: str) -> np.dtype:
     if name == "uint8":
         return np.dtype("<u1")
@@ -181,6 +223,7 @@ def main() -> int:
     parser.add_argument("--dtype", choices=("uint8", "uint16"), default="uint8")
     parser.add_argument("--native-transpose-2d", action="store_true")
     parser.add_argument("--w16-accepted", action="store_true")
+    parser.add_argument("--expect-lpbq", action="store_true")
     args = parser.parse_args()
 
     custom_dir = args.custom_dir.resolve()
@@ -213,6 +256,8 @@ def main() -> int:
     )
     if args.w16_accepted:
         errors.extend(_validate_w16_profile(custom_dir))
+    if args.expect_lpbq:
+        errors.extend(_validate_lpbq_profile(custom_dir))
 
     if errors:
         print(f"FAIL: {args.kernel} E2E validation")
