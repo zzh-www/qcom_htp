@@ -52,6 +52,8 @@ python gen_w4a8_chain.py \
     --bias-scale "${BIAS_SCALE:-512.0}" \
     --w4-pack-order "${W4_PACK_ORDER:-lohi}" \
     --w4-nibble-encoding "${W4_NIBBLE_ENCODING:-twos}" \
+    --w4-encoding "${W4_ENCODING:-symmetric}" \
+    --w4-lpbq-block-size "${W4_LPBQ_BLOCK_SIZE:-32}" \
     --op-input-layout "${OP_INPUT_LAYOUT:-native}" \
     ${GEN_EXTRA_ARGS:-} \
     -o "$OUT_DIR/w4a8.onnx"
@@ -91,11 +93,19 @@ echo "=== [3/4] qairt-converter -> qairt-quantizer ==="
     "${LAYOUT_FLAGS[@]}" \
     -o "$OUT_DIR/w4a8_encoded.dlc" \
     2>&1 | tee "$OUT_DIR/convert.log" | tail -5
-qairt_quantize_encoded_dlc \
-    "$OUT_DIR/w4a8_encoded.dlc" \
-    "$OUT_DIR/w4a8.dlc" \
-    8 4 32 "$PACK_4BIT_WEIGHTS" \
-    "$OUT_DIR/quantize.log"
+if [ "${W4_ENCODING:-symmetric}" = "lpbq" ]; then
+    cp "$OUT_DIR/w4a8_encoded.dlc" "$OUT_DIR/w4a8.dlc"
+    {
+        echo "LPBQ custom-op path uses converter-applied v1.0.0 encodings."
+        echo "qairt-quantizer is intentionally skipped because QAIRT only rewrites LPBQ for built-in row-wise or Conv consumers."
+    } > "$OUT_DIR/quantize.log"
+else
+    qairt_quantize_encoded_dlc \
+        "$OUT_DIR/w4a8_encoded.dlc" \
+        "$OUT_DIR/w4a8.dlc" \
+        8 4 32 "$PACK_4BIT_WEIGHTS" \
+        "$OUT_DIR/quantize.log"
+fi
 tail -5 "$OUT_DIR/quantize.log"
 
 echo "=== [4/4] qnn-context-binary-generator ==="

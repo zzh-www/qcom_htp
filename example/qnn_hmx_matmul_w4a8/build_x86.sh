@@ -9,7 +9,7 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 # shellcheck disable=SC1091
 source "$ROOT_DIR/scripts/env.sh" >/dev/null
 
-for var in QNN_SDK_ROOT; do
+for var in QNN_SDK_ROOT HEXAGON_TOOLS_ROOT; do
     v="${!var:-}"
     if [ -z "$v" ] || [ ! -d "$v" ]; then
         echo "ERROR: $var is empty or missing: '$v'. Source scripts/env.sh." >&2
@@ -30,7 +30,8 @@ SRCS=(
 )
 
 FLAGS=(
-    -O2 -fPIC
+    -O2 -fPIC -nostdlib++
+    -nostdinc++ -I "$HEXAGON_TOOLS_ROOT/target/hexagon/include/c++/v1"
     -D__HVXDBL__ -DUSE_OS_LINUX -DPREPARE_DISABLED
     -DHMX_W4A8_ENABLE_QHPI_PRECOMPUTE
     "-DTHIS_PKG_NAME=$PACKAGE_NAME"
@@ -42,9 +43,17 @@ FLAGS=(
     '-DQNN_API=__attribute__((visibility("default")))'
     ${EXTRA_DEFS:-}
 )
+if [ "${LPBQ_ONLY:-0}" = "1" ]; then
+    FLAGS+=(-DHMX_W4A8_LPBQ_ONLY)
+fi
+if [ "${LPBQ_SCALAR:-0}" = "1" ]; then
+    FLAGS+=(-UHMX_W4A8_ENABLE_QHPI_PRECOMPUTE -DHMX_W4A8_LPBQ_SCALAR_ONLY)
+fi
 
 echo "=== Building x86_64 QnnHmxMatMulW4A8 OpPackage ==="
 "$CXX" -std=c++17 -shared "${FLAGS[@]}" \
     -o "$OUT/libQnnHmxMatMulW4A8.so" \
-    "${SRCS[@]}"
+    "${SRCS[@]}" \
+    /usr/lib/x86_64-linux-gnu/libc++.so.1 /usr/lib/x86_64-linux-gnu/libc++abi.so.1 \
+    -L "$QNN_SDK_ROOT/lib/x86_64-linux-clang" -lQnnHtp
 echo "  -> $OUT/libQnnHmxMatMulW4A8.so"

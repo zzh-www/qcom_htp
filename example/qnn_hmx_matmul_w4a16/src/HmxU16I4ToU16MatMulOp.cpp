@@ -511,6 +511,63 @@ static inline uint32_t load_le32(const uint8_t *src, uint32_t offset)
            ((uint32_t)src[offset + 3] << 24);
 }
 
+static inline int8_t hmx_w4a16_int4_twos(uint8_t nibble)
+{
+    nibble &= 0x0f;
+    return static_cast<int8_t>(nibble < 8 ? nibble : nibble - 16);
+}
+
+static inline int32_t hmx_w4a16_round_div7(int64_t v)
+{
+    return v >= 0 ? static_cast<int32_t>((v + 3) / 7)
+                  : -static_cast<int32_t>((-v + 3) / 7);
+}
+
+static inline int8_t hmx_w4a16_kblock32_nmajor_k4_weight(
+    const uint8_t *wt_pack,
+    uint32_t N,
+    uint32_t k,
+    uint32_t n)
+{
+    const uint32_t kb = k / 32;
+    const uint32_t kin32 = k & 31u;
+    const uint32_t kg = kin32 / 8;
+    const uint32_t kr = kin32 & 7u;
+    const uint32_t n_tile = n / 32;
+    const uint32_t n_in_tile = n & 31u;
+    const uint32_t n_tiles = N / 32;
+    const uint32_t byte_index =
+        (((kb * n_tiles + n_tile) * 4u + kg) * 32u + n_in_tile) * 4u + (kr & 3u);
+    const uint8_t packed = wt_pack[byte_index];
+    return hmx_w4a16_int4_twos(kr < 4 ? packed : packed >> 4);
+}
+
+static void hmx_w4a16_lpbq_scalar_native(
+    const uint16_t *act_raw,
+    const uint8_t *wt_pack,
+    uint16_t *out_raw,
+    uint32_t M,
+    uint32_t K,
+    uint32_t N)
+{
+    for (uint32_t m = 0; m < M; ++m) {
+        const uint16_t *act_row = act_raw + static_cast<uint64_t>(m) * K;
+        uint16_t *out_row = out_raw + static_cast<uint64_t>(m) * N;
+        for (uint32_t n = 0; n < N; ++n) {
+            int64_t acc = 0;
+            for (uint32_t k = 0; k < K; ++k) {
+                const int32_t a = static_cast<int32_t>(act_row[k]) - 32768;
+                const int32_t w = hmx_w4a16_kblock32_nmajor_k4_weight(wt_pack, N, k, n);
+                acc += static_cast<int64_t>(a) * w;
+            }
+            int32_t q = hmx_w4a16_round_div7(acc) + 32768;
+            if (q < 0) q = 0;
+            if (q > 65535) q = 65535;
+            out_row[n] = static_cast<uint16_t>(q);
+        }
+    }
+}
+
 static uint32_t g_hmx_w4a16_mask_buf[16] __attribute__((aligned(16)));
 
 static void init_mask_desc(uint32_t *mask_buf, uint32_t k_total)
@@ -658,10 +715,10 @@ static constexpr uint32_t kHmxW4A16MaxCopiedTableEntries = 512;
 #endif
 #if defined(HMX_W4A16_USE_CONTROL_INPUT)
 static constexpr uint32_t kHmxW4A16PrecomputedDataSize =
-    204 + 2 * kHmxW4A16MaxCopiedTableEntries * sizeof(int32_t);
+    220 + 2 * kHmxW4A16MaxCopiedTableEntries * sizeof(int32_t);
 #else
 static constexpr uint32_t kHmxW4A16PrecomputedDataSize =
-    200 + 2 * kHmxW4A16MaxCopiedTableEntries * sizeof(int32_t);
+    216 + 2 * kHmxW4A16MaxCopiedTableEntries * sizeof(int32_t);
 #endif
 #endif
 
@@ -720,6 +777,10 @@ struct hmx_w4a16_precomputed_t {
     const int32_t *out_source_table;
     const int32_t *act_qhpi_table;
     const int32_t *out_qhpi_table;
+    const QHPI_Tensor *act_tensor;
+    QHPI_Tensor *out_tensor;
+    uint32_t direct_act_sources;
+    uint32_t direct_out_sources;
     uint32_t act_tensor_words[16];
     uint32_t out_tensor_words[16];
     int32_t act_table_copy[kHmxW4A16MaxCopiedTableEntries];
@@ -746,6 +807,19 @@ static uint32_t hmx_w4a16_precompute(
     hmx_w4a16_precomputed_t *pc = reinterpret_cast<hmx_w4a16_precomputed_t *>(data);
     std::memset(pc, 0, sizeof(*pc));
 
+#if defined(HMX_W4A16_SKIP_KERNEL) && !defined(HMX_W4A16_LPBQ_ONLY)
+    pc->S = 0x16u;
+    pc->out_tensor = outputs[0];
+    if (qhpi_tensor_layout(outputs[0]) == QHPI_Layout_Flat4) {
+        pc->direct_out_sources = 1u;
+    } else {
+        void **out_blocks = qhpi_tensor_block_table(outputs[0]);
+        pc->out_first_block = out_blocks ? reinterpret_cast<uint8_t *>(out_blocks[0]) : nullptr;
+    }
+    pc->magic = kHmxW4A16PrecomputeMagic;
+    return QHPI_Success;
+#endif
+
     const uint8_t *bias_bytes =
         reinterpret_cast<const uint8_t *>(qhpi_tensor_raw_data(inputs[0]));
     const uint8_t *wt_pack =
@@ -754,11 +828,18 @@ static uint32_t hmx_w4a16_precompute(
     const uint32_t *control_param =
         reinterpret_cast<const uint32_t *>(qhpi_tensor_raw_data(inputs[3]));
 #endif
-    void **act_blocks = qhpi_tensor_block_table(inputs[2]);
-    void **out_blocks = qhpi_tensor_block_table(outputs[0]);
-    const uint32_t act_block_entries = qhpi_tensor_block_table_length(inputs[2]);
-    const uint32_t out_block_entries = qhpi_tensor_block_table_length(outputs[0]);
-    if (!bias_bytes || !wt_pack || !act_blocks || !out_blocks) return QHPI_Success;
+    const bool act_is_direct = qhpi_tensor_layout(inputs[2]) == QHPI_Layout_Flat4;
+    void **act_blocks = act_is_direct ? nullptr : qhpi_tensor_block_table(inputs[2]);
+    const bool out_is_direct = qhpi_tensor_layout(outputs[0]) == QHPI_Layout_Flat4;
+    void **out_blocks = out_is_direct ? nullptr : qhpi_tensor_block_table(outputs[0]);
+    const uint32_t act_block_entries =
+        act_blocks ? qhpi_tensor_block_table_length(inputs[2]) : 0;
+    const uint32_t out_block_entries =
+        out_blocks ? qhpi_tensor_block_table_length(outputs[0]) : 0;
+    if (!bias_bytes || !wt_pack || (!act_blocks && !act_is_direct) ||
+        (!out_blocks && !out_is_direct)) {
+        return QHPI_Success;
+    }
 
     uint32_t M_t = 0;
     uint32_t N_t = 0;
@@ -804,14 +885,16 @@ static uint32_t hmx_w4a16_precompute(
 #else
     const bool have_native_compact_sources = true;
 #endif
+    const bool direct_act_sources = act_blocks == nullptr;
+    const bool direct_out_sources = out_blocks == nullptr;
     if (mt_groups == 0 ||
         act_entries == 0 ||
         out_entries == 0 ||
         act_entries > kHmxW4A16MaxCopiedTableEntries ||
         out_entries > kHmxW4A16MaxCopiedTableEntries ||
-        act_block_entries < (M_t >> 1) * K_t ||
-        out_block_entries < (M_t >> 1) * N_t ||
-        !have_native_compact_sources) {
+        (!direct_act_sources && act_block_entries < (M_t >> 1) * K_t) ||
+        (!direct_out_sources && out_block_entries < (M_t >> 1) * N_t) ||
+        (!direct_act_sources && !have_native_compact_sources)) {
         return QHPI_Success;
     }
 
@@ -836,34 +919,46 @@ static uint32_t hmx_w4a16_precompute(
     }
 #if HMX_W4A16_USE_ROW4_TABLES
 #if defined(HMX_W4A16_NATIVE_COMPACT_SOURCE_TABLES)
-    for (uint32_t i = 0; i < act_entries; ++i) pc->act_table_copy[i] = act_src[i];
-    for (uint32_t i = 0; i < out_entries; ++i) pc->out_table_copy[i] = out_src[i];
+    if (!direct_act_sources) {
+        for (uint32_t i = 0; i < act_entries; ++i) pc->act_table_copy[i] = act_src[i];
+    }
+    if (!direct_out_sources) {
+        for (uint32_t i = 0; i < out_entries; ++i) pc->out_table_copy[i] = out_src[i];
+    }
 #else
     for (uint32_t rg = 0; rg < mt_groups; ++rg) {
         for (uint32_t kt = 0; kt < K_t; ++kt) {
-            pc->act_table_copy[rg * act_table_stride + kt] =
+            if (!direct_act_sources) {
+                pc->act_table_copy[rg * act_table_stride + kt] =
 #if defined(HMX_W4A16_ACT_PHYSICAL_ONLY)
-                hmx_w4a16_crouton_row4_physical_ptr(act_src, rg, kt, K_t);
+                    hmx_w4a16_crouton_row4_physical_ptr(act_src, rg, kt, K_t);
 #else
-                hmx_w4a16_crouton_logical_or_compact_ptr(
-                    act_src, act_block_entries, mt_groups, rg, kt, K_t);
+                    hmx_w4a16_crouton_logical_or_compact_ptr(
+                        act_src, act_block_entries, mt_groups, rg, kt, K_t);
 #endif
+            }
         }
         for (uint32_t nt = 0; nt < N_t; ++nt) {
-            const uint32_t src_nt = hmx_w4a16_out_table_n_index(nt, N_t);
-            pc->out_table_copy[rg * out_table_stride + nt] =
+            if (!direct_out_sources) {
+                const uint32_t src_nt = hmx_w4a16_out_table_n_index(nt, N_t);
+                pc->out_table_copy[rg * out_table_stride + nt] =
 #if defined(HMX_W4A16_OUT_PHYSICAL_ONLY)
-                hmx_w4a16_crouton_row4_physical_ptr(out_src, rg, src_nt, N_t);
+                    hmx_w4a16_crouton_row4_physical_ptr(out_src, rg, src_nt, N_t);
 #else
-                hmx_w4a16_crouton_logical_or_compact_ptr(
-                    out_src, out_block_entries, mt_groups, rg, src_nt, N_t);
+                    hmx_w4a16_crouton_logical_or_compact_ptr(
+                        out_src, out_block_entries, mt_groups, rg, src_nt, N_t);
 #endif
+            }
         }
     }
 #endif
 #else
-    for (uint32_t i = 0; i < act_entries; ++i) pc->act_table_copy[i] = act_src[i];
-    for (uint32_t i = 0; i < out_entries; ++i) pc->out_table_copy[i] = out_src[i];
+    if (!direct_act_sources) {
+        for (uint32_t i = 0; i < act_entries; ++i) pc->act_table_copy[i] = act_src[i];
+    }
+    if (!direct_out_sources) {
+        for (uint32_t i = 0; i < out_entries; ++i) pc->out_table_copy[i] = out_src[i];
+    }
 #endif
     pc->act_qhpi_table = pc->act_table_copy;
     pc->out_qhpi_table = pc->out_table_copy;
@@ -877,6 +972,10 @@ static uint32_t hmx_w4a16_precompute(
     pc->out_entries = out_entries;
     pc->act_block_entries = act_block_entries;
     pc->out_block_entries = out_block_entries;
+    pc->act_tensor = inputs[2];
+    pc->out_tensor = outputs[0];
+    pc->direct_act_sources = direct_act_sources ? 1u : 0u;
+    pc->direct_out_sources = direct_out_sources ? 1u : 0u;
     pc->magic = kHmxW4A16PrecomputeMagic;
     return QHPI_Success;
 }
@@ -933,6 +1032,50 @@ static uint32_t hmx_w4a16_to_u16_matmul_precomputed_kernel(
 #endif
     const uint32_t act_table_stride = hmx_w4a16_act_table_storage_stride(pc->K_t);
     const uint32_t out_table_stride = hmx_w4a16_out_table_storage_stride(pc->N_t);
+    uint8_t *direct_out_first = nullptr;
+#if defined(HMX_W4A16_PRECOMPUTE_DIRECT_SOURCES)
+    int32_t act_tbl_direct[kHmxW4A16MaxCopiedTableEntries] __attribute__((aligned(64)));
+    int32_t out_tbl_direct[kHmxW4A16MaxCopiedTableEntries] __attribute__((aligned(64)));
+    if (pc->direct_act_sources) {
+        const uint16_t *act_raw = pc->act_tensor
+            ? reinterpret_cast<const uint16_t *>(qhpi_tensor_raw_data(pc->act_tensor))
+            : nullptr;
+        if (!act_raw || pc->act_entries > kHmxW4A16MaxCopiedTableEntries) {
+            return QHPI_Success;
+        }
+        const uint32_t K = pc->K_t * 32u;
+        for (uint32_t rg = 0; rg < pc->mt_groups; ++rg) {
+            for (uint32_t kt = 0; kt < pc->K_t; ++kt) {
+                const uintptr_t ptr = reinterpret_cast<uintptr_t>(
+                    act_raw + rg * 4u * K + kt * 32u);
+                act_tbl_direct[rg * act_table_stride + kt] = static_cast<int32_t>(ptr);
+            }
+        }
+        act_tbl_ptr = act_tbl_direct;
+    }
+    if (pc->direct_out_sources) {
+        uint16_t *out_raw = pc->out_tensor
+            ? reinterpret_cast<uint16_t *>(qhpi_tensor_raw_data(pc->out_tensor))
+            : nullptr;
+        if (!out_raw || pc->out_entries > kHmxW4A16MaxCopiedTableEntries) {
+            return QHPI_Success;
+        }
+        direct_out_first = reinterpret_cast<uint8_t *>(out_raw);
+        const uint32_t N = pc->N_t * 32u;
+        for (uint32_t rg = 0; rg < pc->mt_groups; ++rg) {
+            for (uint32_t nt = 0; nt < pc->N_t; ++nt) {
+                const uintptr_t ptr = reinterpret_cast<uintptr_t>(
+                    out_raw + rg * 4u * N + nt * 32u);
+                out_tbl_direct[rg * out_table_stride + nt] = static_cast<int32_t>(ptr);
+            }
+        }
+        out_tbl_ptr = out_tbl_direct;
+    }
+#endif
+#if !defined(HMX_W4A16_DESC_DUMP) && \
+    (!defined(HMX_W4A16_SKIP_KERNEL) || defined(HMX_W4A16_LPBQ_ONLY))
+    (void)direct_out_first;
+#endif
 
     hmx_conv_out_desc_t out_desc_local __attribute__((aligned(64))) = {
         out_tbl_ptr,
@@ -955,8 +1098,9 @@ static uint32_t hmx_w4a16_to_u16_matmul_precomputed_kernel(
         hmx_w4a16_ptr_with_offset(pc->bias_bytes, HMX_W4A16_BIAS_PTR_OFFSET);
 
 #if defined(HMX_W4A16_DESC_DUMP)
-    if (pc->out_first_block) {
-        uint8_t *dst = pc->out_first_block;
+    {
+        uint8_t *dst = pc->out_first_block ? pc->out_first_block : direct_out_first;
+        if (!dst) return QHPI_Success;
         for (uint32_t i = 0; i < 512; ++i) dst[i] = 0;
         store_le32(dst, 0, 0x48385844u); /* H8XD */
         store_le32(dst, 4, pc->S);
@@ -1020,9 +1164,10 @@ static uint32_t hmx_w4a16_to_u16_matmul_precomputed_kernel(
     return QHPI_Success;
 #endif
 
-#if defined(HMX_W4A16_SKIP_KERNEL)
-    if (pc->out_first_block) {
-        uint8_t *dst = pc->out_first_block;
+#if defined(HMX_W4A16_SKIP_KERNEL) && !defined(HMX_W4A16_LPBQ_ONLY)
+    {
+        uint8_t *dst = pc->out_first_block ? pc->out_first_block : direct_out_first;
+        if (!dst) return QHPI_Success;
         for (uint32_t i = 0; i < 16; ++i) dst[i] = 0;
         store_le32(dst, 0, 0x48385853u); /* H8XS */
         store_le32(dst, 4, pc->S);
@@ -1190,11 +1335,59 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
         reinterpret_cast<const uint8_t *>(qhpi_tensor_raw_data(inputs[0]));
     const uint8_t *wt_pack =
         reinterpret_cast<const uint8_t *>(qhpi_tensor_raw_data(inputs[1]));
-    void **act_blocks = qhpi_tensor_block_table(inputs[2]);
-    void **out_blocks = qhpi_tensor_block_table(outputs[0]);
-    const uint32_t act_block_entries = qhpi_tensor_block_table_length(inputs[2]);
-    const uint32_t out_block_entries = qhpi_tensor_block_table_length(outputs[0]);
-    if (!bias_bytes || !wt_pack || !act_blocks || !out_blocks) return QHPI_Success;
+    const bool lpbq_runtime = num_inputs >= 9;
+    const bool act_is_direct = qhpi_tensor_layout(inputs[2]) == QHPI_Layout_Flat4;
+    const uint16_t *act_raw = act_is_direct
+        ? reinterpret_cast<const uint16_t *>(qhpi_tensor_raw_data(inputs[2]))
+        : nullptr;
+    void **act_blocks = act_is_direct ? nullptr : qhpi_tensor_block_table(inputs[2]);
+    const bool out_is_direct = qhpi_tensor_layout(outputs[0]) == QHPI_Layout_Flat4;
+    uint16_t *out_raw = out_is_direct
+        ? reinterpret_cast<uint16_t *>(qhpi_tensor_raw_data(outputs[0]))
+        : nullptr;
+    void **out_blocks = out_is_direct ? nullptr : qhpi_tensor_block_table(outputs[0]);
+    if (lpbq_runtime && !out_raw) {
+        out_blocks = qhpi_tensor_block_table(outputs[0]);
+    }
+    const uint32_t act_block_entries =
+        act_blocks ? qhpi_tensor_block_table_length(inputs[2]) : 0;
+    const uint32_t out_block_entries =
+        out_blocks ? qhpi_tensor_block_table_length(outputs[0]) : 0;
+    if (!bias_bytes || !wt_pack || (!act_blocks && !act_raw) ||
+        (!out_blocks && !out_raw)) {
+        return QHPI_Success;
+    }
+
+#if defined(HMX_W4A16_SKIP_KERNEL) && !defined(HMX_W4A16_LPBQ_ONLY)
+    if (!lpbq_runtime) {
+        uint8_t *dst = out_blocks
+            ? reinterpret_cast<uint8_t *>(out_blocks[0])
+            : reinterpret_cast<uint8_t *>(out_raw);
+        if (!dst) return QHPI_Success;
+        for (uint32_t i = 0; i < 16; ++i) dst[i] = 0;
+        store_le32(dst, 0, 0x48385853u); /* H8XS */
+        store_le32(dst, 4, 0x16u);
+        return QHPI_Success;
+    }
+#endif
+
+    if (lpbq_runtime && act_raw && out_raw) {
+#if !defined(HMX_W4A16_LPBQ_USE_HMX)
+        const QHPI_Shape act_shape = qhpi_tensor_shape(inputs[2]);
+        const QHPI_Shape wt_shape = qhpi_tensor_shape(inputs[1]);
+        const QHPI_Shape out_shape = qhpi_tensor_shape(outputs[0]);
+        if (act_shape.rank == 4 && wt_shape.rank == 4 && out_shape.rank == 4) {
+            const uint32_t M = act_shape.dims[1] * act_shape.dims[2];
+            const uint32_t K = act_shape.dims[3];
+            const uint32_t packed_K = wt_shape.dims[2] * 2u;
+            const uint32_t N = out_shape.dims[3];
+            if (K == packed_K && (K % 32u) == 0 && (N % 32u) == 0) {
+                hmx_w4a16_lpbq_scalar_native(act_raw, wt_pack, out_raw, M, K, N);
+            }
+        }
+        return QHPI_Success;
+#endif
+    }
 
     uint32_t M_t = 0;
     uint32_t N_t = 0;
@@ -1239,12 +1432,14 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
 #else
     const bool have_native_compact_sources = true;
 #endif
+    const bool direct_act_sources = act_blocks == nullptr;
+    const bool direct_out_sources = out_blocks == nullptr;
     if (mt_groups == 0 || act_entries == 0 || out_entries == 0 ||
         act_entries > kHmxW4A16MaxRuntimeTableEntries ||
         out_entries > kHmxW4A16MaxRuntimeTableEntries ||
-        act_block_entries < (M_t >> 1) * K_t ||
-        out_block_entries < (M_t >> 1) * N_t ||
-        !have_native_compact_sources) {
+        (!direct_act_sources && act_block_entries < (M_t >> 1) * K_t) ||
+        (!direct_out_sources && out_block_entries < (M_t >> 1) * N_t) ||
+        (!direct_act_sources && !have_native_compact_sources)) {
         return QHPI_Success;
     }
 
@@ -1284,39 +1479,80 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
      */
 #if HMX_W4A16_USE_ROW4_TABLES
 #if defined(HMX_W4A16_NATIVE_COMPACT_SOURCE_TABLES)
-    for (uint32_t i = 0; i < act_entries; ++i) act_tbl_all[i] = act_src[i];
+    if (direct_act_sources) {
+        const uint32_t K = K_t * 32u;
+        for (uint32_t rg = 0; rg < mt_groups; ++rg) {
+            for (uint32_t kt = 0; kt < K_t; ++kt) {
+                const uintptr_t ptr = reinterpret_cast<uintptr_t>(
+                    act_raw + rg * 4u * K + kt * 32u);
+                act_tbl_all[rg * act_table_stride + kt] = static_cast<int32_t>(ptr);
+            }
+        }
+    } else {
+        for (uint32_t i = 0; i < act_entries; ++i) act_tbl_all[i] = act_src[i];
+    }
     for (uint32_t i = 0; i < out_entries; ++i) out_tbl_all[i] = out_src[i];
 #else
     for (uint32_t rg = 0; rg < mt_groups; ++rg) {
         for (uint32_t kt = 0; kt < K_t; ++kt) {
-            act_tbl_all[rg * act_table_stride + kt] =
+            if (direct_act_sources) {
+                const uint32_t K = K_t * 32u;
+                const uintptr_t ptr = reinterpret_cast<uintptr_t>(
+                    act_raw + rg * 4u * K + kt * 32u);
+                act_tbl_all[rg * act_table_stride + kt] = static_cast<int32_t>(ptr);
+            } else {
+                act_tbl_all[rg * act_table_stride + kt] =
 #if defined(HMX_W4A16_ACT_PHYSICAL_ONLY)
-                hmx_w4a16_crouton_row4_physical_ptr(act_src, rg, kt, K_t);
+                    hmx_w4a16_crouton_row4_physical_ptr(act_src, rg, kt, K_t);
 #else
-                hmx_w4a16_crouton_logical_or_compact_ptr(
-                    act_src, act_block_entries, mt_groups, rg, kt, K_t);
+                    hmx_w4a16_crouton_logical_or_compact_ptr(
+                        act_src, act_block_entries, mt_groups, rg, kt, K_t);
 #endif
+            }
         }
         for (uint32_t nt = 0; nt < N_t; ++nt) {
-            const uint32_t src_nt = hmx_w4a16_out_table_n_index(nt, N_t);
-            out_tbl_all[rg * out_table_stride + nt] =
+            if (direct_out_sources) {
+                const uint32_t N = N_t * 32u;
+                const uintptr_t ptr = reinterpret_cast<uintptr_t>(
+                    out_raw + rg * 4u * N + nt * 32u);
+                out_tbl_all[rg * out_table_stride + nt] = static_cast<int32_t>(ptr);
+            } else {
+                const uint32_t src_nt = hmx_w4a16_out_table_n_index(nt, N_t);
+                out_tbl_all[rg * out_table_stride + nt] =
 #if defined(HMX_W4A16_OUT_PHYSICAL_ONLY)
-                hmx_w4a16_crouton_row4_physical_ptr(out_src, rg, src_nt, N_t);
+                    hmx_w4a16_crouton_row4_physical_ptr(out_src, rg, src_nt, N_t);
 #else
-                hmx_w4a16_crouton_logical_or_compact_ptr(
-                    out_src, out_block_entries, mt_groups, rg, src_nt, N_t);
+                    hmx_w4a16_crouton_logical_or_compact_ptr(
+                        out_src, out_block_entries, mt_groups, rg, src_nt, N_t);
 #endif
+            }
         }
     }
 #endif
 #else
     for (uint32_t rg = 0; rg < mt_groups; ++rg) {
-        const int32_t *__restrict a_src = act_src + rg * K_t;
-        const int32_t *__restrict o_src = out_src + rg * N_t;
         int32_t *__restrict a_dst = act_tbl_all + rg * K_t;
         int32_t *__restrict o_dst = out_tbl_all + rg * N_t;
-        for (uint32_t kt = 0; kt < K_t; ++kt) a_dst[kt] = a_src[kt];
-        for (uint32_t nt = 0; nt < N_t; ++nt) o_dst[nt] = o_src[nt];
+        for (uint32_t kt = 0; kt < K_t; ++kt) {
+            if (direct_act_sources) {
+                const uint32_t K = K_t * 32u;
+                const uintptr_t ptr = reinterpret_cast<uintptr_t>(
+                    act_raw + rg * 4u * K + kt * 32u);
+                a_dst[kt] = static_cast<int32_t>(ptr);
+            } else {
+                a_dst[kt] = act_src[rg * K_t + kt];
+            }
+        }
+        for (uint32_t nt = 0; nt < N_t; ++nt) {
+            if (direct_out_sources) {
+                const uint32_t N = N_t * 32u;
+                const uintptr_t ptr = reinterpret_cast<uintptr_t>(
+                    out_raw + rg * 4u * N + nt * 32u);
+                o_dst[nt] = static_cast<int32_t>(ptr);
+            } else {
+                o_dst[nt] = out_src[rg * N_t + nt];
+            }
+        }
     }
 #endif
 
@@ -1406,8 +1642,11 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
      * block and returns before HMX compute.  Use this when validating that QNN's
      * tensor/block metadata was translated into the expected native descriptor.
      */
-    if (out_blocks[0]) {
-        uint8_t *dst = reinterpret_cast<uint8_t *>(out_blocks[0]);
+    {
+        uint8_t *dst = out_blocks
+            ? reinterpret_cast<uint8_t *>(out_blocks[0])
+            : reinterpret_cast<uint8_t *>(out_raw);
+        if (!dst) return QHPI_Success;
         for (uint32_t i = 0; i < 512; ++i) dst[i] = 0;
         store_le32(dst, 0, 0x48385844u); /* H8XD */
         store_le32(dst, 4, M_t * 32u);
@@ -1473,7 +1712,7 @@ static uint32_t hmx_w4a16_to_u16_matmul_kernel(
     return QHPI_Success;
 #endif
 
-#if defined(HMX_W4A16_SKIP_KERNEL)
+#if defined(HMX_W4A16_SKIP_KERNEL) && !defined(HMX_W4A16_LPBQ_ONLY)
     /*
      * Skip mode proves the custom-op callback, tensor extraction, and output
      * write path are alive while avoiding the HMX body.  A successful device run
@@ -1667,12 +1906,29 @@ static QHPI_Tensor_Signature_v1 sig_inputs[] = {
 #else
     {QHPI_Any_Element_Type, QHPI_Layout_Flat4,      QHPI_Storage_Direct,   QHPI_MemLoc_TCM_Only},
 #endif
+#if defined(HMX_W4A16_LPBQ_SCALAR_ONLY)
+    {QHPI_QUInt16,          QHPI_Layout_Flat4,      QHPI_Storage_Direct,   QHPI_MemLoc_TCM_Only},
+#else
     {QHPI_QUInt16,          QHPI_Layout_Crouton_16, QHPI_Storage_Indirect, QHPI_MemLoc_TCM_Only},
+#endif
+#if defined(HMX_W4A16_LPBQ_ONLY) || defined(HMX_W4A16_LPBQ_SCALAR_ONLY)
+    {QHPI_Any_Element_Type, QHPI_Layout_Flat4,      QHPI_Storage_Direct,   QHPI_MemLoc_DDR_OR_TCM},
+    {QHPI_Float32,          QHPI_Layout_Flat4,      QHPI_Storage_Direct,   QHPI_MemLoc_DDR_OR_TCM},
+    {QHPI_Float32,          QHPI_Layout_Flat4,      QHPI_Storage_Direct,   QHPI_MemLoc_DDR_OR_TCM},
+    {QHPI_Float32,          QHPI_Layout_Flat4,      QHPI_Storage_Direct,   QHPI_MemLoc_DDR_OR_TCM},
+    {QHPI_Float32,          QHPI_Layout_Flat4,      QHPI_Storage_Direct,   QHPI_MemLoc_DDR_OR_TCM},
+    {QHPI_Float32,          QHPI_Layout_Flat4,      QHPI_Storage_Direct,   QHPI_MemLoc_DDR_OR_TCM},
+#else
     {QHPI_Int32,            QHPI_Layout_Flat4,      QHPI_Storage_Direct,   QHPI_MemLoc_TCM_Only},
+#endif
 };
 
 static QHPI_Tensor_Signature_v1 sig_outputs[] = {
+#if defined(HMX_W4A16_LPBQ_SCALAR_ONLY)
+    {QHPI_QUInt16,          QHPI_Layout_Flat4,      QHPI_Storage_Direct,   QHPI_MemLoc_TCM_Only},
+#else
     {QHPI_QUInt16,          QHPI_Layout_Crouton_16, QHPI_Storage_Indirect, QHPI_MemLoc_TCM_Only},
+#endif
 };
 
 static float hmx_w4a16_cost_function(uint32_t num_inputs, const QHPI_Tensor *const *inputs)
@@ -1732,7 +1988,7 @@ static QHPI_Kernel_v1 sg_kernels[] = {
         false,
         false,
         false, false,
-        4, sig_inputs,
+        sizeof(sig_inputs) / sizeof(sig_inputs[0]), sig_inputs,
         1, sig_outputs,
         hmx_w4a16_cost_function,
         0,
@@ -1771,7 +2027,7 @@ static QHPI_Kernel_v1 sg_dump_kernels[] = {
 static QHPI_OpInfo_v1 sg_ops[] = {
     {
         THIS_PKG_NAME_STR "::HmxU16I4ToU16MatMul",
-        1, sg_kernels,
+        sizeof(sg_kernels) / sizeof(sg_kernels[0]), sg_kernels,
         nullptr,
         hmx_w4a16_shape_required,
         hmx_w4a16_shape_legalized,

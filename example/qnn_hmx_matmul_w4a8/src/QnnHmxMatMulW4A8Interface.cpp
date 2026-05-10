@@ -6,20 +6,38 @@
  */
 
 #include "HTP/QnnHtpCommon.h"
-#include "HTP/core/qhpi.h"
 #include "QnnOpPackage.h"
 #include <array>
+#include <set>
 #include <string>
+#include <unordered_map>
 
+#ifndef THIS_PKG_NAME_STR
 #define STRINGIZE_DETAIL(X) #X
 #define STRINGIZE(X) STRINGIZE_DETAIL(X)
 #define THIS_PKG_NAME_STR STRINGIZE(THIS_PKG_NAME)
+#endif
 
 extern "C" void register_hmx_w4a8_to_u8_matmul_op();
 
 static constexpr auto sg_packageName = THIS_PKG_NAME_STR;
 static constexpr auto sg_opName = "HmxU8I4ToU8MatMul";
 static std::array<const char *, 1> sg_opNames{{sg_opName}};
+
+std::unordered_map<std::string, std::set<std::string> *> &getPkgPerChannelOpsTmpMap();
+
+static std::set<std::string> &hmx_w4a8_per_channel_ops()
+{
+    static std::set<std::string> ops;
+    return ops;
+}
+
+static void register_hmx_w4a8_per_channel_support()
+{
+    std::set<std::string> &ops = hmx_w4a8_per_channel_ops();
+    ops.insert(std::string(THIS_PKG_NAME_STR) + "::HmxU8I4ToU8MatMul");
+    getPkgPerChannelOpsTmpMap()[std::string(THIS_PKG_NAME_STR)] = &ops;
+}
 
 static Qnn_ApiVersion_t sg_sdkApiVersion = QNN_HTP_API_VERSION_INIT;
 static Qnn_Version_t sg_opsetVersion = {1, 0, 0};
@@ -45,6 +63,7 @@ static QnnLog_Level_t sg_maxLogLevel = (QnnLog_Level_t)0;
 static Qnn_ErrorHandle_t pkgInit(QnnOpPackage_GlobalInfrastructure_t infra)
 {
     if (sg_initialized) return QNN_OP_PACKAGE_ERROR_LIBRARY_ALREADY_INITIALIZED;
+    register_hmx_w4a8_per_channel_support();
     sg_globalInfra = infra;
     sg_initialized = true;
     return QNN_SUCCESS;

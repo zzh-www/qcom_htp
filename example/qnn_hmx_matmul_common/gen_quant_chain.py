@@ -94,6 +94,94 @@ def _symmetric_encoding(bits: int) -> dict:
     }
 
 
+def _legacy_encoding_to_v1(name: str, enc: dict) -> dict:
+    """Convert the repo's legacy override record to QAIRT v1.0.0 format."""
+    bits = int(enc["bitwidth"])
+    offset = int(enc.get("offset", 0))
+    dtype = "UINT" if offset == 0 and float(enc.get("min", 0.0)) >= 0.0 else "INT"
+    is_sym = enc.get("is_symmetric", False)
+    if isinstance(is_sym, str):
+        is_sym = is_sym.lower() == "true"
+    return {
+        "name": name,
+        "enc_type": "PER_TENSOR",
+        "bw": bits,
+        "dtype": dtype,
+        "is_sym": bool(is_sym),
+        "scale": [enc.get("scale", 1.0)],
+        "offset": [offset],
+        "min": [enc.get("min")],
+        "max": [enc.get("max")],
+    }
+
+
+def _w4_lpbq_encoding(name: str, weight_dims: tuple[int, ...], block_size: int) -> dict:
+    """Build a deterministic LPBQ override for the packed W4 carrier tensor.
+
+    QAIRT v1.0.0 represents LPBQ as BLOCKWISE_EXPANSION while still accepting
+    typed custom-op tensors.  The converter maps the scale axis to the last
+    dimension and the block axis to dimension 2 for these packed carriers:
+    W4A8 [1,1,K,N/2] and W4A16 [1,1,K/2,N].
+    """
+    if len(weight_dims) != 4:
+        raise ValueError(f"W4 LPBQ requires a 4D weight carrier, got {weight_dims}")
+    block_axis_size = int(weight_dims[2])
+    channels = int(weight_dims[3])
+    if block_axis_size <= 0 or channels <= 0:
+        raise ValueError(f"invalid W4 LPBQ weight shape: {weight_dims}")
+    if block_size <= 0 or block_axis_size % block_size:
+        raise ValueError(
+            f"W4 LPBQ block size {block_size} must divide packed weight axis-2 size {block_axis_size}"
+        )
+    blocks_per_channel = block_axis_size // block_size
+    return {
+        "name": name,
+        "dtype": "INT",
+        "bw": 8,
+        "is_sym": True,
+        "compressed_bw": 4,
+        "enc_type": "LPBQ",
+        "block_size": block_size,
+        "scale": [1.0] * channels,
+        "offset": [-128] * channels,
+        "per_block_int_scale": [[1] * blocks_per_channel for _ in range(channels)],
+    }
+
+
+def _make_quant_overrides(
+    activation_encodings: dict[str, list[dict]],
+    param_encodings: dict[str, list[dict]],
+    *,
+    lpbq_v1: bool,
+) -> dict:
+    if not lpbq_v1:
+        return {
+            "activation_encodings": activation_encodings,
+            "param_encodings": param_encodings,
+        }
+
+    lpbq_params = [
+        enc_list[0]
+        for enc_list in param_encodings.values()
+        if enc_list and enc_list[0].get("enc_type") == "LPBQ"
+    ]
+    v1_activations = [
+        _legacy_encoding_to_v1(name, enc_list[0])
+        for name, enc_list in activation_encodings.items()
+        if enc_list and enc_list[0].get("enc_type") != "LPBQ"
+    ]
+    v1_params = [
+        _legacy_encoding_to_v1(name, enc_list[0])
+        for name, enc_list in param_encodings.items()
+        if enc_list and enc_list[0].get("enc_type") != "LPBQ"
+    ]
+    return {
+        "version": "1.0.0",
+        "activation_encodings": v1_activations,
+        "param_encodings": [*v1_params, *lpbq_params],
+    }
+
+
 def _make_activation(
     family: Family,
     m: int,
@@ -1030,8 +1118,18 @@ def generate(family: Family, args: argparse.Namespace) -> None:
         param_encodings = {f"bias_{split_idx}": [bias_enc] for split_idx in range(split_count)}
     else:
         param_encodings = {"bias": [bias_enc]}
+    use_lpbq_v1_quant_overrides = False
     if family.weight_bits == 4:
-        param_encodings["weight"] = [_symmetric_encoding(4)]
+        if args.w4_encoding == "lpbq":
+            if split_count != 1:
+                raise ValueError("W4 LPBQ custom flow currently supports only unsplit weights")
+            weight_dims = tuple(int(dim) for dim in wt_inits[0].dims)
+            param_encodings["weight"] = [
+                _w4_lpbq_encoding("weight", weight_dims, args.w4_lpbq_block_size)
+            ]
+            use_lpbq_v1_quant_overrides = True
+        else:
+            param_encodings["weight"] = [_symmetric_encoding(4)]
     if family.name == "w16a16" and args.w16_weight_carrier_dtype == "int8":
         if native_split_layout:
             for split_idx in range(split_count):
@@ -1039,10 +1137,11 @@ def generate(family: Family, args: argparse.Namespace) -> None:
         else:
             param_encodings["weight"] = [_symmetric_encoding(8)]
 
-    overrides = {
-        "activation_encodings": activation_encodings,
-        "param_encodings": param_encodings,
-    }
+    overrides = _make_quant_overrides(
+        activation_encodings,
+        param_encodings,
+        lpbq_v1=use_lpbq_v1_quant_overrides,
+    )
     with open(os.path.join(out_dir, "quant_overrides.json"), "w", encoding="utf-8") as f:
         json.dump(overrides, f, indent=2)
 
@@ -1174,6 +1273,18 @@ def main(family_name: str) -> None:
         default="lohi",
     )
     p.add_argument("--w4-nibble-encoding", choices=["twos", "biased"], default="twos")
+    p.add_argument(
+        "--w4-encoding",
+        choices=["symmetric", "lpbq"],
+        default="symmetric",
+        help="weight encoding metadata: legacy int4 symmetric or QAIRT v1 LPBQ",
+    )
+    p.add_argument(
+        "--w4-lpbq-block-size",
+        type=int,
+        default=32,
+        help="packed weight axis-2 block size for QAIRT v1 LPBQ overrides",
+    )
     p.add_argument(
         "--w4-native-sidecar-raw",
         default=None,

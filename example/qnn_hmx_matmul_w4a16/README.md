@@ -27,6 +27,16 @@ Current status:
   legacy carrier probes.
 - Native-alignment process and optrace artifacts are tracked in
   [Agent/handoffs/w4a16_native_alignment.md](../../Agent/handoffs/w4a16_native_alignment.md).
+- LPBQ is supported as an explicit build/run profile.  `LPBQ_ONLY=1` registers
+  the 9-input Crouton HMX signature and lets the LPBQ path bypass the default
+  skip guard; `LPBQ_SCALAR=1` registers a direct Flat4 scalar correctness
+  fallback.  Canonical 256^3 chain8 LPBQ fast validation is native-exact
+  (`65536/65536` after the same native-output transpose used by the standard
+  W4A16 gate).  Current live repeats show native-class performance: custom
+  LPBQ main `30820`/`30991` cycles after one cold-side `33744` run, versus
+  native W4A16 Conv repeats `32563`/`33196` cycles.  The retained native
+  artifact still records a low-side `29815` sample and should be treated as a
+  historical single-run measurement, not as the only performance oracle.
 
 Build:
 
@@ -57,3 +67,16 @@ Canonical 256^3 validation uses the final artifact directories under
 `output_w4a16_native_ref_e2e_256/` with `CHAIN=8
 run_native_w4a16_conv_ref.sh`, then run this custom flow with `CHAIN=8` and
 `VERIFY_NATIVE_RAW` pointing at the native `device_out/Y.raw`.
+
+LPBQ fast validation:
+
+```bash
+LPBQ_ONLY=1 bash example/qnn_hmx_matmul_w4a16/build.sh
+LPBQ_ONLY=1 bash example/qnn_hmx_matmul_w4a16/build_x86.sh
+
+W4_ENCODING=lpbq CHAIN=8 MODE=chain_qdq M=256 K=256 N=256 \
+VERIFY_NATIVE_RAW=/home/zzh/work/qcom_htp/example/qnn_matmul_profile/output_w4a16_native_ref_e2e_256/device_out/Y.raw \
+VERIFY_NATIVE_TRANSPOSE=1 \
+OUT_DIR=/tmp/qcom_htp_w4a16_lpbq_hmx_chain8 \
+bash example/qnn_hmx_matmul_w4a16/standard_flow/custom_w4a16/run_w4a16_chain.sh
+```

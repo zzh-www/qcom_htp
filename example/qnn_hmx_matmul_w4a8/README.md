@@ -21,6 +21,11 @@ Current status:
   reports custom main `10025` cycles and timeline `38644`; matched native
   reports `q::ConvLayer_s1.opt=11546`, MatMul aggregate `29765`, and timeline
   `48831`.
+- LPBQ is supported as an explicit build/run profile.  `LPBQ_ONLY=1` registers
+  the 9-input Crouton HMX signature used by QAIRT v1 LPBQ side tensors, while
+  `LPBQ_SCALAR=1` registers a direct Flat4 scalar correctness fallback.
+  Canonical 256^3 chain8 LPBQ fast validation is byte-exact against the matched
+  native oracle (`65536/65536`) with custom main `9629` cycles.
 
 Build:
 
@@ -34,4 +39,15 @@ Smoke flow:
 ```bash
 cd example/qnn_hmx_matmul_w4a8/standard_flow/custom_w4a8
 SKIP_DEVICE=1 M=32 K=32 N=32 CHAIN=1 bash run_w4a8_chain.sh
+```
+
+LPBQ fast validation:
+
+```bash
+LPBQ_ONLY=1 bash example/qnn_hmx_matmul_w4a8/build.sh
+LPBQ_ONLY=1 bash example/qnn_hmx_matmul_w4a8/build_x86.sh
+
+W4_ENCODING=lpbq CHAIN=8 M=256 K=256 N=256 \
+OUT_DIR=/tmp/qcom_htp_w4a8_lpbq_hmx_chain8 \
+bash example/qnn_hmx_matmul_w4a8/standard_flow/custom_w4a8/run_w4a8_chain.sh
 ```

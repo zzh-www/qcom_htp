@@ -167,6 +167,71 @@ static inline void store_le32(uint8_t *dst, uint32_t offset, uint32_t value)
     dst[offset + 3] = (uint8_t)((value >> 24) & 0xffu);
 }
 
+static inline uint32_t load_le32(const uint8_t *src, uint32_t offset)
+{
+    return (uint32_t)src[offset + 0] |
+           ((uint32_t)src[offset + 1] << 8) |
+           ((uint32_t)src[offset + 2] << 16) |
+           ((uint32_t)src[offset + 3] << 24);
+}
+
+static inline int8_t hmx_w4a8_int4_twos(uint8_t nibble)
+{
+    nibble &= 0x0f;
+    return static_cast<int8_t>(nibble < 8 ? nibble : nibble - 16);
+}
+
+static inline int8_t hmx_w4a8_kmajor_n64_weight(
+    const uint8_t *wt_pack,
+    uint32_t N,
+    uint32_t k,
+    uint32_t n)
+{
+    const uint32_t kt = k / 32;
+    const uint32_t kin32 = k & 31u;
+    const uint32_t kg = kin32 / 4;
+    const uint32_t kr = kin32 & 3u;
+    const uint32_t nb = n / 64;
+    const uint32_t n_in64 = n & 63u;
+    const uint32_t n64_tiles = N / 64;
+    const uint32_t byte_index =
+        (kt * n64_tiles + nb) * 1024u + kg * 128u + (n_in64 & 31u) * 4u + kr;
+    const uint8_t packed = wt_pack[byte_index];
+    return hmx_w4a8_int4_twos(n_in64 < 32 ? packed : packed >> 4);
+}
+
+static inline int32_t hmx_w4a8_effective_bias(const uint8_t *bias_bytes, uint32_t n)
+{
+    const uint32_t nt = n / 32;
+    const uint32_t c = n & 31u;
+    return static_cast<int32_t>(load_le32(bias_bytes + nt * 256u, 128u + c * 4u));
+}
+
+static void hmx_w4a8_lpbq_scalar(
+    const uint8_t *bias_bytes,
+    const uint8_t *wt_pack,
+    const uint8_t *act_raw,
+    uint8_t *out_raw,
+    uint32_t M,
+    uint32_t K,
+    uint32_t N)
+{
+    for (uint32_t m = 0; m < M; ++m) {
+        const uint8_t *act_row = act_raw + static_cast<uint64_t>(m) * K;
+        uint8_t *out_row = out_raw + static_cast<uint64_t>(m) * N;
+        for (uint32_t n = 0; n < N; ++n) {
+            int64_t acc = hmx_w4a8_effective_bias(bias_bytes, n);
+            for (uint32_t k = 0; k < K; ++k) {
+                const int32_t w = hmx_w4a8_kmajor_n64_weight(wt_pack, N, k, n);
+                acc += static_cast<int32_t>(act_row[k]) * w;
+            }
+            if (acc < 0) acc = 0;
+            if (acc > 255) acc = 255;
+            out_row[n] = static_cast<uint8_t>(acc);
+        }
+    }
+}
+
 static inline uint8_t hmx_w4a8_block_pattern_byte(uint32_t block, uint32_t offset)
 {
 #if defined(HMX_W4A8_BLOCK_PATTERN_DUMP_HIGH)
@@ -337,11 +402,28 @@ static uint32_t hmx_w4a8_precompute(
         reinterpret_cast<const uint8_t *>(qhpi_tensor_raw_data(inputs[0]));
     const uint8_t *wt_pack =
         reinterpret_cast<const uint8_t *>(qhpi_tensor_raw_data(inputs[1]));
-    void **act_blocks = qhpi_tensor_block_table(inputs[2]);
-    void **out_blocks = qhpi_tensor_block_table(outputs[0]);
-    const uint32_t act_block_entries = qhpi_tensor_block_table_length(inputs[2]);
-    const uint32_t out_block_entries = qhpi_tensor_block_table_length(outputs[0]);
-    if (!bias_bytes || !wt_pack || !act_blocks || !out_blocks) return QHPI_Success;
+    const bool lpbq_runtime = num_inputs >= 9;
+    const bool act_is_direct = qhpi_tensor_layout(inputs[2]) == QHPI_Layout_Flat4;
+    const uint8_t *act_raw = act_is_direct
+        ? reinterpret_cast<const uint8_t *>(qhpi_tensor_raw_data(inputs[2]))
+        : nullptr;
+    void **act_blocks = act_is_direct ? nullptr : qhpi_tensor_block_table(inputs[2]);
+    const bool out_is_direct = qhpi_tensor_layout(outputs[0]) == QHPI_Layout_Flat4;
+    uint8_t *out_raw = out_is_direct
+        ? reinterpret_cast<uint8_t *>(qhpi_tensor_raw_data(outputs[0]))
+        : nullptr;
+    void **out_blocks = out_is_direct ? nullptr : qhpi_tensor_block_table(outputs[0]);
+    if (lpbq_runtime && !out_raw) {
+        out_blocks = qhpi_tensor_block_table(outputs[0]);
+    }
+    const uint32_t act_block_entries =
+        act_blocks ? qhpi_tensor_block_table_length(inputs[2]) : 0;
+    const uint32_t out_block_entries =
+        out_blocks ? qhpi_tensor_block_table_length(outputs[0]) : 0;
+    if (!bias_bytes || !wt_pack || (!act_blocks && !act_raw) ||
+        (!out_blocks && !out_raw)) {
+        return QHPI_Success;
+    }
 
     const QHPI_Shape act_shape = qhpi_tensor_shape(inputs[2]);
     const QHPI_Shape out_shape = qhpi_tensor_shape(outputs[0]);
@@ -361,7 +443,8 @@ static uint32_t hmx_w4a8_precompute(
     const uint32_t N_t = N / 32;
     const uint32_t K_t = K / 32;
     const uint32_t mt_per_block = 8;
-    const bool native_compact_sources = act_shape.dims[2] == 32;
+    const bool direct_act_sources = act_blocks == nullptr;
+    const bool native_compact_sources = !direct_act_sources && act_shape.dims[2] == 32;
     const uint32_t crouton_row8_blocks = hmx_w4a8_crouton_row8_blocks(M_t);
     const uint32_t row8_groups = native_compact_sources ? crouton_row8_blocks : M_t * 2u;
     const uint32_t mt_groups = row8_groups;
@@ -369,10 +452,13 @@ static uint32_t hmx_w4a8_precompute(
     const uint32_t physical_out_entries = crouton_row8_blocks * N_t;
     const uint32_t act_entries = row8_groups * K_t;
     const uint32_t out_entries = row8_groups * N_t;
-    if (act_block_entries < physical_act_entries || out_block_entries < physical_out_entries) {
+    const bool direct_out_sources = out_blocks == nullptr;
+    if ((!direct_act_sources && act_block_entries < physical_act_entries) ||
+        (!direct_out_sources && out_block_entries < physical_out_entries)) {
         return QHPI_Success;
     }
-    if (act_entries > 1024 || out_entries > 1024) {
+    if (act_entries > kHmxW4A8MaxCopiedTableEntries ||
+        out_entries > kHmxW4A8MaxCopiedTableEntries) {
         return QHPI_Success;
     }
 
@@ -388,7 +474,11 @@ static uint32_t hmx_w4a8_precompute(
         out_entries <= kHmxW4A8MaxCopiedTableEntries) {
         for (uint32_t row8 = 0; row8 < row8_groups; ++row8) {
             for (uint32_t kt = 0; kt < K_t; ++kt) {
-                if (native_compact_sources) {
+                if (direct_act_sources) {
+                    const uintptr_t ptr = reinterpret_cast<uintptr_t>(
+                        act_raw + row8 * 8u * K + kt * 32u);
+                    pc->act_table_copy[row8 * K_t + kt] = static_cast<int32_t>(ptr);
+                } else if (native_compact_sources) {
                     pc->act_table_copy[row8 * K_t + kt] = act_src[row8 * K_t + kt];
                 } else {
                     pc->act_table_copy[row8 * K_t + kt] =
@@ -437,6 +527,7 @@ static uint32_t hmx_w4a8_to_u8_matmul_precomputed_kernel(
 
     const hmx_w4a8_precomputed_t *pc =
         reinterpret_cast<const hmx_w4a8_precomputed_t *>(precomputed_data);
+    if (!pc || pc->magic != kHmxW4A8PrecomputeMagic) return QHPI_Success;
 
 #if defined(HMX_W4A8_PROBE_CYCLES)
     uint64_t cyc_start = 0;
@@ -686,11 +777,46 @@ static uint32_t hmx_w4a8_to_u8_matmul_kernel(
         reinterpret_cast<const uint8_t *>(qhpi_tensor_raw_data(inputs[0]));
     const uint8_t *wt_pack =
         reinterpret_cast<const uint8_t *>(qhpi_tensor_raw_data(inputs[1]));
-    void **act_blocks = qhpi_tensor_block_table(inputs[2]);
-    void **out_blocks = qhpi_tensor_block_table(outputs[0]);
-    const uint32_t act_block_entries = qhpi_tensor_block_table_length(inputs[2]);
-    const uint32_t out_block_entries = qhpi_tensor_block_table_length(outputs[0]);
-    if (!bias_bytes || !wt_pack || !act_blocks || !out_blocks) return QHPI_Success;
+    const bool lpbq_runtime = num_inputs >= 9;
+    const bool act_is_direct = qhpi_tensor_layout(inputs[2]) == QHPI_Layout_Flat4;
+    const uint8_t *act_raw = act_is_direct
+        ? reinterpret_cast<const uint8_t *>(qhpi_tensor_raw_data(inputs[2]))
+        : nullptr;
+    void **act_blocks = act_is_direct ? nullptr : qhpi_tensor_block_table(inputs[2]);
+    const bool out_is_direct = qhpi_tensor_layout(outputs[0]) == QHPI_Layout_Flat4;
+    uint8_t *out_raw = out_is_direct
+        ? reinterpret_cast<uint8_t *>(qhpi_tensor_raw_data(outputs[0]))
+        : nullptr;
+    void **out_blocks = out_is_direct ? nullptr : qhpi_tensor_block_table(outputs[0]);
+    if (lpbq_runtime && !out_raw) {
+        out_blocks = qhpi_tensor_block_table(outputs[0]);
+    }
+    const uint32_t act_block_entries =
+        act_blocks ? qhpi_tensor_block_table_length(inputs[2]) : 0;
+    const uint32_t out_block_entries =
+        out_blocks ? qhpi_tensor_block_table_length(outputs[0]) : 0;
+    if (!bias_bytes || !wt_pack || (!act_blocks && !act_raw) ||
+        (!out_blocks && !out_raw)) {
+        return QHPI_Success;
+    }
+
+    if (lpbq_runtime && act_raw && out_raw) {
+#if !defined(HMX_W4A8_LPBQ_USE_HMX)
+        const QHPI_Shape act_shape = qhpi_tensor_shape(inputs[2]);
+        const QHPI_Shape wt_shape = qhpi_tensor_shape(inputs[1]);
+        const QHPI_Shape out_shape = qhpi_tensor_shape(outputs[0]);
+        if (act_shape.rank == 4 && wt_shape.rank == 4 && out_shape.rank == 4) {
+            const uint32_t M = act_shape.dims[1] * act_shape.dims[2];
+            const uint32_t K = act_shape.dims[3];
+            const uint32_t N = out_shape.dims[3];
+            if (wt_shape.dims[2] == K && wt_shape.dims[3] * 2u == N &&
+                (K % 32u) == 0 && (N % 64u) == 0) {
+                hmx_w4a8_lpbq_scalar(bias_bytes, wt_pack, act_raw, out_raw, M, K, N);
+            }
+        }
+        return QHPI_Success;
+#endif
+    }
 
     /*
      * Shape recovery.
@@ -744,7 +870,8 @@ static uint32_t hmx_w4a8_to_u8_matmul_kernel(
     const uint32_t N_t = N / 32;
     const uint32_t K_t = K / 32;
     const uint32_t mt_per_block = 8;
-    const bool native_compact_sources = act_shape.dims[2] == 32;
+    const bool direct_act_sources = act_blocks == nullptr;
+    const bool native_compact_sources = !direct_act_sources && act_shape.dims[2] == 32;
     const uint32_t crouton_row8_blocks = hmx_w4a8_crouton_row8_blocks(M_t);
     const uint32_t row8_groups = native_compact_sources ? crouton_row8_blocks : M_t * 2u;
     const uint32_t mt_groups = row8_groups;
@@ -752,7 +879,9 @@ static uint32_t hmx_w4a8_to_u8_matmul_kernel(
     const uint32_t physical_out_entries = crouton_row8_blocks * N_t;
     const uint32_t act_entries = row8_groups * K_t;
     const uint32_t out_entries = row8_groups * N_t;
-    if (act_block_entries < physical_act_entries || out_block_entries < physical_out_entries) {
+    const bool direct_out_sources = out_blocks == nullptr;
+    if ((!direct_act_sources && act_block_entries < physical_act_entries) ||
+        (!direct_out_sources && out_block_entries < physical_out_entries)) {
         return QHPI_Success;
     }
     if (act_entries > 1024 || out_entries > 1024) return QHPI_Success;
@@ -791,7 +920,11 @@ static uint32_t hmx_w4a8_to_u8_matmul_kernel(
         int32_t *__restrict a_dst = act_tbl_all + row8 * K_t;
         int32_t *__restrict o_dst = out_tbl_all + row8 * N_t;
         for (uint32_t kt = 0; kt < K_t; ++kt) {
-            if (native_compact_sources) {
+            if (direct_act_sources) {
+                const uintptr_t ptr = reinterpret_cast<uintptr_t>(
+                    act_raw + row8 * 8u * K + kt * 32u);
+                a_dst[kt] = static_cast<int32_t>(ptr);
+            } else if (native_compact_sources) {
                 a_dst[kt] = act_src[row8 * K_t + kt];
             } else {
 #if defined(HMX_W4A8_FIRST64_ROW32_ACT_TABLE)
@@ -804,7 +937,11 @@ static uint32_t hmx_w4a8_to_u8_matmul_kernel(
             }
         }
         for (uint32_t nt = 0; nt < N_t; ++nt) {
-            if (native_compact_sources) {
+            if (direct_out_sources) {
+                const uintptr_t ptr = reinterpret_cast<uintptr_t>(
+                    out_raw + row8 * 8u * N + nt * 32u);
+                o_dst[nt] = static_cast<int32_t>(ptr);
+            } else if (native_compact_sources) {
                 o_dst[nt] = out_src[row8 * N_t + nt];
             } else {
 #if defined(HMX_W4A8_FIRST64_ROW32_OUT_TABLE)
@@ -885,8 +1022,9 @@ static uint32_t hmx_w4a8_to_u8_matmul_kernel(
      * block and returns before HMX compute.  Use this when validating that QNN's
      * tensor/block metadata was translated into the expected native descriptor.
      */
-    if (out_blocks[0]) {
-        uint8_t *dst = reinterpret_cast<uint8_t *>(out_blocks[0]);
+    {
+        uint8_t *dst = out_blocks ? reinterpret_cast<uint8_t *>(out_blocks[0]) : out_raw;
+        if (!dst) return QHPI_Success;
         for (uint32_t i = 0; i < 128; ++i) dst[i] = 0;
         store_le32(dst, 0, 0x48385844u); /* H8XD */
         store_le32(dst, 4, M);
@@ -927,8 +1065,9 @@ static uint32_t hmx_w4a8_to_u8_matmul_kernel(
      * in this mode isolates failures to descriptor/kernel state rather than QNN
      * package registration.
      */
-    if (out_blocks[0]) {
-        uint8_t *dst = reinterpret_cast<uint8_t *>(out_blocks[0]);
+    {
+        uint8_t *dst = out_blocks ? reinterpret_cast<uint8_t *>(out_blocks[0]) : out_raw;
+        if (!dst) return QHPI_Success;
         for (uint32_t i = 0; i < 16; ++i) dst[i] = 0;
         store_le32(dst, 0, 0x48385853u); /* H8XS */
         store_le32(dst, 4, M);
@@ -973,12 +1112,29 @@ static uint32_t hmx_w4a8_to_u8_matmul_kernel(
 static QHPI_Tensor_Signature_v1 sig_inputs[] = {
     {QHPI_Int32,            QHPI_Layout_Flat4,     QHPI_Storage_Direct,   QHPI_MemLoc_TCM_Only},
     {QHPI_Any_Element_Type, QHPI_Layout_Flat4,     QHPI_Storage_Direct,   QHPI_MemLoc_TCM_Only},
-    {QHPI_QUInt8,           QHPI_Layout_Crouton_8, QHPI_Storage_Indirect, QHPI_MemLoc_TCM_Only},
+#if defined(HMX_W4A8_LPBQ_SCALAR_ONLY)
     {QHPI_QUInt8,           QHPI_Layout_Flat4,     QHPI_Storage_Direct,   QHPI_MemLoc_TCM_Only},
+#else
+    {QHPI_QUInt8,           QHPI_Layout_Crouton_8, QHPI_Storage_Indirect, QHPI_MemLoc_TCM_Only},
+#endif
+#if defined(HMX_W4A8_LPBQ_ONLY) || defined(HMX_W4A8_LPBQ_SCALAR_ONLY)
+    {QHPI_Any_Element_Type, QHPI_Layout_Flat4,     QHPI_Storage_Direct,   QHPI_MemLoc_DDR_OR_TCM},
+    {QHPI_Float32,          QHPI_Layout_Flat4,     QHPI_Storage_Direct,   QHPI_MemLoc_DDR_OR_TCM},
+    {QHPI_Float32,          QHPI_Layout_Flat4,     QHPI_Storage_Direct,   QHPI_MemLoc_DDR_OR_TCM},
+    {QHPI_Float32,          QHPI_Layout_Flat4,     QHPI_Storage_Direct,   QHPI_MemLoc_DDR_OR_TCM},
+    {QHPI_Float32,          QHPI_Layout_Flat4,     QHPI_Storage_Direct,   QHPI_MemLoc_DDR_OR_TCM},
+    {QHPI_Float32,          QHPI_Layout_Flat4,     QHPI_Storage_Direct,   QHPI_MemLoc_DDR_OR_TCM},
+#else
+    {QHPI_Any_Element_Type, QHPI_Layout_Flat4,     QHPI_Storage_Direct,   QHPI_MemLoc_DDR_OR_TCM},
+#endif
 };
 
 static QHPI_Tensor_Signature_v1 sig_outputs[] = {
+#if defined(HMX_W4A8_LPBQ_SCALAR_ONLY)
+    {QHPI_QUInt8,           QHPI_Layout_Flat4,     QHPI_Storage_Direct,   QHPI_MemLoc_TCM_Only},
+#else
     {QHPI_QUInt8,           QHPI_Layout_Crouton_8, QHPI_Storage_Indirect, QHPI_MemLoc_TCM_Only},
+#endif
 };
 
 static float hmx_w4a8_cost_function(uint32_t num_inputs, const QHPI_Tensor *const *inputs)
@@ -1038,7 +1194,7 @@ static QHPI_Kernel_v1 sg_kernels[] = {
         false,
         false,
         false, false,
-        4, sig_inputs,
+        sizeof(sig_inputs) / sizeof(sig_inputs[0]), sig_inputs,
         1, sig_outputs,
         hmx_w4a8_cost_function,
         0,
@@ -1058,7 +1214,7 @@ static QHPI_Kernel_v1 sg_kernels[] = {
 static QHPI_OpInfo_v1 sg_ops[] = {
     {
         THIS_PKG_NAME_STR "::HmxU8I4ToU8MatMul",
-        1, sg_kernels,
+        sizeof(sg_kernels) / sizeof(sg_kernels[0]), sg_kernels,
         nullptr,
         hmx_w4a8_shape_required,
         hmx_w4a8_shape_legalized,

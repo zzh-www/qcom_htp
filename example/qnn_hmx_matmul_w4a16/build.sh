@@ -59,6 +59,12 @@ HEX_FLAGS=(
     '-D__QAIC_HEADER_EXPORT=__attribute__((visibility("default")))'
     ${EXTRA_DEFS:-}
 )
+if [ "${LPBQ_ONLY:-0}" = "1" ]; then
+    HEX_FLAGS+=(-DHMX_W4A16_LPBQ_ONLY)
+fi
+if [ "${LPBQ_SCALAR:-0}" = "1" ]; then
+    HEX_FLAGS+=(-UHMX_W4A16_ENABLE_QHPI_PRECOMPUTE -DHMX_W4A16_LPBQ_SCALAR_ONLY)
+fi
 
 echo "--- hexagon-$ARCH ---"
 "$HEX_CXX" -std=c++17 -shared -stdlib=libc++ "${HEX_FLAGS[@]}" \
@@ -81,6 +87,12 @@ ARM_FLAGS=(
     '-D__QAIC_HEADER_EXPORT=__attribute__((visibility("default")))'
     ${EXTRA_DEFS:-}
 )
+if [ "${LPBQ_ONLY:-0}" = "1" ]; then
+    ARM_FLAGS+=(-DHMX_W4A16_LPBQ_ONLY)
+fi
+if [ "${LPBQ_SCALAR:-0}" = "1" ]; then
+    ARM_FLAGS+=(-UHMX_W4A16_ENABLE_QHPI_PRECOMPUTE -DHMX_W4A16_LPBQ_SCALAR_ONLY)
+fi
 
 echo "--- aarch64-android ---"
 "$ARM_CXX" -std=c++17 -static-libstdc++ -shared "${ARM_FLAGS[@]}" \
