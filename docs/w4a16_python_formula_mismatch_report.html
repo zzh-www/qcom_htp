@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>W4A16 Python Reference 与 HMX Native Drain 对齐报告</title>
+  <style>
+    :root {
+      --fg: #172026;
+      --muted: #5f6b73;
+      --line: #d5dce3;
+      --soft: #f6f8fa;
+      --panel: #ffffff;
+      --page: #f3f5f7;
+      --code-bg: #f8fafc;
+      --code-fg: #17324d;
+      --code-line: #cbd5df;
+      --inline-bg: #eef3f7;
+      --inline-fg: #7a2e0e;
+      --accent: #145f7a;
+      --accent-soft: #e8f3f7;
+      --ok: #17633a;
+      --warn: #8a4a10;
+    }
+    body {
+      margin: 0;
+      color: var(--fg);
+      background: var(--page);
+      font: 14px/1.58 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 30px 28px 56px;
+      background: var(--panel);
+      min-height: 100vh;
+    }
+    h1, h2, h3 {
+      line-height: 1.25;
+      margin: 0;
+    }
+    h1 {
+      font-size: 28px;
+      margin-bottom: 8px;
+    }
+    h2 {
+      font-size: 20px;
+      margin-top: 32px;
+      padding-top: 20px;
+      border-top: 1px solid var(--line);
+    }
+    h3 {
+      font-size: 16px;
+      margin-top: 20px;
+    }
+    p {
+      margin: 10px 0;
+    }
+    .meta {
+      color: var(--muted);
+      margin-bottom: 22px;
+    }
+    .callout {
+      border-left: 4px solid var(--accent);
+      background: var(--accent-soft);
+      padding: 12px 16px;
+      margin: 16px 0 22px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 14px 0 18px;
+      table-layout: auto;
+      font-size: 13.5px;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 8px 10px;
+      text-align: left;
+      vertical-align: top;
+      word-break: break-word;
+    }
+    th {
+      background: #e9eef3;
+      color: #22303a;
+      font-weight: 650;
+    }
+    tbody tr:nth-child(even) td {
+      background: #fafbfc;
+    }
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 13px;
+    }
+    code {
+      color: var(--inline-fg);
+      background: var(--inline-bg);
+      border: 1px solid #dce5ec;
+      border-radius: 4px;
+      padding: 1px 4px;
+    }
+    pre {
+      background: var(--code-bg);
+      color: var(--code-fg);
+      border: 1px solid var(--code-line);
+      border-left: 4px solid var(--accent);
+      border-radius: 6px;
+      padding: 13px 15px;
+      overflow-x: auto;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.7);
+    }
+    pre code {
+      color: inherit;
+      background: transparent;
+      border: 0;
+      padding: 0;
+      white-space: pre;
+    }
+    td code {
+      word-break: break-word;
+    }
+    .ok {
+      color: var(--ok);
+      font-weight: 600;
+    }
+    .warn {
+      color: var(--warn);
+      font-weight: 600;
+    }
+    ul {
+      padding-left: 22px;
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>W4A16 Python Reference 与 HMX Native Drain 对齐报告</h1>
+  <p class="meta">仓库：<code>/home/zzh/work/qcom_htp</code>。基于本地 artifact 和设备 probe，更新日期：2026-05-14。</p>
+
+  <section class="callout">
+    <strong>最终结论：</strong>
+    W4A16 custom kernel 与 QNN native output 已经对齐。之前 Python reference 不对齐的根因不是
+    weight packing、layout、custom wrapper 或 native oracle 错，而是 Python 少模拟了 W4A16 HMX
+    在 <code>cvt.uh</code> drain 前对 accumulator 做的 256 粒度有符号向下取整。
+  </section>
+
+  <h2>1. 问题定义</h2>
+  <p>旧 Python reference 使用的公式是高层量化直觉：</p>
+  <pre><code>acc = (A_u16 - 32768) @ W_i4
+out = saturate_u16(round(acc / 7 + 32768))</code></pre>
+  <p>这个公式能解释大方向，但不能 bit-exact 模拟 QNN native/HMX。单层时误差只有 <code>0..36</code> 个 U16 code；chain8 中这些小误差被反复送回后续 MatMul，最终在饱和边界放大成 <code>0</code> 和 <code>65535</code> 的差异。</p>
+
+  <h2>2. 正确的 W4A16 HMX Drain 模型</h2>
+  <p>设备 probe 证明当前 v75 + QNN 版本的 W4A16 HNH path 需要以下模型：</p>
+  <pre><code>acc = (A_u16 - 32768) @ W_i4
+acc_hmx = floor(acc / 256) * 256
+out = saturate_u16(round(acc_hmx / 7 + 32768))</code></pre>
+  <p>这里的 <code>floor</code> 是算术向下取整，不是 toward-zero truncation。对于负 accumulator，它会继续向更小的 256 边界走。例如 <code>acc=-1</code> 会变成 <code>-256</code>。</p>
+
+  <h3>为什么 k_impulse 能证明这一点</h3>
+  <p>构造 <code>A=32768+1</code> 的单 K impulse 时，旧公式会输出 <code>32768 + round(W/7)</code>。HMX 实际行为是：</p>
+  <table>
+    <thead>
+      <tr><th>weight_i4</th><th>旧公式趋势</th><th>HMX floor256 后</th><th>实际输出</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>W &lt; 0</code></td><td>接近 <code>32767</code> 或 <code>32768</code></td><td><code>floor(W / 256) * 256 = -256</code></td><td><code>round(-256 / 7 + 32768) = 32731</code></td></tr>
+      <tr><td><code>W &gt;= 0</code></td><td>接近 <code>32768</code> 或 <code>32769</code></td><td><code>floor(W / 256) * 256 = 0</code></td><td><code>32768</code></td></tr>
+    </tbody>
+  </table>
+  <p>设备输出正是这个模式：负权重 lane 输出 <code>32731</code>，非负权重 lane 输出 <code>32768</code>。同时 <code>zp</code> probe 证明零 accumulator 会输出 <code>32768</code>，排除了固定 baseline 偏移。</p>
+
+  <h2>3. 代码变更</h2>
+  <p>修正点在 <code>example/qnn_hmx_matmul_common/gen_quant_chain.py</code> 的 <code>reference_contract == "native"</code> 分支中，仅对 <code>w4a16</code> 启用：</p>
+  <pre><code>if family.name == "w4a16":
+    acc = (cur.astype(np.int64) - 32768) @ w_raw_kn.astype(np.int64)
+    acc = np.floor_divide(acc, 256) * 256
+    y = acc.astype(np.float64) / 7.0
+    return np.clip(np.rint(y + 32768.0), 0, 65535).astype(np.uint16)</code></pre>
+  <p>没有把这个规则套到 W8A16/W16A16。它们同属 A16 输出路径，但权重位宽、control constants 和 kernel family 不同，需要单独 probe 证明。</p>
+
+  <h2>4. 验证结果</h2>
+  <table>
+    <thead>
+      <tr><th>case</th><th>修正后 Python vs HMX</th><th>旧公式表现</th><th>说明</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>default chain1</td><td class="ok"><code>65536/65536</code>, maxdiff <code>0</code></td><td><code>9272/65536</code>, maxdiff <code>36</code></td><td>单层 drain 已闭环。</td></tr>
+      <tr><td><code>zp</code> probe</td><td class="ok"><code>65536/65536</code>, maxdiff <code>0</code></td><td><code>65536/65536</code>, maxdiff <code>0</code></td><td>零 accumulator 无额外 baseline 偏移。</td></tr>
+      <tr><td><code>k_impulse=0</code></td><td class="ok"><code>65536/65536</code>, maxdiff <code>0</code></td><td><code>17408/65536</code>, maxdiff <code>37</code></td><td>负权重验证 floor256。</td></tr>
+      <tr><td><code>k_impulse=1</code></td><td class="ok"><code>65536/65536</code>, maxdiff <code>0</code></td><td><code>17408/65536</code>, maxdiff <code>37</code></td><td>换 K lane 后仍成立。</td></tr>
+      <tr><td><code>k_impulse=7</code></td><td class="ok"><code>65536/65536</code>, maxdiff <code>0</code></td><td><code>17664/65536</code>, maxdiff <code>37</code></td><td>不同 K residue 仍成立。</td></tr>
+      <tr><td>canonical chain8</td><td class="ok"><code>65536/65536</code>, maxdiff <code>0</code></td><td><code>63422/65536</code>, maxdiff <code>65535</code></td><td>修正后完整 chain reference 与 retained HMX output exact。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>5. 关键 artifact</h2>
+  <table>
+    <thead>
+      <tr><th>artifact</th><th>路径</th><th>用途</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>canonical W4A16 custom chain8</td><td><code>example/qnn_matmul_profile/output_w4a16_aligned_e2e_256/</code></td><td>保留的 accepted custom/HMX artifact。</td></tr>
+      <tr><td>canonical W4A16 native chain8</td><td><code>example/qnn_matmul_profile/output_w4a16_native_ref_e2e_256/</code></td><td>QNN native oracle。</td></tr>
+      <tr><td>default chain1 probe</td><td><code>/tmp/qcom_htp_w4a16_chain1_formula_probe/</code></td><td>隔离单层 drain。</td></tr>
+      <tr><td>native chain1 probe</td><td><code>/tmp/qcom_htp_w4a16_native_chain1_formula_probe/</code></td><td>证明 custom chain1 与 QNN native chain1 exact。</td></tr>
+      <tr><td>floor256 probes</td><td><code>/tmp/qcom_htp_w4a16_drain_probe_zp_-1/</code>, <code>/tmp/qcom_htp_w4a16_drain_probe_k_impulse_{0,1,7}/</code></td><td>证明 floor256 drain 语义。</td></tr>
+      <tr><td>regenerated reference</td><td><code>/tmp/qcom_htp_w4a16_ref_floor256_gen2/</code></td><td>patched generator 重新生成 chain8 reference，并与 retained HMX output exact。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>6. 影响和边界</h2>
+  <ul>
+    <li>W4A16 的 Python reference 现在可以作为 native/HMX bit-exact oracle 使用。</li>
+    <li>QNN native raw output 仍是最终 correctness gate；Python 模型是已验证的解释模型和生成器 reference。</li>
+    <li>这个结论当前限定为 v75 架构 + 当前 QNN 版本 + 当前 W4A16 HNH path。</li>
+    <li>W8A16/W16A16 若要修 Python reference，需要用同样的 <code>zp</code> / <code>k_impulse</code> 方法单独反推。</li>
+  </ul>
+</main>
+</body>
+</html>

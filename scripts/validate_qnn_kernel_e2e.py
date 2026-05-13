@@ -210,6 +210,28 @@ def _compare_output(
     )
 
 
+def _compare_reference(custom_path: Path, custom_dir: Path, dtype_name: str) -> str | None:
+    dtype = _dtype(dtype_name)
+    ref_matches = sorted(custom_dir.glob("*.out_ref_u*.npy"))
+    if not ref_matches:
+        return f"missing Python reference under {custom_dir}"
+    ref = np.load(ref_matches[0])
+    custom = np.frombuffer(_read_bytes(custom_path), dtype=dtype)
+    if custom.size != ref.size:
+        return f"custom/reference size mismatch: custom={custom.size} ref={ref.size}"
+    custom = custom.reshape(ref.shape)
+    if np.array_equal(custom, ref):
+        print(f"  python reference exact: {custom.size} elements, sha256={_sha256(custom.tobytes())}")
+        return None
+    diff = np.abs(custom.astype(np.int64) - ref.astype(np.int64))
+    return (
+        "custom/Python reference mismatch: "
+        f"custom={custom.size} elements sha256={_sha256(custom.tobytes())} "
+        f"ref_sha256={_sha256(np.ascontiguousarray(ref).tobytes())} "
+        f"maxdiff={int(diff.max())}"
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--kernel", required=True)
@@ -224,6 +246,7 @@ def main() -> int:
     parser.add_argument("--native-transpose-2d", action="store_true")
     parser.add_argument("--w16-accepted", action="store_true")
     parser.add_argument("--expect-lpbq", action="store_true")
+    parser.add_argument("--expect-ref-exact", action="store_true")
     args = parser.parse_args()
 
     custom_dir = args.custom_dir.resolve()
@@ -245,6 +268,15 @@ def main() -> int:
     else:
         if output_error:
             errors.append(output_error)
+
+    if args.expect_ref_exact:
+        try:
+            ref_error = _compare_reference(custom_dir / args.custom_raw, custom_dir, args.dtype)
+        except ValueError as exc:
+            errors.append(str(exc))
+        else:
+            if ref_error:
+                errors.append(ref_error)
 
     errors.extend(
         _validate_optrace(

@@ -14,13 +14,15 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 usage() {
     cat <<'EOF'
 Usage:
-  scripts/run_qnn_kernel_e2e_ci.sh all|u8i8|w4a8|w4a8_lpbq|w8a16|w4a16|w4a16_lpbq|w16a16
+  scripts/run_qnn_kernel_e2e_ci.sh all|u8i8|w4a8|w4a8_lpbq|w8a16|w4a16|w4a16_chain1|w4a16_lpbq|w16a16
 
 Environment:
   DEVICE=oneplus                  SSH target for qnn-net-run device execution.
   ARTIFACT_ONLY=1                 Validate retained artifacts only.
   BUILD_PACKAGES=0                Skip package rebuild in device-run mode.
   KERNEL_E2E_OUT_ROOT=<dir>       Output root for regenerated custom artifacts.
+  W4A16_CHAIN1_CASES="default zp k_impulse0 k_impulse1 k_impulse7"
+                                  Case list for the W4A16 CHAIN=1 precision suite.
 EOF
 }
 
@@ -31,7 +33,13 @@ fi
 
 KERNEL="$1"
 if [ "$KERNEL" = "all" ]; then
-    for item in u8i8 w4a8 w4a8_lpbq w8a16 w4a16 w4a16_lpbq w16a16; do
+    items=(u8i8 w4a8 w4a8_lpbq w8a16 w4a16 w4a16_lpbq w16a16)
+    if [ "${ARTIFACT_ONLY:-0}" != "1" ]; then
+        items=(u8i8 w4a8 w4a8_lpbq w8a16 w4a16 w4a16_chain1 w4a16_lpbq w16a16)
+    else
+        echo "=== skip w4a16_chain1 in ARTIFACT_ONLY mode: no retained chain1 native oracle ==="
+    fi
+    for item in "${items[@]}"; do
         "$0" "$item"
     done
     exit 0
@@ -41,6 +49,9 @@ PROFILE_DIR="$ROOT_DIR/example/qnn_matmul_profile"
 ARTIFACT_ONLY="${ARTIFACT_ONLY:-0}"
 BUILD_PACKAGES="${BUILD_PACKAGES:-1}"
 OUT_ROOT="${KERNEL_E2E_OUT_ROOT:-$PROFILE_DIR}"
+RUN_NATIVE_W4A16_CHAIN=""
+CI_NATIVE=""
+REF_FLAG=()
 
 case "$KERNEL" in
     u8i8)
@@ -123,6 +134,25 @@ case "$KERNEL" in
         W16_FLAG=()
         LPBQ_FLAG=()
         ;;
+    w4a16_chain1)
+        EXAMPLE_DIR="$ROOT_DIR/example/qnn_hmx_matmul_w4a16"
+        RUN_SCRIPT="$EXAMPLE_DIR/standard_flow/custom_w4a16/run_w4a16_chain.sh"
+        RETAINED_CUSTOM="$PROFILE_DIR/output_w4a16_chain1_e2e_256"
+        NATIVE_DIR="$PROFILE_DIR/output_w4a16_native_chain1_e2e_256"
+        CI_CUSTOM="$OUT_ROOT/output_w4a16_chain1_ci_e2e_256"
+        CI_NATIVE="$OUT_ROOT/output_w4a16_native_chain1_ci_e2e_256"
+        RUN_NATIVE_W4A16_CHAIN=1
+        HTP_TYPE="QnnHmxMatMulW4A16Package::HmxU16I4ToU16MatMul"
+        QNN_PREFIX="hmx_w4a16_chain"
+        EXPECTED_QNN_OPS=1
+        DTYPE="uint16"
+        BUILD_ENV=(EXTRA_DEFS="-UHMX_W4A16_SKIP_KERNEL -DHMX_W4A16_ALLOW_UNVALIDATED_KERNEL")
+        RUN_ENV=(M=256 K=256 N=256 CHAIN=1 MODE=chain_qdq OP_INPUT_LAYOUT=tiled VERIFY_NATIVE_TRANSPOSE=1 VERIFY_ABS_TOL=0)
+        TRANSPOSE_FLAG=(--native-transpose-2d)
+        W16_FLAG=()
+        LPBQ_FLAG=()
+        REF_FLAG=(--expect-ref-exact)
+        ;;
     w4a16_lpbq)
         EXAMPLE_DIR="$ROOT_DIR/example/qnn_hmx_matmul_w4a16"
         RUN_SCRIPT="$EXAMPLE_DIR/standard_flow/custom_w4a16/run_w4a16_chain.sh"
@@ -163,12 +193,77 @@ case "$KERNEL" in
 esac
 
 CUSTOM_DIR="$RETAINED_CUSTOM"
+if [ "$ARTIFACT_ONLY" = "1" ] && [ -n "$RUN_NATIVE_W4A16_CHAIN" ]; then
+    echo "=== skip $KERNEL in ARTIFACT_ONLY mode: CHAIN=1 native oracle is generated on demand ==="
+    exit 0
+fi
+
 if [ "$ARTIFACT_ONLY" != "1" ]; then
     CUSTOM_DIR="$CI_CUSTOM"
     if [ "$BUILD_PACKAGES" = "1" ]; then
         echo "=== build $KERNEL package ==="
         env "${BUILD_ENV[@]}" bash "$EXAMPLE_DIR/build.sh"
         env "${BUILD_ENV[@]}" bash "$EXAMPLE_DIR/build_x86.sh"
+    fi
+
+    if [ -n "$RUN_NATIVE_W4A16_CHAIN" ]; then
+        echo "=== run $KERNEL precision case suite on ${DEVICE:-oneplus} ==="
+        for case_name in ${W4A16_CHAIN1_CASES:-default zp k_impulse0 k_impulse1 k_impulse7}; do
+            activation_mode="default"
+            activation_k="0"
+            suffix="$case_name"
+            gen_extra_args="--activation-mode default"
+            case "$case_name" in
+                default)
+                    ;;
+                zp)
+                    activation_mode="zp"
+                    gen_extra_args="--activation-mode zp"
+                    ;;
+                k_impulse*)
+                    activation_mode="k_impulse"
+                    activation_k="${case_name#k_impulse}"
+                    suffix="k_impulse_${activation_k}"
+                    gen_extra_args="--activation-mode k_impulse --activation-k ${activation_k}"
+                    ;;
+                k*)
+                    activation_mode="k_impulse"
+                    activation_k="${case_name#k}"
+                    suffix="k_impulse_${activation_k}"
+                    gen_extra_args="--activation-mode k_impulse --activation-k ${activation_k}"
+                    ;;
+                *)
+                    echo "ERROR: unknown W4A16 CHAIN=1 case '$case_name'" >&2
+                    exit 2
+                    ;;
+            esac
+            case_native="$OUT_ROOT/output_w4a16_native_chain1_${suffix}_ci_e2e_256"
+            case_custom="$OUT_ROOT/output_w4a16_chain1_${suffix}_ci_e2e_256"
+            echo "=== run $KERNEL case=$case_name native oracle ==="
+            CHAIN="$RUN_NATIVE_W4A16_CHAIN" OUT_DIR="$case_native" DEVICE="${DEVICE:-oneplus}" \
+                ACTIVATION_MODE="$activation_mode" ACTIVATION_K="$activation_k" \
+                bash "$ROOT_DIR/example/qnn_matmul_profile/run_native_w4a16_conv_ref.sh"
+            echo "=== run $KERNEL case=$case_name custom E2E ==="
+            mkdir -p "$case_custom"
+            env "${RUN_ENV[@]}" \
+                GEN_EXTRA_ARGS="$gen_extra_args" \
+                VERIFY_NATIVE_RAW="$case_native/device_out/Y.raw" \
+                OUT_DIR="$case_custom" DEVICE="${DEVICE:-oneplus}" \
+                bash "$RUN_SCRIPT"
+            echo "=== validate $KERNEL case=$case_name E2E artifact ==="
+            uv run python "$ROOT_DIR/scripts/validate_qnn_kernel_e2e.py" \
+                --kernel "$KERNEL:$case_name" \
+                --custom-dir "$case_custom" \
+                --native-dir "$case_native" \
+                --expected-htp-type "$HTP_TYPE" \
+                --qnn-prefix "$QNN_PREFIX" \
+                --expected-qnn-ops "$EXPECTED_QNN_OPS" \
+                --dtype "$DTYPE" \
+                "${TRANSPOSE_FLAG[@]}" \
+                "${REF_FLAG[@]}"
+        done
+        echo "PASS: $KERNEL precision case suite"
+        exit 0
     fi
 
     echo "=== run $KERNEL canonical E2E on ${DEVICE:-oneplus} ==="
@@ -187,4 +282,5 @@ uv run python "$ROOT_DIR/scripts/validate_qnn_kernel_e2e.py" \
     --dtype "$DTYPE" \
     "${TRANSPOSE_FLAG[@]}" \
     "${W16_FLAG[@]}" \
-    "${LPBQ_FLAG[@]}"
+    "${LPBQ_FLAG[@]}" \
+    "${REF_FLAG[@]}"

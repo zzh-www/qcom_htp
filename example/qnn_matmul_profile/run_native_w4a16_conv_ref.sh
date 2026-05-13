@@ -24,6 +24,8 @@ CONNECT="${CONNECT:-ssh}"
 ARCH="${ARCH:-v75}"
 SHAPE="${SHAPE:-256,256,256}"
 CHAIN="${CHAIN:-1}"
+ACTIVATION_MODE="${ACTIVATION_MODE:-default}"
+ACTIVATION_K="${ACTIVATION_K:-0}"
 OUT_DIR="${OUT_DIR:-}"
 NUM_INFERENCES="${NUM_INFERENCES:-3}"
 SKIP_DEVICE="${SKIP_DEVICE:-0}"
@@ -213,7 +215,9 @@ echo "=== native W4A16 Conv ref: device=$DEVICE via $CONNECT arch=$ARCH shape=${
 
 python "$SCRIPT_DIR/gen_native_w4a16_conv.py" "$OUT_DIR" \
     --m "$SHAPE_M" --k "$SHAPE_K" --n "$SHAPE_N" \
-    --chain "$CHAIN"
+    --chain "$CHAIN" \
+    --activation-mode "$ACTIVATION_MODE" \
+    --activation-k "$ACTIVATION_K"
 build_configs
 
 echo "=== qairt-converter: ONNX + encodings -> encoded DLC ==="

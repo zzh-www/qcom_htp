@@ -42,7 +42,19 @@ def _w4_encoding() -> dict:
     }
 
 
-def _make_activation_u16(m: int, k: int, idx: int = 0) -> np.ndarray:
+def _make_activation_u16(
+    m: int,
+    k: int,
+    idx: int = 0,
+    activation_mode: str = "default",
+    activation_k: int = 0,
+) -> np.ndarray:
+    if activation_mode == "zp":
+        return np.full((m, k), 32768, dtype=np.uint16)
+    if activation_mode == "k_impulse":
+        act = np.full((m, k), 32768, dtype=np.uint16)
+        act[:, activation_k % k] = np.uint16(32769)
+        return act
     seed = (idx + 1) * 374761393
     return np.array(
         [((i * 37 + seed) & 0xFFFF) for i in range(m * k)],
@@ -68,6 +80,8 @@ def main() -> None:
     parser.add_argument("--k", type=int, default=256)
     parser.add_argument("--n", type=int, default=256)
     parser.add_argument("--chain", type=int, default=1)
+    parser.add_argument("--activation-mode", choices=["default", "zp", "k_impulse"], default="default")
+    parser.add_argument("--activation-k", type=int, default=0)
     args = parser.parse_args()
     if args.chain < 1:
         raise ValueError("--chain must be >= 1")
@@ -78,7 +92,12 @@ def main() -> None:
     native_dir = os.path.join(args.out_dir, "runtime_inputs_native")
     os.makedirs(native_dir, exist_ok=True)
 
-    act_mk = _make_activation_u16(args.m, args.k)
+    act_mk = _make_activation_u16(
+        args.m,
+        args.k,
+        activation_mode=args.activation_mode,
+        activation_k=args.activation_k,
+    )
     act_conv_q = act_mk.T.reshape(1, args.k, 1, args.m)
     act_conv_f = _dequant_u16(act_conv_q)
     act_conv_f.astype("<f4").tofile(os.path.join(args.out_dir, "input_A.raw"))
@@ -147,6 +166,8 @@ def main() -> None:
                 "conv_output_shape": [1, args.n, 1, args.m],
                 "logical_matmul_shape_mkn": [args.m, args.k, args.n],
                 "chain": args.chain,
+                "activation_mode": args.activation_mode,
+                "activation_k": args.activation_k,
                 "activation_encoding": _a16_encoding(),
                 "weight_encoding": _w4_encoding(),
             },

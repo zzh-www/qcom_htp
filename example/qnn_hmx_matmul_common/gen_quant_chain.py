@@ -706,6 +706,11 @@ def _make_reference_step(
         qmax = (1 << (family.weight_bits - 1)) - 1
         if qmax <= 0:
             raise ValueError("native reference contract requires signed weights")
+        if family.name == "w4a16":
+            acc = (cur.astype(np.int64) - 32768) @ w_raw_kn.astype(np.int64)
+            acc = np.floor_divide(acc, 256) * 256
+            y = acc.astype(np.float64) / float(qmax)
+            return np.clip(np.rint(y + 32768.0), 0, max_out).astype(_uint_dtype(family.out_bits))
         y = ((cur.astype(np.float64) - 32768.0) @ w_raw_kn.astype(np.float64)) / float(qmax)
         return np.clip(np.rint(y + 32768.0), 0, max_out).astype(_uint_dtype(family.out_bits))
     return np.clip(
