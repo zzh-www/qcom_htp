@@ -1,0 +1,544 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3000" height="2100" viewBox="0 0 3000 2100">
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#555"/></marker></defs>
+<rect width="100%" height="100%" fill="#ffffff"/>
+<rect x="45" y="70" width="1545" height="535" rx="8" fill="#fffde8" stroke="#c8b94c" stroke-width="1.2"/>
+<text x="57" y="94" font-family="Arial, sans-serif" font-size="15" font-weight="700" fill="#333">Stage 1: Input fan-in, 32 InputSlice nodes</text>
+<rect x="45" y="650" width="1545" height="530" rx="8" fill="#fffde8" stroke="#c8b94c" stroke-width="1.2"/>
+<text x="57" y="674" font-family="Arial, sans-serif" font-size="15" font-weight="700" fill="#333">Stage 2: A_0231 layout, 8 SlicePad_shape_inplace -&gt; Transpose_impl lanes</text>
+<rect x="1680" y="650" width="770" height="530" rx="8" fill="#fffde8" stroke="#c8b94c" stroke-width="1.2"/>
+<text x="1692" y="674" font-family="Arial, sans-serif" font-size="15" font-weight="700" fill="#333">Stage 3: conv1x1 HMX core</text>
+<rect x="45" y="1240" width="2450" height="455" rx="8" fill="#fffde8" stroke="#c8b94c" stroke-width="1.2"/>
+<text x="57" y="1264" font-family="Arial, sans-serif" font-size="15" font-weight="700" fill="#333">Stage 4: Y_0231 output layout, 8 SlicePad_shape_inplace -&gt; Transpose.2D -&gt; Transpose.2D lanes</text>
+<path d="M 805.0 987.0 L 805.0 1000.0" fill="none" stroke="#4f4f4f" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.82"/>
+<path d="M 1920.0 887.0 L 1920.0 915.0" fill="none" stroke="#2d6aa6" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.90"/>
+<path d="M 175.0 1372.0 L 175.0 1392.0" fill="none" stroke="#a35a73" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.86"/>
+<path d="M 175.0 1464.0 L 175.0 1484.0" fill="none" stroke="#a35a73" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.86"/>
+<path d="M 355.0 1372.0 L 355.0 1392.0" fill="none" stroke="#a35a73" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.86"/>
+<path d="M 355.0 1464.0 L 355.0 1484.0" fill="none" stroke="#a35a73" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.86"/>
+<path d="M 535.0 1372.0 L 535.0 1392.0" fill="none" stroke="#a35a73" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.86"/>
+<path d="M 535.0 1464.0 L 535.0 1484.0" fill="none" stroke="#a35a73" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.86"/>
+<path d="M 715.0 1372.0 L 715.0 1392.0" fill="none" stroke="#a35a73" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.86"/>
+<path d="M 715.0 1464.0 L 715.0 1484.0" fill="none" stroke="#a35a73" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.86"/>
+<path d="M 895.0 1372.0 L 895.0 1392.0" fill="none" stroke="#a35a73" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.86"/>
+<path d="M 895.0 1464.0 L 895.0 1484.0" fill="none" stroke="#a35a73" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.86"/>
+<path d="M 1075.0 1372.0 L 1075.0 1392.0" fill="none" stroke="#a35a73" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.86"/>
+<path d="M 1075.0 1464.0 L 1075.0 1484.0" fill="none" stroke="#a35a73" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.86"/>
+<path d="M 1255.0 1372.0 L 1255.0 1392.0" fill="none" stroke="#a35a73" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.86"/>
+<path d="M 1255.0 1464.0 L 1255.0 1484.0" fill="none" stroke="#a35a73" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.86"/>
+<path d="M 1435.0 1372.0 L 1435.0 1392.0" fill="none" stroke="#a35a73" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.86"/>
+<path d="M 1435.0 1464.0 L 1435.0 1484.0" fill="none" stroke="#a35a73" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.86"/>
+<path d="M 805.0 630.0 L 805.0 695.0 L 175.0 695.0 L 175.0 710.0" fill="none" stroke="#9a6400" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.85"/>
+<path d="M 805.0 630.0 L 805.0 695.0 L 355.0 695.0 L 355.0 710.0" fill="none" stroke="#9a6400" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.85"/>
+<path d="M 805.0 630.0 L 805.0 695.0 L 535.0 695.0 L 535.0 710.0" fill="none" stroke="#9a6400" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.85"/>
+<path d="M 805.0 630.0 L 805.0 695.0 L 715.0 695.0 L 715.0 710.0" fill="none" stroke="#9a6400" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.85"/>
+<path d="M 805.0 630.0 L 805.0 695.0 L 895.0 695.0 L 895.0 710.0" fill="none" stroke="#9a6400" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.85"/>
+<path d="M 805.0 630.0 L 805.0 695.0 L 1075.0 695.0 L 1075.0 710.0" fill="none" stroke="#9a6400" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.85"/>
+<path d="M 805.0 630.0 L 805.0 695.0 L 1255.0 695.0 L 1255.0 710.0" fill="none" stroke="#9a6400" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.85"/>
+<path d="M 805.0 630.0 L 805.0 695.0 L 1435.0 695.0 L 1435.0 710.0" fill="none" stroke="#9a6400" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.85"/>
+<path d="M 175.0 872.0 L 175.0 910.0 L 805.0 910.0 L 805.0 915.0" fill="none" stroke="#c27a00" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.86"/>
+<path d="M 355.0 872.0 L 355.0 910.0 L 805.0 910.0 L 805.0 915.0" fill="none" stroke="#c27a00" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.86"/>
+<path d="M 535.0 872.0 L 535.0 910.0 L 805.0 910.0 L 805.0 915.0" fill="none" stroke="#c27a00" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.86"/>
+<path d="M 715.0 872.0 L 715.0 910.0 L 805.0 910.0 L 805.0 915.0" fill="none" stroke="#c27a00" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.86"/>
+<path d="M 895.0 872.0 L 895.0 910.0 L 805.0 910.0 L 805.0 915.0" fill="none" stroke="#c27a00" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.86"/>
+<path d="M 1075.0 872.0 L 1075.0 910.0 L 805.0 910.0 L 805.0 915.0" fill="none" stroke="#c27a00" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.86"/>
+<path d="M 1255.0 872.0 L 1255.0 910.0 L 805.0 910.0 L 805.0 915.0" fill="none" stroke="#c27a00" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.86"/>
+<path d="M 1435.0 872.0 L 1435.0 910.0 L 805.0 910.0 L 805.0 915.0" fill="none" stroke="#c27a00" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.86"/>
+<path d="M 175.0 202.0 L 175.0 216.0 L 62.0 216.0 L 62.0 594.0 L 725.0 594.0" fill="none" stroke="#2f6fb7" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.82"/>
+<path d="M 355.0 202.0 L 355.0 216.0 L 62.0 216.0 L 62.0 594.0 L 725.0 594.0" fill="none" stroke="#2f6fb7" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.82"/>
+<path d="M 535.0 202.0 L 535.0 216.0 L 62.0 216.0 L 62.0 594.0 L 725.0 594.0" fill="none" stroke="#2f6fb7" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.82"/>
+<path d="M 715.0 202.0 L 715.0 216.0 L 62.0 216.0 L 62.0 594.0 L 725.0 594.0" fill="none" stroke="#2f6fb7" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.82"/>
+<path d="M 895.0 202.0 L 895.0 216.0 L 1348.0 216.0 L 1348.0 594.0 L 885.0 594.0" fill="none" stroke="#2f6fb7" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.82"/>
+<path d="M 1075.0 202.0 L 1075.0 216.0 L 1348.0 216.0 L 1348.0 594.0 L 885.0 594.0" fill="none" stroke="#2f6fb7" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.82"/>
+<path d="M 1255.0 202.0 L 1255.0 216.0 L 1348.0 216.0 L 1348.0 594.0 L 885.0 594.0" fill="none" stroke="#2f6fb7" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.82"/>
+<path d="M 1435.0 202.0 L 1435.0 216.0 L 1348.0 216.0 L 1348.0 594.0 L 885.0 594.0" fill="none" stroke="#2f6fb7" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.82"/>
+<path d="M 175.0 302.0 L 175.0 316.0 L 62.0 316.0 L 62.0 594.0 L 725.0 594.0" fill="none" stroke="#2f6fb7" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.82"/>
+<path d="M 355.0 302.0 L 355.0 316.0 L 62.0 316.0 L 62.0 594.0 L 725.0 594.0" fill="none" stroke="#2f6fb7" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.82"/>
+<path d="M 535.0 302.0 L 535.0 316.0 L 62.0 316.0 L 62.0 594.0 L 725.0 594.0" fill="none" stroke="#2f6fb7" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.82"/>
+<path d="M 715.0 302.0 L 715.0 316.0 L 62.0 316.0 L 62.0 594.0 L 725.0 594.0" fill="none" stroke="#2f6fb7" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.82"/>
+<path d="M 895.0 302.0 L 895.0 316.0 L 1348.0 316.0 L 1348.0 594.0 L 885.0 594.0" fill="none" stroke="#2f6fb7" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.82"/>
+<path d="M 1075.0 302.0 L 1075.0 316.0 L 1348.0 316.0 L 1348.0 594.0 L 885.0 594.0" fill="none" stroke="#2f6fb7" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.82"/>
+<path d="M 1255.0 302.0 L 1255.0 316.0 L 1348.0 316.0 L 1348.0 594.0 L 885.0 594.0" fill="none" stroke="#2f6fb7" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.82"/>
+<path d="M 1435.0 302.0 L 1435.0 316.0 L 1348.0 316.0 L 1348.0 594.0 L 885.0 594.0" fill="none" stroke="#2f6fb7" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.82"/>
+<path d="M 175.0 402.0 L 175.0 416.0 L 62.0 416.0 L 62.0 594.0 L 725.0 594.0" fill="none" stroke="#2f6fb7" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.82"/>
+<path d="M 355.0 402.0 L 355.0 416.0 L 62.0 416.0 L 62.0 594.0 L 725.0 594.0" fill="none" stroke="#2f6fb7" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.82"/>
+<path d="M 535.0 402.0 L 535.0 416.0 L 62.0 416.0 L 62.0 594.0 L 725.0 594.0" fill="none" stroke="#2f6fb7" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.82"/>
+<path d="M 715.0 402.0 L 715.0 416.0 L 62.0 416.0 L 62.0 594.0 L 725.0 594.0" fill="none" stroke="#2f6fb7" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.82"/>
+<path d="M 895.0 402.0 L 895.0 416.0 L 1348.0 416.0 L 1348.0 594.0 L 885.0 594.0" fill="none" stroke="#2f6fb7" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.82"/>
+<path d="M 1075.0 402.0 L 1075.0 416.0 L 1348.0 416.0 L 1348.0 594.0 L 885.0 594.0" fill="none" stroke="#2f6fb7" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.82"/>
+<path d="M 1255.0 402.0 L 1255.0 416.0 L 1348.0 416.0 L 1348.0 594.0 L 885.0 594.0" fill="none" stroke="#2f6fb7" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.82"/>
+<path d="M 1435.0 402.0 L 1435.0 416.0 L 1348.0 416.0 L 1348.0 594.0 L 885.0 594.0" fill="none" stroke="#2f6fb7" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.82"/>
+<path d="M 175.0 502.0 L 175.0 530.0 L 62.0 530.0 L 62.0 594.0 L 725.0 594.0" fill="none" stroke="#2f6fb7" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.82"/>
+<path d="M 355.0 502.0 L 355.0 530.0 L 62.0 530.0 L 62.0 594.0 L 725.0 594.0" fill="none" stroke="#2f6fb7" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.82"/>
+<path d="M 535.0 502.0 L 535.0 530.0 L 62.0 530.0 L 62.0 594.0 L 725.0 594.0" fill="none" stroke="#2f6fb7" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.82"/>
+<path d="M 715.0 502.0 L 715.0 530.0 L 62.0 530.0 L 62.0 594.0 L 725.0 594.0" fill="none" stroke="#2f6fb7" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.82"/>
+<path d="M 895.0 502.0 L 895.0 530.0 L 1348.0 530.0 L 1348.0 594.0 L 885.0 594.0" fill="none" stroke="#2f6fb7" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.82"/>
+<path d="M 1075.0 502.0 L 1075.0 530.0 L 1348.0 530.0 L 1348.0 594.0 L 885.0 594.0" fill="none" stroke="#2f6fb7" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.82"/>
+<path d="M 1255.0 502.0 L 1255.0 530.0 L 1348.0 530.0 L 1348.0 594.0 L 885.0 594.0" fill="none" stroke="#2f6fb7" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.82"/>
+<path d="M 1435.0 502.0 L 1435.0 530.0 L 1348.0 530.0 L 1348.0 594.0 L 885.0 594.0" fill="none" stroke="#2f6fb7" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.82"/>
+<path d="M 175.0 782.0 L 175.0 800.0" fill="none" stroke="#c27a00" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.86"/>
+<path d="M 355.0 782.0 L 355.0 800.0" fill="none" stroke="#c27a00" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.86"/>
+<path d="M 535.0 782.0 L 535.0 800.0" fill="none" stroke="#c27a00" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.86"/>
+<path d="M 715.0 782.0 L 715.0 800.0" fill="none" stroke="#c27a00" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.86"/>
+<path d="M 895.0 782.0 L 895.0 800.0" fill="none" stroke="#c27a00" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.86"/>
+<path d="M 1075.0 782.0 L 1075.0 800.0" fill="none" stroke="#c27a00" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.86"/>
+<path d="M 1255.0 782.0 L 1255.0 800.0" fill="none" stroke="#c27a00" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.86"/>
+<path d="M 1435.0 782.0 L 1435.0 800.0" fill="none" stroke="#c27a00" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.86"/>
+<path d="M 885.0 1121.0 L 1650.0 1121.0 L 1650.0 851.0 L 1840.0 851.0" fill="none" stroke="#2d6aa6" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.95"/>
+<path d="M 1830.0 782.0 L 1920.0 815.0" fill="none" stroke="#2d6aa6" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.95"/>
+<path d="M 2010.0 782.0 L 1920.0 815.0" fill="none" stroke="#2d6aa6" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.95"/>
+<path d="M 1920.0 987.0 L 1920.0 1015.0" fill="none" stroke="#2d6aa6" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.90"/>
+<path d="M 805.0 1072.0 L 805.0 1085.0" fill="none" stroke="#4f4f4f" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.82"/>
+<path d="M 1920.0 1087.0 L 1920.0 1290.0 L 175.0 1290.0 L 175.0 1300.0" fill="none" stroke="#a35a73" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.84"/>
+<path d="M 1525.0 1282.0 L 1525.0 1290.0 L 175.0 1290.0 L 175.0 1300.0" fill="none" stroke="#a35a73" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.84"/>
+<path d="M 1920.0 1087.0 L 1920.0 1290.0 L 355.0 1290.0 L 355.0 1300.0" fill="none" stroke="#a35a73" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.84"/>
+<path d="M 1525.0 1282.0 L 1525.0 1290.0 L 355.0 1290.0 L 355.0 1300.0" fill="none" stroke="#a35a73" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.84"/>
+<path d="M 1920.0 1087.0 L 1920.0 1290.0 L 535.0 1290.0 L 535.0 1300.0" fill="none" stroke="#a35a73" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.84"/>
+<path d="M 1525.0 1282.0 L 1525.0 1290.0 L 535.0 1290.0 L 535.0 1300.0" fill="none" stroke="#a35a73" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.84"/>
+<path d="M 1920.0 1087.0 L 1920.0 1290.0 L 715.0 1290.0 L 715.0 1300.0" fill="none" stroke="#a35a73" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.84"/>
+<path d="M 1525.0 1282.0 L 1525.0 1290.0 L 715.0 1290.0 L 715.0 1300.0" fill="none" stroke="#a35a73" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.84"/>
+<path d="M 1920.0 1087.0 L 1920.0 1290.0 L 895.0 1290.0 L 895.0 1300.0" fill="none" stroke="#a35a73" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.84"/>
+<path d="M 1525.0 1282.0 L 1525.0 1290.0 L 895.0 1290.0 L 895.0 1300.0" fill="none" stroke="#a35a73" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.84"/>
+<path d="M 1920.0 1087.0 L 1920.0 1290.0 L 1075.0 1290.0 L 1075.0 1300.0" fill="none" stroke="#a35a73" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.84"/>
+<path d="M 1525.0 1282.0 L 1525.0 1290.0 L 1075.0 1290.0 L 1075.0 1300.0" fill="none" stroke="#a35a73" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.84"/>
+<path d="M 1920.0 1087.0 L 1920.0 1290.0 L 1255.0 1290.0 L 1255.0 1300.0" fill="none" stroke="#a35a73" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.84"/>
+<path d="M 1525.0 1282.0 L 1525.0 1290.0 L 1255.0 1290.0 L 1255.0 1300.0" fill="none" stroke="#a35a73" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.84"/>
+<path d="M 1920.0 1087.0 L 1920.0 1290.0 L 1435.0 1290.0 L 1435.0 1300.0" fill="none" stroke="#a35a73" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.84"/>
+<path d="M 1525.0 1282.0 L 1525.0 1290.0 L 1435.0 1290.0 L 1435.0 1300.0" fill="none" stroke="#a35a73" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)" opacity="0.84"/>
+<rect x="2150" y="785" width="170" height="48" rx="5" fill="#ffffff" stroke="#777" stroke-width="1.0" stroke-dasharray="4 3"/>
+<text x="2235" y="798" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" fill="#333">ext input</text>
+<text x="2235" y="810" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" fill="#333">0x0000100200000098</text>
+<text x="2235" y="822" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" fill="#333">shape 1</text>
+<path d="M 2150.0 809.0 L 2000.0 851.0" fill="none" stroke="#777" stroke-width="1.0" stroke-dasharray="4 3" marker-end="url(#arrow)" opacity="0.75"/>
+<rect x="2150" y="875" width="170" height="48" rx="5" fill="#ffffff" stroke="#777" stroke-width="1.0" stroke-dasharray="4 3"/>
+<text x="2235" y="888" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" fill="#333">ext input</text>
+<text x="2235" y="900" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" fill="#333">0x0000122200000017</text>
+<text x="2235" y="912" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" fill="#333">shape 1x1x1x3</text>
+<path d="M 2150.0 899.0 L 2000.0 851.0" fill="none" stroke="#777" stroke-width="1.0" stroke-dasharray="4 3" marker-end="url(#arrow)" opacity="0.75"/>
+<rect x="725.0" y="1000.0" width="160" height="72" rx="5" fill="#fff4db" stroke="#c27a00" stroke-width="1.3"/>
+<text x="805.0" y="1013.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n000</text>
+<text x="805.0" y="1025.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Reshape</text>
+<text x="805.0" y="1037.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">conv1x1 1x8x32x256</text>
+<text x="805.0" y="1049.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">n/a dom cyc</text>
+<rect x="1840.0" y="915.0" width="160" height="72" rx="5" fill="#fff4db" stroke="#c27a00" stroke-width="1.3"/>
+<text x="1920.0" y="928.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n001</text>
+<text x="1920.0" y="940.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Reshape</text>
+<text x="1920.0" y="952.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">conv1x1 1x1x256x256</text>
+<text x="1920.0" y="964.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">18663 dom cyc</text>
+<rect x="95.0" y="130.0" width="160" height="72" rx="5" fill="#eef6ff" stroke="#4b80c0" stroke-width="1.3"/>
+<text x="175.0" y="143.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n002</text>
+<text x="175.0" y="155.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">*InputSlice</text>
+<text x="175.0" y="167.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Input 1x8x1x256</text>
+<text x="175.0" y="179.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">165 dom cyc</text>
+<rect x="275.0" y="130.0" width="160" height="72" rx="5" fill="#eef6ff" stroke="#4b80c0" stroke-width="1.3"/>
+<text x="355.0" y="143.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n003</text>
+<text x="355.0" y="155.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">*InputSlice</text>
+<text x="355.0" y="167.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Input 1x8x1x256</text>
+<text x="355.0" y="179.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">2471 dom cyc</text>
+<rect x="455.0" y="130.0" width="160" height="72" rx="5" fill="#eef6ff" stroke="#4b80c0" stroke-width="1.3"/>
+<text x="535.0" y="143.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n004</text>
+<text x="535.0" y="155.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">*InputSlice</text>
+<text x="535.0" y="167.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Input 1x8x1x256</text>
+<text x="535.0" y="179.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">214 dom cyc</text>
+<rect x="635.0" y="130.0" width="160" height="72" rx="5" fill="#eef6ff" stroke="#4b80c0" stroke-width="1.3"/>
+<text x="715.0" y="143.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n005</text>
+<text x="715.0" y="155.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">*InputSlice</text>
+<text x="715.0" y="167.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Input 1x8x1x256</text>
+<text x="715.0" y="179.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">227 dom cyc</text>
+<rect x="815.0" y="130.0" width="160" height="72" rx="5" fill="#eef6ff" stroke="#4b80c0" stroke-width="1.3"/>
+<text x="895.0" y="143.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n006</text>
+<text x="895.0" y="155.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">*InputSlice</text>
+<text x="895.0" y="167.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Input 1x8x1x256</text>
+<text x="895.0" y="179.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">222 dom cyc</text>
+<rect x="995.0" y="130.0" width="160" height="72" rx="5" fill="#eef6ff" stroke="#4b80c0" stroke-width="1.3"/>
+<text x="1075.0" y="143.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n007</text>
+<text x="1075.0" y="155.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">*InputSlice</text>
+<text x="1075.0" y="167.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Input 1x8x1x256</text>
+<text x="1075.0" y="179.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">247 dom cyc</text>
+<rect x="1175.0" y="130.0" width="160" height="72" rx="5" fill="#eef6ff" stroke="#4b80c0" stroke-width="1.3"/>
+<text x="1255.0" y="143.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n008</text>
+<text x="1255.0" y="155.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">*InputSlice</text>
+<text x="1255.0" y="167.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Input 1x8x1x256</text>
+<text x="1255.0" y="179.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">196 dom cyc</text>
+<rect x="1355.0" y="130.0" width="160" height="72" rx="5" fill="#eef6ff" stroke="#4b80c0" stroke-width="1.3"/>
+<text x="1435.0" y="143.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n009</text>
+<text x="1435.0" y="155.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">*InputSlice</text>
+<text x="1435.0" y="167.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Input 1x8x1x256</text>
+<text x="1435.0" y="179.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">207 dom cyc</text>
+<rect x="95.0" y="230.0" width="160" height="72" rx="5" fill="#eef6ff" stroke="#4b80c0" stroke-width="1.3"/>
+<text x="175.0" y="243.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n010</text>
+<text x="175.0" y="255.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">*InputSlice</text>
+<text x="175.0" y="267.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Input 1x8x1x256</text>
+<text x="175.0" y="279.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">183 dom cyc</text>
+<rect x="275.0" y="230.0" width="160" height="72" rx="5" fill="#eef6ff" stroke="#4b80c0" stroke-width="1.3"/>
+<text x="355.0" y="243.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n011</text>
+<text x="355.0" y="255.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">*InputSlice</text>
+<text x="355.0" y="267.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Input 1x8x1x256</text>
+<text x="355.0" y="279.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">224 dom cyc</text>
+<rect x="455.0" y="230.0" width="160" height="72" rx="5" fill="#eef6ff" stroke="#4b80c0" stroke-width="1.3"/>
+<text x="535.0" y="243.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n012</text>
+<text x="535.0" y="255.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">*InputSlice</text>
+<text x="535.0" y="267.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Input 1x8x1x256</text>
+<text x="535.0" y="279.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">178 dom cyc</text>
+<rect x="635.0" y="230.0" width="160" height="72" rx="5" fill="#eef6ff" stroke="#4b80c0" stroke-width="1.3"/>
+<text x="715.0" y="243.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n013</text>
+<text x="715.0" y="255.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">*InputSlice</text>
+<text x="715.0" y="267.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Input 1x8x1x256</text>
+<text x="715.0" y="279.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">183 dom cyc</text>
+<rect x="815.0" y="230.0" width="160" height="72" rx="5" fill="#eef6ff" stroke="#4b80c0" stroke-width="1.3"/>
+<text x="895.0" y="243.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n014</text>
+<text x="895.0" y="255.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">*InputSlice</text>
+<text x="895.0" y="267.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Input 1x8x1x256</text>
+<text x="895.0" y="279.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">209 dom cyc</text>
+<rect x="995.0" y="230.0" width="160" height="72" rx="5" fill="#eef6ff" stroke="#4b80c0" stroke-width="1.3"/>
+<text x="1075.0" y="243.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n015</text>
+<text x="1075.0" y="255.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">*InputSlice</text>
+<text x="1075.0" y="267.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Input 1x8x1x256</text>
+<text x="1075.0" y="279.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">209 dom cyc</text>
+<rect x="1175.0" y="230.0" width="160" height="72" rx="5" fill="#eef6ff" stroke="#4b80c0" stroke-width="1.3"/>
+<text x="1255.0" y="243.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n016</text>
+<text x="1255.0" y="255.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">*InputSlice</text>
+<text x="1255.0" y="267.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Input 1x8x1x256</text>
+<text x="1255.0" y="279.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">185 dom cyc</text>
+<rect x="1355.0" y="230.0" width="160" height="72" rx="5" fill="#eef6ff" stroke="#4b80c0" stroke-width="1.3"/>
+<text x="1435.0" y="243.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n017</text>
+<text x="1435.0" y="255.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">*InputSlice</text>
+<text x="1435.0" y="267.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Input 1x8x1x256</text>
+<text x="1435.0" y="279.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">179 dom cyc</text>
+<rect x="95.0" y="330.0" width="160" height="72" rx="5" fill="#eef6ff" stroke="#4b80c0" stroke-width="1.3"/>
+<text x="175.0" y="343.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n018</text>
+<text x="175.0" y="355.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">*InputSlice</text>
+<text x="175.0" y="367.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Input 1x8x1x256</text>
+<text x="175.0" y="379.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">179 dom cyc</text>
+<rect x="275.0" y="330.0" width="160" height="72" rx="5" fill="#eef6ff" stroke="#4b80c0" stroke-width="1.3"/>
+<text x="355.0" y="343.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n019</text>
+<text x="355.0" y="355.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">*InputSlice</text>
+<text x="355.0" y="367.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Input 1x8x1x256</text>
+<text x="355.0" y="379.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">175 dom cyc</text>
+<rect x="455.0" y="330.0" width="160" height="72" rx="5" fill="#eef6ff" stroke="#4b80c0" stroke-width="1.3"/>
+<text x="535.0" y="343.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n020</text>
+<text x="535.0" y="355.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">*InputSlice</text>
+<text x="535.0" y="367.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Input 1x8x1x256</text>
+<text x="535.0" y="379.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">179 dom cyc</text>
+<rect x="635.0" y="330.0" width="160" height="72" rx="5" fill="#eef6ff" stroke="#4b80c0" stroke-width="1.3"/>
+<text x="715.0" y="343.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n021</text>
+<text x="715.0" y="355.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">*InputSlice</text>
+<text x="715.0" y="367.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Input 1x8x1x256</text>
+<text x="715.0" y="379.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">178 dom cyc</text>
+<rect x="815.0" y="330.0" width="160" height="72" rx="5" fill="#eef6ff" stroke="#4b80c0" stroke-width="1.3"/>
+<text x="895.0" y="343.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n022</text>
+<text x="895.0" y="355.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">*InputSlice</text>
+<text x="895.0" y="367.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Input 1x8x1x256</text>
+<text x="895.0" y="379.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">175 dom cyc</text>
+<rect x="995.0" y="330.0" width="160" height="72" rx="5" fill="#eef6ff" stroke="#4b80c0" stroke-width="1.3"/>
+<text x="1075.0" y="343.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n023</text>
+<text x="1075.0" y="355.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">*InputSlice</text>
+<text x="1075.0" y="367.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Input 1x8x1x256</text>
+<text x="1075.0" y="379.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">181 dom cyc</text>
+<rect x="1175.0" y="330.0" width="160" height="72" rx="5" fill="#eef6ff" stroke="#4b80c0" stroke-width="1.3"/>
+<text x="1255.0" y="343.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n024</text>
+<text x="1255.0" y="355.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">*InputSlice</text>
+<text x="1255.0" y="367.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Input 1x8x1x256</text>
+<text x="1255.0" y="379.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">183 dom cyc</text>
+<rect x="1355.0" y="330.0" width="160" height="72" rx="5" fill="#eef6ff" stroke="#4b80c0" stroke-width="1.3"/>
+<text x="1435.0" y="343.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n025</text>
+<text x="1435.0" y="355.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">*InputSlice</text>
+<text x="1435.0" y="367.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Input 1x8x1x256</text>
+<text x="1435.0" y="379.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">179 dom cyc</text>
+<rect x="95.0" y="430.0" width="160" height="72" rx="5" fill="#eef6ff" stroke="#4b80c0" stroke-width="1.3"/>
+<text x="175.0" y="443.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n026</text>
+<text x="175.0" y="455.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">*InputSlice</text>
+<text x="175.0" y="467.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Input 1x8x1x256</text>
+<text x="175.0" y="479.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">166 dom cyc</text>
+<rect x="275.0" y="430.0" width="160" height="72" rx="5" fill="#eef6ff" stroke="#4b80c0" stroke-width="1.3"/>
+<text x="355.0" y="443.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n027</text>
+<text x="355.0" y="455.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">*InputSlice</text>
+<text x="355.0" y="467.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Input 1x8x1x256</text>
+<text x="355.0" y="479.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">192 dom cyc</text>
+<rect x="455.0" y="430.0" width="160" height="72" rx="5" fill="#eef6ff" stroke="#4b80c0" stroke-width="1.3"/>
+<text x="535.0" y="443.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n028</text>
+<text x="535.0" y="455.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">*InputSlice</text>
+<text x="535.0" y="467.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Input 1x8x1x256</text>
+<text x="535.0" y="479.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">178 dom cyc</text>
+<rect x="635.0" y="430.0" width="160" height="72" rx="5" fill="#eef6ff" stroke="#4b80c0" stroke-width="1.3"/>
+<text x="715.0" y="443.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n029</text>
+<text x="715.0" y="455.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">*InputSlice</text>
+<text x="715.0" y="467.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Input 1x8x1x256</text>
+<text x="715.0" y="479.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">165 dom cyc</text>
+<rect x="815.0" y="430.0" width="160" height="72" rx="5" fill="#eef6ff" stroke="#4b80c0" stroke-width="1.3"/>
+<text x="895.0" y="443.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n030</text>
+<text x="895.0" y="455.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">*InputSlice</text>
+<text x="895.0" y="467.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Input 1x8x1x256</text>
+<text x="895.0" y="479.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">177 dom cyc</text>
+<rect x="995.0" y="430.0" width="160" height="72" rx="5" fill="#eef6ff" stroke="#4b80c0" stroke-width="1.3"/>
+<text x="1075.0" y="443.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n031</text>
+<text x="1075.0" y="455.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">*InputSlice</text>
+<text x="1075.0" y="467.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Input 1x8x1x256</text>
+<text x="1075.0" y="479.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">178 dom cyc</text>
+<rect x="1175.0" y="430.0" width="160" height="72" rx="5" fill="#eef6ff" stroke="#4b80c0" stroke-width="1.3"/>
+<text x="1255.0" y="443.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n032</text>
+<text x="1255.0" y="455.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">*InputSlice</text>
+<text x="1255.0" y="467.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Input 1x8x1x256</text>
+<text x="1255.0" y="479.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">393 dom cyc</text>
+<rect x="1355.0" y="430.0" width="160" height="72" rx="5" fill="#eef6ff" stroke="#4b80c0" stroke-width="1.3"/>
+<text x="1435.0" y="443.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n033</text>
+<text x="1435.0" y="455.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">*InputSlice</text>
+<text x="1435.0" y="467.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Input 1x8x1x256</text>
+<text x="1435.0" y="479.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">183 dom cyc</text>
+<rect x="95.0" y="1392.0" width="160" height="72" rx="5" fill="#f8ecf0" stroke="#a35a73" stroke-width="1.3"/>
+<text x="175.0" y="1405.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n034</text>
+<text x="175.0" y="1417.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Transpose.2D</text>
+<text x="175.0" y="1429.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Y_0231 1x1x32x256</text>
+<text x="175.0" y="1441.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">83209 dom cyc</text>
+<rect x="95.0" y="1484.0" width="160" height="72" rx="5" fill="#f8ecf0" stroke="#a35a73" stroke-width="1.3"/>
+<text x="175.0" y="1497.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n035</text>
+<text x="175.0" y="1509.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Transpose.2D</text>
+<text x="175.0" y="1521.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Y_0231 1x32x1x256</text>
+<text x="175.0" y="1533.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">590 dom cyc</text>
+<rect x="275.0" y="1392.0" width="160" height="72" rx="5" fill="#f8ecf0" stroke="#a35a73" stroke-width="1.3"/>
+<text x="355.0" y="1405.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n036</text>
+<text x="355.0" y="1417.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Transpose.2D</text>
+<text x="355.0" y="1429.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Y_0231 1x1x32x256</text>
+<text x="355.0" y="1441.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">0 dom cyc</text>
+<rect x="275.0" y="1484.0" width="160" height="72" rx="5" fill="#f8ecf0" stroke="#a35a73" stroke-width="1.3"/>
+<text x="355.0" y="1497.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n037</text>
+<text x="355.0" y="1509.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Transpose.2D</text>
+<text x="355.0" y="1521.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Y_0231 1x32x1x256</text>
+<text x="355.0" y="1533.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">7455 dom cyc</text>
+<rect x="455.0" y="1392.0" width="160" height="72" rx="5" fill="#f8ecf0" stroke="#a35a73" stroke-width="1.3"/>
+<text x="535.0" y="1405.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n038</text>
+<text x="535.0" y="1417.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Transpose.2D</text>
+<text x="535.0" y="1429.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Y_0231 1x1x32x256</text>
+<text x="535.0" y="1441.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">77 dom cyc</text>
+<rect x="455.0" y="1484.0" width="160" height="72" rx="5" fill="#f8ecf0" stroke="#a35a73" stroke-width="1.3"/>
+<text x="535.0" y="1497.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n039</text>
+<text x="535.0" y="1509.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Transpose.2D</text>
+<text x="535.0" y="1521.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Y_0231 1x32x1x256</text>
+<text x="535.0" y="1533.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">0 dom cyc</text>
+<rect x="635.0" y="1392.0" width="160" height="72" rx="5" fill="#f8ecf0" stroke="#a35a73" stroke-width="1.3"/>
+<text x="715.0" y="1405.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n040</text>
+<text x="715.0" y="1417.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Transpose.2D</text>
+<text x="715.0" y="1429.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Y_0231 1x1x32x256</text>
+<text x="715.0" y="1441.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">0 dom cyc</text>
+<rect x="635.0" y="1484.0" width="160" height="72" rx="5" fill="#f8ecf0" stroke="#a35a73" stroke-width="1.3"/>
+<text x="715.0" y="1497.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n041</text>
+<text x="715.0" y="1509.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Transpose.2D</text>
+<text x="715.0" y="1521.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Y_0231 1x32x1x256</text>
+<text x="715.0" y="1533.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">13 dom cyc</text>
+<rect x="815.0" y="1392.0" width="160" height="72" rx="5" fill="#f8ecf0" stroke="#a35a73" stroke-width="1.3"/>
+<text x="895.0" y="1405.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n042</text>
+<text x="895.0" y="1417.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Transpose.2D</text>
+<text x="895.0" y="1429.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Y_0231 1x1x32x256</text>
+<text x="895.0" y="1441.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">0 dom cyc</text>
+<rect x="815.0" y="1484.0" width="160" height="72" rx="5" fill="#f8ecf0" stroke="#a35a73" stroke-width="1.3"/>
+<text x="895.0" y="1497.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n043</text>
+<text x="895.0" y="1509.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Transpose.2D</text>
+<text x="895.0" y="1521.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Y_0231 1x32x1x256</text>
+<text x="895.0" y="1533.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">4745 dom cyc</text>
+<rect x="995.0" y="1392.0" width="160" height="72" rx="5" fill="#f8ecf0" stroke="#a35a73" stroke-width="1.3"/>
+<text x="1075.0" y="1405.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n044</text>
+<text x="1075.0" y="1417.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Transpose.2D</text>
+<text x="1075.0" y="1429.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Y_0231 1x1x32x256</text>
+<text x="1075.0" y="1441.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">0 dom cyc</text>
+<rect x="995.0" y="1484.0" width="160" height="72" rx="5" fill="#f8ecf0" stroke="#a35a73" stroke-width="1.3"/>
+<text x="1075.0" y="1497.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n045</text>
+<text x="1075.0" y="1509.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Transpose.2D</text>
+<text x="1075.0" y="1521.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Y_0231 1x32x1x256</text>
+<text x="1075.0" y="1533.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">0 dom cyc</text>
+<rect x="1175.0" y="1392.0" width="160" height="72" rx="5" fill="#f8ecf0" stroke="#a35a73" stroke-width="1.3"/>
+<text x="1255.0" y="1405.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n046</text>
+<text x="1255.0" y="1417.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Transpose.2D</text>
+<text x="1255.0" y="1429.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Y_0231 1x1x32x256</text>
+<text x="1255.0" y="1441.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">0 dom cyc</text>
+<rect x="1175.0" y="1484.0" width="160" height="72" rx="5" fill="#f8ecf0" stroke="#a35a73" stroke-width="1.3"/>
+<text x="1255.0" y="1497.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n047</text>
+<text x="1255.0" y="1509.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Transpose.2D</text>
+<text x="1255.0" y="1521.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Y_0231 1x32x1x256</text>
+<text x="1255.0" y="1533.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">0 dom cyc</text>
+<rect x="1355.0" y="1392.0" width="160" height="72" rx="5" fill="#f8ecf0" stroke="#a35a73" stroke-width="1.3"/>
+<text x="1435.0" y="1405.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n048</text>
+<text x="1435.0" y="1417.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Transpose.2D</text>
+<text x="1435.0" y="1429.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Y_0231 1x1x32x256</text>
+<text x="1435.0" y="1441.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">0 dom cyc</text>
+<rect x="1355.0" y="1484.0" width="160" height="72" rx="5" fill="#f8ecf0" stroke="#a35a73" stroke-width="1.3"/>
+<text x="1435.0" y="1497.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n049</text>
+<text x="1435.0" y="1509.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Transpose.2D</text>
+<text x="1435.0" y="1521.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Y_0231 1x32x1x256</text>
+<text x="1435.0" y="1533.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">20 dom cyc</text>
+<rect x="1750.0" y="710.0" width="160" height="72" rx="5" fill="#f3ecff" stroke="#7a56b3" stroke-width="1.3"/>
+<text x="1830.0" y="723.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n050</text>
+<text x="1830.0" y="735.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">ConvLayer.opt.weights_to_vtcm</text>
+<text x="1830.0" y="747.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">conv1x1 1x1x128x256</text>
+<text x="1830.0" y="759.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">3321 dom cyc</text>
+<rect x="1930.0" y="710.0" width="160" height="72" rx="5" fill="#f3ecff" stroke="#7a56b3" stroke-width="1.3"/>
+<text x="2010.0" y="723.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n051</text>
+<text x="2010.0" y="735.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">ConvLayer.opt.bias_to_vtcm</text>
+<text x="2010.0" y="747.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">conv1x1 1x8x1x128</text>
+<text x="2010.0" y="759.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">953 dom cyc</text>
+<rect x="95.0" y="710.0" width="160" height="72" rx="5" fill="#fff4db" stroke="#c27a00" stroke-width="1.3"/>
+<text x="175.0" y="723.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n052</text>
+<text x="175.0" y="735.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">SlicePad_shape_inplace</text>
+<text x="175.0" y="747.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">A_0231 1x256x1x32</text>
+<text x="175.0" y="759.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">17664 dom cyc</text>
+<rect x="275.0" y="710.0" width="160" height="72" rx="5" fill="#fff4db" stroke="#c27a00" stroke-width="1.3"/>
+<text x="355.0" y="723.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n053</text>
+<text x="355.0" y="735.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">SlicePad_shape_inplace</text>
+<text x="355.0" y="747.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">A_0231 1x256x1x32</text>
+<text x="355.0" y="759.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">0 dom cyc</text>
+<rect x="455.0" y="710.0" width="160" height="72" rx="5" fill="#fff4db" stroke="#c27a00" stroke-width="1.3"/>
+<text x="535.0" y="723.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n054</text>
+<text x="535.0" y="735.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">SlicePad_shape_inplace</text>
+<text x="535.0" y="747.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">A_0231 1x256x1x32</text>
+<text x="535.0" y="759.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">0 dom cyc</text>
+<rect x="635.0" y="710.0" width="160" height="72" rx="5" fill="#fff4db" stroke="#c27a00" stroke-width="1.3"/>
+<text x="715.0" y="723.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n055</text>
+<text x="715.0" y="735.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">SlicePad_shape_inplace</text>
+<text x="715.0" y="747.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">A_0231 1x256x1x32</text>
+<text x="715.0" y="759.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">49455 dom cyc</text>
+<rect x="815.0" y="710.0" width="160" height="72" rx="5" fill="#fff4db" stroke="#c27a00" stroke-width="1.3"/>
+<text x="895.0" y="723.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n056</text>
+<text x="895.0" y="735.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">SlicePad_shape_inplace</text>
+<text x="895.0" y="747.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">A_0231 1x256x1x32</text>
+<text x="895.0" y="759.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">0 dom cyc</text>
+<rect x="995.0" y="710.0" width="160" height="72" rx="5" fill="#fff4db" stroke="#c27a00" stroke-width="1.3"/>
+<text x="1075.0" y="723.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n057</text>
+<text x="1075.0" y="735.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">SlicePad_shape_inplace</text>
+<text x="1075.0" y="747.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">A_0231 1x256x1x32</text>
+<text x="1075.0" y="759.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">37 dom cyc</text>
+<rect x="1175.0" y="710.0" width="160" height="72" rx="5" fill="#fff4db" stroke="#c27a00" stroke-width="1.3"/>
+<text x="1255.0" y="723.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n058</text>
+<text x="1255.0" y="735.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">SlicePad_shape_inplace</text>
+<text x="1255.0" y="747.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">A_0231 1x256x1x32</text>
+<text x="1255.0" y="759.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">2933 dom cyc</text>
+<rect x="1355.0" y="710.0" width="160" height="72" rx="5" fill="#fff4db" stroke="#c27a00" stroke-width="1.3"/>
+<text x="1435.0" y="723.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n059</text>
+<text x="1435.0" y="735.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">SlicePad_shape_inplace</text>
+<text x="1435.0" y="747.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">A_0231 1x256x1x32</text>
+<text x="1435.0" y="759.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">0 dom cyc</text>
+<rect x="725.0" y="915.0" width="160" height="72" rx="5" fill="#fff4db" stroke="#c27a00" stroke-width="1.3"/>
+<text x="805.0" y="928.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n060</text>
+<text x="805.0" y="940.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Concat</text>
+<text x="805.0" y="952.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">A_0231 1x1x256x256</text>
+<text x="805.0" y="964.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">5909 dom cyc</text>
+<rect x="725.0" y="558.0" width="160" height="72" rx="5" fill="#eef6ff" stroke="#4b80c0" stroke-width="1.3"/>
+<text x="805.0" y="571.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n061</text>
+<text x="805.0" y="583.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Concat</text>
+<text x="805.0" y="595.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Input 1x256x1x256</text>
+<text x="805.0" y="607.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">13663 dom cyc</text>
+<rect x="95.0" y="800.0" width="160" height="72" rx="5" fill="#fff4db" stroke="#c27a00" stroke-width="1.3"/>
+<text x="175.0" y="813.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n062</text>
+<text x="175.0" y="825.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Transpose_impl</text>
+<text x="175.0" y="837.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">A_0231 1x1x32x256</text>
+<text x="175.0" y="849.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">47 dom cyc</text>
+<rect x="275.0" y="800.0" width="160" height="72" rx="5" fill="#fff4db" stroke="#c27a00" stroke-width="1.3"/>
+<text x="355.0" y="813.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n063</text>
+<text x="355.0" y="825.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Transpose_impl</text>
+<text x="355.0" y="837.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">A_0231 1x1x32x256</text>
+<text x="355.0" y="849.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">28 dom cyc</text>
+<rect x="455.0" y="800.0" width="160" height="72" rx="5" fill="#fff4db" stroke="#c27a00" stroke-width="1.3"/>
+<text x="535.0" y="813.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n064</text>
+<text x="535.0" y="825.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Transpose_impl</text>
+<text x="535.0" y="837.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">A_0231 1x1x32x256</text>
+<text x="535.0" y="849.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">19779 dom cyc</text>
+<rect x="635.0" y="800.0" width="160" height="72" rx="5" fill="#fff4db" stroke="#c27a00" stroke-width="1.3"/>
+<text x="715.0" y="813.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n065</text>
+<text x="715.0" y="825.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Transpose_impl</text>
+<text x="715.0" y="837.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">A_0231 1x1x32x256</text>
+<text x="715.0" y="849.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">39 dom cyc</text>
+<rect x="815.0" y="800.0" width="160" height="72" rx="5" fill="#fff4db" stroke="#c27a00" stroke-width="1.3"/>
+<text x="895.0" y="813.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n066</text>
+<text x="895.0" y="825.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Transpose_impl</text>
+<text x="895.0" y="837.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">A_0231 1x1x32x256</text>
+<text x="895.0" y="849.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">264 dom cyc</text>
+<rect x="995.0" y="800.0" width="160" height="72" rx="5" fill="#fff4db" stroke="#c27a00" stroke-width="1.3"/>
+<text x="1075.0" y="813.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n067</text>
+<text x="1075.0" y="825.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Transpose_impl</text>
+<text x="1075.0" y="837.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">A_0231 1x1x32x256</text>
+<text x="1075.0" y="849.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">6322 dom cyc</text>
+<rect x="1175.0" y="800.0" width="160" height="72" rx="5" fill="#fff4db" stroke="#c27a00" stroke-width="1.3"/>
+<text x="1255.0" y="813.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n068</text>
+<text x="1255.0" y="825.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Transpose_impl</text>
+<text x="1255.0" y="837.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">A_0231 1x1x32x256</text>
+<text x="1255.0" y="849.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">0 dom cyc</text>
+<rect x="1355.0" y="800.0" width="160" height="72" rx="5" fill="#fff4db" stroke="#c27a00" stroke-width="1.3"/>
+<text x="1435.0" y="813.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n069</text>
+<text x="1435.0" y="825.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Transpose_impl</text>
+<text x="1435.0" y="837.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">A_0231 1x1x32x256</text>
+<text x="1435.0" y="849.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">3163 dom cyc</text>
+<rect x="1840.0" y="815.0" width="160" height="72" rx="5" fill="#eaf8ee" stroke="#3a8b4f" stroke-width="1.3"/>
+<text x="1920.0" y="828.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n070</text>
+<text x="1920.0" y="840.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">ConvLayer_s1.opt</text>
+<text x="1920.0" y="852.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">conv1x1 1x8x32x256</text>
+<text x="1920.0" y="864.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">8785 dom cyc</text>
+<rect x="1840.0" y="1015.0" width="160" height="72" rx="5" fill="#fff4db" stroke="#c27a00" stroke-width="1.3"/>
+<text x="1920.0" y="1028.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n071</text>
+<text x="1920.0" y="1040.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">ForceFormat_Crouton</text>
+<text x="1920.0" y="1052.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">conv1x1 1x1x256x256</text>
+<text x="1920.0" y="1064.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">125411 dom cyc</text>
+<rect x="725.0" y="1085.0" width="160" height="72" rx="5" fill="#fff4db" stroke="#c27a00" stroke-width="1.3"/>
+<text x="805.0" y="1098.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n072</text>
+<text x="805.0" y="1110.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">ForceFormat_Crouton</text>
+<text x="805.0" y="1122.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">conv1x1 1x8x32x256</text>
+<text x="805.0" y="1134.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">5974 dom cyc</text>
+<rect x="1445.0" y="1210.0" width="160" height="72" rx="5" fill="#f8ecf0" stroke="#a35a73" stroke-width="1.3"/>
+<text x="1525.0" y="1223.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n073</text>
+<text x="1525.0" y="1235.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">ConvLayer.opt.activations_to_vtcm</text>
+<text x="1525.0" y="1247.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Y_0231 1x1x1x32</text>
+<text x="1525.0" y="1259.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">n/a dom cyc</text>
+<rect x="95.0" y="1300.0" width="160" height="72" rx="5" fill="#f8ecf0" stroke="#a35a73" stroke-width="1.3"/>
+<text x="175.0" y="1313.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n074</text>
+<text x="175.0" y="1325.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">SlicePad_shape_inplace</text>
+<text x="175.0" y="1337.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Y_0231 1x1x256x32</text>
+<text x="175.0" y="1349.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">n/a dom cyc</text>
+<rect x="275.0" y="1300.0" width="160" height="72" rx="5" fill="#f8ecf0" stroke="#a35a73" stroke-width="1.3"/>
+<text x="355.0" y="1313.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n075</text>
+<text x="355.0" y="1325.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">SlicePad_shape_inplace</text>
+<text x="355.0" y="1337.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Y_0231 1x1x256x32</text>
+<text x="355.0" y="1349.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">n/a dom cyc</text>
+<rect x="455.0" y="1300.0" width="160" height="72" rx="5" fill="#f8ecf0" stroke="#a35a73" stroke-width="1.3"/>
+<text x="535.0" y="1313.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n076</text>
+<text x="535.0" y="1325.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">SlicePad_shape_inplace</text>
+<text x="535.0" y="1337.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Y_0231 1x1x256x32</text>
+<text x="535.0" y="1349.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">n/a dom cyc</text>
+<rect x="635.0" y="1300.0" width="160" height="72" rx="5" fill="#f8ecf0" stroke="#a35a73" stroke-width="1.3"/>
+<text x="715.0" y="1313.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n077</text>
+<text x="715.0" y="1325.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">SlicePad_shape_inplace</text>
+<text x="715.0" y="1337.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Y_0231 1x1x256x32</text>
+<text x="715.0" y="1349.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">n/a dom cyc</text>
+<rect x="815.0" y="1300.0" width="160" height="72" rx="5" fill="#f8ecf0" stroke="#a35a73" stroke-width="1.3"/>
+<text x="895.0" y="1313.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n078</text>
+<text x="895.0" y="1325.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">SlicePad_shape_inplace</text>
+<text x="895.0" y="1337.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Y_0231 1x1x256x32</text>
+<text x="895.0" y="1349.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">n/a dom cyc</text>
+<rect x="995.0" y="1300.0" width="160" height="72" rx="5" fill="#f8ecf0" stroke="#a35a73" stroke-width="1.3"/>
+<text x="1075.0" y="1313.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n079</text>
+<text x="1075.0" y="1325.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">SlicePad_shape_inplace</text>
+<text x="1075.0" y="1337.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Y_0231 1x1x256x32</text>
+<text x="1075.0" y="1349.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">n/a dom cyc</text>
+<rect x="1175.0" y="1300.0" width="160" height="72" rx="5" fill="#f8ecf0" stroke="#a35a73" stroke-width="1.3"/>
+<text x="1255.0" y="1313.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n080</text>
+<text x="1255.0" y="1325.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">SlicePad_shape_inplace</text>
+<text x="1255.0" y="1337.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Y_0231 1x1x256x32</text>
+<text x="1255.0" y="1349.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">n/a dom cyc</text>
+<rect x="1355.0" y="1300.0" width="160" height="72" rx="5" fill="#f8ecf0" stroke="#a35a73" stroke-width="1.3"/>
+<text x="1435.0" y="1313.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#222">n081</text>
+<text x="1435.0" y="1325.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">SlicePad_shape_inplace</text>
+<text x="1435.0" y="1337.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">Y_0231 1x1x256x32</text>
+<text x="1435.0" y="1349.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="8.5" font-weight="400" fill="#222">n/a dom cyc</text>
+<rect x="2130" y="90" width="390" height="205" rx="8" fill="#fafafa" stroke="#bbb"/>
+<text x="2146" y="118" font-family="Arial, sans-serif" font-size="15" font-weight="700">W4A16 chain1 native HTP op graph</text>
+<text x="2146" y="142" font-family="Arial, sans-serif" font-size="12">82 nodes, 95 dependency edges</text>
+<text x="2146" y="162" font-family="Arial, sans-serif" font-size="12">Node timing: Dominant Path Cycles</text>
+<text x="2146" y="182" font-family="Arial, sans-serif" font-size="12">InputSlice fan-in is routed through side buses</text>
+<text x="2146" y="202" font-family="Arial, sans-serif" font-size="12">Dashed ext inputs are tensors, not HTP nodes</text>
+<text x="2146" y="222" font-family="Arial, sans-serif" font-size="12">Source: chrometrace.json args[Dominant Path Cycles]</text>
+<rect x="2148" y="238" width="14" height="10" fill="#eef6ff" stroke="#4b80c0"/>
+<text x="2172" y="248" font-family="Arial, sans-serif" font-size="12">io</text>
+<rect x="2148" y="255" width="14" height="10" fill="#fff4db" stroke="#c27a00"/>
+<text x="2172" y="265" font-family="Arial, sans-serif" font-size="12">layout</text>
+<rect x="2148" y="272" width="14" height="10" fill="#f3ecff" stroke="#7a56b3"/>
+<text x="2172" y="282" font-family="Arial, sans-serif" font-size="12">prep</text>
+<rect x="2148" y="289" width="14" height="10" fill="#eaf8ee" stroke="#3a8b4f"/>
+<text x="2172" y="299" font-family="Arial, sans-serif" font-size="12">compute</text>
+<rect x="2148" y="306" width="14" height="10" fill="#f8ecf0" stroke="#a35a73"/>
+<text x="2172" y="316" font-family="Arial, sans-serif" font-size="12">post</text>
+</svg>

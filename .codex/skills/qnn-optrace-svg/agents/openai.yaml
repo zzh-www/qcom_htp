@@ -1,0 +1,4 @@
+interface:
+  display_name: "QNN Optrace SVG"
+  short_description: "Render fixed SVGs from QNN optrace."
+  default_prompt: "Generate a fixed-layout SVG diagram from QNN HTP optrace artifacts."

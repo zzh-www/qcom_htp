@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1160" height="540" viewBox="0 0 1160 540" role="img" aria-label="W4A16 chain1 custom HTP op graph">
+  <defs>
+    <marker id="arrowBlue" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 4 L 0 8 z" fill="#2d6aa6"/>
+    </marker>
+    <marker id="arrowPurple" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 4 L 0 8 z" fill="#6f58a8"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1160" height="540" fill="#ffffff"/>
+  <text x="32" y="38" font-family="Arial, sans-serif" font-size="22" font-weight="700" fill="#202124">W4A16 Chain1 Custom HTP Op Graph</text>
+  <text x="32" y="60" font-family="Arial, sans-serif" font-size="12" fill="#555">6 HTP nodes, 5 dependency edges; cycle labels are Dominant Path Cycles from chrometrace.json.</text>
+
+  <rect x="28" y="88" width="365" height="260" fill="#f7f8fa" stroke="#d9dde3" stroke-width="1"/>
+  <text x="44" y="112" font-family="Arial, sans-serif" font-size="13" font-weight="700" fill="#444">Activation path</text>
+
+  <rect x="438" y="88" width="278" height="385" fill="#f7f8fa" stroke="#d9dde3" stroke-width="1"/>
+  <text x="454" y="112" font-family="Arial, sans-serif" font-size="13" font-weight="700" fill="#444">VTCM constants</text>
+
+  <rect x="768" y="145" width="355" height="225" fill="#f7f8fa" stroke="#d9dde3" stroke-width="1"/>
+  <text x="784" y="169" font-family="Arial, sans-serif" font-size="13" font-weight="700" fill="#444">HMX compute, 4 direct kernel inputs</text>
+
+  <path d="M 220 184 L 220 234" fill="none" stroke="#2d6aa6" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowBlue)"/>
+  <path d="M 350 270 L 418 270 L 418 452 L 754 452 L 754 292 L 768 292" fill="none" stroke="#2d6aa6" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowBlue)"/>
+  <path d="M 716 155 L 746 155 L 746 232 L 768 232" fill="none" stroke="#6f58a8" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowPurple)"/>
+  <path d="M 716 270 L 746 270 L 746 262 L 768 262" fill="none" stroke="#6f58a8" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowPurple)"/>
+  <path d="M 716 385 L 746 385 L 746 322 L 768 322" fill="none" stroke="#6f58a8" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrowPurple)"/>
+
+  <g transform="translate(90 134)">
+    <rect width="260" height="50" rx="7" ry="7" fill="#eef6ff" stroke="#4b80c0" stroke-width="1.6"/>
+    <text x="12" y="18" font-family="Arial, sans-serif" font-size="12" font-weight="700" fill="#202124">n001</text>
+    <text x="62" y="18" font-family="Arial, sans-serif" font-size="12" font-weight="600" fill="#202124">*InputSlice</text>
+    <text x="12" y="35" font-family="Arial, sans-serif" font-size="11" fill="#4b4f56">Input [1,8,32,256]</text>
+    <text x="158" y="35" font-family="Arial, sans-serif" font-size="11" fill="#4b4f56">1883 dom cyc</text>
+  </g>
+
+  <g transform="translate(90 234)">
+    <rect width="260" height="72" rx="7" ry="7" fill="#fff4db" stroke="#c27a00" stroke-width="1.6"/>
+    <text x="12" y="20" font-family="Arial, sans-serif" font-size="12" font-weight="700" fill="#202124">n002</text>
+    <text x="62" y="20" font-family="Arial, sans-serif" font-size="12" font-weight="600" fill="#202124">ForceFormat_Crouton</text>
+    <text x="12" y="42" font-family="Arial, sans-serif" font-size="11" fill="#4b4f56">Input [1,8,32,256]</text>
+    <text x="12" y="60" font-family="Arial, sans-serif" font-size="11" fill="#4b4f56">7912 dom cyc</text>
+  </g>
+
+  <g transform="translate(478 124)">
+    <rect width="238" height="62" rx="7" ry="7" fill="#f3ecff" stroke="#7a56b3" stroke-width="1.6"/>
+    <text x="12" y="19" font-family="Arial, sans-serif" font-size="12" font-weight="700" fill="#202124">n003</text>
+    <text x="62" y="19" font-family="Arial, sans-serif" font-size="11.5" font-weight="600" fill="#202124">ConvLayer.opt.weights_to_vtcm</text>
+    <text x="12" y="38" font-family="Arial, sans-serif" font-size="11" fill="#4b4f56">$Const_11 [1,8,1,128]</text>
+    <text x="12" y="54" font-family="Arial, sans-serif" font-size="11" fill="#4b4f56">2493 dom cyc</text>
+  </g>
+
+  <g transform="translate(478 239)">
+    <rect width="238" height="62" rx="7" ry="7" fill="#f3ecff" stroke="#7a56b3" stroke-width="1.6"/>
+    <text x="12" y="19" font-family="Arial, sans-serif" font-size="12" font-weight="700" fill="#202124">n004</text>
+    <text x="62" y="19" font-family="Arial, sans-serif" font-size="11.5" font-weight="600" fill="#202124">ConvLayer.opt.weights_to_vtcm</text>
+    <text x="12" y="38" font-family="Arial, sans-serif" font-size="11" fill="#4b4f56">$Const_12 [1,1,128,256]</text>
+    <text x="12" y="54" font-family="Arial, sans-serif" font-size="11" fill="#4b4f56">671 dom cyc</text>
+  </g>
+
+  <g transform="translate(478 354)">
+    <rect width="238" height="62" rx="7" ry="7" fill="#f3ecff" stroke="#7a56b3" stroke-width="1.6"/>
+    <text x="12" y="19" font-family="Arial, sans-serif" font-size="12" font-weight="700" fill="#202124">n005</text>
+    <text x="62" y="19" font-family="Arial, sans-serif" font-size="11.5" font-weight="600" fill="#202124">ConvLayer.opt.weights_to_vtcm</text>
+    <text x="12" y="38" font-family="Arial, sans-serif" font-size="11" fill="#4b4f56">$Const_13 [1,1,1,1]</text>
+    <text x="12" y="54" font-family="Arial, sans-serif" font-size="11" fill="#4b4f56">310 dom cyc</text>
+  </g>
+
+  <text x="718" y="226" font-family="Arial, sans-serif" font-size="11" font-weight="700" fill="#6f58a8">in0</text>
+  <text x="718" y="256" font-family="Arial, sans-serif" font-size="11" font-weight="700" fill="#6f58a8">in1</text>
+  <text x="718" y="286" font-family="Arial, sans-serif" font-size="11" font-weight="700" fill="#2d6aa6">in2</text>
+  <text x="718" y="316" font-family="Arial, sans-serif" font-size="11" font-weight="700" fill="#6f58a8">in3</text>
+  <circle cx="768" cy="232" r="4" fill="#6f58a8"/>
+  <circle cx="768" cy="262" r="4" fill="#6f58a8"/>
+  <circle cx="768" cy="292" r="4" fill="#2d6aa6"/>
+  <circle cx="768" cy="322" r="4" fill="#6f58a8"/>
+
+  <g transform="translate(768 204)">
+    <rect width="310" height="132" rx="7" ry="7" fill="#eaf8ee" stroke="#3a8b4f" stroke-width="1.6"/>
+    <text x="14" y="22" font-family="Arial, sans-serif" font-size="12" font-weight="700" fill="#202124">n000</text>
+    <text x="64" y="22" font-family="Arial, sans-serif" font-size="12" font-weight="600" fill="#202124">HmxU16I4ToU16MatMul</text>
+    <text x="14" y="44" font-family="Arial, sans-serif" font-size="11" fill="#4b4f56">QnnHmxMatMulW4A16Package</text>
+    <text x="14" y="64" font-family="Arial, sans-serif" font-size="11" fill="#4b4f56">in0 $Const_11 [1,8,1,128]</text>
+    <text x="14" y="82" font-family="Arial, sans-serif" font-size="11" fill="#4b4f56">in1 $Const_12 [1,1,128,256]</text>
+    <text x="14" y="100" font-family="Arial, sans-serif" font-size="11" fill="#4b4f56">in2 activation [1,8,32,256]</text>
+    <text x="14" y="118" font-family="Arial, sans-serif" font-size="11" fill="#4b4f56">in3 $Const_13 [1,1,1,1]; out [1,8,32,256]; 5771 dom cyc</text>
+  </g>
+
+  <text x="32" y="505" font-family="Arial, sans-serif" font-size="12" fill="#555">Legend: blue = activation dependency, purple = VTCM constant dependency, dom cyc = Dominant Path Cycles.</text>
+</svg>

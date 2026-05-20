@@ -27,6 +27,8 @@ Current status:
   legacy carrier probes.
 - Native-alignment process and optrace artifacts are tracked in
   [Agent/handoffs/w4a16_native_alignment.md](../../Agent/handoffs/w4a16_native_alignment.md).
+- The chain1 256^3 HTP op graph/runtime flow is drawn in
+  [w4a16_chain1_htp_op_flow.md](w4a16_chain1_htp_op_flow.md).
 - LPBQ is supported as an explicit build/run profile.  `LPBQ_ONLY=1` registers
   the 9-input Crouton HMX signature and lets the LPBQ path bypass the default
   skip guard; `LPBQ_SCALAR=1` registers a direct Flat4 scalar correctness
