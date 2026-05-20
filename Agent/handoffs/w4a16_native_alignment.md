@@ -1,5 +1,13 @@
 # w4a16 Native Alignment Handoff
 
+Status note: this handoff is historical/native-oracle material for the old
+QNN custom-op alignment route.  It should not be used as the active
+implementation plan for the current handwritten W4A16 goal.  The active route
+is the tutorial/direct-HMX wrapper under
+`example/handwritten_hmx_matmul/tutorial_w4a16_qnn_kernel/`; QNN material here
+is retained only for oracle provenance, prepared-state references, and negative
+evidence.
+
 Current status: `example/qnn_hmx_matmul_w4a16`
 (`HmxU16I4ToU16MatMul`, i4 weight x u16 activation -> u16 output) now has a
 256^3 chain8 native-contract path that is bit-exact against the clean QNN
@@ -52,7 +60,7 @@ matching QNN's native quantized-model entry convention; do not treat that as the
 runtime comparison contract.  Runtime acceptance is the `native_io.json` u16 raw
 contract plus qnn-net-run native I/O flags.
 
-Native-path first rule: before adding new custom probes, read
+Historical native-path rule: before adding new QNN custom-op probes, read
 [`w4a16_qnn_native_path.md`](w4a16_qnn_native_path.md).  The canonical 256^3
 chain8 blocker is closed by matching two named native boundaries: compact
 source tables and K32-block-major/N32-inner W4 sidecar order, then validating
@@ -905,6 +913,14 @@ mask buffer, so the native descriptor-builder `0x700` evidence is not by itself
 a contradiction.
 
 ## Native HNH Wrapper ABI Notes
+
+Current active-route note: the tutorial/direct-HMX path has now closed generic
+wrapper/HMX-environment probing; the old derivation script was removed during
+handwritten-route cleanup after its conclusion was folded into this handoff.
+The native bit5 fast path reaches `hmx_v73_convhnh1x1deep_stride1` before
+visible HMX state setup, and the owned wrapper mirrors that side-load shim.  Use
+the ABI notes below as historical provenance rather than as an active W4A16
+implementation plan.
 
 The W4A16 native HNH wrapper evidence is in
 `Agent/qnn_re/skel_text_full.S` around these anchors:

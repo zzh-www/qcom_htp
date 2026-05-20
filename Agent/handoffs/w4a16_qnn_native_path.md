@@ -1,5 +1,15 @@
 # W4A16 QNN Native Path
 
+Status note: this document is historical/native-oracle evidence for the old
+QNN custom-op alignment route.  It is not the active implementation plan for
+the current handwritten W4A16 goal.  The active route is the QNN-free
+tutorial/direct-HMX wrapper under
+`example/handwritten_hmx_matmul/tutorial_w4a16_qnn_kernel/`; use this note only
+for oracle provenance, recovered native body context, and already-closed
+blackbox hypotheses.  The current direct-HMX route no longer uses the old
+wrapper/HMX-environment derivation scripts; their conclusions are folded into
+this handoff as historical provenance.
+
 This note describes the native QNN implementation path for the canonical
 256^3 W4A16 artifact:
 
@@ -21,7 +31,7 @@ After the 2026-05-09 cleanup, later `output_codex_*` and
 than live directories.  The live native/custom artifacts are
 `output_w4a16_native_ref_e2e_256/` and `output_w4a16_aligned_e2e_256/`.
 
-## Current Direction
+## Historical QNN-Native Direction
 
 Treat W4A16 as a native-implementation analysis task before treating it as a
 custom-op tuning task.  The old output mismatch was not explained by the math
@@ -36,12 +46,13 @@ Until those native fields are decoded or dumped, do not spend more cycles on
 single-field descriptor, mask, control-word, or row4-order sweeps.  A future
 custom change should first name the exact native boundary it reproduces.
 
-Current pivot: analyze QNN native first, then align.  The public QHPI tensor
+Historical pivot: analyze QNN native first, then align.  The public QHPI tensor
 surface visible after native Conv is now known to be a layout-restored export
 surface, not the internal HNH compute surface.  Converter output-layout flags
 do not move a custom diagnostic op inside the native `ConvLayer_s1.opt`
-boundary.  The next useful work is therefore native wrapper/descriptor evidence,
-not another custom input/output layout probe.
+boundary.  For that superseded QNN-custom route, the remaining useful work was
+native wrapper/descriptor evidence, not another custom input/output layout
+probe.  For the current route, continue in the tutorial/direct-HMX wrapper.
 
 ## Native-First Rule
 

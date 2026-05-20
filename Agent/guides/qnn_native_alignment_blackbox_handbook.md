@@ -1,5 +1,11 @@
 # QNN Native Alignment Blackbox Handbook
 
+Status note: this handbook is historical/supporting methodology for future
+QNN-native alignment tasks.  It is not the active W4A16 handwritten MatMul
+route; that work now follows
+`Agent/guides/handwritten_hmx_matmul_roadmap.md` and the tutorial/direct-HMX
+wrapper under `example/handwritten_hmx_matmul/tutorial_w4a16_qnn_kernel/`.
+
 Use this handbook when aligning a custom HMX OP with QNN native behavior. Treat
 alignment as blackbox reverse engineering: the native lowered graph is the
 source of truth, and every formula, decoded comment, Python reference, or custom

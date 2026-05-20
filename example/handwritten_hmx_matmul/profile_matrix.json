@@ -1,0 +1,114 @@
+{
+  "profiles": {
+    "u8i8": {
+      "accepted": true,
+      "acceptance_evidence": [
+        "promotion_evidence.json",
+        "device_body_u8i8.json",
+        "artifact_body_u8i8.json"
+      ],
+      "acceptance_scope": "m4_canonical_e2e",
+      "blocker": null,
+      "chain": 8,
+      "family": "u8i8",
+      "profile": "canonical",
+      "qnn_reference": "example/qnn_matmul_profile/output_u8i8_native_ref_e2e_256",
+      "required_by_final_gate": true,
+      "shape_mkn": [
+        256,
+        256,
+        256
+      ]
+    },
+    "w16a16": {
+      "accepted": false,
+      "blocker": "deferred from the current active handwritten roadmap scope; retained for smoke and diagnostic evidence only",
+      "chain": 8,
+      "family": "w16a16",
+      "profile": "canonical",
+      "qnn_reference": "example/qnn_matmul_profile/output_w16a16_native_ref_e2e_256",
+      "required_by_final_gate": false,
+      "shape_mkn": [
+        256,
+        256,
+        256
+      ]
+    },
+    "w4a16": {
+      "accepted": false,
+      "blocker": "canonical W4A16 enters the owned HMX body on device but remains checksum-mismatched against QNN Native",
+      "chain": 8,
+      "family": "w4a16",
+      "profile": "canonical",
+      "qnn_reference": "example/qnn_matmul_profile/output_w4a16_native_ref_e2e_256",
+      "required_by_final_gate": true,
+      "shape_mkn": [
+        256,
+        256,
+        256
+      ]
+    },
+    "w4a16_chain1": {
+      "accepted": false,
+      "blocker": "chain1 has retained QNN evidence and an owned artifact-body comparison, but it is still checksum-mismatched and lacks device output/perf acceptance",
+      "chain": 1,
+      "family": "w4a16",
+      "profile": "chain1",
+      "qnn_reference": "example/qnn_matmul_profile/output_w4a16_native_chain1_default_ci_e2e_256",
+      "required_by_final_gate": true,
+      "shape_mkn": [
+        256,
+        256,
+        256
+      ]
+    },
+    "w4a8": {
+      "accepted": true,
+      "acceptance_evidence": [
+        "promotion_evidence.json",
+        "device_body_w4a8.json",
+        "artifact_body_w4a8.json"
+      ],
+      "acceptance_scope": "m4_canonical_e2e",
+      "blocker": null,
+      "chain": 8,
+      "family": "w4a8",
+      "profile": "canonical",
+      "qnn_reference": "example/qnn_matmul_profile/output_w4a8_native_ref_e2e_256",
+      "required_by_final_gate": true,
+      "shape_mkn": [
+        256,
+        256,
+        256
+      ]
+    },
+    "w8a16": {
+      "accepted": true,
+      "acceptance_evidence": [
+        "promotion_evidence.json",
+        "device_body_w8a16.json",
+        "artifact_body_w8a16.json"
+      ],
+      "acceptance_scope": "m4_canonical_e2e",
+      "blocker": null,
+      "chain": 8,
+      "family": "w8a16",
+      "profile": "canonical",
+      "qnn_reference": "example/qnn_matmul_profile/output_w8a16_native_ref_e2e_256",
+      "required_by_final_gate": true,
+      "shape_mkn": [
+        256,
+        256,
+        256
+      ]
+    }
+  },
+  "required_final_gate_profiles": [
+    "u8i8",
+    "w4a8",
+    "w8a16",
+    "w4a16",
+    "w4a16_chain1"
+  ],
+  "schema": "handwritten_hmx_matmul_profile_matrix.v1"
+}

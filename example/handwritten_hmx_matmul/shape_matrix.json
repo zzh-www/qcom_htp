@@ -1,0 +1,195 @@
+{
+  "families": {
+    "u8i8": {
+      "accepted": [
+        {
+          "acceptance_scope": "m4_canonical_e2e",
+          "chain": 8,
+          "evidence": [
+            "promotion_evidence.json",
+            "device_body_u8i8.json",
+            "artifact_body_u8i8.json"
+          ],
+          "oracle": "example/qnn_matmul_profile/output_u8i8_native_ref_e2e_256",
+          "reason": "canonical direct device HMX-body output is byte-exact with M4 promotion evidence and native perf references",
+          "shape_mkn": [
+            256,
+            256,
+            256
+          ]
+        }
+      ],
+      "diagnostic": [
+        {
+          "chain": 8,
+          "reason": "non-canonical shape has no matched QNN Native oracle or per-shape owned performance evidence yet",
+          "shape_mkn": [
+            128,
+            256,
+            256
+          ]
+        }
+      ],
+      "rejected": [
+        {
+          "reason": "K must be a multiple of 32 for the current HMX tile contract",
+          "shape_mkn": [
+            256,
+            255,
+            256
+          ]
+        }
+      ]
+    },
+    "w16a16": {
+      "accepted": [],
+      "diagnostic": [
+        {
+          "chain": 8,
+          "oracle": "example/qnn_matmul_profile/output_w16a16_native_ref_e2e_256",
+          "reason": "native-record sidecars are byte-proven, but owned runtime output is not byte-exact yet",
+          "shape_mkn": [
+            256,
+            256,
+            256
+          ]
+        }
+      ],
+      "rejected": [
+        {
+          "reason": "non-canonical N requires a matched native oracle and split contract proof",
+          "shape_mkn": [
+            256,
+            256,
+            384
+          ]
+        }
+      ]
+    },
+    "w4a16": {
+      "accepted": [],
+      "diagnostic": [
+        {
+          "chain": 8,
+          "oracle": "example/qnn_matmul_profile/output_w4a16_native_ref_e2e_256",
+          "reason": "canonical direct device HMX-body enters and has perf evidence, but output is not byte-exact yet",
+          "shape_mkn": [
+            256,
+            256,
+            256
+          ]
+        },
+        {
+          "chain": 1,
+          "oracle": "example/qnn_matmul_profile/output_w4a16_chain1_default_ci_e2e_256",
+          "reason": "chain1 is required by the roadmap but has no owned runner entry yet",
+          "shape_mkn": [
+            256,
+            256,
+            256
+          ]
+        }
+      ],
+      "rejected": [
+        {
+          "reason": "M must be a multiple of 32 for the current row-tile contract",
+          "shape_mkn": [
+            255,
+            256,
+            256
+          ]
+        }
+      ]
+    },
+    "w4a8": {
+      "accepted": [
+        {
+          "acceptance_scope": "m4_canonical_e2e",
+          "chain": 8,
+          "evidence": [
+            "promotion_evidence.json",
+            "device_body_w4a8.json",
+            "artifact_body_w4a8.json"
+          ],
+          "oracle": "example/qnn_matmul_profile/output_w4a8_native_ref_e2e_256",
+          "reason": "canonical direct device HMX-body output is byte-exact with M4 promotion evidence and native perf references",
+          "shape_mkn": [
+            256,
+            256,
+            256
+          ]
+        }
+      ],
+      "diagnostic": [
+        {
+          "chain": 8,
+          "oracle": "example/qnn_matmul_profile/output_w4a8_native_ref_e2e_256",
+          "reason": "canonical direct device HMX-body output is byte-exact and M4-promoted; shape acceptance remains gated on final profile promotion",
+          "shape_mkn": [
+            256,
+            256,
+            256
+          ]
+        }
+      ],
+      "rejected": [
+        {
+          "reason": "N must be a multiple of 64 for the current W4A8 32x64 packing scaffold",
+          "shape_mkn": [
+            256,
+            256,
+            224
+          ]
+        }
+      ]
+    },
+    "w8a16": {
+      "accepted": [
+        {
+          "acceptance_scope": "m4_canonical_e2e",
+          "chain": 8,
+          "evidence": [
+            "promotion_evidence.json",
+            "device_body_w8a16.json",
+            "artifact_body_w8a16.json"
+          ],
+          "oracle": "example/qnn_matmul_profile/output_w8a16_native_ref_e2e_256",
+          "reason": "canonical direct device HMX-body output is byte-exact with M4 promotion evidence and native perf references",
+          "shape_mkn": [
+            256,
+            256,
+            256
+          ]
+        }
+      ],
+      "diagnostic": [
+        {
+          "chain": 8,
+          "reason": "non-canonical N has no matched QNN Native oracle or per-shape owned performance evidence yet",
+          "shape_mkn": [
+            256,
+            256,
+            128
+          ]
+        }
+      ],
+      "rejected": [
+        {
+          "reason": "N must be a multiple of 32 for the current output tile contract",
+          "shape_mkn": [
+            256,
+            256,
+            240
+          ]
+        }
+      ]
+    }
+  },
+  "policy": {
+    "dynamic_weights": "rejected until a static-payload ABI exists",
+    "hot_kernel_transpose_handling": "rejected; transpose must be normalized before packing",
+    "minimum_tile_multiple": 32,
+    "static_weights_only": true
+  },
+  "schema": "handwritten_hmx_matmul_shape_matrix.v1"
+}

@@ -1,0 +1,5171 @@
+{
+  "artifact_standard": "Agent/current/qnn_native_artifact_standard.md",
+  "families": {
+    "u8i8": {
+      "acceptance_checks": {
+        "expected_native_kernel_nodes": 8,
+        "native_artifact_standard_errors": [],
+        "native_artifact_standard_passed": true,
+        "native_artifact_standard_warnings": [],
+        "native_kernel_node_count_matches": true,
+        "native_kernel_nodes_observed": 8,
+        "stale_probe_used": false
+      },
+      "accepted_boundary_policy": null,
+      "activation_bits": 8,
+      "bottom_mapping": {
+        "format_node_counts": {
+          "q::*InputSlice": 1,
+          "q::ForceFormat_Crouton": 1,
+          "q::ForceFormat_Flat": 1
+        },
+        "native_kernel_nodes": [
+          {
+            "grouping": "MatMul_0",
+            "inputs": [
+              {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 14,
+                "tensor_id": "0x000011d900000013",
+                "type": 3
+              },
+              {
+                "data_type": 776,
+                "dims": [
+                  1,
+                  1,
+                  256,
+                  256
+                ],
+                "id": 17,
+                "tensor_id": "0x000011df00000013",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  8,
+                  1,
+                  64
+                ],
+                "id": 4,
+                "tensor_id": "0x0000118100000013",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1
+                ],
+                "id": 0,
+                "tensor_id": "0x0000100200000008",
+                "type": 4
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  1,
+                  1,
+                  2
+                ],
+                "id": 18,
+                "tensor_id": "0x000011e300000013",
+                "type": 4
+              }
+            ],
+            "memory": {
+              "mem_dram_read": 0,
+              "mem_dram_write": 0,
+              "mem_vtcm_read": 133120,
+              "mem_vtcm_write": 65536,
+              "op_flags": "uses_hmx",
+              "output_rank": 4,
+              "output_step_size": 1,
+              "output_zero_offset": 0
+            },
+            "node_id": "0x000011c300000013",
+            "outputs": [
+              {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 6,
+                "tensor_id": "0x000011c300000013",
+                "type": 3
+              }
+            ],
+            "type": "q::ConvLayer_s1.opt"
+          },
+          {
+            "grouping": "MatMul_1",
+            "inputs": [
+              {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 6,
+                "tensor_id": "0x000011c300000013",
+                "type": 3
+              },
+              {
+                "data_type": 776,
+                "dims": [
+                  1,
+                  1,
+                  256,
+                  256
+                ],
+                "id": 17,
+                "tensor_id": "0x000011df00000013",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  8,
+                  1,
+                  64
+                ],
+                "id": 4,
+                "tensor_id": "0x0000118100000013",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1
+                ],
+                "id": 0,
+                "tensor_id": "0x0000100200000008",
+                "type": 4
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  1,
+                  1,
+                  2
+                ],
+                "id": 18,
+                "tensor_id": "0x000011e300000013",
+                "type": 4
+              }
+            ],
+            "memory": {
+              "mem_dram_read": 0,
+              "mem_dram_write": 0,
+              "mem_vtcm_read": 133120,
+              "mem_vtcm_write": 65536,
+              "op_flags": "uses_hmx",
+              "output_rank": 4,
+              "output_step_size": 1,
+              "output_zero_offset": 0
+            },
+            "node_id": "0x000011c600000015",
+            "outputs": [
+              {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 7,
+                "tensor_id": "0x000011c600000015",
+                "type": 3
+              }
+            ],
+            "type": "q::ConvLayer_s1.opt"
+          },
+          {
+            "grouping": "MatMul_2",
+            "inputs": [
+              {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 7,
+                "tensor_id": "0x000011c600000015",
+                "type": 3
+              },
+              {
+                "data_type": 776,
+                "dims": [
+                  1,
+                  1,
+                  256,
+                  256
+                ],
+                "id": 17,
+                "tensor_id": "0x000011df00000013",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  8,
+                  1,
+                  64
+                ],
+                "id": 4,
+                "tensor_id": "0x0000118100000013",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1
+                ],
+                "id": 0,
+                "tensor_id": "0x0000100200000008",
+                "type": 4
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  1,
+                  1,
+                  2
+                ],
+                "id": 18,
+                "tensor_id": "0x000011e300000013",
+                "type": 4
+              }
+            ],
+            "memory": {
+              "mem_dram_read": 0,
+              "mem_dram_write": 0,
+              "mem_vtcm_read": 133120,
+              "mem_vtcm_write": 65536,
+              "op_flags": "uses_hmx",
+              "output_rank": 4,
+              "output_step_size": 1,
+              "output_zero_offset": 0
+            },
+            "node_id": "0x000011c900000017",
+            "outputs": [
+              {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 8,
+                "tensor_id": "0x000011c900000017",
+                "type": 3
+              }
+            ],
+            "type": "q::ConvLayer_s1.opt"
+          },
+          {
+            "grouping": "MatMul_3",
+            "inputs": [
+              {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 8,
+                "tensor_id": "0x000011c900000017",
+                "type": 3
+              },
+              {
+                "data_type": 776,
+                "dims": [
+                  1,
+                  1,
+                  256,
+                  256
+                ],
+                "id": 17,
+                "tensor_id": "0x000011df00000013",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  8,
+                  1,
+                  64
+                ],
+                "id": 4,
+                "tensor_id": "0x0000118100000013",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1
+                ],
+                "id": 0,
+                "tensor_id": "0x0000100200000008",
+                "type": 4
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  1,
+                  1,
+                  2
+                ],
+                "id": 18,
+                "tensor_id": "0x000011e300000013",
+                "type": 4
+              }
+            ],
+            "memory": {
+              "mem_dram_read": 0,
+              "mem_dram_write": 0,
+              "mem_vtcm_read": 133120,
+              "mem_vtcm_write": 65536,
+              "op_flags": "uses_hmx",
+              "output_rank": 4,
+              "output_step_size": 1,
+              "output_zero_offset": 0
+            },
+            "node_id": "0x000011cc00000019",
+            "outputs": [
+              {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 9,
+                "tensor_id": "0x000011cc00000019",
+                "type": 3
+              }
+            ],
+            "type": "q::ConvLayer_s1.opt"
+          },
+          {
+            "grouping": "MatMul_4",
+            "inputs": [
+              {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 9,
+                "tensor_id": "0x000011cc00000019",
+                "type": 3
+              },
+              {
+                "data_type": 776,
+                "dims": [
+                  1,
+                  1,
+                  256,
+                  256
+                ],
+                "id": 17,
+                "tensor_id": "0x000011df00000013",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  8,
+                  1,
+                  64
+                ],
+                "id": 4,
+                "tensor_id": "0x0000118100000013",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1
+                ],
+                "id": 0,
+                "tensor_id": "0x0000100200000008",
+                "type": 4
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  1,
+                  1,
+                  2
+                ],
+                "id": 18,
+                "tensor_id": "0x000011e300000013",
+                "type": 4
+              }
+            ],
+            "memory": {
+              "mem_dram_read": 0,
+              "mem_dram_write": 0,
+              "mem_vtcm_read": 133120,
+              "mem_vtcm_write": 65536,
+              "op_flags": "uses_hmx",
+              "output_rank": 4,
+              "output_step_size": 1,
+              "output_zero_offset": 0
+            },
+            "node_id": "0x000011cf0000001b",
+            "outputs": [
+              {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 10,
+                "tensor_id": "0x000011cf0000001b",
+                "type": 3
+              }
+            ],
+            "type": "q::ConvLayer_s1.opt"
+          },
+          {
+            "grouping": "MatMul_5",
+            "inputs": [
+              {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 10,
+                "tensor_id": "0x000011cf0000001b",
+                "type": 3
+              },
+              {
+                "data_type": 776,
+                "dims": [
+                  1,
+                  1,
+                  256,
+                  256
+                ],
+                "id": 17,
+                "tensor_id": "0x000011df00000013",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  8,
+                  1,
+                  64
+                ],
+                "id": 4,
+                "tensor_id": "0x0000118100000013",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1
+                ],
+                "id": 0,
+                "tensor_id": "0x0000100200000008",
+                "type": 4
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  1,
+                  1,
+                  2
+                ],
+                "id": 18,
+                "tensor_id": "0x000011e300000013",
+                "type": 4
+              }
+            ],
+            "memory": {
+              "mem_dram_read": 0,
+              "mem_dram_write": 0,
+              "mem_vtcm_read": 133120,
+              "mem_vtcm_write": 65536,
+              "op_flags": "uses_hmx",
+              "output_rank": 4,
+              "output_step_size": 1,
+              "output_zero_offset": 0
+            },
+            "node_id": "0x000011d20000001d",
+            "outputs": [
+              {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 11,
+                "tensor_id": "0x000011d20000001d",
+                "type": 3
+              }
+            ],
+            "type": "q::ConvLayer_s1.opt"
+          },
+          {
+            "grouping": "MatMul_6",
+            "inputs": [
+              {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 11,
+                "tensor_id": "0x000011d20000001d",
+                "type": 3
+              },
+              {
+                "data_type": 776,
+                "dims": [
+                  1,
+                  1,
+                  256,
+                  256
+                ],
+                "id": 17,
+                "tensor_id": "0x000011df00000013",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  8,
+                  1,
+                  64
+                ],
+                "id": 4,
+                "tensor_id": "0x0000118100000013",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1
+                ],
+                "id": 0,
+                "tensor_id": "0x0000100200000008",
+                "type": 4
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  1,
+                  1,
+                  2
+                ],
+                "id": 18,
+                "tensor_id": "0x000011e300000013",
+                "type": 4
+              }
+            ],
+            "memory": {
+              "mem_dram_read": 0,
+              "mem_dram_write": 0,
+              "mem_vtcm_read": 133120,
+              "mem_vtcm_write": 65536,
+              "op_flags": "uses_hmx",
+              "output_rank": 4,
+              "output_step_size": 1,
+              "output_zero_offset": 0
+            },
+            "node_id": "0x000011d50000001f",
+            "outputs": [
+              {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 12,
+                "tensor_id": "0x000011d50000001f",
+                "type": 3
+              }
+            ],
+            "type": "q::ConvLayer_s1.opt"
+          },
+          {
+            "grouping": "MatMul_7",
+            "inputs": [
+              {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 12,
+                "tensor_id": "0x000011d50000001f",
+                "type": 3
+              },
+              {
+                "data_type": 776,
+                "dims": [
+                  1,
+                  1,
+                  256,
+                  256
+                ],
+                "id": 17,
+                "tensor_id": "0x000011df00000013",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  8,
+                  1,
+                  64
+                ],
+                "id": 4,
+                "tensor_id": "0x0000118100000013",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1
+                ],
+                "id": 0,
+                "tensor_id": "0x0000100200000008",
+                "type": 4
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  1,
+                  1,
+                  2
+                ],
+                "id": 18,
+                "tensor_id": "0x000011e300000013",
+                "type": 4
+              }
+            ],
+            "memory": {
+              "mem_dram_read": 0,
+              "mem_dram_write": 0,
+              "mem_vtcm_read": 133120,
+              "mem_vtcm_write": 65536,
+              "op_flags": "uses_hmx",
+              "output_rank": 4,
+              "output_step_size": 1,
+              "output_zero_offset": 0
+            },
+            "node_id": "0x000011d800000021",
+            "outputs": [
+              {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 13,
+                "tensor_id": "0x000011d800000021",
+                "type": 3
+              }
+            ],
+            "type": "q::ConvLayer_s1.opt"
+          }
+        ],
+        "node_count": 15,
+        "path": "example/qnn_matmul_profile/output_u8i8_native_ref_e2e_256/ctx/matmul_encoded_bottom_mapping.json",
+        "sidecar_node_counts": {
+          "q::ConvLayer.opt.bias_to_vtcm": 1,
+          "q::ConvLayer.opt.weights_to_vtcm": 1
+        },
+        "tensor_count": 21
+      },
+      "chain": 8,
+      "compare": {
+        "acceptance_status": "accepted",
+        "byte_differences": 0,
+        "custom_sha256": "09ea6b13f2f1c80438c473f450590ae6440cecd13598c912b9daad3fd0bf093b",
+        "exact": 65536,
+        "maxdiff": 0,
+        "mean_absdiff": 0.0,
+        "native_path": "example/qnn_matmul_profile/output_u8i8_native_ref_e2e_256/device_out/Y.raw",
+        "native_sha256": "09ea6b13f2f1c80438c473f450590ae6440cecd13598c912b9daad3fd0bf093b",
+        "path": "example/qnn_matmul_profile/output_u8i8_aligned_e2e_256/device_out/out.raw",
+        "source": "direct_raw_compare",
+        "total": 65536
+      },
+      "comparison_scope": {
+        "accepted_boundary_policy": null,
+        "native_kernel": {
+          "cycles_sum": 12435,
+          "event_count": 8,
+          "event_type": "q::ConvLayer_s1.opt",
+          "outputs": [
+            {
+              "bytes": 65536,
+              "grouping": "MatMul_0",
+              "node_id": "0x000011c300000013",
+              "tensor": {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 6,
+                "tensor_id": "0x000011c300000013",
+                "type": 3
+              }
+            },
+            {
+              "bytes": 65536,
+              "grouping": "MatMul_1",
+              "node_id": "0x000011c600000015",
+              "tensor": {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 7,
+                "tensor_id": "0x000011c600000015",
+                "type": 3
+              }
+            },
+            {
+              "bytes": 65536,
+              "grouping": "MatMul_2",
+              "node_id": "0x000011c900000017",
+              "tensor": {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 8,
+                "tensor_id": "0x000011c900000017",
+                "type": 3
+              }
+            },
+            {
+              "bytes": 65536,
+              "grouping": "MatMul_3",
+              "node_id": "0x000011cc00000019",
+              "tensor": {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 9,
+                "tensor_id": "0x000011cc00000019",
+                "type": 3
+              }
+            },
+            {
+              "bytes": 65536,
+              "grouping": "MatMul_4",
+              "node_id": "0x000011cf0000001b",
+              "tensor": {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 10,
+                "tensor_id": "0x000011cf0000001b",
+                "type": 3
+              }
+            },
+            {
+              "bytes": 65536,
+              "grouping": "MatMul_5",
+              "node_id": "0x000011d20000001d",
+              "tensor": {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 11,
+                "tensor_id": "0x000011d20000001d",
+                "type": 3
+              }
+            },
+            {
+              "bytes": 65536,
+              "grouping": "MatMul_6",
+              "node_id": "0x000011d50000001f",
+              "tensor": {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 12,
+                "tensor_id": "0x000011d50000001f",
+                "type": 3
+              }
+            },
+            {
+              "bytes": 65536,
+              "grouping": "MatMul_7",
+              "node_id": "0x000011d800000021",
+              "tensor": {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 13,
+                "tensor_id": "0x000011d800000021",
+                "type": 3
+              }
+            }
+          ],
+          "packets": [
+            346,
+            346,
+            346,
+            346,
+            346,
+            346,
+            346,
+            346
+          ],
+          "total_output_scope_bytes": 524288
+        },
+        "notes": [
+          "Owned acceptance compares final public output bytes against raw_output.path.",
+          "Native kernel scope is used for HMX packet/cycle class and may be internal to the public output layout."
+        ],
+        "qnn_aggregate": {
+          "cycles_sum": 36922,
+          "events": {
+            "MatMul_0": 28732,
+            "MatMul_1": 1174,
+            "MatMul_2": 1176,
+            "MatMul_3": 1167,
+            "MatMul_4": 1164,
+            "MatMul_5": 1168,
+            "MatMul_6": 1173,
+            "MatMul_7": 1168
+          },
+          "prefix": "MatMul_"
+        },
+        "raw_output": {
+          "acceptance_role": "owned_public_output_exactness_target",
+          "bytes": 65536,
+          "path": "example/qnn_matmul_profile/output_u8i8_native_ref_e2e_256/device_out/Y.raw",
+          "shape_mkn": [
+            256,
+            256,
+            256
+          ],
+          "storage": "uint8"
+        },
+        "timeline": {
+          "source": "example/qnn_matmul_profile/output_u8i8_native_ref_e2e_256/optrace/summary.json",
+          "span_cycles": 53946
+        }
+      },
+      "dtype": "uint8",
+      "matched_custom_artifact": "example/qnn_matmul_profile/output_u8i8_aligned_e2e_256",
+      "native_artifact": "example/qnn_matmul_profile/output_u8i8_native_ref_e2e_256",
+      "native_compute_contract": {
+        "grouping": "MatMul_0",
+        "inputs": {
+          "activation": {
+            "data_type": 1032,
+            "dims": [
+              1,
+              8,
+              32,
+              256
+            ],
+            "id": 14,
+            "tensor_id": "0x000011d900000013",
+            "type": 3
+          },
+          "control": {
+            "data_type": 50,
+            "dims": [
+              1
+            ],
+            "id": 0,
+            "tensor_id": "0x0000100200000008",
+            "type": 4
+          },
+          "extra_control": {
+            "data_type": 50,
+            "dims": [
+              1,
+              1,
+              1,
+              2
+            ],
+            "id": 18,
+            "tensor_id": "0x000011e300000013",
+            "type": 4
+          },
+          "folded_bias": {
+            "data_type": 50,
+            "dims": [
+              1,
+              8,
+              1,
+              64
+            ],
+            "id": 4,
+            "tensor_id": "0x0000118100000013",
+            "type": 3
+          },
+          "packed_weight": {
+            "data_type": 776,
+            "dims": [
+              1,
+              1,
+              256,
+              256
+            ],
+            "id": 17,
+            "tensor_id": "0x000011df00000013",
+            "type": 3
+          }
+        },
+        "node_id": "0x000011c300000013",
+        "outputs": {
+          "output_0": {
+            "data_type": 1032,
+            "dims": [
+              1,
+              8,
+              32,
+              256
+            ],
+            "id": 6,
+            "tensor_id": "0x000011c300000013",
+            "type": 3
+          }
+        },
+        "source": "first q::ConvLayer_s1.opt node in native bottom mapping"
+      },
+      "native_hmx_body": "hmx_v73_convbbb1x1deep_stride1",
+      "native_io": {
+        "activation_encoding": null,
+        "expected_native_output_bytes": 65536,
+        "expected_native_output_storage": "uint8",
+        "input_name": "A",
+        "native_input_bytes": 65536,
+        "native_input_storage": "uint8",
+        "output_name": "Y",
+        "path": "example/qnn_matmul_profile/output_u8i8_native_ref_e2e_256/native_io.json",
+        "weight_encoding": null
+      },
+      "native_reference_command": "example/qnn_matmul_profile/run_matched_native_a8_ref.sh",
+      "op_surface": "HmxU8I8ToU8MatMul",
+      "optrace": {
+        "by_htp_type_cycles": {
+          "$Const": 20,
+          "$Shape": 10,
+          "DmaCheckpointSet": 1756,
+          "SyncOp": 270,
+          "q::*InputSlice": 4831,
+          "q::*OutputSlice": 5105,
+          "q::ConvLayer.opt.bias_to_vtcm": 3204,
+          "q::ConvLayer.opt.weights_to_vtcm": 4789,
+          "q::ConvLayer_s1.opt": 12435,
+          "q::ForceFormat_Crouton": 16467,
+          "q::ForceFormat_Flat": 6598,
+          "q::Reshape": 10
+        },
+        "native_kernel_cycles_sum": 12435,
+        "native_kernel_event_count": 8,
+        "native_kernel_event_cpp": [
+          12.2688,
+          3.39306,
+          3.39884,
+          3.37283,
+          3.36416,
+          3.37572,
+          3.39017,
+          3.37572
+        ],
+        "native_kernel_event_cycles": [
+          4245,
+          1174,
+          1176,
+          1167,
+          1164,
+          1168,
+          1173,
+          1168
+        ],
+        "native_kernel_htp_type": "q::ConvLayer_s1.opt",
+        "native_kernel_packets": [
+          346,
+          346,
+          346,
+          346,
+          346,
+          346,
+          346,
+          346
+        ],
+        "native_qnn_op_cycles": {
+          "MatMul_0": 28732,
+          "MatMul_1": 1174,
+          "MatMul_2": 1176,
+          "MatMul_3": 1167,
+          "MatMul_4": 1164,
+          "MatMul_5": 1168,
+          "MatMul_6": 1173,
+          "MatMul_7": 1168
+        },
+        "native_qnn_op_cycles_sum": 36922,
+        "native_qnn_op_prefix": "MatMul_",
+        "path": "example/qnn_matmul_profile/output_u8i8_native_ref_e2e_256/optrace/summary.json",
+        "totals": {
+          "event_count_pid0": 29,
+          "sum_pid0_event_cycles": 55495,
+          "timeline_span_cycles": 53946
+        }
+      },
+      "output_bits": 8,
+      "prepared_payload_sources": {
+        "bias_q_int32": {
+          "bytes": 1152,
+          "exists": true,
+          "path": "example/qnn_matmul_profile/output_u8i8_aligned_e2e_256/u8i8.onnx.bias_q_int32.npy",
+          "sha256": "be691cff688c2df2fb2a33f12c6123e99cbd7083194cadc9c48fb780ab4fc4ea"
+        },
+        "custom_native_io": {
+          "bytes": 478,
+          "exists": true,
+          "path": "example/qnn_matmul_profile/output_u8i8_aligned_e2e_256/native_io.json",
+          "sha256": "03d910c190bed8069bd911f3a6e8ded0d646d4ff4b0852980930868554c05685"
+        },
+        "effective_bias_int32": {
+          "bytes": 2176,
+          "exists": true,
+          "path": "example/qnn_matmul_profile/output_u8i8_aligned_e2e_256/u8i8.onnx.effective_int32.npy",
+          "sha256": "3d5da4c5fd7c26580ede118ba463740ba9f455621185211b48f9cb1763f024c7"
+        },
+        "logical_weight_kn": {
+          "bytes": 65664,
+          "exists": true,
+          "path": "example/qnn_matmul_profile/output_u8i8_aligned_e2e_256/u8i8.onnx.wRaw_KN.npy",
+          "sha256": "3d1373fa5f817d17c079afc8833602d456bc04584b774429590171f1a995ccaf"
+        },
+        "native_io_matched_effective_bias": "u8i8.onnx.effective_int32.npy",
+        "native_io_matched_weight": "u8i8.onnx.wRaw_KN.npy",
+        "quant_overrides": {
+          "bytes": 683,
+          "exists": true,
+          "path": "example/qnn_matmul_profile/output_u8i8_aligned_e2e_256/quant_overrides.json",
+          "sha256": "baafb2f77aac40b3757965fa55b90299bf869e1a0f93a2dd00cd7ffc0a06fb41"
+        }
+      },
+      "quantization_mode": "per_tensor_activation_output_per_channel_weight",
+      "raw_input": {
+        "bytes": 65536,
+        "exists": true,
+        "path": "example/qnn_matmul_profile/output_u8i8_native_ref_e2e_256/runtime_inputs_native/A.raw",
+        "sha256": "eab0861c5ac3815e6dd379bf90d089c8d75afff3548a8db75a8bf06cabd3032f"
+      },
+      "raw_output": {
+        "bytes": 65536,
+        "exists": true,
+        "path": "example/qnn_matmul_profile/output_u8i8_native_ref_e2e_256/device_out/Y.raw",
+        "sha256": "09ea6b13f2f1c80438c473f450590ae6440cecd13598c912b9daad3fd0bf093b"
+      },
+      "scope": "canonical_256",
+      "shape_mkn": [
+        256,
+        256,
+        256
+      ],
+      "weight_bits": 8
+    },
+    "w16a16": {
+      "acceptance_checks": {
+        "expected_native_kernel_nodes": 2,
+        "native_artifact_standard_errors": [],
+        "native_artifact_standard_passed": true,
+        "native_artifact_standard_warnings": [],
+        "native_kernel_node_count_matches": true,
+        "native_kernel_nodes_observed": 2,
+        "stale_probe_used": false
+      },
+      "accepted_boundary_policy": "single_custom_op_internal_split_n128",
+      "activation_bits": 16,
+      "bottom_mapping": {
+        "format_node_counts": {
+          "q::*InputSlice": 1,
+          "q::ForceFormat_Crouton": 1
+        },
+        "native_kernel_nodes": [
+          {
+            "grouping": "matmul_1",
+            "inputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  1,
+                  256,
+                  256
+                ],
+                "id": 12,
+                "tensor_id": "0x0000108800000002",
+                "type": 3
+              },
+              {
+                "data_type": 776,
+                "dims": [
+                  1,
+                  1,
+                  256,
+                  256
+                ],
+                "id": 5,
+                "tensor_id": "0x0000106c00000011",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  4,
+                  1,
+                  128
+                ],
+                "id": 6,
+                "tensor_id": "0x0000106d00000011",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1
+                ],
+                "id": 1,
+                "tensor_id": "0x00001002000000c0",
+                "type": 4
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  1,
+                  1,
+                  2
+                ],
+                "id": 13,
+                "tensor_id": "0x0000109200000011",
+                "type": 4
+              }
+            ],
+            "memory": {
+              "mem_dram_read": 0,
+              "mem_dram_write": 0,
+              "mem_vtcm_read": 1116160,
+              "mem_vtcm_write": 524288,
+              "op_flags": "uses_hmx",
+              "output_rank": 4,
+              "output_step_size": 3.05185e-05,
+              "output_zero_offset": 32768
+            },
+            "node_id": "0x0000108400000011",
+            "outputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  1,
+                  256,
+                  128
+                ],
+                "id": 10,
+                "tensor_id": "0x0000108400000011",
+                "type": 3
+              }
+            ],
+            "type": "q::ConvLayer_s1.opt"
+          },
+          {
+            "grouping": "matmul_1",
+            "inputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  1,
+                  256,
+                  256
+                ],
+                "id": 12,
+                "tensor_id": "0x0000108800000002",
+                "type": 3
+              },
+              {
+                "data_type": 776,
+                "dims": [
+                  1,
+                  1,
+                  256,
+                  256
+                ],
+                "id": 7,
+                "tensor_id": "0x0000106f00000011",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  4,
+                  1,
+                  128
+                ],
+                "id": 8,
+                "tensor_id": "0x0000107000000011",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1
+                ],
+                "id": 1,
+                "tensor_id": "0x00001002000000c0",
+                "type": 4
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  1,
+                  1,
+                  2
+                ],
+                "id": 13,
+                "tensor_id": "0x0000109200000011",
+                "type": 4
+              }
+            ],
+            "memory": {
+              "mem_dram_read": 0,
+              "mem_dram_write": 0,
+              "mem_vtcm_read": 1116160,
+              "mem_vtcm_write": 524288,
+              "op_flags": "uses_hmx",
+              "output_rank": 4,
+              "output_step_size": 3.05185e-05,
+              "output_zero_offset": 32768
+            },
+            "node_id": "0x0000108700000011",
+            "outputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  1,
+                  256,
+                  128
+                ],
+                "id": 11,
+                "tensor_id": "0x0000108700000011",
+                "type": 3
+              }
+            ],
+            "type": "q::ConvLayer_s1.opt"
+          }
+        ],
+        "node_count": 9,
+        "path": "example/qnn_matmul_profile/output_w16a16_native_ref_e2e_256/ctx/matmul_encoded_bottom_mapping.json",
+        "sidecar_node_counts": {
+          "q::ConvLayer.opt.bias_to_vtcm": 2,
+          "q::ConvLayer.opt.weights_to_vtcm": 2
+        },
+        "tensor_count": 18
+      },
+      "chain": "1",
+      "compare": {
+        "alignment_gate": {
+          "accepted": true,
+          "checks": {
+            "default_acceptance_profile": {
+              "evidence": "accepted",
+              "pass": true
+            },
+            "diagnostic_profile_only": {
+              "evidence": "accepted",
+              "pass": true
+            },
+            "native_cycle_budget": {
+              "evidence": "custom=74670 native=75433 delta=-763",
+              "pass": true
+            },
+            "native_packet_budget": {
+              "evidence": "custom=17594 native=17672 delta=-78",
+              "pass": true
+            },
+            "native_raw_exact": {
+              "evidence": "65536/65536 maxdiff=0",
+              "pass": true
+            },
+            "same_or_justified_boundary": {
+              "evidence": "custom_boundaries=1 native_boundaries=2 policy=single_custom_op_internal_split_n128",
+              "pass": true
+            }
+          },
+          "cycle_delta": -763,
+          "packet_delta": -78
+        },
+        "native_raw_exact_evidence": "65536/65536 maxdiff=0",
+        "native_raw_exact_pass": true,
+        "path": "example/qnn_matmul_profile/output_w16a16_accepted_256/analysis/w16a16_custom_compare.json"
+      },
+      "comparison_scope": {
+        "accepted_boundary_policy": "single_custom_op_internal_split_n128",
+        "native_kernel": {
+          "cycles_sum": 75433,
+          "event_count": 2,
+          "event_type": "q::ConvLayer_s1.opt",
+          "outputs": [
+            {
+              "bytes": 65536,
+              "grouping": "matmul_1",
+              "node_id": "0x0000108400000011",
+              "tensor": {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  1,
+                  256,
+                  128
+                ],
+                "id": 10,
+                "tensor_id": "0x0000108400000011",
+                "type": 3
+              }
+            },
+            {
+              "bytes": 65536,
+              "grouping": "matmul_1",
+              "node_id": "0x0000108700000011",
+              "tensor": {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  1,
+                  256,
+                  128
+                ],
+                "id": 11,
+                "tensor_id": "0x0000108700000011",
+                "type": 3
+              }
+            }
+          ],
+          "packets": [
+            8836,
+            8836
+          ],
+          "total_output_scope_bytes": 131072
+        },
+        "notes": [
+          "Owned acceptance compares final public output bytes against raw_output.path.",
+          "Native kernel scope is used for HMX packet/cycle class and may be internal to the public output layout.",
+          "W16A16 native compute uses two internal N128 kernel output scopes for one public 256-column output."
+        ],
+        "qnn_aggregate": {
+          "cycles_sum": 82644,
+          "events": {
+            "matmul_1": 82644
+          },
+          "prefix": "matmul_"
+        },
+        "raw_output": {
+          "acceptance_role": "owned_public_output_exactness_target",
+          "bytes": 131072,
+          "path": "example/qnn_matmul_profile/output_w16a16_native_ref_e2e_256/device_out/Y.raw",
+          "shape_mkn": [
+            256,
+            256,
+            256
+          ],
+          "storage": "uint16_le"
+        },
+        "timeline": {
+          "source": "example/qnn_matmul_profile/output_w16a16_native_ref_e2e_256/optrace/summary.json",
+          "span_cycles": 124593
+        }
+      },
+      "dtype": "uint16_le",
+      "matched_custom_artifact": "example/qnn_matmul_profile/output_w16a16_accepted_256",
+      "native_artifact": "example/qnn_matmul_profile/output_w16a16_native_ref_e2e_256",
+      "native_compute_contract": {
+        "grouping": "matmul_1",
+        "inputs": {
+          "activation": {
+            "data_type": 1046,
+            "dims": [
+              1,
+              1,
+              256,
+              256
+            ],
+            "id": 12,
+            "tensor_id": "0x0000108800000002",
+            "type": 3
+          },
+          "control": {
+            "data_type": 50,
+            "dims": [
+              1
+            ],
+            "id": 1,
+            "tensor_id": "0x00001002000000c0",
+            "type": 4
+          },
+          "extra_control": {
+            "data_type": 50,
+            "dims": [
+              1,
+              1,
+              1,
+              2
+            ],
+            "id": 13,
+            "tensor_id": "0x0000109200000011",
+            "type": 4
+          },
+          "folded_bias": {
+            "data_type": 50,
+            "dims": [
+              1,
+              4,
+              1,
+              128
+            ],
+            "id": 6,
+            "tensor_id": "0x0000106d00000011",
+            "type": 3
+          },
+          "packed_weight": {
+            "data_type": 776,
+            "dims": [
+              1,
+              1,
+              256,
+              256
+            ],
+            "id": 5,
+            "tensor_id": "0x0000106c00000011",
+            "type": 3
+          }
+        },
+        "node_id": "0x0000108400000011",
+        "outputs": {
+          "output_0": {
+            "data_type": 1046,
+            "dims": [
+              1,
+              1,
+              256,
+              128
+            ],
+            "id": 10,
+            "tensor_id": "0x0000108400000011",
+            "type": 3
+          }
+        },
+        "source": "first q::ConvLayer_s1.opt node in native bottom mapping"
+      },
+      "native_hmx_body": "hmx_v73_convhhh1x1_stride1",
+      "native_io": {
+        "activation_encoding": {
+          "bitwidth": 16,
+          "dtype": "int",
+          "is_symmetric": "True",
+          "max": 1.0,
+          "min": -1.0,
+          "offset": -32768,
+          "scale": 3.051850947599719e-05
+        },
+        "expected_native_output_bytes": 131072,
+        "expected_native_output_storage": "uint16_le",
+        "input_name": "A",
+        "native_input_bytes": 131072,
+        "native_input_storage": "uint16_le",
+        "output_name": "Y",
+        "path": "example/qnn_matmul_profile/output_w16a16_native_ref_e2e_256/native_io.json",
+        "weight_encoding": null
+      },
+      "native_reference_command": "example/qnn_matmul_profile/profile_all.sh w16a16",
+      "op_surface": "HmxU16I16ToU16MatMul",
+      "optrace": {
+        "by_htp_type_cycles": {
+          "$Const": 30,
+          "$Shape": 10,
+          "DmaCheckpointSet": 1356,
+          "SyncOp": 32,
+          "q::*InputSlice": 7575,
+          "q::*OutputSlice": 22469,
+          "q::Concat": 5,
+          "q::ConvLayer.opt.bias_to_vtcm": 4394,
+          "q::ConvLayer.opt.weights_to_vtcm": 2766,
+          "q::ConvLayer_s1.opt": 75433,
+          "q::ForceFormat_Crouton": 12665
+        },
+        "native_kernel_cycles_sum": 75433,
+        "native_kernel_event_count": 2,
+        "native_kernel_event_cpp": [
+          4.42587,
+          4.11114
+        ],
+        "native_kernel_event_cycles": [
+          39107,
+          36326
+        ],
+        "native_kernel_htp_type": "q::ConvLayer_s1.opt",
+        "native_kernel_packets": [
+          8836,
+          8836
+        ],
+        "native_qnn_op_cycles": {
+          "matmul_1": 82644
+        },
+        "native_qnn_op_cycles_sum": 82644,
+        "native_qnn_op_prefix": "matmul_",
+        "path": "example/qnn_matmul_profile/output_w16a16_native_ref_e2e_256/optrace/summary.json",
+        "totals": {
+          "event_count_pid0": 25,
+          "sum_pid0_event_cycles": 126735,
+          "timeline_span_cycles": 124593
+        }
+      },
+      "output_bits": 16,
+      "prepared_payload_sources": {
+        "bias_q_int32": {
+          "bytes": 1152,
+          "exists": true,
+          "path": "example/qnn_matmul_profile/output_w16a16_accepted_256/w16a16.onnx.bias_q_int32.npy",
+          "sha256": "be691cff688c2df2fb2a33f12c6123e99cbd7083194cadc9c48fb780ab4fc4ea"
+        },
+        "custom_native_io": {
+          "bytes": 602,
+          "exists": true,
+          "path": "example/qnn_matmul_profile/output_w16a16_accepted_256/native_io.json",
+          "sha256": "5bd0663c0c79e0844db1bed35fba9a310bc80543aaf0bce649568fe7fde8ce55"
+        },
+        "effective_bias_int32": {
+          "bytes": 1152,
+          "exists": true,
+          "path": "example/qnn_matmul_profile/output_w16a16_accepted_256/w16a16.onnx.effective_int32.npy",
+          "sha256": "fca6814545676b327d578b5a3db8e60f35381cb838c15d418a1c9852d2d1492d"
+        },
+        "generated_sidecars": {
+          "exists": true,
+          "file_count": 2,
+          "path": "example/qnn_matmul_profile/output_w16a16_accepted_256/generated_sidecars"
+        },
+        "logical_weight_kn": {
+          "bytes": 262272,
+          "exists": true,
+          "path": "example/qnn_matmul_profile/output_w16a16_accepted_256/w16a16.onnx.wRaw_KN.npy",
+          "sha256": "23aa5ba4be6a6a009841d60d8dc1f248afa34574b73191543ad495455107564f"
+        },
+        "quant_overrides": {
+          "bytes": 1320,
+          "exists": true,
+          "path": "example/qnn_matmul_profile/output_w16a16_accepted_256/quant_overrides.json",
+          "sha256": "161b35d26bbde98a60dea2ab6b058df20997bc2885c83c3d61a307971d29a24e"
+        },
+        "run_profile": {
+          "bytes": 774,
+          "exists": true,
+          "path": "example/qnn_matmul_profile/output_w16a16_accepted_256/w16a16_run_profile.json",
+          "sha256": "bbf9c76204bee992b230d6674183b680bb24f734edf7f9c3300bd50188306252"
+        }
+      },
+      "quantization_mode": "accepted_native_record_per_tensor_a16_output_per_channel_w16_weight",
+      "raw_input": {
+        "bytes": 131072,
+        "exists": true,
+        "path": "example/qnn_matmul_profile/output_w16a16_native_ref_e2e_256/runtime_inputs_native/A.raw",
+        "sha256": "37a0c7cf9dc4868a04a1f00b4cdf0e622bfe062559969a7bf0a63eb366d913cd"
+      },
+      "raw_output": {
+        "bytes": 131072,
+        "exists": true,
+        "path": "example/qnn_matmul_profile/output_w16a16_native_ref_e2e_256/device_out/Y.raw",
+        "sha256": "4a0c0f0250b836809320a4428ff8aa5b673d25c5056c5bb820c2b0aefcb5a588"
+      },
+      "scope": "canonical_256",
+      "shape_mkn": [
+        256,
+        256,
+        256
+      ],
+      "weight_bits": 16
+    },
+    "w4a16": {
+      "acceptance_checks": {
+        "expected_native_kernel_nodes": 8,
+        "native_artifact_standard_errors": [],
+        "native_artifact_standard_passed": true,
+        "native_artifact_standard_warnings": [],
+        "native_kernel_node_count_matches": true,
+        "native_kernel_nodes_observed": 8,
+        "stale_probe_used": false
+      },
+      "accepted_boundary_policy": null,
+      "activation_bits": 16,
+      "bottom_mapping": {
+        "format_node_counts": {
+          "q::*InputSlice": 32,
+          "q::ForceFormat_Crouton": 2
+        },
+        "native_kernel_nodes": [
+          {
+            "grouping": "conv1x1_0",
+            "inputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 126,
+                "tensor_id": "0x0000131a00000017",
+                "type": 3
+              },
+              {
+                "data_type": 776,
+                "dims": [
+                  1,
+                  1,
+                  128,
+                  256
+                ],
+                "id": 97,
+                "tensor_id": "0x000012b800000017",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  8,
+                  1,
+                  128
+                ],
+                "id": 98,
+                "tensor_id": "0x000012b900000017",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1
+                ],
+                "id": 3,
+                "tensor_id": "0x0000100200000098",
+                "type": 4
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  1,
+                  1,
+                  3
+                ],
+                "id": 137,
+                "tensor_id": "0x0000133a00000017",
+                "type": 4
+              }
+            ],
+            "memory": {
+              "mem_dram_read": 0,
+              "mem_dram_write": 0,
+              "mem_vtcm_read": 167936,
+              "mem_vtcm_write": 131072,
+              "op_flags": "uses_hmx",
+              "output_rank": 4,
+              "output_step_size": 3.05185e-05,
+              "output_zero_offset": 32768
+            },
+            "node_id": "0x0000130300000017",
+            "outputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 117,
+                "tensor_id": "0x0000130300000017",
+                "type": 3
+              }
+            ],
+            "type": "q::ConvLayer_s1.opt"
+          },
+          {
+            "grouping": "conv1x1_1",
+            "inputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 117,
+                "tensor_id": "0x0000130300000017",
+                "type": 3
+              },
+              {
+                "data_type": 776,
+                "dims": [
+                  1,
+                  1,
+                  128,
+                  256
+                ],
+                "id": 97,
+                "tensor_id": "0x000012b800000017",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  8,
+                  1,
+                  128
+                ],
+                "id": 98,
+                "tensor_id": "0x000012b900000017",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1
+                ],
+                "id": 3,
+                "tensor_id": "0x0000100200000098",
+                "type": 4
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  1,
+                  1,
+                  3
+                ],
+                "id": 137,
+                "tensor_id": "0x0000133a00000017",
+                "type": 4
+              }
+            ],
+            "memory": {
+              "mem_dram_read": 0,
+              "mem_dram_write": 0,
+              "mem_vtcm_read": 167936,
+              "mem_vtcm_write": 131072,
+              "op_flags": "uses_hmx",
+              "output_rank": 4,
+              "output_step_size": 3.05185e-05,
+              "output_zero_offset": 32768
+            },
+            "node_id": "0x000013060000001f",
+            "outputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 118,
+                "tensor_id": "0x000013060000001f",
+                "type": 3
+              }
+            ],
+            "type": "q::ConvLayer_s1.opt"
+          },
+          {
+            "grouping": "conv1x1_2",
+            "inputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 118,
+                "tensor_id": "0x000013060000001f",
+                "type": 3
+              },
+              {
+                "data_type": 776,
+                "dims": [
+                  1,
+                  1,
+                  128,
+                  256
+                ],
+                "id": 97,
+                "tensor_id": "0x000012b800000017",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  8,
+                  1,
+                  128
+                ],
+                "id": 98,
+                "tensor_id": "0x000012b900000017",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1
+                ],
+                "id": 3,
+                "tensor_id": "0x0000100200000098",
+                "type": 4
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  1,
+                  1,
+                  3
+                ],
+                "id": 137,
+                "tensor_id": "0x0000133a00000017",
+                "type": 4
+              }
+            ],
+            "memory": {
+              "mem_dram_read": 0,
+              "mem_dram_write": 0,
+              "mem_vtcm_read": 167936,
+              "mem_vtcm_write": 131072,
+              "op_flags": "uses_hmx",
+              "output_rank": 4,
+              "output_step_size": 3.05185e-05,
+              "output_zero_offset": 32768
+            },
+            "node_id": "0x0000130900000027",
+            "outputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 119,
+                "tensor_id": "0x0000130900000027",
+                "type": 3
+              }
+            ],
+            "type": "q::ConvLayer_s1.opt"
+          },
+          {
+            "grouping": "conv1x1_3",
+            "inputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 119,
+                "tensor_id": "0x0000130900000027",
+                "type": 3
+              },
+              {
+                "data_type": 776,
+                "dims": [
+                  1,
+                  1,
+                  128,
+                  256
+                ],
+                "id": 97,
+                "tensor_id": "0x000012b800000017",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  8,
+                  1,
+                  128
+                ],
+                "id": 98,
+                "tensor_id": "0x000012b900000017",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1
+                ],
+                "id": 3,
+                "tensor_id": "0x0000100200000098",
+                "type": 4
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  1,
+                  1,
+                  3
+                ],
+                "id": 137,
+                "tensor_id": "0x0000133a00000017",
+                "type": 4
+              }
+            ],
+            "memory": {
+              "mem_dram_read": 0,
+              "mem_dram_write": 0,
+              "mem_vtcm_read": 167936,
+              "mem_vtcm_write": 131072,
+              "op_flags": "uses_hmx",
+              "output_rank": 4,
+              "output_step_size": 3.05185e-05,
+              "output_zero_offset": 32768
+            },
+            "node_id": "0x0000130c0000002f",
+            "outputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 120,
+                "tensor_id": "0x0000130c0000002f",
+                "type": 3
+              }
+            ],
+            "type": "q::ConvLayer_s1.opt"
+          },
+          {
+            "grouping": "conv1x1_4",
+            "inputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 120,
+                "tensor_id": "0x0000130c0000002f",
+                "type": 3
+              },
+              {
+                "data_type": 776,
+                "dims": [
+                  1,
+                  1,
+                  128,
+                  256
+                ],
+                "id": 97,
+                "tensor_id": "0x000012b800000017",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  8,
+                  1,
+                  128
+                ],
+                "id": 98,
+                "tensor_id": "0x000012b900000017",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1
+                ],
+                "id": 3,
+                "tensor_id": "0x0000100200000098",
+                "type": 4
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  1,
+                  1,
+                  3
+                ],
+                "id": 137,
+                "tensor_id": "0x0000133a00000017",
+                "type": 4
+              }
+            ],
+            "memory": {
+              "mem_dram_read": 0,
+              "mem_dram_write": 0,
+              "mem_vtcm_read": 167936,
+              "mem_vtcm_write": 131072,
+              "op_flags": "uses_hmx",
+              "output_rank": 4,
+              "output_step_size": 3.05185e-05,
+              "output_zero_offset": 32768
+            },
+            "node_id": "0x0000130f00000037",
+            "outputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 121,
+                "tensor_id": "0x0000130f00000037",
+                "type": 3
+              }
+            ],
+            "type": "q::ConvLayer_s1.opt"
+          },
+          {
+            "grouping": "conv1x1_5",
+            "inputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 121,
+                "tensor_id": "0x0000130f00000037",
+                "type": 3
+              },
+              {
+                "data_type": 776,
+                "dims": [
+                  1,
+                  1,
+                  128,
+                  256
+                ],
+                "id": 97,
+                "tensor_id": "0x000012b800000017",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  8,
+                  1,
+                  128
+                ],
+                "id": 98,
+                "tensor_id": "0x000012b900000017",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1
+                ],
+                "id": 3,
+                "tensor_id": "0x0000100200000098",
+                "type": 4
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  1,
+                  1,
+                  3
+                ],
+                "id": 137,
+                "tensor_id": "0x0000133a00000017",
+                "type": 4
+              }
+            ],
+            "memory": {
+              "mem_dram_read": 0,
+              "mem_dram_write": 0,
+              "mem_vtcm_read": 167936,
+              "mem_vtcm_write": 131072,
+              "op_flags": "uses_hmx",
+              "output_rank": 4,
+              "output_step_size": 3.05185e-05,
+              "output_zero_offset": 32768
+            },
+            "node_id": "0x000013120000003f",
+            "outputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 122,
+                "tensor_id": "0x000013120000003f",
+                "type": 3
+              }
+            ],
+            "type": "q::ConvLayer_s1.opt"
+          },
+          {
+            "grouping": "conv1x1_6",
+            "inputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 122,
+                "tensor_id": "0x000013120000003f",
+                "type": 3
+              },
+              {
+                "data_type": 776,
+                "dims": [
+                  1,
+                  1,
+                  128,
+                  256
+                ],
+                "id": 97,
+                "tensor_id": "0x000012b800000017",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  8,
+                  1,
+                  128
+                ],
+                "id": 98,
+                "tensor_id": "0x000012b900000017",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1
+                ],
+                "id": 3,
+                "tensor_id": "0x0000100200000098",
+                "type": 4
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  1,
+                  1,
+                  3
+                ],
+                "id": 137,
+                "tensor_id": "0x0000133a00000017",
+                "type": 4
+              }
+            ],
+            "memory": {
+              "mem_dram_read": 0,
+              "mem_dram_write": 0,
+              "mem_vtcm_read": 167936,
+              "mem_vtcm_write": 131072,
+              "op_flags": "uses_hmx",
+              "output_rank": 4,
+              "output_step_size": 3.05185e-05,
+              "output_zero_offset": 32768
+            },
+            "node_id": "0x0000131500000047",
+            "outputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 123,
+                "tensor_id": "0x0000131500000047",
+                "type": 3
+              }
+            ],
+            "type": "q::ConvLayer_s1.opt"
+          },
+          {
+            "grouping": "conv1x1_7",
+            "inputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 123,
+                "tensor_id": "0x0000131500000047",
+                "type": 3
+              },
+              {
+                "data_type": 776,
+                "dims": [
+                  1,
+                  1,
+                  128,
+                  256
+                ],
+                "id": 97,
+                "tensor_id": "0x000012b800000017",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  8,
+                  1,
+                  128
+                ],
+                "id": 98,
+                "tensor_id": "0x000012b900000017",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1
+                ],
+                "id": 3,
+                "tensor_id": "0x0000100200000098",
+                "type": 4
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  1,
+                  1,
+                  3
+                ],
+                "id": 137,
+                "tensor_id": "0x0000133a00000017",
+                "type": 4
+              }
+            ],
+            "memory": {
+              "mem_dram_read": 0,
+              "mem_dram_write": 0,
+              "mem_vtcm_read": 167936,
+              "mem_vtcm_write": 131072,
+              "op_flags": "uses_hmx",
+              "output_rank": 4,
+              "output_step_size": 3.05185e-05,
+              "output_zero_offset": 32768
+            },
+            "node_id": "0x000013180000004f",
+            "outputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 124,
+                "tensor_id": "0x000013180000004f",
+                "type": 3
+              }
+            ],
+            "type": "q::ConvLayer_s1.opt"
+          }
+        ],
+        "node_count": 89,
+        "path": "example/qnn_matmul_profile/output_w4a16_native_ref_e2e_256/ctx/conv_encoded_bottom_mapping.json",
+        "sidecar_node_counts": {
+          "q::ConvLayer.opt.bias_to_vtcm": 1,
+          "q::ConvLayer.opt.weights_to_vtcm": 1
+        },
+        "tensor_count": 140
+      },
+      "chain": 8,
+      "compare": {
+        "exact": 65536,
+        "maxdiff": 0,
+        "mean_absdiff": 0.0,
+        "native_transpose": true,
+        "path": "example/qnn_matmul_profile/output_w4a16_aligned_e2e_256/analysis/w4a16_native_compare.json",
+        "total": 65536
+      },
+      "comparison_scope": {
+        "accepted_boundary_policy": null,
+        "native_kernel": {
+          "cycles_sum": 29815,
+          "event_count": 8,
+          "event_type": "q::ConvLayer_s1.opt",
+          "outputs": [
+            {
+              "bytes": 131072,
+              "grouping": "conv1x1_0",
+              "node_id": "0x0000130300000017",
+              "tensor": {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 117,
+                "tensor_id": "0x0000130300000017",
+                "type": 3
+              }
+            },
+            {
+              "bytes": 131072,
+              "grouping": "conv1x1_1",
+              "node_id": "0x000013060000001f",
+              "tensor": {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 118,
+                "tensor_id": "0x000013060000001f",
+                "type": 3
+              }
+            },
+            {
+              "bytes": 131072,
+              "grouping": "conv1x1_2",
+              "node_id": "0x0000130900000027",
+              "tensor": {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 119,
+                "tensor_id": "0x0000130900000027",
+                "type": 3
+              }
+            },
+            {
+              "bytes": 131072,
+              "grouping": "conv1x1_3",
+              "node_id": "0x0000130c0000002f",
+              "tensor": {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 120,
+                "tensor_id": "0x0000130c0000002f",
+                "type": 3
+              }
+            },
+            {
+              "bytes": 131072,
+              "grouping": "conv1x1_4",
+              "node_id": "0x0000130f00000037",
+              "tensor": {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 121,
+                "tensor_id": "0x0000130f00000037",
+                "type": 3
+              }
+            },
+            {
+              "bytes": 131072,
+              "grouping": "conv1x1_5",
+              "node_id": "0x000013120000003f",
+              "tensor": {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 122,
+                "tensor_id": "0x000013120000003f",
+                "type": 3
+              }
+            },
+            {
+              "bytes": 131072,
+              "grouping": "conv1x1_6",
+              "node_id": "0x0000131500000047",
+              "tensor": {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 123,
+                "tensor_id": "0x0000131500000047",
+                "type": 3
+              }
+            },
+            {
+              "bytes": 131072,
+              "grouping": "conv1x1_7",
+              "node_id": "0x000013180000004f",
+              "tensor": {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 124,
+                "tensor_id": "0x000013180000004f",
+                "type": 3
+              }
+            }
+          ],
+          "packets": [
+            808,
+            808,
+            808,
+            808,
+            808,
+            808,
+            808,
+            808
+          ],
+          "total_output_scope_bytes": 1048576
+        },
+        "notes": [
+          "Owned acceptance compares final public output bytes against raw_output.path.",
+          "Native kernel scope is used for HMX packet/cycle class and may be internal to the public output layout."
+        ],
+        "qnn_aggregate": {
+          "cycles_sum": 70408,
+          "events": {
+            "conv1x1_0": 19386,
+            "conv1x1_1": 3768,
+            "conv1x1_2": 3510,
+            "conv1x1_3": 3516,
+            "conv1x1_4": 3533,
+            "conv1x1_5": 2519,
+            "conv1x1_6": 2037,
+            "conv1x1_7": 32139
+          },
+          "prefix": "conv1x1_"
+        },
+        "raw_output": {
+          "acceptance_role": "owned_public_output_exactness_target",
+          "bytes": 131072,
+          "path": "example/qnn_matmul_profile/output_w4a16_native_ref_e2e_256/device_out/Y.raw",
+          "shape_mkn": [
+            256,
+            256,
+            256
+          ],
+          "storage": "uint16_le"
+        },
+        "timeline": {
+          "source": "example/qnn_matmul_profile/output_w4a16_native_ref_e2e_256/optrace/summary.json",
+          "span_cycles": 253245
+        }
+      },
+      "dtype": "uint16_le",
+      "matched_custom_artifact": "example/qnn_matmul_profile/output_w4a16_aligned_e2e_256",
+      "native_artifact": "example/qnn_matmul_profile/output_w4a16_native_ref_e2e_256",
+      "native_compute_contract": {
+        "grouping": "conv1x1_0",
+        "inputs": {
+          "activation": {
+            "data_type": 1046,
+            "dims": [
+              1,
+              8,
+              32,
+              256
+            ],
+            "id": 126,
+            "tensor_id": "0x0000131a00000017",
+            "type": 3
+          },
+          "control": {
+            "data_type": 50,
+            "dims": [
+              1
+            ],
+            "id": 3,
+            "tensor_id": "0x0000100200000098",
+            "type": 4
+          },
+          "extra_control": {
+            "data_type": 50,
+            "dims": [
+              1,
+              1,
+              1,
+              3
+            ],
+            "id": 137,
+            "tensor_id": "0x0000133a00000017",
+            "type": 4
+          },
+          "folded_bias": {
+            "data_type": 50,
+            "dims": [
+              1,
+              8,
+              1,
+              128
+            ],
+            "id": 98,
+            "tensor_id": "0x000012b900000017",
+            "type": 3
+          },
+          "packed_weight": {
+            "data_type": 776,
+            "dims": [
+              1,
+              1,
+              128,
+              256
+            ],
+            "id": 97,
+            "tensor_id": "0x000012b800000017",
+            "type": 3
+          }
+        },
+        "node_id": "0x0000130300000017",
+        "outputs": {
+          "output_0": {
+            "data_type": 1046,
+            "dims": [
+              1,
+              8,
+              32,
+              256
+            ],
+            "id": 117,
+            "tensor_id": "0x0000130300000017",
+            "type": 3
+          }
+        },
+        "source": "first q::ConvLayer_s1.opt node in native bottom mapping"
+      },
+      "native_hmx_body": "hmx_v73_convhnh1x1_stride1",
+      "native_io": {
+        "activation_encoding": {
+          "bitwidth": 16,
+          "dtype": "int",
+          "is_symmetric": "True",
+          "max": 1.0,
+          "min": -1.0,
+          "offset": -32768,
+          "scale": 3.051850947599719e-05
+        },
+        "expected_native_output_bytes": 131072,
+        "expected_native_output_storage": "uint16_le",
+        "input_name": "A",
+        "native_input_bytes": 131072,
+        "native_input_storage": "uint16_le",
+        "output_name": "Y",
+        "path": "example/qnn_matmul_profile/output_w4a16_native_ref_e2e_256/native_io.json",
+        "weight_encoding": {
+          "bitwidth": 4,
+          "dtype": "int",
+          "is_symmetric": "True",
+          "max": 1.0,
+          "min": -1.1428571428571428,
+          "offset": -8,
+          "scale": 0.14285714285714285
+        }
+      },
+      "native_reference_command": "example/qnn_matmul_profile/run_native_w4a16_conv_ref.sh",
+      "op_surface": "HmxU16I4ToU16MatMul",
+      "optrace": {
+        "by_htp_type_cycles": {
+          "$Const": 55,
+          "$Shape": 200,
+          "DmaCheckpointSet": 1345,
+          "SyncOp": 84,
+          "q::*InputSlice": 14115,
+          "q::*OutputSlice": 34851,
+          "q::Concat": 19935,
+          "q::ConvLayer.opt.bias_to_vtcm": 1117,
+          "q::ConvLayer.opt.weights_to_vtcm": 3385,
+          "q::ConvLayer_s1.opt": 29815,
+          "q::ForceFormat_Crouton": 8442,
+          "q::Reshape": 27613,
+          "q::SlicePad_shape_inplace": 129004,
+          "q::Transpose.2D": 120003,
+          "q::Transpose_impl": 108427
+        },
+        "native_kernel_cycles_sum": 29815,
+        "native_kernel_event_count": 8,
+        "native_kernel_event_cpp": [
+          10.8354,
+          4.66337,
+          4.34406,
+          4.35149,
+          4.37252,
+          3.11757,
+          2.52104,
+          2.69431
+        ],
+        "native_kernel_event_cycles": [
+          8755,
+          3768,
+          3510,
+          3516,
+          3533,
+          2519,
+          2037,
+          2177
+        ],
+        "native_kernel_htp_type": "q::ConvLayer_s1.opt",
+        "native_kernel_packets": [
+          808,
+          808,
+          808,
+          808,
+          808,
+          808,
+          808,
+          808
+        ],
+        "native_qnn_op_cycles": {
+          "conv1x1_0": 19386,
+          "conv1x1_1": 3768,
+          "conv1x1_2": 3510,
+          "conv1x1_3": 3516,
+          "conv1x1_4": 3533,
+          "conv1x1_5": 2519,
+          "conv1x1_6": 2037,
+          "conv1x1_7": 32139
+        },
+        "native_qnn_op_cycles_sum": 70408,
+        "native_qnn_op_prefix": "conv1x1_",
+        "path": "example/qnn_matmul_profile/output_w4a16_native_ref_e2e_256/optrace/summary.json",
+        "totals": {
+          "event_count_pid0": 154,
+          "sum_pid0_event_cycles": 498391,
+          "timeline_span_cycles": 253245
+        }
+      },
+      "output_bits": 16,
+      "prepared_payload_sources": {
+        "bias_q_int32": {
+          "bytes": 1152,
+          "exists": true,
+          "path": "example/qnn_matmul_profile/output_w4a16_aligned_e2e_256/w4a16.onnx.bias_q_int32.npy",
+          "sha256": "4885861f12444e26a08d823fef2e7074ddad8a1a31520eab9f1c56f9799da1fe"
+        },
+        "custom_native_io": {
+          "bytes": 594,
+          "exists": true,
+          "path": "example/qnn_matmul_profile/output_w4a16_aligned_e2e_256/native_io.json",
+          "sha256": "a63ac16490e4cf3ced6fd419ccda4a1ef83ffd31928b541cfa2522397b27ddbf"
+        },
+        "effective_bias_int32": {
+          "bytes": 1152,
+          "exists": true,
+          "path": "example/qnn_matmul_profile/output_w4a16_aligned_e2e_256/w4a16.onnx.effective_int32.npy",
+          "sha256": "63e809ad06c9db1b124412709327019cf7bea0306def450ddc5f9cc780aac4bc"
+        },
+        "logical_weight_kn": {
+          "bytes": 262272,
+          "exists": true,
+          "path": "example/qnn_matmul_profile/output_w4a16_aligned_e2e_256/w4a16.onnx.wRaw_KN.npy",
+          "sha256": "6576818686a0b24c38918a0ed44cdb66881c28e4643a88a9a1a046b5b5d5b2e5"
+        },
+        "quant_overrides": {
+          "bytes": 3226,
+          "exists": true,
+          "path": "example/qnn_matmul_profile/output_w4a16_aligned_e2e_256/quant_overrides.json",
+          "sha256": "7883867c7890d5e28859afcc39740225c330ec8cb3f80b42dd2192404828f6e9"
+        }
+      },
+      "quantization_mode": "per_tensor_a16_output_per_channel_w4_weight",
+      "raw_input": {
+        "bytes": 131072,
+        "exists": true,
+        "path": "example/qnn_matmul_profile/output_w4a16_native_ref_e2e_256/runtime_inputs_native/A.raw",
+        "sha256": "54ca1a96e40f06bb3e998a3dea796383bb6ba1ffd03c1872c04e12867390d958"
+      },
+      "raw_output": {
+        "bytes": 131072,
+        "exists": true,
+        "path": "example/qnn_matmul_profile/output_w4a16_native_ref_e2e_256/device_out/Y.raw",
+        "sha256": "eebaa4a4f7138179dbbb18d0b115849298ad9c0f30cc17faa75dcc235c2b1a69"
+      },
+      "scope": "canonical_256",
+      "shape_mkn": [
+        256,
+        256,
+        256
+      ],
+      "weight_bits": 4
+    },
+    "w4a8": {
+      "acceptance_checks": {
+        "expected_native_kernel_nodes": 8,
+        "native_artifact_standard_errors": [],
+        "native_artifact_standard_passed": true,
+        "native_artifact_standard_warnings": [],
+        "native_kernel_node_count_matches": true,
+        "native_kernel_nodes_observed": 8,
+        "stale_probe_used": false
+      },
+      "accepted_boundary_policy": null,
+      "activation_bits": 8,
+      "bottom_mapping": {
+        "format_node_counts": {
+          "q::*InputSlice": 1,
+          "q::ForceFormat_Crouton": 1,
+          "q::ForceFormat_Flat": 1
+        },
+        "native_kernel_nodes": [
+          {
+            "grouping": "MatMul_0",
+            "inputs": [
+              {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 15,
+                "tensor_id": "0x0000120b00000013",
+                "type": 3
+              },
+              {
+                "data_type": 776,
+                "dims": [
+                  1,
+                  1,
+                  256,
+                  128
+                ],
+                "id": 4,
+                "tensor_id": "0x000011a100000013",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  8,
+                  1,
+                  64
+                ],
+                "id": 5,
+                "tensor_id": "0x000011a200000013",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1
+                ],
+                "id": 0,
+                "tensor_id": "0x0000100200000018",
+                "type": 4
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  1,
+                  1,
+                  2
+                ],
+                "id": 18,
+                "tensor_id": "0x0000121400000013",
+                "type": 4
+              }
+            ],
+            "memory": {
+              "mem_dram_read": 0,
+              "mem_dram_write": 0,
+              "mem_vtcm_read": 100352,
+              "mem_vtcm_write": 65536,
+              "op_flags": "uses_hmx",
+              "output_rank": 4,
+              "output_step_size": 1,
+              "output_zero_offset": 0
+            },
+            "node_id": "0x000011f300000013",
+            "outputs": [
+              {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 7,
+                "tensor_id": "0x000011f300000013",
+                "type": 3
+              }
+            ],
+            "type": "q::ConvLayer_s1.opt"
+          },
+          {
+            "grouping": "MatMul_1",
+            "inputs": [
+              {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 7,
+                "tensor_id": "0x000011f300000013",
+                "type": 3
+              },
+              {
+                "data_type": 776,
+                "dims": [
+                  1,
+                  1,
+                  256,
+                  128
+                ],
+                "id": 4,
+                "tensor_id": "0x000011a100000013",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  8,
+                  1,
+                  64
+                ],
+                "id": 5,
+                "tensor_id": "0x000011a200000013",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1
+                ],
+                "id": 0,
+                "tensor_id": "0x0000100200000018",
+                "type": 4
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  1,
+                  1,
+                  2
+                ],
+                "id": 18,
+                "tensor_id": "0x0000121400000013",
+                "type": 4
+              }
+            ],
+            "memory": {
+              "mem_dram_read": 0,
+              "mem_dram_write": 0,
+              "mem_vtcm_read": 100352,
+              "mem_vtcm_write": 65536,
+              "op_flags": "uses_hmx",
+              "output_rank": 4,
+              "output_step_size": 1,
+              "output_zero_offset": 0
+            },
+            "node_id": "0x000011f600000016",
+            "outputs": [
+              {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 8,
+                "tensor_id": "0x000011f600000016",
+                "type": 3
+              }
+            ],
+            "type": "q::ConvLayer_s1.opt"
+          },
+          {
+            "grouping": "MatMul_2",
+            "inputs": [
+              {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 8,
+                "tensor_id": "0x000011f600000016",
+                "type": 3
+              },
+              {
+                "data_type": 776,
+                "dims": [
+                  1,
+                  1,
+                  256,
+                  128
+                ],
+                "id": 4,
+                "tensor_id": "0x000011a100000013",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  8,
+                  1,
+                  64
+                ],
+                "id": 5,
+                "tensor_id": "0x000011a200000013",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1
+                ],
+                "id": 0,
+                "tensor_id": "0x0000100200000018",
+                "type": 4
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  1,
+                  1,
+                  2
+                ],
+                "id": 18,
+                "tensor_id": "0x0000121400000013",
+                "type": 4
+              }
+            ],
+            "memory": {
+              "mem_dram_read": 0,
+              "mem_dram_write": 0,
+              "mem_vtcm_read": 100352,
+              "mem_vtcm_write": 65536,
+              "op_flags": "uses_hmx",
+              "output_rank": 4,
+              "output_step_size": 1,
+              "output_zero_offset": 0
+            },
+            "node_id": "0x000011f900000019",
+            "outputs": [
+              {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 9,
+                "tensor_id": "0x000011f900000019",
+                "type": 3
+              }
+            ],
+            "type": "q::ConvLayer_s1.opt"
+          },
+          {
+            "grouping": "MatMul_3",
+            "inputs": [
+              {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 9,
+                "tensor_id": "0x000011f900000019",
+                "type": 3
+              },
+              {
+                "data_type": 776,
+                "dims": [
+                  1,
+                  1,
+                  256,
+                  128
+                ],
+                "id": 4,
+                "tensor_id": "0x000011a100000013",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  8,
+                  1,
+                  64
+                ],
+                "id": 5,
+                "tensor_id": "0x000011a200000013",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1
+                ],
+                "id": 0,
+                "tensor_id": "0x0000100200000018",
+                "type": 4
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  1,
+                  1,
+                  2
+                ],
+                "id": 18,
+                "tensor_id": "0x0000121400000013",
+                "type": 4
+              }
+            ],
+            "memory": {
+              "mem_dram_read": 0,
+              "mem_dram_write": 0,
+              "mem_vtcm_read": 100352,
+              "mem_vtcm_write": 65536,
+              "op_flags": "uses_hmx",
+              "output_rank": 4,
+              "output_step_size": 1,
+              "output_zero_offset": 0
+            },
+            "node_id": "0x000011fc0000001c",
+            "outputs": [
+              {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 10,
+                "tensor_id": "0x000011fc0000001c",
+                "type": 3
+              }
+            ],
+            "type": "q::ConvLayer_s1.opt"
+          },
+          {
+            "grouping": "MatMul_4",
+            "inputs": [
+              {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 10,
+                "tensor_id": "0x000011fc0000001c",
+                "type": 3
+              },
+              {
+                "data_type": 776,
+                "dims": [
+                  1,
+                  1,
+                  256,
+                  128
+                ],
+                "id": 4,
+                "tensor_id": "0x000011a100000013",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  8,
+                  1,
+                  64
+                ],
+                "id": 5,
+                "tensor_id": "0x000011a200000013",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1
+                ],
+                "id": 0,
+                "tensor_id": "0x0000100200000018",
+                "type": 4
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  1,
+                  1,
+                  2
+                ],
+                "id": 18,
+                "tensor_id": "0x0000121400000013",
+                "type": 4
+              }
+            ],
+            "memory": {
+              "mem_dram_read": 0,
+              "mem_dram_write": 0,
+              "mem_vtcm_read": 100352,
+              "mem_vtcm_write": 65536,
+              "op_flags": "uses_hmx",
+              "output_rank": 4,
+              "output_step_size": 1,
+              "output_zero_offset": 0
+            },
+            "node_id": "0x000011ff0000001f",
+            "outputs": [
+              {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 11,
+                "tensor_id": "0x000011ff0000001f",
+                "type": 3
+              }
+            ],
+            "type": "q::ConvLayer_s1.opt"
+          },
+          {
+            "grouping": "MatMul_5",
+            "inputs": [
+              {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 11,
+                "tensor_id": "0x000011ff0000001f",
+                "type": 3
+              },
+              {
+                "data_type": 776,
+                "dims": [
+                  1,
+                  1,
+                  256,
+                  128
+                ],
+                "id": 4,
+                "tensor_id": "0x000011a100000013",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  8,
+                  1,
+                  64
+                ],
+                "id": 5,
+                "tensor_id": "0x000011a200000013",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1
+                ],
+                "id": 0,
+                "tensor_id": "0x0000100200000018",
+                "type": 4
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  1,
+                  1,
+                  2
+                ],
+                "id": 18,
+                "tensor_id": "0x0000121400000013",
+                "type": 4
+              }
+            ],
+            "memory": {
+              "mem_dram_read": 0,
+              "mem_dram_write": 0,
+              "mem_vtcm_read": 100352,
+              "mem_vtcm_write": 65536,
+              "op_flags": "uses_hmx",
+              "output_rank": 4,
+              "output_step_size": 1,
+              "output_zero_offset": 0
+            },
+            "node_id": "0x0000120200000022",
+            "outputs": [
+              {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 12,
+                "tensor_id": "0x0000120200000022",
+                "type": 3
+              }
+            ],
+            "type": "q::ConvLayer_s1.opt"
+          },
+          {
+            "grouping": "MatMul_6",
+            "inputs": [
+              {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 12,
+                "tensor_id": "0x0000120200000022",
+                "type": 3
+              },
+              {
+                "data_type": 776,
+                "dims": [
+                  1,
+                  1,
+                  256,
+                  128
+                ],
+                "id": 4,
+                "tensor_id": "0x000011a100000013",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  8,
+                  1,
+                  64
+                ],
+                "id": 5,
+                "tensor_id": "0x000011a200000013",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1
+                ],
+                "id": 0,
+                "tensor_id": "0x0000100200000018",
+                "type": 4
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  1,
+                  1,
+                  2
+                ],
+                "id": 18,
+                "tensor_id": "0x0000121400000013",
+                "type": 4
+              }
+            ],
+            "memory": {
+              "mem_dram_read": 0,
+              "mem_dram_write": 0,
+              "mem_vtcm_read": 100352,
+              "mem_vtcm_write": 65536,
+              "op_flags": "uses_hmx",
+              "output_rank": 4,
+              "output_step_size": 1,
+              "output_zero_offset": 0
+            },
+            "node_id": "0x0000120500000025",
+            "outputs": [
+              {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 13,
+                "tensor_id": "0x0000120500000025",
+                "type": 3
+              }
+            ],
+            "type": "q::ConvLayer_s1.opt"
+          },
+          {
+            "grouping": "MatMul_7",
+            "inputs": [
+              {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 13,
+                "tensor_id": "0x0000120500000025",
+                "type": 3
+              },
+              {
+                "data_type": 776,
+                "dims": [
+                  1,
+                  1,
+                  256,
+                  128
+                ],
+                "id": 4,
+                "tensor_id": "0x000011a100000013",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  8,
+                  1,
+                  64
+                ],
+                "id": 5,
+                "tensor_id": "0x000011a200000013",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1
+                ],
+                "id": 0,
+                "tensor_id": "0x0000100200000018",
+                "type": 4
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  1,
+                  1,
+                  2
+                ],
+                "id": 18,
+                "tensor_id": "0x0000121400000013",
+                "type": 4
+              }
+            ],
+            "memory": {
+              "mem_dram_read": 0,
+              "mem_dram_write": 0,
+              "mem_vtcm_read": 100352,
+              "mem_vtcm_write": 65536,
+              "op_flags": "uses_hmx",
+              "output_rank": 4,
+              "output_step_size": 1,
+              "output_zero_offset": 0
+            },
+            "node_id": "0x0000120800000028",
+            "outputs": [
+              {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 14,
+                "tensor_id": "0x0000120800000028",
+                "type": 3
+              }
+            ],
+            "type": "q::ConvLayer_s1.opt"
+          }
+        ],
+        "node_count": 15,
+        "path": "example/qnn_matmul_profile/output_w4a8_native_ref_e2e_256/ctx/matmul_encoded_bottom_mapping.json",
+        "sidecar_node_counts": {
+          "q::ConvLayer.opt.bias_to_vtcm": 1,
+          "q::ConvLayer.opt.weights_to_vtcm": 1
+        },
+        "tensor_count": 21
+      },
+      "chain": 8,
+      "compare": {
+        "acceptance_status": "accepted",
+        "byte_differences": 0,
+        "custom_sha256": "09ea6b13f2f1c80438c473f450590ae6440cecd13598c912b9daad3fd0bf093b",
+        "exact": 65536,
+        "maxdiff": 0,
+        "mean_absdiff": 0.0,
+        "native_path": "example/qnn_matmul_profile/output_w4a8_native_ref_e2e_256/device_out/Y.raw",
+        "native_sha256": "09ea6b13f2f1c80438c473f450590ae6440cecd13598c912b9daad3fd0bf093b",
+        "path": "example/qnn_matmul_profile/output_w4a8_aligned_e2e_256/device_out/out.raw",
+        "source": "direct_raw_compare",
+        "total": 65536
+      },
+      "comparison_scope": {
+        "accepted_boundary_policy": null,
+        "native_kernel": {
+          "cycles_sum": 11546,
+          "event_count": 8,
+          "event_type": "q::ConvLayer_s1.opt",
+          "outputs": [
+            {
+              "bytes": 65536,
+              "grouping": "MatMul_0",
+              "node_id": "0x000011f300000013",
+              "tensor": {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 7,
+                "tensor_id": "0x000011f300000013",
+                "type": 3
+              }
+            },
+            {
+              "bytes": 65536,
+              "grouping": "MatMul_1",
+              "node_id": "0x000011f600000016",
+              "tensor": {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 8,
+                "tensor_id": "0x000011f600000016",
+                "type": 3
+              }
+            },
+            {
+              "bytes": 65536,
+              "grouping": "MatMul_2",
+              "node_id": "0x000011f900000019",
+              "tensor": {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 9,
+                "tensor_id": "0x000011f900000019",
+                "type": 3
+              }
+            },
+            {
+              "bytes": 65536,
+              "grouping": "MatMul_3",
+              "node_id": "0x000011fc0000001c",
+              "tensor": {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 10,
+                "tensor_id": "0x000011fc0000001c",
+                "type": 3
+              }
+            },
+            {
+              "bytes": 65536,
+              "grouping": "MatMul_4",
+              "node_id": "0x000011ff0000001f",
+              "tensor": {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 11,
+                "tensor_id": "0x000011ff0000001f",
+                "type": 3
+              }
+            },
+            {
+              "bytes": 65536,
+              "grouping": "MatMul_5",
+              "node_id": "0x0000120200000022",
+              "tensor": {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 12,
+                "tensor_id": "0x0000120200000022",
+                "type": 3
+              }
+            },
+            {
+              "bytes": 65536,
+              "grouping": "MatMul_6",
+              "node_id": "0x0000120500000025",
+              "tensor": {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 13,
+                "tensor_id": "0x0000120500000025",
+                "type": 3
+              }
+            },
+            {
+              "bytes": 65536,
+              "grouping": "MatMul_7",
+              "node_id": "0x0000120800000028",
+              "tensor": {
+                "data_type": 1032,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 14,
+                "tensor_id": "0x0000120800000028",
+                "type": 3
+              }
+            }
+          ],
+          "packets": [
+            330,
+            330,
+            330,
+            330,
+            330,
+            330,
+            330,
+            330
+          ],
+          "total_output_scope_bytes": 524288
+        },
+        "notes": [
+          "Owned acceptance compares final public output bytes against raw_output.path.",
+          "Native kernel scope is used for HMX packet/cycle class and may be internal to the public output layout."
+        ],
+        "qnn_aggregate": {
+          "cycles_sum": 29765,
+          "events": {
+            "MatMul_0": 23590,
+            "MatMul_1": 870,
+            "MatMul_2": 861,
+            "MatMul_3": 925,
+            "MatMul_4": 918,
+            "MatMul_5": 840,
+            "MatMul_6": 852,
+            "MatMul_7": 909
+          },
+          "prefix": "MatMul_"
+        },
+        "raw_output": {
+          "acceptance_role": "owned_public_output_exactness_target",
+          "bytes": 65536,
+          "path": "example/qnn_matmul_profile/output_w4a8_native_ref_e2e_256/device_out/Y.raw",
+          "shape_mkn": [
+            256,
+            256,
+            256
+          ],
+          "storage": "uint8"
+        },
+        "timeline": {
+          "source": "example/qnn_matmul_profile/output_w4a8_native_ref_e2e_256/optrace/summary.json",
+          "span_cycles": 48831
+        }
+      },
+      "dtype": "uint8",
+      "matched_custom_artifact": "example/qnn_matmul_profile/output_w4a8_aligned_e2e_256",
+      "native_artifact": "example/qnn_matmul_profile/output_w4a8_native_ref_e2e_256",
+      "native_compute_contract": {
+        "grouping": "MatMul_0",
+        "inputs": {
+          "activation": {
+            "data_type": 1032,
+            "dims": [
+              1,
+              8,
+              32,
+              256
+            ],
+            "id": 15,
+            "tensor_id": "0x0000120b00000013",
+            "type": 3
+          },
+          "control": {
+            "data_type": 50,
+            "dims": [
+              1
+            ],
+            "id": 0,
+            "tensor_id": "0x0000100200000018",
+            "type": 4
+          },
+          "extra_control": {
+            "data_type": 50,
+            "dims": [
+              1,
+              1,
+              1,
+              2
+            ],
+            "id": 18,
+            "tensor_id": "0x0000121400000013",
+            "type": 4
+          },
+          "folded_bias": {
+            "data_type": 50,
+            "dims": [
+              1,
+              8,
+              1,
+              64
+            ],
+            "id": 5,
+            "tensor_id": "0x000011a200000013",
+            "type": 3
+          },
+          "packed_weight": {
+            "data_type": 776,
+            "dims": [
+              1,
+              1,
+              256,
+              128
+            ],
+            "id": 4,
+            "tensor_id": "0x000011a100000013",
+            "type": 3
+          }
+        },
+        "node_id": "0x000011f300000013",
+        "outputs": {
+          "output_0": {
+            "data_type": 1032,
+            "dims": [
+              1,
+              8,
+              32,
+              256
+            ],
+            "id": 7,
+            "tensor_id": "0x000011f300000013",
+            "type": 3
+          }
+        },
+        "source": "first q::ConvLayer_s1.opt node in native bottom mapping"
+      },
+      "native_hmx_body": "hmx_v73_convbnb1x1_stride1",
+      "native_io": {
+        "activation_encoding": null,
+        "expected_native_output_bytes": 65536,
+        "expected_native_output_storage": "uint8",
+        "input_name": "A",
+        "native_input_bytes": 65536,
+        "native_input_storage": "uint8",
+        "output_name": "Y",
+        "path": "example/qnn_matmul_profile/output_w4a8_native_ref_e2e_256/native_io.json",
+        "weight_encoding": null
+      },
+      "native_reference_command": "example/qnn_matmul_profile/run_matched_native_a8_ref.sh",
+      "op_surface": "HmxU8I4ToU8MatMul",
+      "optrace": {
+        "by_htp_type_cycles": {
+          "$Const": 20,
+          "$Shape": 10,
+          "DmaCheckpointSet": 1682,
+          "SyncOp": 259,
+          "q::*InputSlice": 5394,
+          "q::*OutputSlice": 4419,
+          "q::ConvLayer.opt.bias_to_vtcm": 1716,
+          "q::ConvLayer.opt.weights_to_vtcm": 3203,
+          "q::ConvLayer_s1.opt": 11546,
+          "q::ForceFormat_Crouton": 13273,
+          "q::ForceFormat_Flat": 6121,
+          "q::Reshape": 10
+        },
+        "native_kernel_cycles_sum": 11546,
+        "native_kernel_event_count": 8,
+        "native_kernel_event_cpp": [
+          16.2758,
+          2.63636,
+          2.60909,
+          2.80303,
+          2.78182,
+          2.54545,
+          2.58182,
+          2.75455
+        ],
+        "native_kernel_event_cycles": [
+          5371,
+          870,
+          861,
+          925,
+          918,
+          840,
+          852,
+          909
+        ],
+        "native_kernel_htp_type": "q::ConvLayer_s1.opt",
+        "native_kernel_packets": [
+          330,
+          330,
+          330,
+          330,
+          330,
+          330,
+          330,
+          330
+        ],
+        "native_qnn_op_cycles": {
+          "MatMul_0": 23590,
+          "MatMul_1": 870,
+          "MatMul_2": 861,
+          "MatMul_3": 925,
+          "MatMul_4": 918,
+          "MatMul_5": 840,
+          "MatMul_6": 852,
+          "MatMul_7": 909
+        },
+        "native_qnn_op_cycles_sum": 29765,
+        "native_qnn_op_prefix": "MatMul_",
+        "path": "example/qnn_matmul_profile/output_w4a8_native_ref_e2e_256/optrace/summary.json",
+        "totals": {
+          "event_count_pid0": 29,
+          "sum_pid0_event_cycles": 47653,
+          "timeline_span_cycles": 48831
+        }
+      },
+      "output_bits": 8,
+      "prepared_payload_sources": {
+        "bias_q_int32": {
+          "bytes": 1152,
+          "exists": true,
+          "path": "example/qnn_matmul_profile/output_w4a8_aligned_e2e_256/w4a8.onnx.bias_q_int32.npy",
+          "sha256": "be691cff688c2df2fb2a33f12c6123e99cbd7083194cadc9c48fb780ab4fc4ea"
+        },
+        "custom_native_io": {
+          "bytes": 591,
+          "exists": true,
+          "path": "example/qnn_matmul_profile/output_w4a8_aligned_e2e_256/native_io.json",
+          "sha256": "dabc27c9f458c1922a75146ad10646225d269aa75eb073bb443ffcbc7a930413"
+        },
+        "effective_bias_int32": {
+          "bytes": 1152,
+          "exists": true,
+          "path": "example/qnn_matmul_profile/output_w4a8_aligned_e2e_256/w4a8.onnx.effective_int32.npy",
+          "sha256": "117f938b54079607da0611519b5a844c6a3a57134b0aee157ef3a83566fe352a"
+        },
+        "logical_weight_kn": {
+          "bytes": 262272,
+          "exists": true,
+          "path": "example/qnn_matmul_profile/output_w4a8_aligned_e2e_256/w4a8.onnx.wRaw_KN.npy",
+          "sha256": "6576818686a0b24c38918a0ed44cdb66881c28e4643a88a9a1a046b5b5d5b2e5"
+        },
+        "native_io_matched_effective_bias": "w4a8.onnx.effective_int32.npy",
+        "native_io_matched_weight": "w4a8.onnx.wRaw_KN.npy",
+        "quant_overrides": {
+          "bytes": 2752,
+          "exists": true,
+          "path": "example/qnn_matmul_profile/output_w4a8_aligned_e2e_256/quant_overrides.json",
+          "sha256": "018bfdd9a82893710ef025aef600b6a564d742bc71a8648e49a8e6f29a62da70"
+        }
+      },
+      "quantization_mode": "per_tensor_activation_output_per_channel_w4_weight",
+      "raw_input": {
+        "bytes": 65536,
+        "exists": true,
+        "path": "example/qnn_matmul_profile/output_w4a8_native_ref_e2e_256/runtime_inputs_native/A.raw",
+        "sha256": "eab0861c5ac3815e6dd379bf90d089c8d75afff3548a8db75a8bf06cabd3032f"
+      },
+      "raw_output": {
+        "bytes": 65536,
+        "exists": true,
+        "path": "example/qnn_matmul_profile/output_w4a8_native_ref_e2e_256/device_out/Y.raw",
+        "sha256": "09ea6b13f2f1c80438c473f450590ae6440cecd13598c912b9daad3fd0bf093b"
+      },
+      "scope": "canonical_256",
+      "shape_mkn": [
+        256,
+        256,
+        256
+      ],
+      "weight_bits": 4
+    },
+    "w8a16": {
+      "acceptance_checks": {
+        "expected_native_kernel_nodes": 8,
+        "native_artifact_standard_errors": [],
+        "native_artifact_standard_passed": true,
+        "native_artifact_standard_warnings": [],
+        "native_kernel_node_count_matches": true,
+        "native_kernel_nodes_observed": 8,
+        "stale_probe_used": false
+      },
+      "accepted_boundary_policy": null,
+      "activation_bits": 16,
+      "bottom_mapping": {
+        "format_node_counts": {
+          "q::*InputSlice": 1,
+          "q::ForceFormat_Crouton": 1
+        },
+        "native_kernel_nodes": [
+          {
+            "grouping": "matmul_0",
+            "inputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 14,
+                "tensor_id": "0x000011a500000002",
+                "type": 3
+              },
+              {
+                "data_type": 776,
+                "dims": [
+                  1,
+                  1,
+                  256,
+                  256
+                ],
+                "id": 15,
+                "tensor_id": "0x000011a800000011",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  8,
+                  1,
+                  128
+                ],
+                "id": 5,
+                "tensor_id": "0x0000115e00000011",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1
+                ],
+                "id": 0,
+                "tensor_id": "0x0000100200000088",
+                "type": 4
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  1,
+                  1,
+                  3
+                ],
+                "id": 16,
+                "tensor_id": "0x000011ae00000011",
+                "type": 4
+              }
+            ],
+            "memory": {
+              "mem_dram_read": 0,
+              "mem_dram_write": 0,
+              "mem_vtcm_read": 200704,
+              "mem_vtcm_write": 131072,
+              "op_flags": "uses_hmx",
+              "output_rank": 4,
+              "output_step_size": 3.05185e-05,
+              "output_zero_offset": 32768
+            },
+            "node_id": "0x0000118f00000011",
+            "outputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 6,
+                "tensor_id": "0x0000118f00000011",
+                "type": 3
+              }
+            ],
+            "type": "q::ConvLayer_s1.opt"
+          },
+          {
+            "grouping": "matmul_1",
+            "inputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 6,
+                "tensor_id": "0x0000118f00000011",
+                "type": 3
+              },
+              {
+                "data_type": 776,
+                "dims": [
+                  1,
+                  1,
+                  256,
+                  256
+                ],
+                "id": 15,
+                "tensor_id": "0x000011a800000011",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  8,
+                  1,
+                  128
+                ],
+                "id": 5,
+                "tensor_id": "0x0000115e00000011",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1
+                ],
+                "id": 0,
+                "tensor_id": "0x0000100200000088",
+                "type": 4
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  1,
+                  1,
+                  3
+                ],
+                "id": 16,
+                "tensor_id": "0x000011ae00000011",
+                "type": 4
+              }
+            ],
+            "memory": {
+              "mem_dram_read": 0,
+              "mem_dram_write": 0,
+              "mem_vtcm_read": 200704,
+              "mem_vtcm_write": 131072,
+              "op_flags": "uses_hmx",
+              "output_rank": 4,
+              "output_step_size": 3.05185e-05,
+              "output_zero_offset": 32768
+            },
+            "node_id": "0x0000119200000015",
+            "outputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 7,
+                "tensor_id": "0x0000119200000015",
+                "type": 3
+              }
+            ],
+            "type": "q::ConvLayer_s1.opt"
+          },
+          {
+            "grouping": "matmul_2",
+            "inputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 7,
+                "tensor_id": "0x0000119200000015",
+                "type": 3
+              },
+              {
+                "data_type": 776,
+                "dims": [
+                  1,
+                  1,
+                  256,
+                  256
+                ],
+                "id": 15,
+                "tensor_id": "0x000011a800000011",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  8,
+                  1,
+                  128
+                ],
+                "id": 5,
+                "tensor_id": "0x0000115e00000011",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1
+                ],
+                "id": 0,
+                "tensor_id": "0x0000100200000088",
+                "type": 4
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  1,
+                  1,
+                  3
+                ],
+                "id": 16,
+                "tensor_id": "0x000011ae00000011",
+                "type": 4
+              }
+            ],
+            "memory": {
+              "mem_dram_read": 0,
+              "mem_dram_write": 0,
+              "mem_vtcm_read": 200704,
+              "mem_vtcm_write": 131072,
+              "op_flags": "uses_hmx",
+              "output_rank": 4,
+              "output_step_size": 3.05185e-05,
+              "output_zero_offset": 32768
+            },
+            "node_id": "0x0000119500000019",
+            "outputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 8,
+                "tensor_id": "0x0000119500000019",
+                "type": 3
+              }
+            ],
+            "type": "q::ConvLayer_s1.opt"
+          },
+          {
+            "grouping": "matmul_3",
+            "inputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 8,
+                "tensor_id": "0x0000119500000019",
+                "type": 3
+              },
+              {
+                "data_type": 776,
+                "dims": [
+                  1,
+                  1,
+                  256,
+                  256
+                ],
+                "id": 15,
+                "tensor_id": "0x000011a800000011",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  8,
+                  1,
+                  128
+                ],
+                "id": 5,
+                "tensor_id": "0x0000115e00000011",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1
+                ],
+                "id": 0,
+                "tensor_id": "0x0000100200000088",
+                "type": 4
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  1,
+                  1,
+                  3
+                ],
+                "id": 16,
+                "tensor_id": "0x000011ae00000011",
+                "type": 4
+              }
+            ],
+            "memory": {
+              "mem_dram_read": 0,
+              "mem_dram_write": 0,
+              "mem_vtcm_read": 200704,
+              "mem_vtcm_write": 131072,
+              "op_flags": "uses_hmx",
+              "output_rank": 4,
+              "output_step_size": 3.05185e-05,
+              "output_zero_offset": 32768
+            },
+            "node_id": "0x000011980000001d",
+            "outputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 9,
+                "tensor_id": "0x000011980000001d",
+                "type": 3
+              }
+            ],
+            "type": "q::ConvLayer_s1.opt"
+          },
+          {
+            "grouping": "matmul_4",
+            "inputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 9,
+                "tensor_id": "0x000011980000001d",
+                "type": 3
+              },
+              {
+                "data_type": 776,
+                "dims": [
+                  1,
+                  1,
+                  256,
+                  256
+                ],
+                "id": 15,
+                "tensor_id": "0x000011a800000011",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  8,
+                  1,
+                  128
+                ],
+                "id": 5,
+                "tensor_id": "0x0000115e00000011",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1
+                ],
+                "id": 0,
+                "tensor_id": "0x0000100200000088",
+                "type": 4
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  1,
+                  1,
+                  3
+                ],
+                "id": 16,
+                "tensor_id": "0x000011ae00000011",
+                "type": 4
+              }
+            ],
+            "memory": {
+              "mem_dram_read": 0,
+              "mem_dram_write": 0,
+              "mem_vtcm_read": 200704,
+              "mem_vtcm_write": 131072,
+              "op_flags": "uses_hmx",
+              "output_rank": 4,
+              "output_step_size": 3.05185e-05,
+              "output_zero_offset": 32768
+            },
+            "node_id": "0x0000119b00000021",
+            "outputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 10,
+                "tensor_id": "0x0000119b00000021",
+                "type": 3
+              }
+            ],
+            "type": "q::ConvLayer_s1.opt"
+          },
+          {
+            "grouping": "matmul_5",
+            "inputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 10,
+                "tensor_id": "0x0000119b00000021",
+                "type": 3
+              },
+              {
+                "data_type": 776,
+                "dims": [
+                  1,
+                  1,
+                  256,
+                  256
+                ],
+                "id": 15,
+                "tensor_id": "0x000011a800000011",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  8,
+                  1,
+                  128
+                ],
+                "id": 5,
+                "tensor_id": "0x0000115e00000011",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1
+                ],
+                "id": 0,
+                "tensor_id": "0x0000100200000088",
+                "type": 4
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  1,
+                  1,
+                  3
+                ],
+                "id": 16,
+                "tensor_id": "0x000011ae00000011",
+                "type": 4
+              }
+            ],
+            "memory": {
+              "mem_dram_read": 0,
+              "mem_dram_write": 0,
+              "mem_vtcm_read": 200704,
+              "mem_vtcm_write": 131072,
+              "op_flags": "uses_hmx",
+              "output_rank": 4,
+              "output_step_size": 3.05185e-05,
+              "output_zero_offset": 32768
+            },
+            "node_id": "0x0000119e00000025",
+            "outputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 11,
+                "tensor_id": "0x0000119e00000025",
+                "type": 3
+              }
+            ],
+            "type": "q::ConvLayer_s1.opt"
+          },
+          {
+            "grouping": "matmul_6",
+            "inputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 11,
+                "tensor_id": "0x0000119e00000025",
+                "type": 3
+              },
+              {
+                "data_type": 776,
+                "dims": [
+                  1,
+                  1,
+                  256,
+                  256
+                ],
+                "id": 15,
+                "tensor_id": "0x000011a800000011",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  8,
+                  1,
+                  128
+                ],
+                "id": 5,
+                "tensor_id": "0x0000115e00000011",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1
+                ],
+                "id": 0,
+                "tensor_id": "0x0000100200000088",
+                "type": 4
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  1,
+                  1,
+                  3
+                ],
+                "id": 16,
+                "tensor_id": "0x000011ae00000011",
+                "type": 4
+              }
+            ],
+            "memory": {
+              "mem_dram_read": 0,
+              "mem_dram_write": 0,
+              "mem_vtcm_read": 200704,
+              "mem_vtcm_write": 131072,
+              "op_flags": "uses_hmx",
+              "output_rank": 4,
+              "output_step_size": 3.05185e-05,
+              "output_zero_offset": 32768
+            },
+            "node_id": "0x000011a100000029",
+            "outputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 12,
+                "tensor_id": "0x000011a100000029",
+                "type": 3
+              }
+            ],
+            "type": "q::ConvLayer_s1.opt"
+          },
+          {
+            "grouping": "matmul_7",
+            "inputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 12,
+                "tensor_id": "0x000011a100000029",
+                "type": 3
+              },
+              {
+                "data_type": 776,
+                "dims": [
+                  1,
+                  1,
+                  256,
+                  256
+                ],
+                "id": 15,
+                "tensor_id": "0x000011a800000011",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  8,
+                  1,
+                  128
+                ],
+                "id": 5,
+                "tensor_id": "0x0000115e00000011",
+                "type": 3
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1
+                ],
+                "id": 0,
+                "tensor_id": "0x0000100200000088",
+                "type": 4
+              },
+              {
+                "data_type": 50,
+                "dims": [
+                  1,
+                  1,
+                  1,
+                  3
+                ],
+                "id": 16,
+                "tensor_id": "0x000011ae00000011",
+                "type": 4
+              }
+            ],
+            "memory": {
+              "mem_dram_read": 0,
+              "mem_dram_write": 0,
+              "mem_vtcm_read": 200704,
+              "mem_vtcm_write": 131072,
+              "op_flags": "uses_hmx",
+              "output_rank": 4,
+              "output_step_size": 3.05185e-05,
+              "output_zero_offset": 32768
+            },
+            "node_id": "0x000011a40000002d",
+            "outputs": [
+              {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 13,
+                "tensor_id": "0x000011a40000002d",
+                "type": 3
+              }
+            ],
+            "type": "q::ConvLayer_s1.opt"
+          }
+        ],
+        "node_count": 12,
+        "path": "example/qnn_matmul_profile/output_w8a16_native_ref_e2e_256/ctx/matmul_encoded_bottom_mapping.json",
+        "sidecar_node_counts": {
+          "q::ConvLayer.opt.bias_to_vtcm": 1,
+          "q::ConvLayer.opt.weights_to_vtcm": 1
+        },
+        "tensor_count": 19
+      },
+      "chain": 8,
+      "compare": {
+        "acceptance_status": "accepted",
+        "byte_differences": 0,
+        "custom_sha256": "90444514529ccfb6a6fc7bad872b29479ec692a611401d826ea17be5b077a089",
+        "exact": 65536,
+        "maxdiff": 0,
+        "mean_absdiff": 0.0,
+        "native_path": "example/qnn_matmul_profile/output_w8a16_native_ref_e2e_256/device_out/Y.raw",
+        "native_sha256": "90444514529ccfb6a6fc7bad872b29479ec692a611401d826ea17be5b077a089",
+        "path": "example/qnn_matmul_profile/output_w8a16_aligned_e2e_256/device_out/out.raw",
+        "source": "direct_raw_compare",
+        "total": 65536
+      },
+      "comparison_scope": {
+        "accepted_boundary_policy": null,
+        "native_kernel": {
+          "cycles_sum": 30182,
+          "event_count": 8,
+          "event_type": "q::ConvLayer_s1.opt",
+          "outputs": [
+            {
+              "bytes": 131072,
+              "grouping": "matmul_0",
+              "node_id": "0x0000118f00000011",
+              "tensor": {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 6,
+                "tensor_id": "0x0000118f00000011",
+                "type": 3
+              }
+            },
+            {
+              "bytes": 131072,
+              "grouping": "matmul_1",
+              "node_id": "0x0000119200000015",
+              "tensor": {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 7,
+                "tensor_id": "0x0000119200000015",
+                "type": 3
+              }
+            },
+            {
+              "bytes": 131072,
+              "grouping": "matmul_2",
+              "node_id": "0x0000119500000019",
+              "tensor": {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 8,
+                "tensor_id": "0x0000119500000019",
+                "type": 3
+              }
+            },
+            {
+              "bytes": 131072,
+              "grouping": "matmul_3",
+              "node_id": "0x000011980000001d",
+              "tensor": {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 9,
+                "tensor_id": "0x000011980000001d",
+                "type": 3
+              }
+            },
+            {
+              "bytes": 131072,
+              "grouping": "matmul_4",
+              "node_id": "0x0000119b00000021",
+              "tensor": {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 10,
+                "tensor_id": "0x0000119b00000021",
+                "type": 3
+              }
+            },
+            {
+              "bytes": 131072,
+              "grouping": "matmul_5",
+              "node_id": "0x0000119e00000025",
+              "tensor": {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 11,
+                "tensor_id": "0x0000119e00000025",
+                "type": 3
+              }
+            },
+            {
+              "bytes": 131072,
+              "grouping": "matmul_6",
+              "node_id": "0x000011a100000029",
+              "tensor": {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 12,
+                "tensor_id": "0x000011a100000029",
+                "type": 3
+              }
+            },
+            {
+              "bytes": 131072,
+              "grouping": "matmul_7",
+              "node_id": "0x000011a40000002d",
+              "tensor": {
+                "data_type": 1046,
+                "dims": [
+                  1,
+                  8,
+                  32,
+                  256
+                ],
+                "id": 13,
+                "tensor_id": "0x000011a40000002d",
+                "type": 3
+              }
+            }
+          ],
+          "packets": [
+            695,
+            695,
+            695,
+            695,
+            695,
+            695,
+            695,
+            695
+          ],
+          "total_output_scope_bytes": 1048576
+        },
+        "notes": [
+          "Owned acceptance compares final public output bytes against raw_output.path.",
+          "Native kernel scope is used for HMX packet/cycle class and may be internal to the public output layout."
+        ],
+        "qnn_aggregate": {
+          "cycles_sum": 35747,
+          "events": {
+            "matmul_0": 12387,
+            "matmul_1": 3293,
+            "matmul_2": 3359,
+            "matmul_3": 3337,
+            "matmul_4": 3368,
+            "matmul_5": 3349,
+            "matmul_6": 3361,
+            "matmul_7": 3293
+          },
+          "prefix": "matmul_"
+        },
+        "raw_output": {
+          "acceptance_role": "owned_public_output_exactness_target",
+          "bytes": 131072,
+          "path": "example/qnn_matmul_profile/output_w8a16_native_ref_e2e_256/device_out/Y.raw",
+          "shape_mkn": [
+            256,
+            256,
+            256
+          ],
+          "storage": "uint16_le"
+        },
+        "timeline": {
+          "source": "example/qnn_matmul_profile/output_w8a16_native_ref_e2e_256/optrace/summary.json",
+          "span_cycles": 79095
+        }
+      },
+      "dtype": "uint16_le",
+      "matched_custom_artifact": "example/qnn_matmul_profile/output_w8a16_aligned_e2e_256",
+      "native_artifact": "example/qnn_matmul_profile/output_w8a16_native_ref_e2e_256",
+      "native_compute_contract": {
+        "grouping": "matmul_0",
+        "inputs": {
+          "activation": {
+            "data_type": 1046,
+            "dims": [
+              1,
+              8,
+              32,
+              256
+            ],
+            "id": 14,
+            "tensor_id": "0x000011a500000002",
+            "type": 3
+          },
+          "control": {
+            "data_type": 50,
+            "dims": [
+              1
+            ],
+            "id": 0,
+            "tensor_id": "0x0000100200000088",
+            "type": 4
+          },
+          "extra_control": {
+            "data_type": 50,
+            "dims": [
+              1,
+              1,
+              1,
+              3
+            ],
+            "id": 16,
+            "tensor_id": "0x000011ae00000011",
+            "type": 4
+          },
+          "folded_bias": {
+            "data_type": 50,
+            "dims": [
+              1,
+              8,
+              1,
+              128
+            ],
+            "id": 5,
+            "tensor_id": "0x0000115e00000011",
+            "type": 3
+          },
+          "packed_weight": {
+            "data_type": 776,
+            "dims": [
+              1,
+              1,
+              256,
+              256
+            ],
+            "id": 15,
+            "tensor_id": "0x000011a800000011",
+            "type": 3
+          }
+        },
+        "node_id": "0x0000118f00000011",
+        "outputs": {
+          "output_0": {
+            "data_type": 1046,
+            "dims": [
+              1,
+              8,
+              32,
+              256
+            ],
+            "id": 6,
+            "tensor_id": "0x0000118f00000011",
+            "type": 3
+          }
+        },
+        "source": "first q::ConvLayer_s1.opt node in native bottom mapping"
+      },
+      "native_hmx_body": "hmx_v75_convhbh1x1deep_stride1",
+      "native_io": {
+        "activation_encoding": {
+          "bitwidth": 16,
+          "dtype": "int",
+          "is_symmetric": "True",
+          "max": 1.0,
+          "min": -1.0,
+          "offset": -32768,
+          "scale": 3.051850947599719e-05
+        },
+        "expected_native_output_bytes": 131072,
+        "expected_native_output_storage": "uint16_le",
+        "input_name": "A",
+        "native_input_bytes": 131072,
+        "native_input_storage": "uint16_le",
+        "output_name": "Y",
+        "path": "example/qnn_matmul_profile/output_w8a16_native_ref_e2e_256/native_io.json",
+        "weight_encoding": {
+          "bitwidth": 8,
+          "dtype": "int",
+          "is_symmetric": "True",
+          "max": 1.0,
+          "min": -1.0,
+          "offset": -128,
+          "scale": 0.007874015748031496
+        }
+      },
+      "native_reference_command": "example/qnn_matmul_profile/run_matched_native_w8a16_ref.sh",
+      "op_surface": "HmxU16I8ToU16MatMul",
+      "optrace": {
+        "by_htp_type_cycles": {
+          "$Const": 20,
+          "$Shape": 15,
+          "DmaCheckpointSet": 2278,
+          "SyncOp": 18,
+          "q::*InputSlice": 6961,
+          "q::*OutputSlice": 22345,
+          "q::ConvLayer.opt.bias_to_vtcm": 2844,
+          "q::ConvLayer.opt.weights_to_vtcm": 2693,
+          "q::ConvLayer_s1.opt": 30182,
+          "q::ForceFormat_Crouton": 11050
+        },
+        "native_kernel_cycles_sum": 30182,
+        "native_kernel_event_count": 8,
+        "native_kernel_event_cpp": [
+          9.81583,
+          4.73813,
+          4.83309,
+          4.80144,
+          4.84604,
+          4.81871,
+          4.83597,
+          4.73813
+        ],
+        "native_kernel_event_cycles": [
+          6822,
+          3293,
+          3359,
+          3337,
+          3368,
+          3349,
+          3361,
+          3293
+        ],
+        "native_kernel_htp_type": "q::ConvLayer_s1.opt",
+        "native_kernel_packets": [
+          695,
+          695,
+          695,
+          695,
+          695,
+          695,
+          695,
+          695
+        ],
+        "native_qnn_op_cycles": {
+          "matmul_0": 12387,
+          "matmul_1": 3293,
+          "matmul_2": 3359,
+          "matmul_3": 3337,
+          "matmul_4": 3368,
+          "matmul_5": 3349,
+          "matmul_6": 3361,
+          "matmul_7": 3293
+        },
+        "native_qnn_op_cycles_sum": 35747,
+        "native_qnn_op_prefix": "matmul_",
+        "path": "example/qnn_matmul_profile/output_w8a16_native_ref_e2e_256/optrace/summary.json",
+        "totals": {
+          "event_count_pid0": 25,
+          "sum_pid0_event_cycles": 78406,
+          "timeline_span_cycles": 79095
+        }
+      },
+      "output_bits": 16,
+      "prepared_payload_sources": {
+        "bias_q_int32": {
+          "bytes": 1152,
+          "exists": true,
+          "path": "example/qnn_matmul_profile/output_w8a16_aligned_e2e_256/w8a16.onnx.bias_q_int32.npy",
+          "sha256": "4885861f12444e26a08d823fef2e7074ddad8a1a31520eab9f1c56f9799da1fe"
+        },
+        "custom_native_io": {
+          "bytes": 594,
+          "exists": true,
+          "path": "example/qnn_matmul_profile/output_w8a16_aligned_e2e_256/native_io.json",
+          "sha256": "57e5032e04613b8d40f20bd4f86a2d2c8afafbfd44c5201f2c5a502bf7ad5052"
+        },
+        "effective_bias_int32": {
+          "bytes": 1152,
+          "exists": true,
+          "path": "example/qnn_matmul_profile/output_w8a16_aligned_e2e_256/w8a16.onnx.effective_int32.npy",
+          "sha256": "08082d4afc26a40add73d8c54f104eeeedad2239e348541060676dc4a16fe875"
+        },
+        "logical_weight_kn": {
+          "bytes": 262272,
+          "exists": true,
+          "path": "example/qnn_matmul_profile/output_w8a16_aligned_e2e_256/w8a16.onnx.wRaw_KN.npy",
+          "sha256": "69d1da581fa77a16e79d6f5c951f627cee7c45a0db20c7ddd4febd31c708252b"
+        },
+        "quant_overrides": {
+          "bytes": 3024,
+          "exists": true,
+          "path": "example/qnn_matmul_profile/output_w8a16_aligned_e2e_256/quant_overrides.json",
+          "sha256": "b17088bd4bab0ed48a54f9a7d3e3fc07e16e0c5eda252332f442fe99c32f00a4"
+        }
+      },
+      "quantization_mode": "per_tensor_a16_output_per_channel_w8_weight",
+      "raw_input": {
+        "bytes": 131072,
+        "exists": true,
+        "path": "example/qnn_matmul_profile/output_w8a16_native_ref_e2e_256/runtime_inputs_native/A.raw",
+        "sha256": "d6ddb093400eaeace1bb9627e28fb3853d92aeb31f22a577c108053839c16b1f"
+      },
+      "raw_output": {
+        "bytes": 131072,
+        "exists": true,
+        "path": "example/qnn_matmul_profile/output_w8a16_native_ref_e2e_256/device_out/Y.raw",
+        "sha256": "90444514529ccfb6a6fc7bad872b29479ec692a611401d826ea17be5b077a089"
+      },
+      "scope": "canonical_256",
+      "shape_mkn": [
+        256,
+        256,
+        256
+      ],
+      "weight_bits": 8
+    }
+  },
+  "roadmap": "Agent/guides/handwritten_hmx_matmul_roadmap.md",
+  "schema": "handwritten_hmx_matmul_oracles.v1",
+  "source": "retained QNN Native standard artifacts"
+}
