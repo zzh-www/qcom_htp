@@ -1,0 +1,117 @@
+{
+  "schema": "qnn_kernel_correctness_status.v1",
+  "updated": "2026-05-23",
+  "policy": {
+    "promoted_status": "Only same-hardware exact gates are marked pass/promoted here. Native-vs-Python tolerance and sidecar-only checks are not enough.",
+    "default_entry": "tests/qnn_kernel_e2e/run_correctness.sh",
+    "full_entry": "tests/qnn_kernel_e2e/run_all.sh"
+  },
+  "promoted": [
+    {
+      "target": "u8i8_native_match",
+      "kernel": "u8i8",
+      "ci_entry": "tests/qnn_kernel_e2e/correctness/test_u8i8_native_match_e2e.sh",
+      "status": "pass",
+      "scope": "QNN custom HMX op vs QNN Native HTP, same hardware, Python generated normal_random case",
+      "shape_mkn": [256, 256, 256],
+      "chain": 1,
+      "evidence": {
+        "command": "OUT_ROOT=/tmp/qcom_htp_u8i8_public_impl_gate USE_NATIVE_BIAS_RECORD=0 BUILD_PACKAGES=0 DEVICE=oneplus CHAIN=1 CASE_NAME=normal_random M=256 K=256 N=256 bash scripts/run_u8i8_python_case_custom_native_match.sh",
+        "custom_native_compare": "/tmp/qcom_htp_u8i8_public_impl_gate/analysis/custom_native_compare.json",
+        "output_exact": "65536/65536",
+        "maxabs": 0,
+        "sidecar_exact": "2048/2048"
+      }
+    },
+    {
+      "target": "w4a8_per_channel_native_match",
+      "kernel": "w4a8_per_channel",
+      "ci_entry": "tests/qnn_kernel_e2e/correctness/test_w4a8_per_channel_native_match_e2e.sh",
+      "status": "pass",
+      "scope": "QNN custom HMX per-channel op vs QNN Native HTP, same hardware, 7 Python generated cases",
+      "shape_mkn": [256, 256, 256],
+      "chain": 1,
+      "cases": ["normal_random", "zp_neutral", "positive_boundary", "negative_boundary", "single_k_impulse", "bias_only", "scale_only"],
+      "evidence": {
+        "command": "OUT_ROOT=/tmp/qcom_htp_w4a8_per_channel_native_match_ci BUILD_PACKAGES=0 DEVICE=oneplus bash scripts/run_w4a8_python_case_custom_native_match.sh",
+        "custom_native_compare_summary": "/tmp/qcom_htp_w4a8_per_channel_native_match_ci/analysis/custom_native_compare_summary.json",
+        "output_exact": "65536/65536 for all 7 cases",
+        "maxabs": 0,
+        "sidecar_exact": "2048/2048 for all 7 cases",
+        "bias_source": "custom sidecar uses QNN Native quantized DLC B exported by scripts/run_qnn_python_case_native.py"
+      }
+    },
+    {
+      "target": "w8a16_per_channel_native_match",
+      "kernel": "w8a16",
+      "ci_entry": "tests/qnn_kernel_e2e/correctness/test_w8a16_per_channel_native_match_e2e.sh",
+      "status": "pass",
+      "scope": "QNN custom HMX W8A16 op vs QNN Native HTP, same hardware, 7 Python generated cases",
+      "shape_mkn": [256, 256, 256],
+      "chain": 1,
+      "cases": ["normal_random", "zp_neutral", "positive_boundary", "negative_boundary", "single_k_impulse", "bias_only", "scale_only"],
+      "evidence": {
+        "command": "KERNEL_E2E_OUT_ROOT=/tmp/qcom_htp_w8a16_ci_default_generated BUILD_PACKAGES=0 DEVICE=oneplus tests/qnn_kernel_e2e/correctness/test_w8a16_per_channel_native_match_e2e.sh",
+        "custom_native_compare_summary": "/tmp/qcom_htp_w8a16_ci_default_generated/output_w8a16_per_channel_native_match_ci/analysis/custom_native_compare_summary.json",
+        "output_exact": "65536/65536 for all 7 cases",
+        "maxabs": 0,
+        "sidecar_source": "generated: recovered W8A16 drain/control plus generated effective-bias fields",
+        "root_cause_note": "W8A16 drain scale is QNN's normalized two-stage float32 path: weight_scale/max(weight_scale), then max(weight_scale)*act_scale/output_scale. Direct per-channel scale caused 0/1/2 ULP control mismatches."
+      }
+    },
+    {
+      "target": "w4a16_per_channel_native_match",
+      "kernel": "w4a16_per_channel",
+      "ci_entry": "tests/qnn_kernel_e2e/correctness/test_w4a16_per_channel_native_match_e2e.sh",
+      "status": "pass",
+      "scope": "QNN custom HMX W4A16 per-channel op vs QNN Native HTP, same hardware, 7 Python generated cases",
+      "shape_mkn": [256, 256, 256],
+      "chain": 1,
+      "cases": ["normal_random", "zp_neutral", "positive_boundary", "negative_boundary", "single_k_impulse", "bias_only", "scale_only"],
+      "evidence": {
+        "command": "KERNEL_E2E_OUT_ROOT=/tmp/qcom_htp_w4a16_per_channel_native_match_generated_ci2 BUILD_PACKAGES=0 DEVICE=oneplus tests/qnn_kernel_e2e/correctness/test_w4a16_per_channel_native_match_e2e.sh",
+        "custom_native_compare_summary": "/tmp/qcom_htp_w4a16_per_channel_native_match_generated_ci2/output_w4a16_per_channel_native_match_ci/analysis/custom_native_compare_summary.json",
+        "output_exact": "65536/65536 for all 7 cases",
+        "maxabs": 0,
+        "sidecar_exact": "4096/4096 for all 7 cases",
+        "control_exact": "2048/2048 for all 7 cases",
+        "effective_exact": "256/256 for all 7 cases",
+        "root_cause_note": "W4A16 per-channel uses the same normalized two-stage A16 drain scale path as W8A16; fixed A16 constants only matched effective fields and left control/drain bytes wrong."
+      }
+    },
+    {
+      "target": "w4a16_per_channel_chain1",
+      "kernel": "w4a16_per_channel",
+      "ci_entry": "tests/qnn_kernel_e2e/correctness/test_w4a16_per_channel_chain1_e2e.sh",
+      "status": "pass",
+      "scope": "QNN custom HMX per-channel op vs regenerated QNN Native CHAIN=1 oracle plus Python reference",
+      "shape_mkn": [256, 256, 256],
+      "chain": 1,
+      "cases": ["default", "zp", "k_impulse0", "k_impulse1", "k_impulse7"],
+      "evidence": {
+        "summary": "Agent/current/qnn_kernel_e2e_ci.md",
+        "op_flow": "example/qnn_hmx_matmul_w4a16/w4a16_chain1_htp_op_flow.md",
+        "output_exact": "65536/65536 after native transpose",
+        "python_reference_exact": "65536/65536"
+      }
+    },
+    {
+      "target": "handwritten_hmx_matmul",
+      "kernel": "handwritten_hmx_matmul",
+      "ci_entry": "tests/qnn_kernel_e2e/correctness/test_handwritten_hmx_matmul_e2e.sh",
+      "status": "pass",
+      "scope": "QNN-free handwritten HMX MatMul runtime gate for active families",
+      "active_families": ["u8i8", "w4a8_per_channel", "w8a16", "w4a16_per_channel"],
+      "evidence": {
+        "command": "HANDWRITTEN_HMX_MATMUL_OUT_ROOT=/tmp/handwritten_hmx_matmul_gate_device_refresh2 DEVICE=oneplus tests/qnn_kernel_e2e/correctness/test_handwritten_hmx_matmul_e2e.sh",
+        "promotion_evidence": "/tmp/handwritten_hmx_matmul_gate_device_refresh2/promotion_evidence.json",
+        "completion_checklist": "/tmp/handwritten_hmx_matmul_gate_device_refresh2/completion_checklist.json",
+        "roadmap_audit": "/tmp/handwritten_hmx_matmul_gate_device_refresh2/roadmap_audit.json",
+        "m4_promoted_count": 4,
+        "open": 0,
+        "fail": 0
+      }
+    }
+  ],
+  "not_promoted_yet": []
+}

@@ -16,11 +16,13 @@ the linked documents.
 | [w16a16 native alignment plan](handoffs/w16a16_native_alignment_plan.md) | Plan for aligning `HmxU16I16ToU16MatMul`: native oracle, split-N kernel surface, body verification, probes, and acceptance gates. |
 | [w8a16 native alignment handoff](handoffs/w8a16_native_alignment.md) | Current 256^3 `HmxU16I8ToU16MatMul` state: native-output exact, but kernel-entry shape and performance remain open. |
 | [w4a16 QNN native path](handoffs/w4a16_qnn_native_path.md) | Historical/native-oracle entrypoint for W4A16: Conv lowering path, tensor contracts, sidecars, optrace scopes, and skel wrapper flow. It is not the active implementation route. |
-| [w4a16 native alignment handoff](handoffs/w4a16_native_alignment.md) | Current `HmxU16I4ToU16MatMul` probe history: QNN custom chain8 remains transpose-aware exact, while active W4A16 work has moved to the tutorial/direct-HMX wrapper under `example/handwritten_hmx_matmul/`. |
+| [w4a16 native alignment handoff](handoffs/w4a16_native_alignment.md) | Current `HmxU16I4ToU16MatMul` probe history: QNN custom chain8 remains transpose-aware exact, while active W4A16 work has moved to the direct-body custom-baseline route under `example/handwritten_hmx_matmul/`. |
 | [w4a16 Python formula mismatch report](../docs/w4a16_python_formula_mismatch_report.html) | HTML report explaining the W4A16 HMX floor256 accumulator drain required for Python/native bit-exactness. |
 | [QNN native artifact standard](current/qnn_native_artifact_standard.md) | Required DLC, context-binary, native I/O, and optrace/performance artifact flow for QNN-native references and custom-op comparisons. |
-| [QNN kernel E2E CI](current/qnn_kernel_e2e_ci.md) | Required per-kernel E2E CI entrypoints and the formal pre-push device gate. |
-| [QNN native alignment blackbox handbook](guides/qnn_native_alignment_blackbox_handbook.md) | Methodology for future QNN-native blackbox alignment. For W4A16 handwritten MatMul this is superseded by the tutorial/direct-HMX wrapper route. |
+| [QNN kernel E2E CI](current/qnn_kernel_e2e_ci.md) | Required kernel CI entrypoints, including handwritten HMX MatMul, and the formal pre-push device gate. |
+| [QNN HTP per-channel bias prepare](guides/qnn_htp_perchannel_bias_prepare.md) | Recovered HTP prepare algorithm for DLC Conv `B` to final per-channel `bias_to_vtcm` sidecar bias, plus public Python API and validation commands. |
+| [QNN HTP W8A16 per-channel sidecar](guides/qnn_htp_w8a16_perchannel_sidecar.md) | W8A16 generated sidecar ABI for custom HMX, how it differs from QNN Native final sidecar, and the promoted correctness CI gate. |
+| [QNN native alignment blackbox handbook](guides/qnn_native_alignment_blackbox_handbook.md) | Methodology for future QNN-native blackbox alignment. For W4A16 handwritten MatMul this is superseded by the direct-body custom-baseline route. |
 | [QNN reverse-engineering evidence](qnn_re/) | Non-Markdown disassembly slices and large cached evidence such as `skel_text_full.S`. |
 
 ## Rules

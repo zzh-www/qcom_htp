@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run a prepared handwritten artifact through an owned HMX body in hexagon-sim.
 
-This is a Milestone-4 diagnostic bridge.  It proves that a retained owned
+This is the artifact-body simulator bridge.  It proves that a retained owned
 prepared artifact can feed an owned body in the simulator.  It does not claim
 byte-exactness or native performance.
 """

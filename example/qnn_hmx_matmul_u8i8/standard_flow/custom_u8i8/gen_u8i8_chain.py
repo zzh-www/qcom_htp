@@ -13,13 +13,30 @@ The only custom op emitted here is HmxU8I8ToU8MatMul:
 import argparse
 import json
 import os
+import sys
+from pathlib import Path
 
 import numpy as np
 import onnx
 from onnx import TensorProto, helper, numpy_helper
 
+REPO_ROOT = Path(__file__).resolve().parents[4]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from scripts.qnn_htp_bias_prepare import qnn_htp_u8i8_prepare_bias_q
+from scripts.qnn_htp_u8_drain import qnn_htp_u8_drain_scale_control
+
 DOMAIN = "hmx"
 ACT_ZP = 128
+
+
+def native_drain_scale_control(exact_scale: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Encode QNN native u8i8 drain scale/control sidecar fields.
+
+    Kept as a local compatibility wrapper for older scripts.
+    """
+    return qnn_htp_u8_drain_scale_control(exact_scale)
 
 
 def pack_weight_kmajor(w_raw_kn: np.ndarray) -> np.ndarray:
@@ -62,6 +79,43 @@ def make_reference(a_raw: np.ndarray, w_raw_kn: np.ndarray, bias_q: np.ndarray) 
     return np.clip(out, 0, 255).astype(np.uint8)
 
 
+def load_python_case(case_dir: str) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict]:
+    root = Path(case_dir).resolve()
+    meta = json.loads((root / "case.json").read_text(encoding="utf-8"))
+    m, k, n = meta["shape_mkn"]
+    if m != k or k != n:
+        raise ValueError(
+            f"u8i8 custom case import currently requires square M=K=N, got {(m, k, n)}"
+        )
+    if meta["family"] != "u8i8":
+        raise ValueError(f"u8i8 custom case import got family={meta['family']!r}")
+    files = meta["files"]
+    a_q = np.load(root / files["activation_q"]["npy"]).astype(np.uint8).reshape(m, k)
+    w_q_nk = np.load(root / files["weight_q_nk"]["npy"]).astype(np.int8).reshape(n, k)
+    bias_q = np.load(root / files["bias_q_int32"]["npy"]).astype(np.int32).reshape(n)
+    weight_scale = np.load(root / files["weight_scale"]["npy"]).astype(np.float32).reshape(n)
+    bias_scale = np.array(meta["qparams"]["bias"]["scale"], dtype=np.float32).reshape(n)
+    return a_q, w_q_nk.T.copy(), bias_q, weight_scale, bias_scale, meta
+
+
+def drain_reference(
+    a_raw_mk: np.ndarray,
+    w_raw_kn: np.ndarray,
+    effective_i32: np.ndarray,
+    drain_scale_f16: np.ndarray,
+    baseline_u16: int,
+    chain: int,
+) -> np.ndarray:
+    cur = a_raw_mk.astype(np.uint8)
+    for _ in range(chain):
+        raw_acc = cur.astype(np.int32) @ w_raw_kn.astype(np.int32)
+        drain_in = raw_acc + effective_i32.reshape(1, -1)
+        scaled = np.trunc(drain_in.astype(np.float64) * drain_scale_f16.reshape(1, -1) / 512.0)
+        shifted = scaled.astype(np.int64) + (int(baseline_u16) >> 7)
+        cur = np.clip(shifted, 0, 255).astype(np.uint8)
+    return cur
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--M", type=int, default=256)
@@ -70,8 +124,37 @@ def main() -> None:
     p.add_argument("--seed", type=int, default=0xB17E)
     p.add_argument("--chain", type=int, default=8)
     p.add_argument("--mode", choices=["chain", "independent"], default="chain")
+    p.add_argument(
+        "--case-dir",
+        default=None,
+        help="Import a generated u8i8 Python/QNN case. Currently requires square M=K=N.",
+    )
+    p.add_argument("--baseline-u16", type=int, default=0)
+    p.add_argument(
+        "--bias-record-raw",
+        default=None,
+        help="Override generated folded bias records with a raw native/custom 256-byte-per-N-tile blob.",
+    )
     p.add_argument("-o", "--out", default="u8i8_chain.onnx")
     args = p.parse_args()
+
+    if args.case_dir:
+        (
+            case_a_q,
+            case_w_raw_kn,
+            case_bias_q,
+            case_weight_scale,
+            case_bias_scale,
+            case_meta,
+        ) = load_python_case(args.case_dir)
+        args.M, args.K, args.N = case_meta["shape_mkn"]
+    else:
+        case_a_q = None
+        case_w_raw_kn = None
+        case_bias_q = None
+        case_weight_scale = None
+        case_bias_scale = None
+        case_meta = None
 
     assert args.M == args.K == args.N, "current replica flow is square-only"
     assert args.M % 32 == 0 and args.K % 32 == 0 and args.N % 32 == 0
@@ -84,8 +167,11 @@ def main() -> None:
     here = os.path.dirname(os.path.abspath(__file__))
     out_path = args.out if os.path.isabs(args.out) else os.path.join(here, args.out)
 
-    k_idx, n_idx = np.meshgrid(np.arange(k), np.arange(n), indexing="ij")
-    w_raw_kn = (((k_idx * 31 + n_idx * 13) % 15) - 7).astype(np.int8)
+    if case_w_raw_kn is not None:
+        w_raw_kn = case_w_raw_kn.astype(np.int8)
+    else:
+        k_idx, n_idx = np.meshgrid(np.arange(k), np.arange(n), indexing="ij")
+        w_raw_kn = (((k_idx * 31 + n_idx * 13) % 15) - 7).astype(np.int8)
     wt_packed = pack_weight_kmajor(w_raw_kn)
     # The ONNX tensor keeps a native-looking [1, 1, K, N] shape so converter and
     # ctxgen accept it as a normal weight initializer.  Its bytes are already in
@@ -104,21 +190,52 @@ def main() -> None:
     # The V73DEEP Conv1x1 body consumes a 256-byte native bias record per N tile:
     # first 128 bytes are 32 fp16 scale/baseline pairs, second 128 bytes are
     # 32 int32 effective-bias values.  Runtime therefore only forwards a pointer.
-    bias_q = np.arange(1, n + 1, dtype=np.int32)
+    output_scale = 1.0
+    act_scale = 1.0
+    if case_meta is not None:
+        act_scale = float(case_meta["qparams"]["activation"]["scale"])
+        output_scale = float(case_meta["qparams"]["output"]["scale"])
+        drain_scale_exact = (
+            np.float32(512.0)
+            * np.float32(act_scale)
+            * case_weight_scale.astype(np.float32)
+            / np.float32(output_scale)
+        ).astype(np.float32)
+        drain_scale_u16, drain_control_u16 = native_drain_scale_control(drain_scale_exact)
+        drain_scale_f16 = drain_scale_u16.view(np.float16)
+    else:
+        drain_scale_f16 = np.full((n,), np.float16(512.0), dtype=np.float16)
+        drain_control_u16 = np.full((n,), int(args.baseline_u16) & 0xFFFF, dtype=np.uint16)
+    baseline_u16 = int(args.baseline_u16) & 0xFFFF
+    if args.baseline_u16:
+        drain_control_u16.fill(baseline_u16)
+
+    bias_q = case_bias_q if case_bias_q is not None else np.arange(1, n + 1, dtype=np.int32)
+    prepared_bias_q = (
+        qnn_htp_u8i8_prepare_bias_q(bias_q, act_scale, case_weight_scale)
+        if case_weight_scale is not None
+        else bias_q.astype(np.int32).copy()
+    )
     sum_w = w_raw_kn.astype(np.int32).sum(axis=0)
-    effective_i32 = (-ACT_ZP) * sum_w + bias_q
+    effective_i32 = (-ACT_ZP) * sum_w + prepared_bias_q
 
     bias_fold_bytes = np.zeros((n_t, 256), dtype=np.uint8)
     for nt in range(n_t):
         for c in range(32):
             col = nt * 32 + c
-            scale_u16 = np.float16(512.0).view(np.uint16).item()
-            baseline_u16 = 0
+            scale_u16 = drain_scale_f16[col].view(np.uint16).item()
+            control_u16 = drain_control_u16[col].item()
             bias_fold_bytes[nt, 4 * c:4 * c + 2] = np.array([scale_u16], np.uint16).view(np.uint8)
-            bias_fold_bytes[nt, 4 * c + 2:4 * c + 4] = np.array([baseline_u16], np.uint16).view(np.uint8)
+            bias_fold_bytes[nt, 4 * c + 2:4 * c + 4] = np.array([control_u16], np.uint16).view(np.uint8)
             bias_fold_bytes[nt, 128 + 4 * c:128 + 4 * c + 4] = (
                 np.array([int(effective_i32[col])], np.int32).view(np.uint8)
             )
+    if args.bias_record_raw:
+        raw = Path(args.bias_record_raw).read_bytes()
+        expected = n_t * 256
+        if len(raw) != expected:
+            raise ValueError(f"{args.bias_record_raw}: got {len(raw)} bytes, expected {expected}")
+        bias_fold_bytes = np.frombuffer(raw, dtype=np.uint8).reshape(n_t, 256).copy()
     bias_init = numpy_helper.from_array(
         bias_fold_bytes.view(np.int32).reshape(1, n_t, 1, 64).copy(),
         name="bias",
@@ -248,14 +365,18 @@ def main() -> None:
     os.makedirs(runtime_dir, exist_ok=True)
     runtime_input_list = os.path.join(out_dir, "runtime_input_list.txt")
     if args.mode == "chain":
-        a0 = make_activation(m, k, 0)
+        a0 = case_a_q.reshape(1, 1, m, k) if case_a_q is not None else make_activation(m, k, 0)
         a0.tofile(os.path.join(runtime_dir, "act_u8i8.raw"))
         with open(runtime_input_list, "w", encoding="utf-8") as f:
             f.write("act_raw:=runtime_inputs_u8/act_u8i8.raw\n")
-        cur = a0.reshape(m, k).astype(np.int32)
-        for _ in range(chain):
-            cur = np.clip((cur - ACT_ZP) @ w_raw_kn.astype(np.int32) + bias_q, 0, 255)
-        out_ref = cur.astype(np.uint8)
+        out_ref = drain_reference(
+            a0.reshape(m, k),
+            w_raw_kn,
+            effective_i32,
+            drain_scale_f16.astype(np.float32),
+            baseline_u16,
+            chain,
+        )
     else:
         input_parts = []
         for i in range(chain):
@@ -284,6 +405,21 @@ def main() -> None:
                 "shape_mkn": [m, k, n],
                 "graph_input_shape": [1, 1, m, k],
                 "graph_output_shape": [1, 1, m, n],
+                "source_case_dir": str(Path(args.case_dir).resolve()) if args.case_dir else None,
+                "bias_record_raw": str(Path(args.bias_record_raw).resolve()) if args.bias_record_raw else None,
+                "u8i8_drain": {
+                    "act_scale": act_scale,
+                    "output_scale": output_scale,
+                    "bias_scale_f16_min": float(drain_scale_f16.astype(np.float32).min()),
+                    "bias_scale_f16_max": float(drain_scale_f16.astype(np.float32).max()),
+                    "bias_control_u16_unique": sorted(int(v) for v in np.unique(drain_control_u16)),
+                    "bias_baseline_override_u16": baseline_u16 if args.baseline_u16 else None,
+                    "bias_prepare": (
+                        "htp_global_scale_requant"
+                        if case_weight_scale is not None
+                        else "direct_bias_q"
+                    ),
+                },
             },
             f,
             indent=2,
@@ -291,7 +427,10 @@ def main() -> None:
 
     np.save(out_path + ".wRaw_KN.npy", w_raw_kn)
     np.save(out_path + ".bias_q_int32.npy", bias_q)
+    np.save(out_path + ".prepared_bias_q_int32.npy", prepared_bias_q)
     np.save(out_path + ".effective_int32.npy", effective_i32)
+    np.save(out_path + ".drain_scale_f16.npy", drain_scale_f16)
+    np.save(out_path + ".drain_control_u16.npy", drain_control_u16)
     np.save(out_path + ".out_ref_u8.npy", out_ref)
 
     print(f"  -> {out_path}")

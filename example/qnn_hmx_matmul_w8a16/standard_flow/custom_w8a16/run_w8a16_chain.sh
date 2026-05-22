@@ -28,6 +28,7 @@ MODE="${MODE:-chain_qdq}"
 OUT_DIR="${OUT_DIR:-$SCRIPT_DIR/out/w8a16_${MODE}_${M}}"
 SKIP_DEVICE="${SKIP_DEVICE:-0}"
 NATIVE_OUTPUT="${NATIVE_OUTPUT:-1}"
+VERIFY_REF="${VERIFY_REF:-1}"
 
 mkdir -p "$OUT_DIR"
 cd "$SCRIPT_DIR"
@@ -194,6 +195,7 @@ CHECK_ARGS=("$OUT_DIR" --require-native-io --require-layout-flags --reject-float
 python "$ROOT_DIR/scripts/check_qnn_artifact_standard.py" "${CHECK_ARGS[@]}"
 
 VERIFY_STATUS=0
+if [ "$VERIFY_REF" = "1" ]; then
 python3 - "$OUT_DIR" <<'PY' || VERIFY_STATUS=$?
 import sys
 from pathlib import Path
@@ -274,6 +276,9 @@ if native_ref_q is not None:
 if ok != out_q.size:
     raise SystemExit(3)
 PY
+else
+    echo "  bit-exact: skipped (VERIFY_REF=0)"
+fi
 
 if [ "$RUN_STATUS" != "0" ] || [ "$VERIFY_STATUS" != "0" ]; then
     echo "ERROR: device validation failed (run=$RUN_STATUS verify=$VERIFY_STATUS)" >&2

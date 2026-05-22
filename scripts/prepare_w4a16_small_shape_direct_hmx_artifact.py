@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare a reduced W4A16 artifact for the direct-HMX tutorial path.
+"""Prepare a W4A16 artifact for the direct-HMX custom-baseline path.
 
 This keeps the experiment on the recovered HMX body/wrapper path.  It does not
 introduce a CPU value model; it only builds a smaller prepared_state from a
@@ -119,7 +119,7 @@ def build_oracle(custom_artifact: Path, native_artifact: Path) -> dict:
             },
         },
         "reduced_shape_policy": {
-            "purpose": "small-shape direct-HMX bringup",
+            "purpose": "direct-HMX custom-baseline bringup",
             "cpu_value_model_used": False,
             "native_oracle": "device-backed QNN native Conv Y.raw",
             "minimum_valid_w4a16_tile": True,

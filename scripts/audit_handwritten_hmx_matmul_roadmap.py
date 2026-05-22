@@ -35,24 +35,8 @@ def main() -> int:
     args = parser.parse_args()
 
     root = args.artifact_root.resolve()
-    tutorial = load_json(root / "w4a16_qnn_kernel_tutorial" / "device_result.json")
     w4a16_chain8 = load_json(root / "device_body_w4a16_chain8_custom_baseline.json")
     w4a16_bridge = load_json(root / "w4a16_chain8_custom_baseline_native_bridge.json")
-    result = (tutorial or {}).get("result", {})
-    gates = [
-        (tutorial or {}).get(key, {}).get("match") is True
-        for key in (
-            "prepared_state_compare",
-            "call_abi_compare",
-            "vtcm_offset_compare",
-            "step_trace_compare",
-            "hnh_path_compare",
-        )
-    ]
-    tutorial_exact = (
-        result.get("byte_differences") == 0
-        and result.get("exactness_status") == "byte_exact_device_diff"
-    )
     chain8_exact = exact_device_body(w4a16_chain8)
     bridge_exact = (
         (w4a16_bridge or {}).get("accepted_bridge") is True
@@ -71,19 +55,6 @@ def main() -> int:
         {
             "id": "m1_owned_runtime_boundary",
             "status": "pass" if (Path("example/handwritten_hmx_matmul").is_dir()) else "fail",
-        },
-        {
-            "id": "w4a16_tutorial_direct_hmx_route",
-            "status": "pass" if tutorial is not None and all(gates) else "open",
-            "device_required": args.require_device,
-            "gate_names": [
-                "prepared_state_compare",
-                "call_abi_compare",
-                "vtcm_offset_compare",
-                "step_trace_compare",
-                "hnh_path_compare",
-            ],
-            "gate_matches": gates,
         },
         {
             "id": "w4a16_chain8_custom_baseline_exactness",
@@ -110,13 +81,12 @@ def main() -> int:
     ]
     payload = {
         "schema": "handwritten_hmx_matmul_roadmap_audit.v1",
-        "route": "tutorial_direct_hmx_wrapper",
+        "route": "direct_body_custom_baseline",
         "summary": {
             "pass": sum(1 for item in entries if item["status"] == "pass"),
             "open": sum(1 for item in entries if item["status"] == "open"),
             "fail": sum(1 for item in entries if item["status"] == "fail"),
             "w4a16_complete": chain8_exact and bridge_exact,
-            "legacy_tutorial_exact": tutorial_exact,
         },
         "entries": entries,
     }

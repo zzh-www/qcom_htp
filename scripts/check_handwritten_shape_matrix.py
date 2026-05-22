@@ -11,7 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 FAMILIES = ("u8i8", "w4a8", "w8a16", "w4a16")
-ACCEPTED_CANONICAL = ("u8i8", "w4a8", "w8a16")
+ACCEPTED_CANONICAL = ("u8i8", "w4a8", "w8a16", "w4a16")
 
 
 def load_json(path: Path) -> dict:

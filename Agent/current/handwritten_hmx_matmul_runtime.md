@@ -14,7 +14,8 @@ Primary files:
 - `example/handwritten_hmx_matmul/run_owned_smoke.py`
 - `scripts/run_handwritten_artifact_body_device.py`
 - `scripts/run_handwritten_artifact_body_sim.py`
-- `tests/handwritten_hmx_matmul/run_all.sh`
+- `tests/qnn_kernel_e2e/correctness/test_handwritten_hmx_matmul_e2e.sh`
+- `tests/qnn_kernel_e2e/handwritten_hmx_matmul/run_all.sh`
 
 The owned runtime does not execute QNN.  It prepares owned buffers, calls the
 replicated HMX body directly, and compares against retained offline oracle raw
@@ -56,27 +57,31 @@ then verifies that the same public raw output matches native raw after
 
 ## Gate
 
-Run the full device gate:
+Run the formal CI device gate:
 
 ```bash
-OUT_ROOT=/tmp/handwritten_hmx_matmul_gate \
+HANDWRITTEN_HMX_MATMUL_OUT_ROOT=/tmp/handwritten_hmx_matmul_gate \
 DEVICE=oneplus \
-tests/handwritten_hmx_matmul/run_all.sh
+tests/qnn_kernel_e2e/correctness/test_handwritten_hmx_matmul_e2e.sh
 ```
 
 Artifact-only smoke:
 
 ```bash
-ARTIFACT_ONLY=1 OUT_ROOT=/tmp/handwritten_hmx_matmul_gate \
-tests/handwritten_hmx_matmul/run_all.sh
+ARTIFACT_ONLY=1 HANDWRITTEN_HMX_MATMUL_OUT_ROOT=/tmp/handwritten_hmx_matmul_gate \
+tests/qnn_kernel_e2e/correctness/test_handwritten_hmx_matmul_e2e.sh
 ```
+
+The wrapper delegates to
+`tests/qnn_kernel_e2e/handwritten_hmx_matmul/run_all.sh`; that script is the
+implementation sub-gate, not the formal CI entrypoint.
 
 The last accepted device run used:
 
 ```bash
 OUT_ROOT=/tmp/handwritten_hmx_matmul_gate_device_refresh2 \
 DEVICE=oneplus \
-tests/handwritten_hmx_matmul/run_all.sh
+tests/qnn_kernel_e2e/handwritten_hmx_matmul/run_all.sh
 ```
 
-It produced a complete checklist with `pass=4`, `open=0`, `fail=0`.
+It produced a complete checklist with `pass=3`, `open=0`, `fail=0`.

@@ -84,43 +84,6 @@ def _validate_optrace(
     return errors
 
 
-def _validate_w16_profile(custom_dir: Path) -> list[str]:
-    profile = _load_json(custom_dir / "w16a16_run_profile.json")
-    expected = {
-        "kernel_profile": "accepted",
-        "acceptance_scope": "canonical_256_native_oracle",
-        "boundary_policy": "single_custom_op_internal_split_n128",
-    }
-    errors = []
-    for key, value in expected.items():
-        if profile.get(key) != value:
-            errors.append(f"w16a16 profile {key}={profile.get(key)!r}, expected {value!r}")
-
-    compare_path = custom_dir / "analysis" / "w16a16_custom_compare.json"
-    if compare_path.exists():
-        compare = _load_json(compare_path)
-        gate = compare.get("alignment_gate", {})
-        checks = gate.get("checks", {})
-        stable_checks = (
-            "native_raw_exact",
-            "default_acceptance_profile",
-            "same_or_justified_boundary",
-            "native_packet_budget",
-            "diagnostic_profile_only",
-        )
-        for name in stable_checks:
-            check = checks.get(name, {})
-            if check.get("pass") is not True:
-                errors.append(f"w16a16 analysis {name} did not pass")
-        cycle_check = checks.get("native_cycle_budget", {})
-        if cycle_check.get("pass") is not True:
-            print(
-                "  [warn] w16a16 native_cycle_budget did not pass: "
-                f"{cycle_check.get('evidence', 'no evidence')}"
-            )
-    return errors
-
-
 def _validate_lpbq_profile(custom_dir: Path) -> list[str]:
     errors: list[str] = []
     overrides = _load_json(custom_dir / "quant_overrides.json")
@@ -244,7 +207,6 @@ def main() -> int:
     parser.add_argument("--expected-qnn-ops", required=True, type=int)
     parser.add_argument("--dtype", choices=("uint8", "uint16"), default="uint8")
     parser.add_argument("--native-transpose-2d", action="store_true")
-    parser.add_argument("--w16-accepted", action="store_true")
     parser.add_argument("--expect-lpbq", action="store_true")
     parser.add_argument("--expect-ref-exact", action="store_true")
     args = parser.parse_args()
@@ -286,8 +248,6 @@ def main() -> int:
             args.expected_qnn_ops,
         )
     )
-    if args.w16_accepted:
-        errors.extend(_validate_w16_profile(custom_dir))
     if args.expect_lpbq:
         errors.extend(_validate_lpbq_profile(custom_dir))
 

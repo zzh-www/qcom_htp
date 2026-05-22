@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Generate owned prepared-state inputs from the frozen oracle manifest.
 
-This is Milestone-2 scaffolding: it moves prepared-state creation out of the
-smoke runner and records what is exact, what is generated, and what still needs
-native prepared-byte proof.
+This builds the owned prepared-state files consumed by the QNN-free runtime
+smoke and direct-body gates.
 """
 
 from __future__ import annotations

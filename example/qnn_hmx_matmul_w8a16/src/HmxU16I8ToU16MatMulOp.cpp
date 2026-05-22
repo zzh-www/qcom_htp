@@ -374,6 +374,10 @@ static inline uint32_t hmx_w8a16_extra_param2()
 #endif
 }
 
+#ifndef HMX_W8A16_ENTRY_DUMP_CHANNEL
+#define HMX_W8A16_ENTRY_DUMP_CHANNEL 243u
+#endif
+
 static inline const uint8_t *hmx_w8a16_ptr_with_offset(const uint8_t *ptr, intptr_t offset)
 {
     return reinterpret_cast<const uint8_t *>(reinterpret_cast<uintptr_t>(ptr) + offset);
@@ -456,6 +460,13 @@ static inline void store_u16_words(uint16_t *dst, const uint16_t *src, uint32_t 
 {
     for (uint32_t i = 0; i < count; ++i) dst[i] = src[i];
 }
+
+#if defined(HMX_W8A16_ENTRY_DUMP)
+static inline void copy_dump_bytes(uint8_t *dst, const uint8_t *src, uint32_t count)
+{
+    for (uint32_t i = 0; i < count; ++i) dst[i] = src[i];
+}
+#endif
 
 static uint32_t g_hmx_w8a16_mask_buf[16] __attribute__((aligned(16)));
 
@@ -682,7 +693,7 @@ static uint32_t hmx_w8a16_precompute(
     void **act_blocks = qhpi_tensor_block_table(inputs[2]);
     void **out_blocks = qhpi_tensor_block_table(outputs[0]);
     const uint32_t blocks = qhpi_tensor_block_table_length(inputs[2]);
-#if defined(HMX_W8A16_DIRECT_OUTPUT_RAW)
+#if defined(HMX_W8A16_DIRECT_OUTPUT_RAW) || defined(HMX_W8A16_ENTRY_DUMP)
     uint16_t *out_raw = reinterpret_cast<uint16_t *>(qhpi_tensor_raw_data(outputs[0]));
 #else
     uint16_t *out_raw = nullptr;
@@ -718,7 +729,12 @@ static uint32_t hmx_w8a16_precompute(
 
     pc->bias_bytes = hmx_w8a16_ptr_with_offset(bias_bytes, HMX_W8A16_BIAS_PTR_OFFSET);
     pc->wt_pack = hmx_w8a16_ptr_with_offset(wt_pack, HMX_W8A16_WEIGHT_PTR_OFFSET);
+#if defined(HMX_W8A16_ENTRY_DUMP)
+    pc->out_first_block =
+        reinterpret_cast<uint8_t *>(out_raw ? out_raw : reinterpret_cast<uint16_t *>(out_blocks[0]));
+#else
     pc->out_first_block = reinterpret_cast<uint8_t *>(out_blocks[0]);
+#endif
     pc->act_qhpi_table = act_src;
     pc->out_qhpi_table = out_src;
     for (uint32_t row4 = 0; row4 < row4_groups; ++row4) {
@@ -840,6 +856,66 @@ static uint32_t hmx_w8a16_to_u16_matmul_precomputed_kernel(
         store_le32(dst, 56, act_desc->act_table_y_stride_words);
         const uint32_t *mask_words = reinterpret_cast<const uint32_t *>(mask_desc);
         for (uint32_t i = 0; i < 16; ++i) store_le32(dst, 64 + i * 4, mask_words[i]);
+    }
+    return QHPI_Success;
+#endif
+
+#if defined(HMX_W8A16_ENTRY_DUMP)
+    if (pc->out_first_block) {
+        uint8_t *dst = pc->out_first_block;
+        for (uint32_t i = 0; i < 2048; ++i) dst[i] = 0;
+
+        store_le32(dst, 0, 0x48385845u); /* H8XE */
+        store_le32(dst, 4, pc->S);
+        store_le32(dst, 8, pc->M_t);
+        store_le32(dst, 12, pc->N_t);
+        store_le32(dst, 16, pc->K_t);
+        store_le32(dst, 20, pc->mt_groups);
+        store_le32(dst, 24, act_table_stride);
+        store_le32(dst, 28, out_table_stride);
+
+        store_le32(dst, 32, out_desc->out_table_stride_dwords);
+        store_le32(dst, 36, out_desc->out_y_stride_words);
+        store_le32(dst, 40, out_desc->n_tiles_pow2);
+        store_le32(dst, 44, static_cast<uint32_t>(out_desc->m_total_minus_step));
+        store_le32(dst, 48, out_desc->k_total_bytes);
+        store_le32(dst, 52, act_desc->n_act_pairs);
+        store_le32(dst, 56, act_desc->act_table_y_stride_words);
+        store_le32(dst, 60, static_cast<uint32_t>(reinterpret_cast<uintptr_t>(pc->bias_bytes)));
+        store_le32(dst, 64, static_cast<uint32_t>(reinterpret_cast<uintptr_t>(pc->wt_pack)));
+        store_le32(dst, 68, static_cast<uint32_t>(reinterpret_cast<uintptr_t>(act_desc->act_ptr_pairs)));
+        store_le32(dst, 72, static_cast<uint32_t>(reinterpret_cast<uintptr_t>(out_desc->out_tile_ptr_table)));
+        store_le32(dst, 76, extra_param[0]);
+        store_le32(dst, 80, extra_param[1]);
+        store_le32(dst, 84, extra_param[2]);
+
+        const uint32_t *mask_words = reinterpret_cast<const uint32_t *>(mask_desc);
+        for (uint32_t i = 0; i < 16; ++i) store_le32(dst, 128 + i * 4, mask_words[i]);
+
+        const uint32_t tile = pc->N_t > 7 ? 7u : 0u;
+        const uint32_t tile_offset = tile * 512u;
+        store_le32(dst, 96, tile);
+        store_le32(dst, 100, tile_offset);
+        const uint32_t dump_channel = HMX_W8A16_ENTRY_DUMP_CHANNEL;
+        const uint32_t dump_channel_in_tile = dump_channel & 31u;
+        const uint32_t dump_lane = dump_channel_in_tile >> 1;
+        const uint32_t dump_parity = dump_channel_in_tile & 1u;
+        const uint32_t dump_tile = dump_channel >> 5;
+        const uint32_t dump_slot_offset =
+            dump_tile * 512u + 256u + dump_parity * 128u + dump_lane * 8u;
+        store_le32(dst, 104, dump_channel);
+        store_le32(dst, 108, dump_tile);
+        store_le32(dst, 112, dump_lane);
+        store_le32(dst, 116, dump_parity);
+        store_le32(dst, 120, dump_slot_offset);
+        for (uint32_t i = 0; i < 8; ++i) {
+            store_le32(dst, 32 + i * 4, pc->bias_bytes[dump_slot_offset + i]);
+        }
+        const uint32_t dump_base_slot_offset = dump_tile * 512u + 256u + dump_lane * 8u;
+        for (uint32_t i = 0; i < 8; ++i) {
+            store_le32(dst, 64 + i * 4, pc->bias_bytes[dump_base_slot_offset + i]);
+        }
+        copy_dump_bytes(dst + 256, pc->bias_bytes + tile_offset, 512);
     }
     return QHPI_Success;
 #endif

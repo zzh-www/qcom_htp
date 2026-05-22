@@ -21,8 +21,8 @@ from analyze_w4a16_native_run import _load_quantized_raw
 
 
 DEFAULT_DIRECT = Path("/tmp/w4a16_256_custombaseline_deep_probe.json")
-DEFAULT_CUSTOM = Path("example/qnn_matmul_profile/output_w4a16_chain1_default_ci_e2e_256")
-DEFAULT_NATIVE = Path("example/qnn_matmul_profile/output_w4a16_native_chain1_default_ci_e2e_256")
+DEFAULT_CUSTOM = Path("example/qnn_matmul_profile/output_w4a16_aligned_e2e_256")
+DEFAULT_NATIVE = Path("example/qnn_matmul_profile/output_w4a16_native_ref_e2e_256")
 DEFAULT_OUT = Path("/tmp/w4a16_custom_baseline_native_bridge_summary.json")
 
 

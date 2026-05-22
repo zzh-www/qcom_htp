@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Summarize canonical promotion evidence for handwritten HMX MatMul.
 
-The promotion record is intentionally narrower than final roadmap completion:
-it only records whether a canonical family has enough no-QNN owned-body
-evidence to close the M4 canonical E2E item.  Shape/profile acceptance and LPBQ
-coverage remain outside the current tutorial/direct-HMX gate.
+The promotion record is intentionally narrower than broad shape expansion:
+it records whether each active canonical family has enough no-QNN owned-body
+evidence to close the M4 canonical E2E item.
 """
 
 from __future__ import annotations

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the current handwritten HMX MatMul tutorial/direct-HMX route."""
+"""Validate the current handwritten HMX MatMul direct-body route."""
 
 from __future__ import annotations
 
@@ -28,12 +28,8 @@ def validate_static_files(errors: list[str]) -> None:
         "example/handwritten_hmx_matmul/oracles.json",
         "example/handwritten_hmx_matmul/shape_matrix.json",
         "example/handwritten_hmx_matmul/profile_matrix.json",
-        "example/handwritten_hmx_matmul/tutorial_w4a16_qnn_kernel/README.md",
-        "scripts/build_w4a16_qnn_kernel_tutorial.py",
-        "scripts/run_w4a16_qnn_kernel_tutorial_device.py",
         "scripts/run_handwritten_artifact_body_device.py",
         "scripts/run_handwritten_artifact_body_sim.py",
-        "scripts/check_w4a16_tutorial_chain1_sources.py",
         "scripts/prepare_w4a16_small_shape_direct_hmx_artifact.py",
         "scripts/summarize_w4a16_custom_baseline_native_bridge.py",
     ]
@@ -43,9 +39,8 @@ def validate_static_files(errors: list[str]) -> None:
             errors.append(f"missing required route file: {item}")
 
     tests = [
-        "tests/handwritten_hmx_matmul/run_all.sh",
-        "tests/handwritten_hmx_matmul/test_w4a16_qnn_kernel_tutorial_wrapper.sh",
-        "tests/handwritten_hmx_matmul/test_w4a16_run_all_matrix_wiring.sh",
+        "tests/qnn_kernel_e2e/correctness/test_handwritten_hmx_matmul_e2e.sh",
+        "tests/qnn_kernel_e2e/handwritten_hmx_matmul/run_all.sh",
     ]
     for item in tests:
         path = ROOT / item
@@ -54,12 +49,27 @@ def validate_static_files(errors: list[str]) -> None:
 
 
 def validate_no_old_route_wiring(errors: list[str]) -> None:
-    run_all = ROOT / "tests/handwritten_hmx_matmul/run_all.sh"
+    ci_run_all = ROOT / "tests/qnn_kernel_e2e/run_all.sh"
+    ci_correctness = ROOT / "tests/qnn_kernel_e2e/run_correctness.sh"
+    ci_wrapper = ROOT / "tests/qnn_kernel_e2e/correctness/test_handwritten_hmx_matmul_e2e.sh"
+    if ci_run_all.is_file():
+        text = ci_run_all.read_text(encoding="utf-8")
+        if "run_correctness.sh" not in text:
+            errors.append("qnn_kernel_e2e/run_all.sh must include correctness CI")
+    if ci_correctness.is_file():
+        text = ci_correctness.read_text(encoding="utf-8")
+        if "correctness/test_handwritten_hmx_matmul_e2e.sh" not in text:
+            errors.append("qnn_kernel_e2e/run_correctness.sh must include handwritten HMX MatMul CI")
+    if ci_wrapper.is_file():
+        text = ci_wrapper.read_text(encoding="utf-8")
+        if "tests/qnn_kernel_e2e/handwritten_hmx_matmul/run_all.sh" not in text:
+            errors.append("handwritten HMX MatMul CI wrapper must delegate to the route sub-gate")
+
+    run_all = ROOT / "tests/qnn_kernel_e2e/handwritten_hmx_matmul/run_all.sh"
     if not run_all.is_file():
         return
     text = run_all.read_text(encoding="utf-8")
     for marker in (
-        "test_w4a16_qnn_kernel_tutorial_wrapper.sh",
         "prepare_w4a16_small_shape_direct_hmx_artifact.py",
         "device_body_w4a16_chain8_custom_baseline.json",
         "w4a16_chain8_custom_baseline_native_bridge.json",
@@ -74,15 +84,11 @@ def validate_no_old_route_wiring(errors: list[str]) -> None:
         "context_record_state_before_bias_control_load",
         "wrapper_payload_window_probe",
         "selector_mutation_plan",
+        "w4a16_qnn_kernel_tutorial",
+        "check_w4a16_tutorial_chain1_sources.py",
     ):
         if marker in text:
             errors.append(f"run_all.sh still wires old W4A16 route: {marker}")
-    tutorial_build = ROOT / "example/handwritten_hmx_matmul/tutorial_w4a16_qnn_kernel/build.sh"
-    if tutorial_build.is_file():
-        build_text = tutorial_build.read_text(encoding="utf-8")
-        for marker in ("DESCRIPTOR_CARRIER", "--descriptor-carrier"):
-            if marker in build_text:
-                errors.append(f"tutorial build still exposes old descriptor carrier route: {marker}")
 
 
 def validate_body_json(path: Path, schema: str, errors: list[str]) -> None:
@@ -166,31 +172,6 @@ def validate_w4a16_chain8_custom_baseline(root: Path, require_device: bool, erro
         errors.append("W4A16 chain8 custom-baseline checksum mismatch")
 
 
-def validate_tutorial_device(root: Path, require_device: bool, errors: list[str]) -> None:
-    if not require_device:
-        return
-    path = root / "w4a16_qnn_kernel_tutorial" / "device_result.json"
-    try:
-        data = load_json(path)
-    except ValueError as exc:
-        errors.append(str(exc))
-        return
-    if data.get("qnn_runtime_used") is not False:
-        errors.append("tutorial device result must record qnn_runtime_used=false")
-    for key in (
-        "prepared_state_compare",
-        "call_abi_compare",
-        "vtcm_offset_compare",
-        "step_trace_compare",
-        "hnh_path_compare",
-    ):
-        if data.get(key, {}).get("match") is not True:
-            errors.append(f"tutorial gate mismatch: {key}")
-    result = data.get("result", {})
-    if result.get("entered_and_returned") is not True:
-        errors.append("tutorial direct HMX body did not enter and return")
-
-
 def validate_completion_checklist(root: Path, errors: list[str]) -> None:
     audit_path = root / "roadmap_audit.json"
     checklist_path = root / "completion_checklist.json"
@@ -211,8 +192,8 @@ def validate_completion_checklist(root: Path, errors: list[str]) -> None:
     if checklist.get("schema") != "handwritten_hmx_matmul_completion_checklist.v1":
         errors.append(f"unexpected schema in {checklist_path}: {checklist.get('schema')!r}")
         return
-    if checklist.get("route") != "tutorial_direct_hmx_wrapper":
-        errors.append(f"completion checklist must use tutorial route: {checklist.get('route')!r}")
+    if checklist.get("route") != "direct_body_custom_baseline":
+        errors.append(f"completion checklist must use direct body route: {checklist.get('route')!r}")
     evidence = []
     for item in checklist.get("criteria", []):
         if isinstance(item, dict):
@@ -234,7 +215,6 @@ def main() -> int:
     validate_static_files(errors)
     validate_no_old_route_wiring(errors)
     validate_artifacts(root, args.require_device, errors)
-    validate_tutorial_device(root, args.require_device, errors)
     validate_w4a16_chain8_custom_baseline(root, args.require_device, errors)
     validate_completion_checklist(root, errors)
 
@@ -245,7 +225,7 @@ def main() -> int:
         return 1
 
     mode = "device" if args.require_device else "artifact"
-    print(f"handwritten HMX MatMul gate: ok ({mode} tutorial/direct-HMX route, {root})")
+    print(f"handwritten HMX MatMul gate: ok ({mode} direct-body route, {root})")
     return 0
 
 

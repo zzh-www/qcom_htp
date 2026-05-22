@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate and run a Milestone-1 owned-runtime smoke artifact."""
+"""Generate and run an owned-runtime smoke artifact."""
 
 from __future__ import annotations
 

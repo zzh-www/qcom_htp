@@ -91,7 +91,7 @@ route.  Current acceptance is the device gate's chain8 custom-baseline path:
 - `scripts/summarize_w4a16_custom_baseline_native_bridge.py` verifies the same
   custom public raw output against the QNN native raw output after the existing
   `native_transpose_2d` transform;
-- `tests/handwritten_hmx_matmul/run_all.sh` requires this bridge before W4A16
+- `tests/qnn_kernel_e2e/handwritten_hmx_matmul/run_all.sh` requires this bridge before W4A16
   is promoted.
 
 Do not reintroduce old descriptor sweeps, residual-ranking scripts, or

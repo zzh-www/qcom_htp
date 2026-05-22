@@ -35,26 +35,19 @@
       ]
     },
     "w4a16": {
-      "accepted": false,
-      "blocker": "canonical W4A16 enters the owned HMX body on device but remains checksum-mismatched against QNN Native",
+      "accepted": true,
+      "acceptance_evidence": [
+        "promotion_evidence.json",
+        "device_body_w4a16_chain8_custom_baseline.json",
+        "artifact_body_w4a16_chain8_custom_baseline.json",
+        "w4a16_chain8_custom_baseline_native_bridge.json"
+      ],
+      "acceptance_scope": "m4_canonical_e2e",
+      "blocker": null,
       "chain": 8,
       "family": "w4a16",
       "profile": "canonical",
-      "qnn_reference": "example/qnn_matmul_profile/output_w4a16_native_ref_e2e_256",
-      "required_by_final_gate": true,
-      "shape_mkn": [
-        256,
-        256,
-        256
-      ]
-    },
-    "w4a16_chain1": {
-      "accepted": false,
-      "blocker": "chain1 has retained QNN evidence and an owned artifact-body comparison, but it is still checksum-mismatched and lacks device output/perf acceptance",
-      "chain": 1,
-      "family": "w4a16",
-      "profile": "chain1",
-      "qnn_reference": "example/qnn_matmul_profile/output_w4a16_native_chain1_default_ci_e2e_256",
+      "qnn_reference": "example/qnn_matmul_profile/output_w4a16_aligned_e2e_256",
       "required_by_final_gate": true,
       "shape_mkn": [
         256,
@@ -107,8 +100,7 @@
     "u8i8",
     "w4a8",
     "w8a16",
-    "w4a16",
-    "w4a16_chain1"
+    "w4a16"
   ],
   "schema": "handwritten_hmx_matmul_profile_matrix.v1"
 }

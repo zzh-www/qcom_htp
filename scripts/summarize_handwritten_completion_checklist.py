@@ -38,32 +38,6 @@ def criterion(
     }
 
 
-def tutorial_gate(root: Path) -> tuple[bool, dict]:
-    data = optional_json(root / "w4a16_qnn_kernel_tutorial" / "device_result.json")
-    matches = [
-        data.get(key, {}).get("match") is True
-        for key in (
-            "prepared_state_compare",
-            "call_abi_compare",
-            "vtcm_offset_compare",
-            "step_trace_compare",
-            "hnh_path_compare",
-        )
-    ]
-    result = data.get("result", {}) if isinstance(data.get("result"), dict) else {}
-    ok = bool(data) and data.get("qnn_runtime_used") is False and all(matches)
-    return ok, {
-        "present": bool(data),
-        "qnn_runtime_used": data.get("qnn_runtime_used"),
-        "gate_matches": matches,
-        "hnh_path": result.get("hnh_path"),
-        "entered_and_returned": result.get("entered_and_returned"),
-        "byte_differences": result.get("byte_differences"),
-        "output_checksum": result.get("output_checksum"),
-        "native_raw_checksum": result.get("native_raw_checksum"),
-    }
-
-
 def device_body_exact(root: Path, family: str) -> tuple[bool, dict]:
     data = optional_json(device_body_path(root, family))
     result = data.get("result", {}) if isinstance(data.get("result"), dict) else {}
@@ -121,7 +95,6 @@ def summarize(root: Path) -> dict:
         if isinstance(promotion.get("summary"), dict)
         else []
     )
-    tutorial_ok, tutorial = tutorial_gate(root)
     body_exact = {}
     body_records = {}
     for family in ACTIVE_FAMILIES:
@@ -133,13 +106,6 @@ def summarize(root: Path) -> dict:
     criteria = [
         criterion(
             1,
-            "current W4A16 route is tutorial/direct-HMX and does not use QNN runtime",
-            "pass" if tutorial_ok else "open",
-            [str(root / "w4a16_qnn_kernel_tutorial" / "device_result.json")],
-            [] if tutorial_ok else [f"tutorial_gate={tutorial}"],
-        ),
-        criterion(
-            2,
             "retained exact families keep QNN-free direct-device body evidence",
             "pass" if all(body_exact[family] for family in PROMOTABLE_FAMILIES) else "open",
             [str(device_body_path(root, family)) for family in PROMOTABLE_FAMILIES],
@@ -150,7 +116,7 @@ def summarize(root: Path) -> dict:
             ],
         ),
         criterion(
-            3,
+            2,
             "W4A16 chain8 custom-baseline direct-HMX output is byte-exact and bridges to native via native_transpose_2d",
             "pass" if body_exact["w4a16"] and bridge_exact else "open",
             [
@@ -162,7 +128,7 @@ def summarize(root: Path) -> dict:
             else [f"w4a16_chain8={body_records['w4a16']}", f"bridge={bridge_record}"],
         ),
         criterion(
-            4,
+            3,
             "roadmap audit has been regenerated for this artifact root",
             "pass" if audit.get("schema") == "handwritten_hmx_matmul_roadmap_audit.v1" else "open",
             [str(root / "roadmap_audit.json")],
@@ -180,7 +146,7 @@ def summarize(root: Path) -> dict:
     ]
     return {
         "schema": "handwritten_hmx_matmul_completion_checklist.v1",
-        "route": "tutorial_direct_hmx_wrapper",
+        "route": "direct_body_custom_baseline",
         "artifact_root": str(root),
         "scope": {
             "active_families": list(ACTIVE_FAMILIES),

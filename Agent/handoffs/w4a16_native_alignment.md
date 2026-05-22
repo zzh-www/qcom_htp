@@ -3,10 +3,9 @@
 Status note: this handoff is historical/native-oracle material for the old
 QNN custom-op alignment route.  It should not be used as the active
 implementation plan for the current handwritten W4A16 goal.  The active route
-is the tutorial/direct-HMX wrapper under
-`example/handwritten_hmx_matmul/tutorial_w4a16_qnn_kernel/`; QNN material here
-is retained only for oracle provenance, prepared-state references, and negative
-evidence.
+is the direct-body custom-baseline gate under
+`example/handwritten_hmx_matmul/`; QNN material here is retained only for
+oracle provenance, prepared-state references, and negative evidence.
 
 Current status: `example/qnn_hmx_matmul_w4a16`
 (`HmxU16I4ToU16MatMul`, i4 weight x u16 activation -> u16 output) now has a
@@ -914,7 +913,7 @@ a contradiction.
 
 ## Native HNH Wrapper ABI Notes
 
-Current active-route note: the tutorial/direct-HMX path has now closed generic
+Current active-route note: the direct-body custom-baseline path has now closed generic
 wrapper/HMX-environment probing; the old derivation script was removed during
 handwritten-route cleanup after its conclusion was folded into this handoff.
 The native bit5 fast path reaches `hmx_v73_convhnh1x1deep_stride1` before

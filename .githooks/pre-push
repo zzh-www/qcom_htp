@@ -15,8 +15,8 @@ EOF
     exit 1
 fi
 
-echo "=== qcom_htp pre-push: running full QNN kernel E2E CI ==="
+echo "=== qcom_htp pre-push: running full kernel CI gates ==="
 echo "    tests/qnn_kernel_e2e/run_all.sh"
 tests/qnn_kernel_e2e/run_all.sh
 
-echo "=== qcom_htp pre-push: CI passed ==="
+echo "=== qcom_htp pre-push: kernel CI passed ==="

@@ -7,7 +7,7 @@ runtime contracts, and performance scopes.
 
 Machine-readable manifest: `../../example/handwritten_hmx_matmul/oracles.json`.
 W16A16 remains in the manifest as retained evidence, but it is inactive for the
-current W4A16 tutorial/direct-HMX route.
+current W4A16 direct-body custom-baseline route.
 
 Regenerate and validate:
 

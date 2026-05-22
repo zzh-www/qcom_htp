@@ -4,11 +4,28 @@
 import argparse
 import json
 import os
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import onnx
 from onnx import TensorProto, helper, numpy_helper
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from scripts.qnn_htp_bias_prepare import (
+    qnn_htp_perchannel_a8_sidecar_bias_q,
+    qnn_htp_perchannel_a16_sidecar_bias_q,
+    qnn_htp_perchannel_w4a8_sidecar_effective_i32,
+)
+from scripts.qnn_htp_u8_drain import (
+    qnn_htp_w8a16_drain_control_words,
+    qnn_htp_w8a16_drain_scale,
+    qnn_htp_u8_drain_scale_control,
+)
 
 DOMAIN = "hmx"
 
@@ -62,6 +79,21 @@ def _activation_encoding(bits: int) -> dict:
         "offset": 0,
         "min": 0.0,
         "max": max_value,
+    }
+
+
+def _case_tensor_encoding(qparams: dict) -> dict:
+    bits = int(qparams["bitwidth"])
+    scale = float(qparams["scale"])
+    zp = int(qparams["zero_point"])
+    return {
+        "bitwidth": bits,
+        "dtype": "int",
+        "is_symmetric": "True" if bits == 16 else "False",
+        "scale": scale,
+        "offset": -zp,
+        "min": (0 - zp) * scale,
+        "max": ((1 << bits) - 1 - zp) * scale,
     }
 
 
@@ -369,13 +401,21 @@ def _pack_w4_native_npair_tile32_nmajor(nib: np.ndarray, order: str) -> np.ndarr
     return packed.astype(np.uint8, copy=False)
 
 
-def _pack_native_a16_bias(family: Family, w_raw_kn: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def _pack_native_a16_bias(
+    family: Family,
+    w_raw_kn: np.ndarray,
+    sidecar_bias_q: np.ndarray | None = None,
+    drain_scale: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
     """Pack native A16 bias/control records for 32-column HMX tiles."""
     k, n = w_raw_kn.shape
     if k % 32 or n % 32:
         raise ValueError("native A16 bias pack requires K and N multiples of 32")
     sum_w = w_raw_kn.astype(np.int32).sum(axis=0)
-    effective_i32 = (-128 * sum_w).astype(np.int32)
+    if sidecar_bias_q is None:
+        sidecar_bias_q = np.zeros(n, dtype=np.int32)
+    sidecar_bias_q = sidecar_bias_q.astype(np.int32, copy=False).reshape(n)
+    effective_i32 = ((-128 * sum_w).astype(np.int32) + sidecar_bias_q).astype(np.int32)
     packed = np.zeros((n // 32, 512), dtype=np.uint8)
     if family.weight_bits == 4:
         const_words = [0x5524, 0x8040, 0x0092, 0x4000]
@@ -383,18 +423,71 @@ def _pack_native_a16_bias(family: Family, w_raw_kn: np.ndarray) -> tuple[np.ndar
         const_words = [0x4440, 0x8040, 0x0008, 0x4000]
     else:
         raise ValueError("native A16 bias pack is not decoded for this weight width")
-    const = np.array(const_words, dtype=np.uint16).view(np.uint8)
+    const = np.array(const_words, dtype=np.uint16)
+    if drain_scale is not None:
+        if family.name not in {"w8a16", "w4a16"}:
+            raise ValueError("variable A16 drain control is currently decoded only for w8a16/w4a16")
+        exact = drain_scale.astype(np.float32, copy=False).reshape(n)
+        word0_u16, word1_u16, word2_u16, word3_u16 = qnn_htp_w8a16_drain_control_words(
+            exact
+        )
+    else:
+        word0_u16 = np.full(n, const[0], dtype=np.uint16)
+        word1_u16 = np.full(n, const[1], dtype=np.uint16)
+        word2_u16 = np.full(n, const[2], dtype=np.uint16)
+        word3_u16 = np.full(n, const[3], dtype=np.uint16)
     for nt in range(n // 32):
         for parity in (0, 1):
             half_base = parity * 256
             for lane, c in enumerate(range(parity, 32, 2)):
                 col = nt * 32 + c
                 lane_base = half_base + 8 * lane
-                packed[nt, lane_base:lane_base + 8] = const
+                packed[nt, lane_base:lane_base + 8] = np.array(
+                    [word0_u16[col], word1_u16[col], word2_u16[col], word3_u16[col]],
+                    dtype=np.uint16,
+                ).view(np.uint8)
                 packed[nt, half_base + 128 + 8 * lane:half_base + 132 + 8 * lane] = (
                     np.array([int(effective_i32[col])], dtype=np.int32).view(np.uint8)
                 )
     return packed, effective_i32
+
+
+def _load_python_case(family: Family, case_dir: str | None) -> dict | None:
+    if not case_dir:
+        return None
+    root = Path(case_dir).resolve()
+    meta = json.loads((root / "case.json").read_text(encoding="utf-8"))
+    expected_family = {
+        "w4a8": "w4a8_per_channel",
+        "w8a16": "w8a16",
+        "w4a16": "w4a16_per_channel",
+    }.get(family.name)
+    if meta.get("family") != expected_family:
+        raise ValueError(
+            f"{family.name} custom case import expected family={expected_family!r}, "
+            f"got {meta.get('family')!r}"
+        )
+    if meta.get("weight_schema_variant") != "per_output_channel":
+        raise ValueError(
+            f"{family.name} custom case import currently supports per-output-channel only, "
+            f"got {meta.get('weight_schema_variant')!r}"
+        )
+    files = meta["files"]
+    m, k, n = [int(v) for v in meta["shape_mkn"]]
+    activation_q = np.load(root / files["activation_q"]["npy"]).reshape(m, k)
+    weight_q_nk = np.load(root / files["weight_q_nk"]["npy"]).reshape(n, k)
+    bias_q = np.load(root / files["bias_q_int32"]["npy"]).astype(np.int32).reshape(n)
+    weight_scale = np.load(root / files["weight_scale"]["npy"]).astype(np.float32).reshape(n)
+    output_ref_q = np.load(root / files["output_ref_q"]["npy"]).reshape(m, n)
+    return {
+        "root": root,
+        "meta": meta,
+        "activation_q": activation_q,
+        "weight_q_nk": weight_q_nk,
+        "bias_q": bias_q,
+        "weight_scale": weight_scale,
+        "output_ref_q": output_ref_q,
+    }
 
 
 def _weight_initializer(
@@ -557,11 +650,85 @@ def _bias_initializer(
     baseline_value: int,
     bias_layout: str,
     bias_fold: str,
+    case_data: dict | None = None,
 ) -> tuple:
     n = w_raw_kn.shape[1]
     n_t = n // 32
     act_zp = 1 << (family.act_bits - 1)
     sum_w = w_raw_kn.astype(np.int32).sum(axis=0)
+    if case_data is not None:
+        meta = case_data["meta"]
+        act_scale_f64 = float(meta["qparams"]["activation"]["scale"])
+        output_scale_f64 = float(meta["qparams"]["output"]["scale"])
+        act_scale = np.float32(act_scale_f64)
+        output_scale = np.float32(output_scale_f64)
+        weight_scale = case_data["weight_scale"].astype(np.float32)
+        bias_q = case_data["bias_q"].astype(np.int32)
+        if _is_native_a16_family(family):
+            sidecar_bias_q = qnn_htp_perchannel_a16_sidecar_bias_q(
+                bias_q,
+                act_scale,
+                weight_scale,
+            )
+            drain_scale = None
+            if family.name in {"w8a16", "w4a16"}:
+                drain_scale = qnn_htp_w8a16_drain_scale(
+                    act_scale_f64,
+                    weight_scale,
+                    output_scale_f64,
+                )
+            bias_fold_bytes, effective_i32 = _pack_native_a16_bias(
+                family,
+                w_raw_kn,
+                sidecar_bias_q=sidecar_bias_q,
+                drain_scale=drain_scale,
+            )
+            init = numpy_helper.from_array(
+                bias_fold_bytes.view(np.int32).reshape(1, n_t, 1, 128).copy(),
+                name="bias",
+            )
+            return init, bias_q, effective_i32
+        if family.out_bits != 8:
+            raise ValueError("Python-case bias import is currently implemented for U8-output families")
+        if family.name == "w4a8":
+            effective_i32 = qnn_htp_perchannel_w4a8_sidecar_effective_i32(
+                bias_q,
+                act_scale,
+                weight_scale,
+                w_raw_kn.astype(np.int32),
+                act_zp,
+            )
+        else:
+            prepared_bias_q = qnn_htp_perchannel_a8_sidecar_bias_q(
+                bias_q,
+                act_scale,
+                weight_scale,
+            )
+            effective_i32 = (-act_zp) * sum_w + prepared_bias_q
+        exact_scale = (
+            np.float32(512.0) * act_scale * weight_scale / output_scale
+        ).astype(np.float32)
+        if family.name == "w4a8":
+            exact_scale = (exact_scale / np.float32(16.0)).astype(np.float32)
+        scale_u16, control_u16 = qnn_htp_u8_drain_scale_control(exact_scale)
+        bias_fold_bytes = np.zeros((n_t, 256), dtype=np.uint8)
+        for nt in range(n_t):
+            for c in range(32):
+                col = nt * 32 + c
+                bias_fold_bytes[nt, 4 * c : 4 * c + 2] = np.array(
+                    [scale_u16[col]], np.uint16
+                ).view(np.uint8)
+                bias_fold_bytes[nt, 4 * c + 2 : 4 * c + 4] = np.array(
+                    [control_u16[col]], np.uint16
+                ).view(np.uint8)
+                bias_fold_bytes[nt, 128 + 4 * c : 128 + 4 * c + 4] = np.array(
+                    [int(effective_i32[col])], np.int32
+                ).view(np.uint8)
+        init = numpy_helper.from_array(
+            bias_fold_bytes.view(np.int32).reshape(1, n_t, 1, 64).copy(),
+            name="bias",
+        )
+        return init, bias_q, effective_i32
     if bias_layout == "native_a16":
         if not _is_native_a16_family(family):
             raise ValueError("native_a16 bias layout is only valid for A16/U16 families")
@@ -721,6 +888,13 @@ def _make_reference_step(
 
 
 def generate(family: Family, args: argparse.Namespace) -> None:
+    case_data = _load_python_case(family, args.case_dir)
+    if case_data is not None:
+        args.M, args.K, args.N = [int(v) for v in case_data["meta"]["shape_mkn"]]
+        if args.chain != 1 or args.mode not in {"chain", "chain_qdq"}:
+            raise ValueError("--case-dir currently supports --chain 1 --mode chain/chain_qdq only")
+        if args.mode == "chain_qdq" and not _is_native_a16_family(family):
+            raise ValueError("--case-dir --mode chain_qdq is currently supported only for A16 families")
     assert args.M % 32 == 0 and args.K % 32 == 0 and args.N % 32 == 0
     if args.chain != 1 and not (args.M == args.K == args.N):
         raise ValueError("non-square M/K/N is currently supported only for chain=1")
@@ -793,7 +967,10 @@ def generate(family: Family, args: argparse.Namespace) -> None:
     out_dir = os.path.dirname(out_path)
     os.makedirs(out_dir, exist_ok=True)
 
-    w_raw_kn = _make_weight(family, k, n, args.weight_limit)
+    if case_data is not None:
+        w_raw_kn = case_data["weight_q_nk"].astype(_signed_dtype(family.weight_bits)).T.copy()
+    else:
+        w_raw_kn = _make_weight(family, k, n, args.weight_limit)
     reference_contract = args.reference_contract
     if reference_contract == "auto":
         reference_contract = "native" if _is_native_a16_family(family) and args.a16_quant_contract == "native" else "legacy"
@@ -860,7 +1037,20 @@ def generate(family: Family, args: argparse.Namespace) -> None:
             args.bias_baseline,
             args.bias_layout,
             args.bias_fold,
+            case_data,
         )
+        if _is_native_a16_family(family) and args.a16_bias_sidecar_raw:
+            raw = np.fromfile(args.a16_bias_sidecar_raw, dtype=np.uint8)
+            bias_shape = tuple(int(dim) for dim in bias_part.dims)
+            expected = int(np.prod(bias_shape)) * np.dtype(np.int32).itemsize
+            if raw.size == expected * split_count:
+                raw = raw[split_idx * expected:(split_idx + 1) * expected]
+            if raw.size != expected:
+                raise ValueError(
+                    f"A16 bias sidecar raw byte count mismatch: got {raw.size}, want {expected}"
+                )
+            bias_payload = raw.view(np.int32).reshape(bias_shape)
+            bias_part = numpy_helper.from_array(bias_payload.copy(), name=bias_part.name)
         if family.name == "w16a16" and args.w16_bias_sidecar_raw:
             raw = np.fromfile(args.w16_bias_sidecar_raw, dtype=np.uint8)
             bias_shape = tuple(int(dim) for dim in bias_part.dims)
@@ -1082,7 +1272,10 @@ def generate(family: Family, args: argparse.Namespace) -> None:
     model.ir_version = 8
     onnx.save(model, out_path)
 
-    if _is_native_a16_family(family) and args.a16_quant_contract == "native":
+    if case_data is not None:
+        act_enc = _case_tensor_encoding(case_data["meta"]["qparams"]["activation"])
+        out_enc = _case_tensor_encoding(case_data["meta"]["qparams"]["output"])
+    elif _is_native_a16_family(family) and args.a16_quant_contract == "native":
         act_enc = _native_a16_encoding()
         out_enc = _native_a16_encoding()
     else:
@@ -1157,7 +1350,10 @@ def generate(family: Family, args: argparse.Namespace) -> None:
     native_input_rel = f"runtime_inputs_u8/{native_input_name}"
     native_input_storage = _uint_storage(family.act_bits)
     if args.mode in ("chain", "chain_float", "chain_qdq", "direct_flat"):
-        a0 = _make_activation(family, m, k, 0, args.activation_mode, args.activation_k)
+        if case_data is not None:
+            a0 = case_data["activation_q"].astype(_uint_dtype(family.act_bits)).reshape(1, 1, m, k)
+        else:
+            a0 = _make_activation(family, m, k, 0, args.activation_mode, args.activation_k)
         if w4_native_conv_input_layout:
             act_nchw = a0.reshape(m, k).T.reshape(1, k, 1, m)
             act_nchw.tofile(os.path.join(runtime_dir, native_input_name))
@@ -1169,9 +1365,12 @@ def generate(family: Family, args: argparse.Namespace) -> None:
         with open(runtime_input_list, "w", encoding="utf-8") as f:
             f.write(f"act_raw:={native_input_rel}\n")
         cur = a0.reshape(m, k).astype(np.int32)
-        for _ in range(chain):
-            cur = _make_reference_step(family, cur, w_raw_kn, bias_q, reference_contract)
-        out_ref = cur
+        if case_data is not None:
+            out_ref = case_data["output_ref_q"].astype(_uint_dtype(family.out_bits))
+        else:
+            for _ in range(chain):
+                cur = _make_reference_step(family, cur, w_raw_kn, bias_q, reference_contract)
+            out_ref = cur
     else:
         input_parts = []
         for i in range(chain):
@@ -1236,6 +1435,11 @@ def main(family_name: str) -> None:
     p.add_argument("--seed", type=int, default=0xB17E)
     p.add_argument("--chain", type=int, default=8)
     p.add_argument("--mode", choices=["chain", "chain_float", "chain_qdq", "direct", "direct_flat", "independent"], default="chain")
+    p.add_argument(
+        "--case-dir",
+        default=None,
+        help="Import a generated Python/QNN correctness case for custom/native matching.",
+    )
     p.add_argument("--bias-scale", type=float, default=512.0)
     p.add_argument("--bias-baseline", type=int, default=0)
     p.add_argument(
@@ -1302,6 +1506,7 @@ def main(family_name: str) -> None:
     p.add_argument("--w16-weight-sidecar-raw", default=None)
     p.add_argument("--w16-bias-sidecar-raw", default=None)
     p.add_argument("--w16-scratch-sidecar-raw", default=None)
+    p.add_argument("--a16-bias-sidecar-raw", default=None)
     p.add_argument("--a16-quant-contract", choices=["legacy", "native"], default="legacy")
     p.add_argument("--reference-contract", choices=["auto", "legacy", "native"], default="auto")
     p.add_argument("--final-output-rank", choices=["4d", "3d"], default="4d")

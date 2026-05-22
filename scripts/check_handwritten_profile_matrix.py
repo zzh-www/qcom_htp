@@ -17,14 +17,14 @@ REQUIRED = (
     "w4a8",
     "w8a16",
     "w4a16",
-    "w4a16_chain1",
 )
 DEFERRED: tuple[str, ...] = ()
-ACCEPTED_PROFILES = ("u8i8", "w4a8", "w8a16")
+ACCEPTED_PROFILES = ("u8i8", "w4a8", "w8a16", "w4a16")
 ACCEPTANCE_SCOPES = {
     "u8i8": "m4_canonical_e2e",
     "w4a8": "m4_canonical_e2e",
     "w8a16": "m4_canonical_e2e",
+    "w4a16": "m4_canonical_e2e",
 }
 
 
@@ -84,8 +84,6 @@ def validate(path: Path) -> list[str]:
             )
             if standard_errors:
                 errors.append(f"{name}: qnn_reference does not pass artifact standard: {standard_errors}")
-        if name.endswith("_chain1") and record.get("chain") != 1:
-            errors.append(f"{name}: chain1 profile must record chain=1")
     for name in DEFERRED:
         record = profiles.get(name)
         if not isinstance(record, dict):

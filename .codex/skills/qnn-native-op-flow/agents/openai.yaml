@@ -1,0 +1,4 @@
+interface:
+  display_name: "QNN Native Op Flow"
+  short_description: "Generate QNN native-op flow artifacts correctly."
+  default_prompt: "Use $qnn-native-op-flow to build or review a QNN native op generation flow."

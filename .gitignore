@@ -19,5 +19,12 @@ example/qnn_matmul_profile/bench_data_*
 example/qnn_matmul_profile/output_*/
 **/qnn_matmul_profile/output_*/
 
+# Rebuildable QNN correctness case/runtime artifacts
+tests/qnn_kernel_e2e/correctness/python_cases/
+case_encoded_schematic.bin
+
+# Rebuildable handwritten-HMX host/device outputs
+example/handwritten_hmx_matmul/build/
+
 # Standalone trace_for_review dump
 trace_for_review/

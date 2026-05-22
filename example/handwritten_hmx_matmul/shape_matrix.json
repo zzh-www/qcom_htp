@@ -67,22 +67,30 @@
       ]
     },
     "w4a16": {
-      "accepted": [],
-      "diagnostic": [
+      "accepted": [
         {
+          "acceptance_scope": "m4_canonical_e2e",
           "chain": 8,
-          "oracle": "example/qnn_matmul_profile/output_w4a16_native_ref_e2e_256",
-          "reason": "canonical direct device HMX-body enters and has perf evidence, but output is not byte-exact yet",
+          "evidence": [
+            "promotion_evidence.json",
+            "device_body_w4a16_chain8_custom_baseline.json",
+            "w4a16_chain8_custom_baseline_native_bridge.json",
+            "artifact_body_w4a16_chain8_custom_baseline.json"
+          ],
+          "oracle": "example/qnn_matmul_profile/output_w4a16_aligned_e2e_256",
+          "reason": "canonical direct device HMX-body output is byte-exact against the retained custom baseline and bridges to QNN native via native_transpose_2d",
           "shape_mkn": [
             256,
             256,
             256
           ]
-        },
+        }
+      ],
+      "diagnostic": [
         {
-          "chain": 1,
-          "oracle": "example/qnn_matmul_profile/output_w4a16_chain1_default_ci_e2e_256",
-          "reason": "chain1 is required by the roadmap but has no owned runner entry yet",
+          "chain": 8,
+          "oracle": "example/qnn_matmul_profile/output_w4a16_native_ref_e2e_256",
+          "reason": "QNN native raw is layout-equivalent after native_transpose_2d; direct byte comparison without that transform is not the acceptance rule",
           "shape_mkn": [
             256,
             256,
