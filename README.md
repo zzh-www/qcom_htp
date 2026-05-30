@@ -26,6 +26,11 @@ The full CI gate `tests/qnn_kernel_e2e/run_all.sh` now includes the promoted
 W4A8/W4A16 LPBQ native-match correctness tests through
 `tests/qnn_kernel_e2e/run_correctness.sh`.
 
+For pushes, use `scripts/run_kernel_ci_preflight.sh` before `git push`, or run
+`scripts/push_with_kernel_ci.sh origin main`.  The preflight runs the full
+device-backed gate before Git opens the remote push connection and records a
+local proof for `.githooks/pre-push` to check quickly.
+
 The `u8i8` promoted gate is a single `normal_random` case:
 custom/native `65536/65536`, max integer delta `0`, sidecar `2048/2048`.
 

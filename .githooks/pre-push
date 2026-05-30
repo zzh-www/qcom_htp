@@ -1,22 +1,91 @@
 #!/usr/bin/env bash
 #
-# Required local pre-push gate for this repo.
+# Required local pre-push proof check for this repo.
 
 set -euo pipefail
 
 ROOT_DIR="$(git rev-parse --show-toplevel)"
 cd "$ROOT_DIR"
 
-if [ "${ARTIFACT_ONLY:-0}" = "1" ]; then
-    cat >&2 <<'EOF'
-ERROR: pre-push must run the full device E2E gate.
-       ARTIFACT_ONLY=1 is only allowed for manual local smoke tests, not push.
+PROOF_FILE="$(git rev-parse --git-path qcom_htp_kernel_ci_pass.json)"
+
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "ERROR: python3 is required for the qcom_htp pre-push proof check." >&2
+    exit 1
+fi
+
+if [ ! -f "$PROOF_FILE" ]; then
+    cat >&2 <<EOF
+ERROR: missing kernel CI preflight proof.
+       Run: scripts/run_kernel_ci_preflight.sh
+       Then push again, or use: scripts/push_with_kernel_ci.sh <git-push-args>
 EOF
     exit 1
 fi
 
-echo "=== qcom_htp pre-push: running full kernel CI gates ==="
-echo "    tests/qnn_kernel_e2e/run_all.sh"
-tests/qnn_kernel_e2e/run_all.sh
+mapfile -t PROOF_FIELDS < <(python3 - "$PROOF_FILE" <<'PY'
+import json
+import sys
 
-echo "=== qcom_htp pre-push: kernel CI passed ==="
+proof_path = sys.argv[1]
+
+try:
+    with open(proof_path, "r", encoding="utf-8") as f:
+        proof = json.load(f)
+except Exception as exc:
+    print(f"ERROR: cannot read kernel CI proof {proof_path}: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+head = proof.get("head")
+tree = proof.get("tree")
+
+if not head or not tree:
+    print(f"ERROR: invalid kernel CI proof {proof_path}: missing head/tree", file=sys.stderr)
+    sys.exit(1)
+
+print(head)
+print(tree)
+print(proof.get("passed_at_utc", "unknown"))
+PY
+)
+
+PROVEN_HEAD="${PROOF_FIELDS[0]}"
+PROVEN_TREE="${PROOF_FIELDS[1]}"
+PASSED_AT_UTC="${PROOF_FIELDS[2]}"
+ZERO_OID="0000000000000000000000000000000000000000"
+CHECKED_REFS=0
+
+check_proven_ref() {
+    local label="$1"
+    local oid="$2"
+    local tree
+
+    if ! tree="$(git rev-parse "$oid^{tree}" 2>/dev/null)"; then
+        echo "ERROR: cannot resolve pushed ref $label ($oid) to a commit tree." >&2
+        exit 1
+    fi
+
+    if [ "$oid" != "$PROVEN_HEAD" ] || [ "$tree" != "$PROVEN_TREE" ]; then
+        echo "ERROR: kernel CI preflight proof does not match pushed ref $label." >&2
+        echo "       proof HEAD: $PROVEN_HEAD" >&2
+        echo "       pushed oid: $oid" >&2
+        echo "       proof tree: $PROVEN_TREE" >&2
+        echo "       pushed tree: $tree" >&2
+        echo "       Run: scripts/run_kernel_ci_preflight.sh" >&2
+        exit 1
+    fi
+}
+
+while read -r LOCAL_REF LOCAL_OID REMOTE_REF REMOTE_OID; do
+    [ -n "${LOCAL_REF:-}" ] || continue
+    [ "$LOCAL_OID" != "$ZERO_OID" ] || continue
+    CHECKED_REFS=1
+    check_proven_ref "$LOCAL_REF" "$LOCAL_OID"
+done
+
+if [ "$CHECKED_REFS" -eq 0 ]; then
+    HEAD_SHA="$(git rev-parse HEAD)"
+    check_proven_ref "HEAD" "$HEAD_SHA"
+fi
+
+echo "=== qcom_htp pre-push: kernel CI proof ok (head=${PROVEN_HEAD:0:12}, passed_at=$PASSED_AT_UTC) ==="

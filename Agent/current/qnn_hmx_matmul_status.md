@@ -19,8 +19,11 @@ tests/qnn_kernel_e2e/run_all.sh
 ```
 
 The latest recorded full device-backed run for this document set passed on
-2026-05-30 with `tests/qnn_kernel_e2e/run_all.sh`.  The pre-push hook also
-runs this gate and rejects `ARTIFACT_ONLY=1`.
+2026-05-30 with `tests/qnn_kernel_e2e/run_all.sh`.  For pushes, run
+`scripts/run_kernel_ci_preflight.sh` first; it runs the same full gate before
+the remote connection is opened and records a local proof.  The pre-push hook
+then checks that proof against the pushed commit and tree.  The preflight
+rejects `ARTIFACT_ONLY=1`.
 
 Machine-readable promoted correctness state lives in
 `tests/qnn_kernel_e2e/correctness/status.json`.  Human-readable CI details and

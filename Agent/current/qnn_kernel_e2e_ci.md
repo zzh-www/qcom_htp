@@ -31,10 +31,24 @@ Leaf entries:
 Machine-readable promoted correctness status is recorded in
 `tests/qnn_kernel_e2e/correctness/status.json`.
 
-Run the full gate before every formal code commit or push:
+Run the full gate before every formal code commit:
 
 ```bash
 tests/qnn_kernel_e2e/run_all.sh
+```
+
+For pushes, run the preflight wrapper so the long device-backed gate finishes
+before Git opens the remote push connection:
+
+```bash
+scripts/run_kernel_ci_preflight.sh
+git push
+```
+
+Or use the combined wrapper:
+
+```bash
+scripts/push_with_kernel_ci.sh origin main
 ```
 
 Install the repo-local pre-push hook in each checkout:
@@ -43,9 +57,12 @@ Install the repo-local pre-push hook in each checkout:
 scripts/install_git_hooks.sh
 ```
 
-The hook is versioned at `.githooks/pre-push` and invokes
-`tests/qnn_kernel_e2e/run_all.sh` before Git sends refs to the remote.
-The hook rejects `ARTIFACT_ONLY=1`; push-time validation must run on the device.
+The hook is versioned at `.githooks/pre-push`.  It intentionally does not run
+the long device-backed gate while the GitHub SSH connection is open.  Instead,
+it verifies the local proof written by `scripts/run_kernel_ci_preflight.sh` and
+rejects the push unless the proof's `HEAD` and tree match each pushed commit.
+The preflight rejects `ARTIFACT_ONLY=1`; push-time validation must run on the
+device.
 
 The full gate first runs correctness CI, then performance CI.  Correctness CI
 prioritizes same-hardware exactness and explicitly runs only the promoted leaf
