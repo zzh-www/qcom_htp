@@ -28,3 +28,6 @@ example/handwritten_hmx_matmul/build/
 
 # Standalone trace_for_review dump
 trace_for_review/
+
+# GDN golden cache (regenerable via scripts/gdn_extract_golden.py)
+tests/gdn/golden/
