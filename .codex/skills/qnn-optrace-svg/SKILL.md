@@ -1,6 +1,6 @@
 ---
 name: qnn-optrace-svg
-description: Generate fixed-layout SVG diagrams from QNN HTP optrace artifacts in qcom_htp. Use when Codex needs to visualize chrometrace_htp.json node-flow graphs together with chrometrace.json timing, especially W4A16/QNN Native/custom-op HTP op graphs, without relying on Mermaid auto-layout.
+description: Generate fixed-layout SVG diagrams from QNN HTP optrace artifacts in qcom_htp. Use when you need to visualize chrometrace_htp.json node-flow graphs together with chrometrace.json timing, especially W4A16/QNN Native/custom-op HTP op graphs, without relying on Mermaid auto-layout.
 ---
 
 # QNN Optrace SVG
