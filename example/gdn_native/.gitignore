@@ -1,0 +1,17 @@
+# generated artifacts (DLCs, context binaries, device outputs, calib/test raws)
+gdn_chunk.onnx
+gdn_chunk_q.onnx
+*.dlc
+*.raw
+ctx/
+device_out/
+output/
+calib/
+quant_w*/
+ctxcheck_w*/
+_*.log
+*_encoding.json
+sym_overrides.json
+quant_overrides.json
+input_list.txt
+native_io.json
