@@ -127,6 +127,39 @@ def chunk_q(qc, kc, vc, gc, betac, S_in, Q, gemm_only=False, solve="neumann"):
         rows = [torch.cat([Tblk[i][j] if j <= i else torch.zeros_like(Tinv[0])
                            for j in range(nb)], dim=-1) for i in range(nb)]
         T = torch.cat(rows, dim=-2)
+    elif solve == "deployed":
+        # mirror gdn_onnx_kernel.solve_T_blocked EXACTLY (logical-16 / physical-32 padded blocks,
+        # selector MatMul+Add) with Q on every tensor — the faithful deployed requant chain.
+        bl, bp = 16, 32; nb = C // bl
+        npp = __import__("numpy")
+        c4 = lambda a: torch.from_numpy(a.astype("float32")).to(dtype).reshape(1, 1, *a.shape)
+        eyb = c4(npp.eye(bp, dtype="float32"))
+        def _sel(i):
+            s = npp.zeros((bp, C), dtype="float32"); s[:bl, i*bl:(i+1)*bl] = npp.eye(bl); return s
+        sel = [c4(_sel(i)) for i in range(nb)]; selT = [s.transpose(-1, -2) for s in sel]
+        SA = [A(f"SA{i}", torch.matmul(sel[i], Amat)) for i in range(nb)]
+        Aij = [[A(f"Aij{i}_{j}", torch.matmul(SA[i], selT[j])) for j in range(nb)] for i in range(nb)]
+        def inv_block(d, bi):
+            Tb = eyb + d; Ap = d
+            for s in range(max(1, (bl - 1).bit_length())):
+                Ap = A(f"ibAp{bi}_{s}", torch.matmul(Ap, Ap))
+                Tb = A(f"ibT{bi}_{s}", torch.matmul(Tb, eyb + Ap))
+            return Tb
+        Tinv = [inv_block(Aij[i][i], i) for i in range(nb)]
+        Tblk = [[None] * nb for _ in range(nb)]
+        for i in range(nb):
+            Tblk[i][i] = Tinv[i]
+            for j in range(i - 1, -1, -1):
+                acc = None
+                for k in range(j, i):
+                    t = A(f"oa{i}_{j}_{k}", torch.matmul(Aij[i][k], Tblk[k][j]))
+                    acc = t if acc is None else acc + t
+                Tblk[i][j] = A(f"Tb{i}_{j}", torch.matmul(Tinv[i], acc))
+        T = None
+        for i in range(nb):
+            for j in range(i + 1):
+                term = A(f"pl{i}_{j}", torch.matmul(A(f"pm{i}_{j}", torch.matmul(selT[i], Tblk[i][j])), sel[j]))
+                T = term if T is None else T + term
     else:
         raise ValueError(solve)
 
