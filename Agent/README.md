@@ -3,6 +3,20 @@
 This directory is the home for agent-managed project knowledge in `qcom_htp`.
 Use this README as a map only; keep detailed evidence in the linked files.
 
+## Positioning
+
+`Agent/` is the formal, systematic, **in-repo** knowledge base for this project.
+Because it lives in git, it is **shared across every agent and checkout** — any
+agent working in `qcom_htp` reads and contributes to the same `Agent/` tree.  It
+is the authoritative source of project state: when anything disagrees,
+`Agent/current/` wins.
+
+This is distinct from an agent's *private auto-memory* (e.g. files under a
+local `~/.claude/.../memory/` dir).  Private memory is per-agent, not shipped,
+and only a terse recall layer — it should *point into* `Agent/` rather than
+duplicate, override, or substitute for it.  Durable, substantive project
+knowledge belongs here in `Agent/`, written so any other agent can pick it up.
+
 ## Current Fact Sources
 
 | Document | Use |
