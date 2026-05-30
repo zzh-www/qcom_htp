@@ -1,35 +1,51 @@
 # Agent Knowledge
 
-This directory is the only home for agent-managed project knowledge in
-`qcom_htp`.  Keep this README as an entrypoint: add links here, put details in
-the linked documents.
+This directory is the home for agent-managed project knowledge in `qcom_htp`.
+Use this README as a map only; keep detailed evidence in the linked files.
 
-## Start Here
+## Current Fact Sources
 
-| Document | Purpose |
+| Document | Use |
 |---|---|
-| [Handwritten HMX MatMul roadmap](guides/handwritten_hmx_matmul_roadmap.md) | Current QNN-free runtime route, accepted active families, W4A16 chain8 custom-baseline bridge, and completion gates. |
-| [Handwritten HMX MatMul runtime boundary](current/handwritten_hmx_matmul_runtime.md) | Current owned runtime files, device gate, and W4A16 custom-baseline/native-bridge boundary. |
-| [Handwritten HMX MatMul body evidence](current/handwritten_hmx_matmul_bodies.md) | Body manifest and byte-identity evidence for owned HMX kernel slices. |
-| [Handwritten HMX MatMul oracles](current/handwritten_hmx_matmul_oracles.md) | QNN Native oracle freeze used only for prepared bytes, raw outputs, and perf references. |
-| [QNN HMX MatMul status](current/qnn_hmx_matmul_status.md) | Concise current direction and historical boundary for quantized MatMul family work. |
-| [w16a16 native alignment plan](handoffs/w16a16_native_alignment_plan.md) | Plan for aligning `HmxU16I16ToU16MatMul`: native oracle, split-N kernel surface, body verification, probes, and acceptance gates. |
-| [w8a16 native alignment handoff](handoffs/w8a16_native_alignment.md) | Current 256^3 `HmxU16I8ToU16MatMul` state: native-output exact, but kernel-entry shape and performance remain open. |
-| [w4a16 QNN native path](handoffs/w4a16_qnn_native_path.md) | Historical/native-oracle entrypoint for W4A16: Conv lowering path, tensor contracts, sidecars, optrace scopes, and skel wrapper flow. It is not the active implementation route. |
-| [w4a16 native alignment handoff](handoffs/w4a16_native_alignment.md) | Current `HmxU16I4ToU16MatMul` probe history: QNN custom chain8 remains transpose-aware exact, while active W4A16 work has moved to the direct-body custom-baseline route under `example/handwritten_hmx_matmul/`. |
-| [w4a16 Python formula mismatch report](../docs/w4a16_python_formula_mismatch_report.html) | HTML report explaining the W4A16 HMX floor256 accumulator drain required for Python/native bit-exactness. |
-| [QNN native artifact standard](current/qnn_native_artifact_standard.md) | Required DLC, context-binary, native I/O, and optrace/performance artifact flow for QNN-native references and custom-op comparisons. |
-| [QNN kernel E2E CI](current/qnn_kernel_e2e_ci.md) | Required kernel CI entrypoints, including handwritten HMX MatMul, and the formal pre-push device gate. |
-| [QNN HTP per-channel bias prepare](guides/qnn_htp_perchannel_bias_prepare.md) | Recovered HTP prepare algorithm for DLC Conv `B` to final per-channel `bias_to_vtcm` sidecar bias, plus public Python API and validation commands. |
-| [QNN HTP W8A16 per-channel sidecar](guides/qnn_htp_w8a16_perchannel_sidecar.md) | W8A16 generated sidecar ABI for custom HMX, how it differs from QNN Native final sidecar, and the promoted correctness CI gate. |
-| [QNN native alignment blackbox handbook](guides/qnn_native_alignment_blackbox_handbook.md) | Methodology for future QNN-native blackbox alignment. For W4A16 handwritten MatMul this is superseded by the direct-body custom-baseline route. |
-| [QNN reverse-engineering evidence](qnn_re/) | Non-Markdown disassembly slices and large cached evidence such as `skel_text_full.S`. |
+| [QNN HMX MatMul status](current/qnn_hmx_matmul_status.md) | Current kernel-family state, promoted gates, LPBQ status, and historical boundaries. |
+| [QNN kernel E2E CI](current/qnn_kernel_e2e_ci.md) | Formal CI entrypoints, promoted leaf gates, pre-push behavior, and result matrices. |
+| [QNN native artifact standard](current/qnn_native_artifact_standard.md) | Required DLC/context/native-I/O/optrace artifact layout for QNN Native and custom-op comparisons. |
+| [Handwritten HMX MatMul runtime boundary](current/handwritten_hmx_matmul_runtime.md) | Current QNN-free runtime tree, accepted families, and formal gate. |
+| [Handwritten HMX MatMul body evidence](current/handwritten_hmx_matmul_bodies.md) | Owned HMX body slices and byte-identity evidence. |
+| [Handwritten HMX MatMul oracles](current/handwritten_hmx_matmul_oracles.md) | Frozen QNN Native oracle artifacts used by the handwritten runtime. |
+
+## Durable Guides
+
+| Document | Use |
+|---|---|
+| [Handwritten HMX MatMul roadmap](guides/handwritten_hmx_matmul_roadmap.md) | QNN-free handwritten route, completion criteria, and W4A16 custom-baseline bridge. |
+| [QNN HTP per-channel bias prepare](guides/qnn_htp_perchannel_bias_prepare.md) | Recovered HTP prepare algorithm for per-channel Conv bias sidecars. |
+| [QNN HTP W8A16 per-channel sidecar](guides/qnn_htp_w8a16_perchannel_sidecar.md) | W8A16 custom sidecar ABI and generated-sidecar implementation notes. |
+| [QNN native alignment blackbox handbook](guides/qnn_native_alignment_blackbox_handbook.md) | General blackbox methodology for future QNN-native alignment work. |
+
+## Historical Handoffs
+
+These files preserve investigation history.  Do not treat them as the current
+implementation route unless a current fact source links to a specific section.
+
+| Document | Scope |
+|---|---|
+| [w16a16 native alignment plan](handoffs/w16a16_native_alignment_plan.md) | Open W16A16 native-alignment plan; W16A16 is not in the active gate. |
+| [w8a16 native alignment handoff](handoffs/w8a16_native_alignment.md) | W8A16 native-output exactness history and remaining kernel-entry/perf questions. |
+| [w4a16 QNN native path](handoffs/w4a16_qnn_native_path.md) | Historical W4A16 QNN Native/custom-op route and provenance. |
+| [w4a16 native alignment handoff](handoffs/w4a16_native_alignment.md) | Historical W4A16 probe log; active W4A16 acceptance moved to the handwritten custom-baseline route. |
+| [w8a16 zp-neutral optrace](handoffs/w8a16_zp_neutral_optrace.md) | Narrow archived blocker note for W8A16 sidecar/debug provenance. |
+
+## Evidence
+
+`Agent/qnn_re/` contains non-Markdown reverse-engineering evidence and
+disassembly slices.  Keep large raw evidence there rather than in status docs.
 
 ## Rules
 
 - Keep `Agent/README.md` short and link-oriented.
-- Put durable agent methodology under `Agent/guides/`.
-- Put handoffs under `Agent/handoffs/`.
-- Put current status and longer working notes under `Agent/current/`.
+- Put stable methods under `Agent/guides/`.
+- Put current state under `Agent/current/`.
+- Put historical handoff/probe logs under `Agent/handoffs/`.
 - Keep reverse-engineering evidence under `Agent/qnn_re/`.
-- Do not add agent-managed docs under repo root, `docs/`, or ad-hoc folders.
+- Do not add new agent-managed documents under repo root, `docs/`, or ad-hoc folders.

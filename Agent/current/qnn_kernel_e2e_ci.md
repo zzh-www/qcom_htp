@@ -67,7 +67,7 @@ The `w4a8_per_channel_native_match` entry is promoted separately from
 Native first, syncs the custom static bias to QNN Native's quantized DLC `B`,
 then checks both the generated W4A8 sidecar and same-hardware custom/native
 output exactness.  Current evidence:
-`/tmp/qcom_htp_w4a8_per_channel_native_match_ci/analysis/custom_native_compare_summary.json`
+`/tmp/qcom_htp_display_perchannel_w4a8/analysis/custom_native_compare_summary.json`
 with every case `65536/65536`, max integer delta `0`, and sidecar `2048/2048`.
 
 The `w8a16_per_channel_native_match` entry is promoted.  It runs the 7
@@ -78,13 +78,13 @@ case to the quantized DLC `B` and actual DLC A/Y/W encodings, builds the custom
 A16 sidecar from the recovered generated drain/control and effective-bias
 rules, then checks same-hardware custom/native output exactness.  Current
 evidence:
-`/tmp/qcom_htp_w8a16_ci_default_generated/output_w8a16_per_channel_native_match_ci/analysis/custom_native_compare_summary.json`
+`/tmp/qcom_htp_display_perchannel_w8a16/analysis/custom_native_compare_summary.json`
 with every case `65536/65536`, max integer delta `0`.  The recovered W8A16
 drain scale uses QNN's two-stage normalized scale path instead of the direct
 per-channel `act_scale * weight_scale / output_scale` expression.  The prior
 `zp_neutral` native-final-sidecar blocker and the rejected
 `HMX_W8A16_INTERNAL_SPLIT_N128` hypothesis are recorded in
-`Agent/current/w8a16_zp_neutral_optrace.md`.  The custom/native sidecar ABI
+`Agent/handoffs/w8a16_zp_neutral_optrace.md`.  The custom/native sidecar ABI
 difference and generated-sidecar implementation are documented in
 `Agent/guides/qnn_htp_w8a16_perchannel_sidecar.md`.
 
@@ -95,7 +95,7 @@ generated A16 sidecar.  W4A16 uses the same normalized two-stage A16 drain
 scale path as W8A16; treating the A16 control/drain words as fixed constants
 only matched effective-bias fields and left the 512-byte sidecar wrong.
 Current evidence:
-`/tmp/qcom_htp_w4a16_per_channel_native_match_generated_ci2/output_w4a16_per_channel_native_match_ci/analysis/custom_native_compare_summary.json`
+`/tmp/qcom_htp_display_perchannel_w4a16/analysis/custom_native_compare_summary.json`
 with every case sidecar `4096/4096`, control bytes `2048/2048`, effective
 fields `256/256`, and same-hardware output `65536/65536`, max integer delta
 `0`.
