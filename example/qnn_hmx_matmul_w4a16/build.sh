@@ -35,6 +35,8 @@ mkdir -p "$OUT_HTP" "$OUT_ARM"
 SRCS=(
     "$SCRIPT_DIR/src/QnnHmxMatMulW4A16Interface.cpp"
     "$SCRIPT_DIR/src/HmxU16I4ToU16MatMulOp.cpp"
+    "$ROOT_DIR/example/qnn_hmx_matmul_common/HmxW4LpbqExpandToI8Op.cpp"
+    "$ROOT_DIR/example/qnn_hmx_matmul_w8a16/src/HmxU16I8ToU16MatMulOp.cpp"
 )
 
 echo "=== Building QnnHmxMatMulW4A16Package (arch=$ARCH) ==="
@@ -44,6 +46,7 @@ HEX_FLAGS=(
     -mhvx -mhvx-length=128B -mhmx "-m$ARCH"
     -DUSE_OS_QURT -DPREPARE_DISABLED
     -DHMX_W4A16_ENABLE_QHPI_PRECOMPUTE
+    -DHMX_W8A16_ENABLE_QHPI_PRECOMPUTE
     -DHMX_W4A16_NATIVE_COMPACT_SOURCE_TABLES
     -DHMX_W4A16_SKIP_KERNEL
     "-DTHIS_PKG_NAME=$PACKAGE_NAME"
@@ -77,6 +80,7 @@ ARM_FLAGS=(
     --sysroot="$NDK_BIN/../sysroot"
     -stdlib=libc++
     -D__HVXDBL__ -DUSE_OS_LINUX -DANDROID -DPREPARE_DISABLED
+    -DHMX_W8A16_ENABLE_QHPI_PRECOMPUTE
     "-DTHIS_PKG_NAME=$PACKAGE_NAME"
     -I "$QNN_SDK_ROOT/include/QNN"
     -fomit-frame-pointer -fvisibility=default

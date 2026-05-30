@@ -5,6 +5,76 @@
         Version="1.0">
     <OpDefList>
         <OpDef>
+            <Name>HmxW4LpbqExpandToI8</Name>
+            <Description>
+                <Content>LPBQ pre-chain op: expand native K-pair signed int4 block-quantized weights with per-block integer scales into the K-major packed int8 carrier consumed by HMX W8 MatMul.</Content>
+            </Description>
+            <Input>
+                <Name>weight_lpbq</Name>
+                <Mandatory>true</Mandatory>
+                <Datatype>QNN_DATATYPE_UINT_8</Datatype>
+                <Datatype>QNN_DATATYPE_UFIXED_POINT_8</Datatype>
+                <Shape><Rank>4D</Rank><Layout>NONTRIVIAL</Layout><Text>[1, 1, K/2, N]</Text></Shape>
+            </Input>
+            <Input>
+                <Name>per_block_int_scale</Name>
+                <Mandatory>true</Mandatory>
+                <Datatype>QNN_DATATYPE_UINT_8</Datatype>
+                <Datatype>QNN_DATATYPE_UFIXED_POINT_8</Datatype>
+                <Shape><Rank>4D</Rank><Layout>NONTRIVIAL</Layout><Text>[1, 1, 1, N * (K/32)]</Text></Shape>
+            </Input>
+            <Output>
+                <Name>weight_i8</Name>
+                <Mandatory>true</Mandatory>
+                <Datatype>QNN_DATATYPE_UINT_8</Datatype>
+                <Datatype>QNN_DATATYPE_UFIXED_POINT_8</Datatype>
+                <Shape><Rank>4D</Rank><Layout>NONTRIVIAL</Layout><Text>[1, 1, K, N] with K-major HMX W8 tile byte order</Text></Shape>
+            </Output>
+            <SupportedBackend>HTP</SupportedBackend>
+        </OpDef>
+        <OpDef>
+            <Name>HmxU16I8ToU16MatMul</Name>
+            <Description>
+                <Content>Shared HMX u16 activation x int8 packed weight to u16 MatMul/FC-as-Conv1d compute op used after LPBQ expansion.</Content>
+            </Description>
+            <Input>
+                <Name>bias</Name>
+                <Mandatory>true</Mandatory>
+                <Datatype>QNN_DATATYPE_INT_32</Datatype>
+                <Datatype>QNN_DATATYPE_SFIXED_POINT_32</Datatype>
+                <Shape><Rank>4D</Rank><Layout>NONTRIVIAL</Layout><Text>[1, N/32, 1, 64]</Text></Shape>
+            </Input>
+            <Input>
+                <Name>weight</Name>
+                <Mandatory>true</Mandatory>
+                <Datatype>QNN_DATATYPE_UINT_8</Datatype>
+                <Datatype>QNN_DATATYPE_UFIXED_POINT_8</Datatype>
+                <Shape><Rank>4D</Rank><Layout>NONTRIVIAL</Layout><Text>[1, 1, K, N]</Text></Shape>
+            </Input>
+            <Input>
+                <Name>activation</Name>
+                <Mandatory>true</Mandatory>
+                <Datatype>QNN_DATATYPE_UINT_16</Datatype>
+                <Datatype>QNN_DATATYPE_UFIXED_POINT_16</Datatype>
+                <Shape><Rank>4D</Rank><Layout>NONTRIVIAL</Layout><Text>[1, M/32, 32, K]</Text></Shape>
+            </Input>
+            <Input>
+                <Name>scratch</Name>
+                <Mandatory>true</Mandatory>
+                <Datatype>QNN_DATATYPE_UINT_8</Datatype>
+                <Datatype>QNN_DATATYPE_UFIXED_POINT_8</Datatype>
+                <Shape><Rank>4D</Rank><Layout>NONTRIVIAL</Layout><Text>[1, 1, 1, 2048]</Text></Shape>
+            </Input>
+            <Output>
+                <Name>output</Name>
+                <Mandatory>true</Mandatory>
+                <Datatype>QNN_DATATYPE_UINT_16</Datatype>
+                <Datatype>QNN_DATATYPE_UFIXED_POINT_16</Datatype>
+                <Shape><Rank>4D</Rank><Layout>NONTRIVIAL</Layout><Text>[1, M/32, 32, N]</Text></Shape>
+            </Output>
+            <SupportedBackend>HTP</SupportedBackend>
+        </OpDef>
+        <OpDef>
             <Name>HmxU16I4ToU16MatMul</Name>
             <Description>
                 <Content>QNN custom u16 activation x signed int4 weight byte-carrier to u16 MatMul/FC-as-Conv1d package. Activation is per-tensor; W4 weight supports per-channel and future LPBQ/per-group packing.</Content>

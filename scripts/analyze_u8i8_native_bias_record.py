@@ -37,10 +37,13 @@ def native_drain_scale_control(exact_scale: np.ndarray) -> tuple[np.ndarray, np.
 
 def load_case(case_dir: Path) -> tuple[dict, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     meta = json.loads((case_dir / "case.json").read_text(encoding="utf-8"))
-    if meta["family"] not in {"u8i8", "w4a8_per_channel"}:
-        raise ValueError(f"expected u8i8 or w4a8_per_channel case, got {meta['family']!r}")
+    if meta["family"] not in {"u8i8", "w4a8_per_channel", "w4a8_lpbq"}:
+        raise ValueError(f"expected u8i8, w4a8_per_channel, or w4a8_lpbq case, got {meta['family']!r}")
     files = meta["files"]
-    weight_q_nk = np.load(case_dir / files["weight_q_nk"]["npy"]).astype(np.int8)
+    weight_file = "weight_q_nk"
+    if meta["family"] == "w4a8_lpbq" and "weight_lpbq_expanded_q_nk" in files:
+        weight_file = "weight_lpbq_expanded_q_nk"
+    weight_q_nk = np.load(case_dir / files[weight_file]["npy"]).astype(np.int8)
     bias_q = np.load(case_dir / files["bias_q_int32"]["npy"]).astype(np.int32)
     weight_scale = np.load(case_dir / files["weight_scale"]["npy"]).astype(np.float32)
     bias_scale = np.array(meta["qparams"]["bias"]["scale"], dtype=np.float32).reshape(-1)

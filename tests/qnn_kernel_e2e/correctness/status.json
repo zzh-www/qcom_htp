@@ -1,10 +1,13 @@
 {
   "schema": "qnn_kernel_correctness_status.v1",
-  "updated": "2026-05-23",
+  "updated": "2026-05-30",
   "policy": {
     "promoted_status": "Only same-hardware exact gates are marked pass/promoted here. Native-vs-Python tolerance and sidecar-only checks are not enough.",
     "default_entry": "tests/qnn_kernel_e2e/run_correctness.sh",
-    "full_entry": "tests/qnn_kernel_e2e/run_all.sh"
+    "default_entry_scope": "promoted per-channel, LPBQ native-match, W4A16 chain1, and handwritten gates",
+    "full_entry": "tests/qnn_kernel_e2e/run_all.sh",
+    "lpbq_entry": "scripts/run_qnn_kernel_e2e_ci.sh lpbq",
+    "lpbq_entry_scope": "LPBQ native-match plus LPBQ CHAIN=8 profile gates"
   },
   "promoted": [
     {
@@ -39,6 +42,39 @@
         "maxabs": 0,
         "sidecar_exact": "2048/2048 for all 7 cases",
         "bias_source": "custom sidecar uses QNN Native quantized DLC B exported by scripts/run_qnn_python_case_native.py"
+      }
+    },
+    {
+      "target": "w4a8_lpbq_native_match",
+      "kernel": "w4a8_lpbq",
+      "ci_entry": "tests/qnn_kernel_e2e/correctness/test_w4a8_lpbq_native_match_e2e.sh",
+      "status": "pass",
+      "scope": "QNN custom HMX W4A8 LPBQ op vs real QNN Native HTP LPBQ blockwise expansion",
+      "shape_mkn": [
+        256,
+        256,
+        256
+      ],
+      "chain": 1,
+      "cases": [
+        "normal_random",
+        "zp_neutral",
+        "positive_boundary",
+        "negative_boundary",
+        "single_k_impulse",
+        "bias_only",
+        "scale_only"
+      ],
+      "evidence": {
+        "command": "UV_CACHE_DIR=/tmp/uv-cache-qcom OUT_ROOT=/tmp/qcom_htp_lpbq_w4a8_full_pergroup M=256 K=256 N=256 W4_ENCODING=lpbq BUILD_PACKAGES=0 DEVICE=oneplus bash scripts/run_w4a8_python_case_custom_native_match.sh",
+        "custom_native_compare_summary": "/tmp/qcom_htp_lpbq_w4a8_full_pergroup/analysis/custom_native_compare_summary.json",
+        "output_exact": "65536/65536 for all 7 cases",
+        "maxabs": 0,
+        "native_lpbq_graph_check": "/tmp/qcom_htp_lpbq_w4a8_full_pergroup/native_normal_random/analysis/native_lpbq_graph_check.json",
+        "lpbq_metadata": "native QAIRT v1.0.0 weight enc_type=LPBQ compressed_bw=4 block_size=32; per_block_int_scale is derived from K32 per-group scales and is non-degenerate ([1,2] normally, [1,16] for single_k_impulse)",
+        "two_op_custom_graph": "HmxW4LpbqExpandToI8 -> HmxU8I8ToU8MatMul",
+        "sidecar_exact": "2048/2048 for all 7 cases",
+        "expand_prepare": "HmxW4LpbqExpandToI8 const-folds static LPBQ weights so QNN inserts weights_to_vtcm before W8 compute"
       }
     },
     {
@@ -77,6 +113,39 @@
         "control_exact": "2048/2048 for all 7 cases",
         "effective_exact": "256/256 for all 7 cases",
         "root_cause_note": "W4A16 per-channel uses the same normalized two-stage A16 drain scale path as W8A16; fixed A16 constants only matched effective fields and left control/drain bytes wrong."
+      }
+    },
+    {
+      "target": "w4a16_lpbq_native_match",
+      "kernel": "w4a16_lpbq",
+      "ci_entry": "tests/qnn_kernel_e2e/correctness/test_w4a16_lpbq_native_match_e2e.sh",
+      "status": "pass",
+      "scope": "QNN custom HMX W4A16 LPBQ op vs real QNN Native HTP LPBQ blockwise expansion",
+      "shape_mkn": [
+        256,
+        256,
+        256
+      ],
+      "chain": 1,
+      "cases": [
+        "normal_random",
+        "zp_neutral",
+        "positive_boundary",
+        "negative_boundary",
+        "single_k_impulse",
+        "bias_only",
+        "scale_only"
+      ],
+      "evidence": {
+        "command": "UV_CACHE_DIR=/tmp/uv-cache-qcom OUT_ROOT=/tmp/qcom_htp_lpbq_w4a16_full_pergroup M=256 K=256 N=256 W4_ENCODING=lpbq BUILD_PACKAGES=0 DEVICE=oneplus bash scripts/run_w4a16_python_case_custom_native_match.sh",
+        "custom_native_compare_summary": "/tmp/qcom_htp_lpbq_w4a16_full_pergroup/analysis/custom_native_compare_summary.json",
+        "output_exact": "65536/65536 for all 7 cases",
+        "maxabs": 0,
+        "sidecar_exact": "4096/4096 for all 7 cases",
+        "native_lpbq_graph_check": "/tmp/qcom_htp_lpbq_w4a16_full_pergroup/native_normal_random/analysis/native_lpbq_graph_check.json",
+        "lpbq_metadata": "native QAIRT v1.0.0 weight enc_type=LPBQ compressed_bw=4 block_size=32; per_block_int_scale is derived from K32 per-group scales and is non-degenerate ([1,2] normally, [1,16] for single_k_impulse)",
+        "two_op_custom_graph": "HmxW4LpbqExpandToI8 -> HmxU16I8ToU16MatMul",
+        "expand_prepare": "HmxW4LpbqExpandToI8 const-folds static LPBQ weights; W4A16 custom uses direct tiled A16 input for the same-hardware exactness gate"
       }
     },
     {

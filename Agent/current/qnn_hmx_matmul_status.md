@@ -2,9 +2,37 @@
 
 ## Current Direction
 
-Immediate QNN-kernel alignment work is back on the per-channel custom/native
-path.  LPBQ is retained as explicit lower-priority coverage, but it is not the
-current default gate.
+Immediate QNN-kernel alignment work is now on the W4 LPBQ path.  The
+per-channel custom/native gates are the accepted baseline and remain protected
+by default correctness and performance CI; LPBQ is the active next promotion
+target.
+
+Current LPBQ gate:
+
+- The LPBQ correctness gate has been redesigned to compare against real QNN
+  Native LPBQ Conv, not the older per-channel Conv oracle.
+- Generated LPBQ cases now use dedicated `w4a8_lpbq` and `w4a16_lpbq` families
+  that first derive signed int4 per-group scales on K32 blocks, then represent
+  those scales as LPBQ `per_channel_float_scale * per_block_int_scale`.  The
+  native runner validates that the QNN graph lowers through
+  `Conv2d_w_blk_exp_scale` and
+  `q::ConvLayer.opt.expand_block_quant_to_pc_int8_weights`.
+- Current device evidence promotes the real-native LPBQ correctness gates:
+  - Two-op LPBQ implementation:
+    `HmxW4LpbqExpandToI8` expands native K-pair W4 plus per-block integer
+    scales into the K-major W8 HMX carrier, const-folds static weights during
+    prepare, and then reuses `HmxU8I8ToU8MatMul`/`HmxU16I8ToU16MatMul`.
+  - W4A8 real-native LPBQ full case suite:
+    `/tmp/qcom_htp_lpbq_w4a8_full_pergroup`, all 7 generated cases,
+    custom/native exact `65536/65536`, maxabs `0`, sidecar `2048/2048`.
+  - W4A16 real-native LPBQ full case suite:
+    `/tmp/qcom_htp_lpbq_w4a16_full_pergroup`, all 7 generated cases,
+    custom/native exact `65536/65536`, maxabs `0`, sidecar `4096/4096`.
+    W4A16 uses direct tiled A16 input for the custom same-hardware gate to avoid
+    float/QDQ fallback while preserving the native-output comparison.
+- The older `/tmp/qcom_htp_lpbq_full_ci/` evidence is now classified as a
+  degenerate all-one LPBQ metadata/per-channel-oracle check.  It must not be
+  used as proof that custom LPBQ matches QNN Native blockwise expansion.
 
 The current per-channel baseline starts with `u8i8` because its custom-op flow
 is already cleanly matched to QNN Native:

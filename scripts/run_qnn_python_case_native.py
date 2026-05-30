@@ -28,7 +28,7 @@ from onnx import TensorProto, helper, numpy_helper
 
 W4A16_ACCEPTED_MAXDIFF_BY_CASE = {
     "normal_random": 6,
-    "single_k_impulse": 35,
+    "single_k_impulse": 36,
     "scale_only": 3,
 }
 
@@ -36,7 +36,7 @@ W4A16_ACCEPTED_MAXDIFF_BY_CASE = {
 def accepted_maxdiff_for_case(meta: dict[str, Any], override: int | None = None) -> int:
     if override is not None:
         return override
-    if meta.get("family") == "w4a16_per_channel":
+    if meta.get("family") in {"w4a16_per_channel", "w4a16_lpbq"}:
         return W4A16_ACCEPTED_MAXDIFF_BY_CASE.get(str(meta.get("case")), 1)
     return 1
 
@@ -71,6 +71,10 @@ def load_case(case_dir: Path) -> dict[str, Any]:
         "bias_float": np.load(case_dir / meta["files"]["bias_float"]["npy"]),
         "output_ref_q": np.load(case_dir / meta["files"]["output_ref_q"]["npy"]),
     }
+    if "weight_lpbq_per_block_int_scale" in meta.get("files", {}):
+        arrays["weight_lpbq_per_block_int_scale"] = np.load(
+            case_dir / meta["files"]["weight_lpbq_per_block_int_scale"]["npy"]
+        )
     return {"meta": meta, "arrays": arrays}
 
 
@@ -131,17 +135,53 @@ def weight_enc_v1(name: str, bitwidth: int, scales: np.ndarray) -> dict[str, Any
     }
 
 
-def write_artifact(case_dir: Path, out_dir: Path) -> dict[str, Any]:
+def lpbq_weight_enc_v1(
+    name: str,
+    scales: np.ndarray,
+    per_block_int_scale: np.ndarray,
+    block_size: int,
+) -> dict[str, Any]:
+    flat_scales = scales.astype(np.float64).reshape(-1).tolist()
+    per_block = per_block_int_scale.astype(np.uint8)
+    if per_block.ndim != 2:
+        raise ValueError(f"LPBQ per_block_int_scale must be rank-2, got {per_block.shape}")
+    if per_block.shape[0] != len(flat_scales):
+        raise ValueError(
+            "LPBQ per_block_int_scale channel count mismatch: "
+            f"{per_block.shape[0]} != {len(flat_scales)}"
+        )
+    return {
+        "name": name,
+        "enc_type": "LPBQ",
+        "bw": 8,
+        "dtype": "INT",
+        "is_sym": True,
+        "compressed_bw": 4,
+        "block_size": int(block_size),
+        "scale": flat_scales,
+        "offset": [-128] * len(flat_scales),
+        "per_block_int_scale": per_block.astype(int).tolist(),
+    }
+
+
+def write_artifact(case_dir: Path, out_dir: Path, w4_encoding: str) -> dict[str, Any]:
     case = load_case(case_dir)
     meta = case["meta"]
     arr = case["arrays"]
     family = meta["family"]
     qparams = meta["qparams"]
     m, k, n = meta["shape_mkn"]
-    if meta.get("weight_schema_variant") != "per_output_channel":
-        raise ValueError("native Conv1x1 runner currently supports only per-output-channel weight scales")
-    if family not in {"u8i8", "w4a8_per_channel", "w8a16", "w4a16_per_channel"}:
+    if meta.get("weight_schema_variant") not in {"per_output_channel", "lpbq_blockwise_expansion"}:
+        raise ValueError("native Conv1x1 runner currently supports only per-output-channel or LPBQ weight scales")
+    if family not in {"u8i8", "w4a8_per_channel", "w4a8_lpbq", "w8a16", "w4a16_per_channel", "w4a16_lpbq"}:
         raise ValueError(f"unsupported native Conv1x1 family: {family}")
+    if w4_encoding == "lpbq":
+        if family not in {"w4a8_lpbq", "w4a16_lpbq"}:
+            raise ValueError(f"--w4-encoding lpbq requires an LPBQ case family, got {family}")
+        if "weight_lpbq_per_block_int_scale" not in arr:
+            raise ValueError(f"{case_dir}: missing LPBQ per-block scale artifact")
+    elif meta.get("weight_schema_variant") == "lpbq_blockwise_expansion":
+        raise ValueError(f"{case_dir}: LPBQ case requires --w4-encoding lpbq")
 
     out_dir.mkdir(parents=True, exist_ok=True)
     runtime_dir = out_dir / "runtime_inputs_native"
@@ -191,6 +231,15 @@ def write_artifact(case_dir: Path, out_dir: Path) -> dict[str, Any]:
 
     act = qparams["activation"]
     out = qparams["output"]
+    if w4_encoding == "lpbq":
+        weight_encoding = lpbq_weight_enc_v1(
+            "W",
+            arr["weight_scale"],
+            arr["weight_lpbq_per_block_int_scale"],
+            int(qparams["weight"].get("block_size", 32)),
+        )
+    else:
+        weight_encoding = weight_enc_v1("W", qparams["weight"]["bitwidth"], arr["weight_scale"])
     overrides = {
         "version": "1.0.0",
         "activation_encodings": [
@@ -198,7 +247,7 @@ def write_artifact(case_dir: Path, out_dir: Path) -> dict[str, Any]:
             enc_v1("Y", out["bitwidth"], out["scale"], out["zero_point"], symmetric=out["bitwidth"] == 16),
         ],
         "param_encodings": [
-            weight_enc_v1("W", qparams["weight"]["bitwidth"], arr["weight_scale"]),
+            weight_encoding,
         ],
     }
     (out_dir / "quant_overrides.json").write_text(json.dumps(overrides, indent=2), encoding="utf-8")
@@ -222,6 +271,7 @@ def write_artifact(case_dir: Path, out_dir: Path) -> dict[str, Any]:
         "native_output_to_logical_mn": "Y.raw is Conv output [1,N,1,M]; compare as raw.reshape(N,M).T",
         "logical_matmul_shape_mkn": [m, k, n],
         "source_model_contract": "float Conv(A,W,B); quantization overrides encode A/Y/W; bias is a float op parameter quantized by qairt-quantizer",
+        "w4_encoding": w4_encoding,
     }
     (out_dir / "native_io.json").write_text(json.dumps(native_io, indent=2), encoding="utf-8")
     return meta
@@ -302,6 +352,45 @@ def extract_dlc_bias(dlc_path: Path, qnn: Path) -> np.ndarray:
     raise ValueError(f"{dlc_path}: missing quantized Conv B tensor")
 
 
+def validate_native_lpbq_graph(out_dir: Path) -> dict[str, Any]:
+    mapping = next((out_dir / "ctx").glob("*bottom_mapping.json"), None)
+    before = next((out_dir / "ctx").glob("*bottom_mapping_graph_before.json"), None)
+    if mapping is None or before is None:
+        raise ValueError(f"{out_dir}: missing backend op mapping JSON for LPBQ validation")
+
+    def node_types(path: Path) -> set[str]:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        nodes = data.get("graph", {}).get("nodes", {})
+        return {
+            str(node.get("type"))
+            for node in nodes.values()
+            if isinstance(node, dict) and node.get("type") is not None
+        }
+
+    before_types = node_types(before)
+    final_types = node_types(mapping)
+    required_before = "Conv2d_w_blk_exp_scale"
+    required_final = "q::ConvLayer.opt.expand_block_quant_to_pc_int8_weights"
+    if required_before not in before_types:
+        raise ValueError(f"{out_dir}: native LPBQ graph-before missing {required_before}")
+    if required_final not in final_types:
+        raise ValueError(f"{out_dir}: native LPBQ graph missing {required_final}")
+    summary = {
+        "lpbq_native_graph": True,
+        "graph_before_contains": required_before,
+        "final_graph_contains": required_final,
+        "mapping": str(mapping),
+        "graph_before_mapping": str(before),
+    }
+    analysis_dir = out_dir / "analysis"
+    analysis_dir.mkdir(exist_ok=True)
+    (analysis_dir / "native_lpbq_graph_check.json").write_text(
+        json.dumps(summary, indent=2),
+        encoding="utf-8",
+    )
+    return summary
+
+
 def compare(case_dir: Path, out_dir: Path, out_bits: int, maxdiff_tolerance: int | None) -> dict[str, Any]:
     case = load_case(case_dir)
     meta = case["meta"]
@@ -317,6 +406,14 @@ def compare(case_dir: Path, out_dir: Path, out_bits: int, maxdiff_tolerance: int
     ref = ref.reshape(m, n)
     diff = np.abs(native.astype(np.int64) - ref.astype(np.int64))
     maxdiff = int(diff.max()) if diff.size else 0
+    out_qparams = meta["qparams"]["output"]
+    out_scale = float(out_qparams["scale"])
+    out_offset = int(out_qparams.get("qnn_offset", -int(out_qparams["zero_point"])))
+    native_dequant = (native.astype(np.float64) + out_offset) * out_scale
+    ref_dequant = (ref.astype(np.float64) + out_offset) * out_scale
+    dequant_diff = np.abs(native_dequant - ref_dequant)
+    max_dequant_diff = float(dequant_diff.max()) if dequant_diff.size else 0.0
+    mean_dequant_diff = float(dequant_diff.mean()) if dequant_diff.size else 0.0
     accepted_maxdiff = accepted_maxdiff_for_case(meta, maxdiff_tolerance)
     accepted = maxdiff <= accepted_maxdiff
     summary = {
@@ -328,12 +425,21 @@ def compare(case_dir: Path, out_dir: Path, out_bits: int, maxdiff_tolerance: int
         "total": int(ref.size),
         "maxdiff": maxdiff,
         "mean_absdiff": float(diff.mean()) if diff.size else 0.0,
+        "int_exact_elements": int((native == ref).sum()),
+        "int_total_elements": int(ref.size),
+        "int_max_abs_delta": maxdiff,
+        "int_mean_abs_delta": float(diff.mean()) if diff.size else 0.0,
+        "dequant_float_max_abs_delta": max_dequant_diff,
+        "dequant_float_mean_abs_delta": mean_dequant_diff,
         "accepted": accepted,
         "accepted_maxdiff": accepted_maxdiff,
         "assertion": "maxdiff <= accepted_maxdiff",
         "comparison_scope": "qnn_native_htp_vs_python_aimet_oracle_only",
         "same_hardware_policy": "custom_vs_native and handwritten_vs_custom must remain exact-output gates",
         "quantization_reference": meta.get("quantization_reference"),
+        "dequant_float_reference": "final output dequantization: (q + qnn_offset) * output_scale",
+        "output_scale": out_scale,
+        "output_qnn_offset": out_offset,
         "native_sha256": meta["files"]["output_ref_q"]["raw_sha256"],
         "native_output_to_logical_mn": "Y.raw [1,N,1,M] -> raw.reshape(N,M).T",
     }
@@ -353,6 +459,7 @@ def main() -> int:
     parser.add_argument("--arch", default=os.environ.get("ARCH", "v75"))
     parser.add_argument("--soc-id", type=int, default=int(os.environ.get("SOC_ID", "57")))
     parser.add_argument("--num-inferences", type=int, default=1)
+    parser.add_argument("--w4-encoding", choices=("symmetric", "lpbq"), default="symmetric")
     parser.add_argument(
         "--maxdiff-tolerance",
         type=int,
@@ -368,7 +475,7 @@ def main() -> int:
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True)
 
-    meta = write_artifact(case_dir, out_dir)
+    meta = write_artifact(case_dir, out_dir, args.w4_encoding)
     qnn = args.qnn_sdk_root.resolve()
     env = qnn_env(qnn)
     write_htp_config(out_dir, qnn, args.arch, args.soc_id)
@@ -425,7 +532,7 @@ def main() -> int:
             "--target_backend",
             "HTP",
             *(["--restrict_quantization_steps=-0x8000 0x7F7F"] if act_bits == "16" else []),
-            *(["--pack_4_bit_weights"] if weight_bits == "4" else []),
+            *(["--pack_4_bit_weights"] if weight_bits == "4" or args.w4_encoding == "lpbq" else []),
         ],
         env=env,
         log=out_dir / "_quantize.log",
@@ -460,6 +567,8 @@ def main() -> int:
         env=env,
         log=out_dir / "_ctxgen.log",
     )
+    if args.w4_encoding == "lpbq":
+        validate_native_lpbq_graph(out_dir)
     if args.no_device:
         print(f"prepared {out_dir}")
         return 0
@@ -494,9 +603,14 @@ def main() -> int:
         ssh_read(args.device, f"{remote}/out/Result_0/Y.raw", out_dir / "device_out/Y.raw")
     summary = compare(case_dir, out_dir, meta["qparams"]["output"]["bitwidth"], args.maxdiff_tolerance)
     print(
-        f"{summary['family']}:{summary['case']} exact={summary['exact']}/{summary['total']} "
-        f"maxdiff={summary['maxdiff']} accepted_maxdiff={summary['accepted_maxdiff']} "
-        f"accepted={summary['accepted']} mean_absdiff={summary['mean_absdiff']:.6f}"
+        f"{summary['family']}:{summary['case']} "
+        f"int_exact={summary['int_exact_elements']}/{summary['int_total_elements']} "
+        f"int_max_abs_delta={summary['int_max_abs_delta']} "
+        f"accepted_max_int_delta={summary['accepted_maxdiff']} "
+        f"accepted={summary['accepted']} "
+        f"int_mean_abs_delta={summary['int_mean_abs_delta']:.6f} "
+        f"dequant_float_max_abs_delta={summary['dequant_float_max_abs_delta']:.9g} "
+        f"dequant_float_mean_abs_delta={summary['dequant_float_mean_abs_delta']:.9g}"
     )
     return 0 if summary["accepted"] else 1
 

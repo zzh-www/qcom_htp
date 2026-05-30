@@ -27,6 +27,8 @@ mkdir -p "$OUT"
 SRCS=(
     "$SCRIPT_DIR/src/QnnHmxMatMulW4A16Interface.cpp"
     "$SCRIPT_DIR/src/HmxU16I4ToU16MatMulOp.cpp"
+    "$ROOT_DIR/example/qnn_hmx_matmul_common/HmxW4LpbqExpandToI8Op.cpp"
+    "$ROOT_DIR/example/qnn_hmx_matmul_w8a16/src/HmxU16I8ToU16MatMulOp.cpp"
 )
 
 FLAGS=(
@@ -34,6 +36,7 @@ FLAGS=(
     -nostdinc++ -I "$HEXAGON_TOOLS_ROOT/target/hexagon/include/c++/v1"
     -D__HVXDBL__ -DUSE_OS_LINUX -DPREPARE_DISABLED
     -DHMX_W4A16_ENABLE_QHPI_PRECOMPUTE
+    -DHMX_W8A16_ENABLE_QHPI_PRECOMPUTE
     -DHMX_W4A16_NATIVE_COMPACT_SOURCE_TABLES
     -DHMX_W4A16_SKIP_KERNEL
     "-DTHIS_PKG_NAME=$PACKAGE_NAME"

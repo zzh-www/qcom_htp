@@ -32,14 +32,17 @@ ACT_ZP = 128
 
 def load_case(case_dir: Path) -> tuple[dict, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     meta = json.loads((case_dir / "case.json").read_text(encoding="utf-8"))
-    if meta["family"] not in {"w8a16", "w4a16_per_channel"}:
-        raise ValueError(f"expected w8a16 or w4a16_per_channel case, got {meta['family']!r}")
-    if meta.get("weight_schema_variant") != "per_output_channel":
+    if meta["family"] not in {"w8a16", "w4a16_per_channel", "w4a16_lpbq"}:
+        raise ValueError(f"expected w8a16, w4a16_per_channel, or w4a16_lpbq case, got {meta['family']!r}")
+    if meta.get("weight_schema_variant") not in {"per_output_channel", "lpbq_blockwise_expansion"}:
         raise ValueError(
-            "A16 native bias record analysis currently supports per-output-channel cases only"
+            "A16 native bias record analysis currently supports per-output-channel or LPBQ cases only"
         )
     files = meta["files"]
-    weight_q_nk = np.load(case_dir / files["weight_q_nk"]["npy"]).astype(np.int8)
+    weight_file = "weight_q_nk"
+    if meta["family"] == "w4a16_lpbq" and "weight_lpbq_expanded_q_nk" in files:
+        weight_file = "weight_lpbq_expanded_q_nk"
+    weight_q_nk = np.load(case_dir / files[weight_file]["npy"]).astype(np.int8)
     bias_q = np.load(case_dir / files["bias_q_int32"]["npy"]).astype(np.int32)
     weight_scale = np.load(case_dir / files["weight_scale"]["npy"]).astype(np.float32)
     shape = np.array(meta["shape_mkn"], dtype=np.int64)
@@ -47,7 +50,7 @@ def load_case(case_dir: Path) -> tuple[dict, np.ndarray, np.ndarray, np.ndarray,
 
 
 def const_words_for_family(family: str) -> list[int]:
-    if family == "w8a16":
+    if family in {"w8a16", "w4a16_lpbq"}:
         return [0x4440, 0x8040, 0x0008, 0x4000]
     if family == "w4a16_per_channel":
         return [0x5524, 0x8040, 0x0092, 0x4000]
@@ -74,7 +77,7 @@ def expected_record(case_dir: Path) -> tuple[dict, np.ndarray, np.ndarray]:
 
     record = np.zeros((n // 32, 512), dtype=np.uint8)
     const = np.array(const_words_for_family(meta["family"]), dtype=np.uint16)
-    if meta["family"] in {"w8a16", "w4a16_per_channel"}:
+    if meta["family"] in {"w8a16", "w4a16_per_channel", "w4a16_lpbq"}:
         exact = qnn_htp_w8a16_drain_scale(
             act_scale_f64,
             weight_scale,

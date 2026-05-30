@@ -68,16 +68,82 @@ EXPORT_API Qnn_ErrorHandle_t HmxU16I4ToU16MatMulShapeInference(Qnn_OpConfig_t *o
     return QNN_SUCCESS;
 }
 
+EXPORT_API Qnn_ErrorHandle_t HmxU16I8ToU16MatMulShapeInference(Qnn_OpConfig_t *op)
+{
+    if (!op || op->v1.numOfInputs < 4 || op->v1.numOfOutputs < 1) {
+        return QNN_OP_PACKAGE_ERROR_INVALID_INFO;
+    }
+    if (tensor_rank(&op->v1.inputTensors[1]) != 4 ||
+        tensor_rank(&op->v1.inputTensors[2]) != 4) {
+        return QNN_OP_PACKAGE_ERROR_INVALID_INFO;
+    }
+
+    uint32_t *w = tensor_dims(&op->v1.inputTensors[1]);
+    uint32_t *a = tensor_dims(&op->v1.inputTensors[2]);
+    uint32_t *o = tensor_dims(&op->v1.outputTensors[0]);
+    if (!w || !a || !o) return QNN_OP_PACKAGE_ERROR_INVALID_INFO;
+
+    o[0] = 1;
+    o[1] = a[1];
+    o[2] = a[2];
+    o[3] = w[3];
+    return QNN_SUCCESS;
+}
+
+EXPORT_API Qnn_ErrorHandle_t HmxW4LpbqExpandToI8ShapeInference(Qnn_OpConfig_t *op)
+{
+    if (!op || op->v1.numOfInputs < 2 || op->v1.numOfOutputs < 1) {
+        return QNN_OP_PACKAGE_ERROR_INVALID_INFO;
+    }
+    if (tensor_rank(&op->v1.inputTensors[0]) != 4) {
+        return QNN_OP_PACKAGE_ERROR_INVALID_INFO;
+    }
+
+    uint32_t *w = tensor_dims(&op->v1.inputTensors[0]);
+    uint32_t *o = tensor_dims(&op->v1.outputTensors[0]);
+    if (!w || !o) return QNN_OP_PACKAGE_ERROR_INVALID_INFO;
+
+    o[0] = 1;
+    o[1] = 1;
+    o[2] = w[2] * 2;
+    o[3] = w[3];
+    return QNN_SUCCESS;
+}
+
 EXPORT_API Qnn_ErrorHandle_t HmxU16I4ToU16MatMulDataTypeInference(Qnn_OpConfig_t *op)
+{
+    if (!op || op->v1.numOfOutputs < 1) return QNN_OP_PACKAGE_ERROR_INVALID_INFO;
+    if (op->v1.numOfInputs >= 4) {
+        set_tensor_dtype(&op->v1.inputTensors[0], QNN_DATATYPE_SFIXED_POINT_32);
+        set_tensor_dtype(&op->v1.inputTensors[1], QNN_DATATYPE_UFIXED_POINT_8);
+        set_tensor_dtype(&op->v1.inputTensors[2], QNN_DATATYPE_UFIXED_POINT_16);
+        set_tensor_dtype(&op->v1.inputTensors[3], QNN_DATATYPE_INT_32);
+    }
+    set_tensor_dtype(&op->v1.outputTensors[0], QNN_DATATYPE_UFIXED_POINT_16);
+    return QNN_SUCCESS;
+}
+
+EXPORT_API Qnn_ErrorHandle_t HmxU16I8ToU16MatMulDataTypeInference(Qnn_OpConfig_t *op)
 {
     if (!op || op->v1.numOfOutputs < 1) return QNN_OP_PACKAGE_ERROR_INVALID_INFO;
     if (op->v1.numOfInputs >= 4) {
         set_tensor_dtype(&op->v1.inputTensors[0], QNN_DATATYPE_SFIXED_POINT_32);
         set_tensor_dtype(&op->v1.inputTensors[1], QNN_DATATYPE_SFIXED_POINT_8);
         set_tensor_dtype(&op->v1.inputTensors[2], QNN_DATATYPE_UFIXED_POINT_16);
-        set_tensor_dtype(&op->v1.inputTensors[3], QNN_DATATYPE_INT_32);
+        set_tensor_dtype(&op->v1.inputTensors[3], QNN_DATATYPE_UFIXED_POINT_8);
     }
     set_tensor_dtype(&op->v1.outputTensors[0], QNN_DATATYPE_UFIXED_POINT_16);
+    return QNN_SUCCESS;
+}
+
+EXPORT_API Qnn_ErrorHandle_t HmxW4LpbqExpandToI8DataTypeInference(Qnn_OpConfig_t *op)
+{
+    if (!op || op->v1.numOfOutputs < 1) return QNN_OP_PACKAGE_ERROR_INVALID_INFO;
+    if (op->v1.numOfInputs >= 2) {
+        set_tensor_dtype(&op->v1.inputTensors[0], QNN_DATATYPE_UFIXED_POINT_8);
+        set_tensor_dtype(&op->v1.inputTensors[1], QNN_DATATYPE_UFIXED_POINT_8);
+    }
+    set_tensor_dtype(&op->v1.outputTensors[0], QNN_DATATYPE_UFIXED_POINT_8);
     return QNN_SUCCESS;
 }
 
@@ -109,6 +175,14 @@ Qnn_ErrorHandle_t (*HmxU16I4ToU16MatMulOutputInfoInferencePtr)(Qnn_OpConfig_t *)
     &HmxU16I4ToU16MatMulShapeInference;
 Qnn_ErrorHandle_t (*HmxU16I4ToU16MatMulDataTypeInferencePtr)(Qnn_OpConfig_t *) =
     &HmxU16I4ToU16MatMulDataTypeInference;
+Qnn_ErrorHandle_t (*HmxU16I8ToU16MatMulOutputInfoInferencePtr)(Qnn_OpConfig_t *) =
+    &HmxU16I8ToU16MatMulShapeInference;
+Qnn_ErrorHandle_t (*HmxU16I8ToU16MatMulDataTypeInferencePtr)(Qnn_OpConfig_t *) =
+    &HmxU16I8ToU16MatMulDataTypeInference;
+Qnn_ErrorHandle_t (*HmxW4LpbqExpandToI8OutputInfoInferencePtr)(Qnn_OpConfig_t *) =
+    &HmxW4LpbqExpandToI8ShapeInference;
+Qnn_ErrorHandle_t (*HmxW4LpbqExpandToI8DataTypeInferencePtr)(Qnn_OpConfig_t *) =
+    &HmxW4LpbqExpandToI8DataTypeInference;
 Qnn_ErrorHandle_t (*HmxW4A16TensorDumpOutputInfoInferencePtr)(Qnn_OpConfig_t *) =
     &HmxW4A16TensorDumpShapeInference;
 Qnn_ErrorHandle_t (*HmxW4A16TensorDumpDataTypeInferencePtr)(Qnn_OpConfig_t *) =

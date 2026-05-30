@@ -1,8 +1,7 @@
 /*
  * QnnHmxMatMulW4A8Interface.cpp
  *
- * QNN OpPackage interface for the single custom op kept in this example:
- * HmxU8I4ToU8MatMul.
+ * QNN OpPackage interface for W4A8 plus the LPBQ expand+W8 compute path.
  */
 
 #include "HTP/QnnHtpCommon.h"
@@ -19,10 +18,18 @@
 #endif
 
 extern "C" void register_hmx_w4a8_to_u8_matmul_op();
+extern "C" void register_hmx_w4_lpbq_expand_to_i8_op();
+extern "C" void register_hmx_u8i8_to_u8_matmul_op();
 
 static constexpr auto sg_packageName = THIS_PKG_NAME_STR;
 static constexpr auto sg_opName = "HmxU8I4ToU8MatMul";
-static std::array<const char *, 1> sg_opNames{{sg_opName}};
+static constexpr auto sg_lpbqExpandOpName = "HmxW4LpbqExpandToI8";
+static constexpr auto sg_lpbqComputeOpName = "HmxU8I8ToU8MatMul";
+static std::array<const char *, 3> sg_opNames{{
+    sg_opName,
+    sg_lpbqExpandOpName,
+    sg_lpbqComputeOpName,
+}};
 
 std::unordered_map<std::string, std::set<std::string> *> &getPkgPerChannelOpsTmpMap();
 
@@ -82,7 +89,10 @@ static Qnn_ErrorHandle_t pkgValidateOpConfig(Qnn_OpConfig_t opConfig)
     if (std::string(sg_packageName) != opConfig.v1.packageName) {
         return QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
     }
-    if (std::string(sg_opName) != opConfig.v1.typeName) {
+    const std::string typeName(opConfig.v1.typeName);
+    if (typeName != sg_opName &&
+        typeName != sg_lpbqExpandOpName &&
+        typeName != sg_lpbqComputeOpName) {
         return QNN_OP_PACKAGE_ERROR_VALIDATION_FAILURE;
     }
     return QNN_SUCCESS;
@@ -149,5 +159,7 @@ QnnHmxMatMulW4A8InterfaceProvider(QnnOpPackage_Interface_t *interface)
 extern "C" const char *qhpi_init()
 {
     register_hmx_w4a8_to_u8_matmul_op();
+    register_hmx_w4_lpbq_expand_to_i8_op();
+    register_hmx_u8i8_to_u8_matmul_op();
     return THIS_PKG_NAME_STR;
 }

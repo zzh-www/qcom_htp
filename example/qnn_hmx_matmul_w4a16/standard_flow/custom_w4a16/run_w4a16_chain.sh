@@ -29,6 +29,7 @@ OUT_DIR="${OUT_DIR:-$SCRIPT_DIR/out/w4a16_${MODE}_${M}}"
 SKIP_DEVICE="${SKIP_DEVICE:-0}"
 NATIVE_OUTPUT="${NATIVE_OUTPUT:-1}"
 PACK_4BIT_WEIGHTS="${PACK_4BIT_WEIGHTS:-1}"
+VERIFY_REF="${VERIFY_REF:-1}"
 
 mkdir -p "$OUT_DIR"
 cd "$SCRIPT_DIR"
@@ -98,11 +99,11 @@ echo "=== [3/4] qairt-converter -> qairt-quantizer ==="
     -o "$OUT_DIR/w4a16_encoded.dlc" \
     2>&1 | tee "$OUT_DIR/convert.log" | tail -5
 if [ "${W4_ENCODING:-symmetric}" = "lpbq" ]; then
-    cp "$OUT_DIR/w4a16_encoded.dlc" "$OUT_DIR/w4a16.dlc"
-    {
-        echo "LPBQ custom-op path uses converter-applied v1.0.0 encodings."
-        echo "qairt-quantizer is intentionally skipped because QAIRT only rewrites LPBQ for built-in row-wise or Conv consumers."
-    } > "$OUT_DIR/quantize.log"
+    qairt_quantize_encoded_dlc \
+        "$OUT_DIR/w4a16_encoded.dlc" \
+        "$OUT_DIR/w4a16.dlc" \
+        16 8 32 0 \
+        "$OUT_DIR/quantize.log"
 else
     qairt_quantize_encoded_dlc \
         "$OUT_DIR/w4a16_encoded.dlc" \
@@ -206,6 +207,7 @@ CHECK_ARGS=("$OUT_DIR" --require-native-io --require-layout-flags --reject-float
 python "$ROOT_DIR/scripts/check_qnn_artifact_standard.py" "${CHECK_ARGS[@]}"
 
 VERIFY_STATUS=0
+if [ "$VERIFY_REF" = "1" ]; then
 python3 - "$OUT_DIR" <<'PY' || VERIFY_STATUS=$?
 import sys
 from pathlib import Path
@@ -291,6 +293,9 @@ if native_ref_q is not None:
 if ok != out_q.size:
     raise SystemExit(3)
 PY
+else
+    echo "  bit-exact: skipped (VERIFY_REF=0)"
+fi
 
 if [ "${ANALYZE_W4A16:-1}" = "1" ]; then
     echo "=== analyze w4a16 native/perf artifacts ==="

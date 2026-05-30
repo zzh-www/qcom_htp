@@ -14,7 +14,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 usage() {
     cat <<'EOF'
 Usage:
-  scripts/run_qnn_kernel_e2e_ci.sh all|correctness|performance|lpbq|u8i8|u8i8_native_match|w4a8_per_channel|w4a8_per_channel_native_match|w4a8_lpbq|w8a16|w8a16_per_channel_native_match|w4a16_per_channel|w4a16_per_channel_native_match|w4a16_per_channel_chain1|w4a16_lpbq
+  scripts/run_qnn_kernel_e2e_ci.sh all|correctness|performance|lpbq|u8i8|u8i8_native_match|w4a8_per_channel|w4a8_per_channel_native_match|w4a8_lpbq|w4a8_lpbq_native_match|w8a16|w8a16_per_channel_native_match|w4a16_per_channel|w4a16_per_channel_native_match|w4a16_per_channel_chain1|w4a16_lpbq|w4a16_lpbq_native_match
 
 Environment:
   DEVICE=oneplus                  SSH target for qnn-net-run device execution.
@@ -29,6 +29,7 @@ Environment:
   W4A8_MATCH_N=256                N size for the w4a8 per-channel custom/native gate.
   W4A8_MATCH_CASES="normal_random zp_neutral positive_boundary negative_boundary single_k_impulse bias_only scale_only"
                                   Float-derived w4a8 per-channel Python/QNN cases for the custom/native gate.
+                                  Also used by w4a8_lpbq_native_match.
   W8A16_MATCH_M=256               M size for the w8a16 per-channel custom/native gate.
   W8A16_MATCH_K=256               K size for the w8a16 per-channel custom/native gate.
   W8A16_MATCH_N=256               N size for the w8a16 per-channel custom/native gate.
@@ -40,6 +41,7 @@ Environment:
   W4A16_MATCH_N=256               N size for the w4a16 per-channel custom/native gate.
   W4A16_MATCH_CASES="normal_random zp_neutral positive_boundary negative_boundary single_k_impulse bias_only scale_only"
                                   Float-derived w4a16 per-channel Python/QNN cases for the custom/native gate.
+                                  Also used by w4a16_lpbq_native_match.
   W4A16_CHAIN1_CASES="default zp k_impulse0 k_impulse1 k_impulse7"
                                   Case list for the W4A16 CHAIN=1 precision suite.
 EOF
@@ -57,7 +59,15 @@ if [ "$KERNEL" = "all" ]; then
     exit 0
 fi
 if [ "$KERNEL" = "correctness" ]; then
-    items=(u8i8_native_match w4a8_per_channel_native_match w8a16_per_channel_native_match w4a16_per_channel_native_match w4a16_per_channel_chain1)
+    items=(
+        u8i8_native_match
+        w4a8_per_channel_native_match
+        w4a8_lpbq_native_match
+        w8a16_per_channel_native_match
+        w4a16_per_channel_native_match
+        w4a16_lpbq_native_match
+        w4a16_per_channel_chain1
+    )
     for item in "${items[@]}"; do
         "$0" "$item"
     done
@@ -71,7 +81,7 @@ if [ "$KERNEL" = "performance" ]; then
     exit 0
 fi
 if [ "$KERNEL" = "lpbq" ]; then
-    items=(w4a8_lpbq w4a16_lpbq)
+    items=(w4a8_lpbq_native_match w4a16_lpbq_native_match w4a8_lpbq w4a16_lpbq)
     for item in "${items[@]}"; do
         "$0" "$item"
     done
@@ -87,6 +97,7 @@ RUN_MATCHED_U8I8_NATIVE=""
 RUN_MATCHED_W4A8_NATIVE=""
 RUN_MATCHED_W8A16_NATIVE=""
 RUN_MATCHED_W4A16_NATIVE=""
+MATCH_W4_ENCODING="symmetric"
 REF_FLAG=()
 
 case "$KERNEL" in
@@ -165,7 +176,7 @@ case "$KERNEL" in
     w4a8_lpbq)
         EXAMPLE_DIR="$ROOT_DIR/example/qnn_hmx_matmul_w4a8"
         RUN_SCRIPT="$EXAMPLE_DIR/standard_flow/custom_w4a8/run_w4a8_chain.sh"
-        RETAINED_CUSTOM="$PROFILE_DIR/output_w4a8_lpbq_e2e_256"
+        RETAINED_CUSTOM="$PROFILE_DIR/output_w4a8_lpbq_ci_e2e_256"
         NATIVE_DIR="$PROFILE_DIR/output_w4a8_native_ref_e2e_256"
         CI_CUSTOM="$OUT_ROOT/output_w4a8_lpbq_ci_e2e_256"
         HTP_TYPE="QnnHmxMatMulW4A8Package::HmxU8I4ToU8MatMul"
@@ -174,6 +185,24 @@ case "$KERNEL" in
         DTYPE="uint8"
         BUILD_ENV=(LPBQ_ONLY=1)
         RUN_ENV=(M=256 K=256 N=256 CHAIN=8 MODE=chain W4_ENCODING=lpbq)
+        TRANSPOSE_FLAG=()
+        LPBQ_FLAG=(--expect-lpbq)
+        ;;
+    w4a8_lpbq_native_match)
+        EXAMPLE_DIR="$ROOT_DIR/example/qnn_hmx_matmul_w4a8"
+        RUN_SCRIPT="$EXAMPLE_DIR/standard_flow/custom_w4a8/run_w4a8_chain.sh"
+        RETAINED_CUSTOM="$PROFILE_DIR/output_w4a8_lpbq_e2e_256"
+        NATIVE_DIR="$PROFILE_DIR/output_w4a8_native_ref_e2e_256"
+        CI_CUSTOM="$OUT_ROOT/output_w4a8_lpbq_native_match_custom_ci"
+        CI_NATIVE="$OUT_ROOT/output_w4a8_lpbq_native_match_native_ci"
+        RUN_MATCHED_W4A8_NATIVE=1
+        MATCH_W4_ENCODING="lpbq"
+        HTP_TYPE="QnnHmxMatMulW4A8Package::HmxU8I4ToU8MatMul"
+        QNN_PREFIX="hmx_w4a8_chain"
+        EXPECTED_QNN_OPS=1
+        DTYPE="uint8"
+        BUILD_ENV=(LPBQ_ONLY=1)
+        RUN_ENV=()
         TRANSPOSE_FLAG=()
         LPBQ_FLAG=(--expect-lpbq)
         ;;
@@ -262,7 +291,7 @@ case "$KERNEL" in
     w4a16_lpbq)
         EXAMPLE_DIR="$ROOT_DIR/example/qnn_hmx_matmul_w4a16"
         RUN_SCRIPT="$EXAMPLE_DIR/standard_flow/custom_w4a16/run_w4a16_chain.sh"
-        RETAINED_CUSTOM="$PROFILE_DIR/output_w4a16_lpbq_e2e_256"
+        RETAINED_CUSTOM="$PROFILE_DIR/output_w4a16_lpbq_ci_e2e_256"
         NATIVE_DIR="$PROFILE_DIR/output_w4a16_native_ref_e2e_256"
         CI_CUSTOM="$OUT_ROOT/output_w4a16_lpbq_ci_e2e_256"
         HTP_TYPE="QnnHmxMatMulW4A16Package::HmxU16I4ToU16MatMul"
@@ -271,6 +300,24 @@ case "$KERNEL" in
         DTYPE="uint16"
         BUILD_ENV=(LPBQ_ONLY=1)
         RUN_ENV=(M=256 K=256 N=256 CHAIN=8 MODE=chain_qdq OP_INPUT_LAYOUT=tiled W4_ENCODING=lpbq VERIFY_NATIVE_RAW="$NATIVE_DIR/device_out/Y.raw" VERIFY_NATIVE_TRANSPOSE=1)
+        TRANSPOSE_FLAG=(--native-transpose-2d)
+        LPBQ_FLAG=(--expect-lpbq)
+        ;;
+    w4a16_lpbq_native_match)
+        EXAMPLE_DIR="$ROOT_DIR/example/qnn_hmx_matmul_w4a16"
+        RUN_SCRIPT="$EXAMPLE_DIR/standard_flow/custom_w4a16/run_w4a16_chain.sh"
+        RETAINED_CUSTOM="$PROFILE_DIR/output_w4a16_lpbq_e2e_256"
+        NATIVE_DIR="$PROFILE_DIR/output_w4a16_native_ref_e2e_256"
+        CI_CUSTOM="$OUT_ROOT/output_w4a16_lpbq_native_match_custom_ci"
+        CI_NATIVE="$OUT_ROOT/output_w4a16_lpbq_native_match_native_ci"
+        RUN_MATCHED_W4A16_NATIVE=1
+        MATCH_W4_ENCODING="lpbq"
+        HTP_TYPE="QnnHmxMatMulW4A16Package::HmxU16I4ToU16MatMul"
+        QNN_PREFIX="hmx_w4a16_chain"
+        EXPECTED_QNN_OPS=1
+        DTYPE="uint16"
+        BUILD_ENV=(LPBQ_ONLY=1 EXTRA_DEFS="-UHMX_W4A16_SKIP_KERNEL -DHMX_W4A16_ALLOW_UNVALIDATED_KERNEL")
+        RUN_ENV=()
         TRANSPOSE_FLAG=(--native-transpose-2d)
         LPBQ_FLAG=(--expect-lpbq)
         ;;
@@ -329,10 +376,14 @@ if [ "$ARTIFACT_ONLY" != "1" ]; then
         match_m="${W4A8_MATCH_M:-256}"
         match_k="${W4A8_MATCH_K:-256}"
         match_n="${W4A8_MATCH_N:-256}"
+        match_root="output_w4a8_per_channel_native_match_ci"
+        if [ "$MATCH_W4_ENCODING" = "lpbq" ]; then
+            match_root="output_w4a8_lpbq_native_match_ci"
+        fi
         echo "=== run $KERNEL Python-case custom/native exactness on ${DEVICE:-oneplus} ==="
-        OUT_ROOT="$OUT_ROOT/output_w4a8_per_channel_native_match_ci" \
+        OUT_ROOT="$OUT_ROOT/$match_root" \
             M="$match_m" K="$match_k" N="$match_n" CHAIN=1 \
-            BUILD_PACKAGES=0 DEVICE="${DEVICE:-oneplus}" \
+            W4_ENCODING="$MATCH_W4_ENCODING" BUILD_PACKAGES=0 DEVICE="${DEVICE:-oneplus}" \
             bash "$ROOT_DIR/scripts/run_w4a8_python_case_custom_native_match.sh"
         echo "PASS: $KERNEL Python-case custom/native exactness"
         exit 0
@@ -355,10 +406,14 @@ if [ "$ARTIFACT_ONLY" != "1" ]; then
         match_m="${W4A16_MATCH_M:-256}"
         match_k="${W4A16_MATCH_K:-256}"
         match_n="${W4A16_MATCH_N:-256}"
+        match_root="output_w4a16_per_channel_native_match_ci"
+        if [ "$MATCH_W4_ENCODING" = "lpbq" ]; then
+            match_root="output_w4a16_lpbq_native_match_ci"
+        fi
         echo "=== run $KERNEL Python-case custom/native exactness on ${DEVICE:-oneplus} ==="
-        OUT_ROOT="$OUT_ROOT/output_w4a16_per_channel_native_match_ci" \
+        OUT_ROOT="$OUT_ROOT/$match_root" \
             M="$match_m" K="$match_k" N="$match_n" CHAIN=1 \
-            BUILD_PACKAGES=0 DEVICE="${DEVICE:-oneplus}" \
+            W4_ENCODING="$MATCH_W4_ENCODING" BUILD_PACKAGES=0 DEVICE="${DEVICE:-oneplus}" \
             bash "$ROOT_DIR/scripts/run_w4a16_python_case_custom_native_match.sh"
         echo "PASS: $KERNEL Python-case custom/native exactness"
         exit 0

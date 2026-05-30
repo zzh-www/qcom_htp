@@ -147,7 +147,14 @@ def _legacy_encoding_to_v1(name: str, enc: dict) -> dict:
     }
 
 
-def _w4_lpbq_encoding(name: str, weight_dims: tuple[int, ...], block_size: int) -> dict:
+def _w4_lpbq_encoding(
+    name: str,
+    weight_dims: tuple[int, ...],
+    block_size: int,
+    *,
+    family_name: str,
+    case_data: dict | None = None,
+) -> dict:
     """Build a deterministic LPBQ override for the packed W4 carrier tensor.
 
     QAIRT v1.0.0 represents LPBQ as BLOCKWISE_EXPANSION while still accepting
@@ -166,6 +173,35 @@ def _w4_lpbq_encoding(name: str, weight_dims: tuple[int, ...], block_size: int) 
             f"W4 LPBQ block size {block_size} must divide packed weight axis-2 size {block_axis_size}"
         )
     blocks_per_channel = block_axis_size // block_size
+    scales = [1.0] * channels
+    per_block = [[1] * blocks_per_channel for _ in range(channels)]
+    if case_data is not None and "lpbq_per_block_int_scale" in case_data:
+        logical = case_data["lpbq_per_block_int_scale"].astype(np.uint8)
+        logical_scales = case_data["weight_scale"].astype(np.float32).reshape(-1)
+        logical_channels, logical_blocks = logical.shape
+        if family_name == "w4a8" and channels * 2 == logical_channels:
+            mapped = []
+            mapped_scales = []
+            for carrier_ch in range(channels):
+                tile = carrier_ch // 32
+                nc = carrier_ch % 32
+                logical_ch = tile * 64 + nc
+                mapped.append(logical[logical_ch, :blocks_per_channel].astype(int).tolist())
+                mapped_scales.append(float(logical_scales[logical_ch]))
+            per_block = mapped
+            scales = mapped_scales
+        elif family_name == "w4a16" and channels == logical_channels and logical_blocks == blocks_per_channel * 2:
+            per_block = logical[:, 0::2].astype(int).tolist()
+            scales = logical_scales.astype(float).tolist()
+        elif family_name == "w4a16" and channels == logical_channels and logical_blocks == blocks_per_channel:
+            per_block = logical.astype(int).tolist()
+            scales = logical_scales.astype(float).tolist()
+        else:
+            raise ValueError(
+                "cannot map logical LPBQ metadata to custom carrier: "
+                f"family={family_name} weight_dims={weight_dims} logical={logical.shape}"
+            )
+
     return {
         "name": name,
         "dtype": "INT",
@@ -174,9 +210,9 @@ def _w4_lpbq_encoding(name: str, weight_dims: tuple[int, ...], block_size: int) 
         "compressed_bw": 4,
         "enc_type": "LPBQ",
         "block_size": block_size,
-        "scale": [1.0] * channels,
+        "scale": scales,
         "offset": [-128] * channels,
-        "per_block_int_scale": [[1] * blocks_per_channel for _ in range(channels)],
+        "per_block_int_scale": per_block,
     }
 
 
@@ -276,6 +312,58 @@ def _pack_w8_kmajor_split128(w_raw_kn: np.ndarray) -> np.ndarray:
     for n_base in range(0, n, 128):
         parts.append(_pack_w8_kmajor(w_raw_kn[:, n_base:n_base + 128]))
     return np.concatenate(parts).astype(np.int8, copy=False)
+
+
+def _lpbq_block_scale_pattern(family_name: str, k: int, n: int, block_size: int) -> np.ndarray:
+    if k % block_size:
+        raise ValueError(f"LPBQ K={k} must be divisible by block size {block_size}")
+    blocks = k // block_size
+    scales = np.empty((n, blocks), dtype=np.uint8)
+    for out_ch in range(n):
+        for block in range(blocks):
+            if family_name == "w4a8":
+                pair_id = (out_ch // 64) * 32 + (out_ch % 32)
+                factor = 1 + ((pair_id * 3 + block * 5) % 3)
+            else:
+                factor = 1 + ((out_ch * 3 + (block // 2) * 5) % 3)
+            scales[out_ch, block] = factor
+    return scales
+
+
+def _expand_lpbq_logical_kn(compressed_kn: np.ndarray, per_block: np.ndarray, block_size: int) -> np.ndarray:
+    k, n = compressed_kn.shape
+    if per_block.shape != (n, k // block_size):
+        raise ValueError(
+            f"LPBQ per-block scale shape mismatch: got {per_block.shape}, "
+            f"want {(n, k // block_size)}"
+        )
+    expanded = np.empty((k, n), dtype=np.int8)
+    for block in range(k // block_size):
+        start = block * block_size
+        stop = start + block_size
+        scale = per_block[:, block].astype(np.int16).reshape(1, n)
+        values = compressed_kn[start:stop, :].astype(np.int16) * scale
+        expanded[start:stop, :] = np.clip(values, -128, 127).astype(np.int8)
+    return expanded
+
+
+def _lpbq_initializers(
+    compressed_kn: np.ndarray,
+    per_block: np.ndarray,
+    block_size: int,
+) -> list:
+    k, n = compressed_kn.shape
+    if k % 32 or n % 32:
+        raise ValueError("LPBQ expand path requires K and N multiples of 32")
+    if block_size != 32:
+        raise ValueError("custom LPBQ expand currently matches QNN native K32 blocks only")
+    nib = (compressed_kn.astype(np.int8) & 0x0F).astype(np.uint8)
+    compressed = _pack_w4_native_kpair_linear(nib, "native_kpair_lohi")
+    block_scales = per_block.astype(np.uint8).reshape(1, 1, 1, n * (k // block_size))
+    return [
+        numpy_helper.from_array(compressed.reshape(1, 1, k // 2, n), name="weight_lpbq"),
+        numpy_helper.from_array(block_scales, name="weight_lpbq_per_block_int_scale"),
+    ]
 
 
 def _pack_w4_native_kpair_linear(nib: np.ndarray, order: str) -> np.ndarray:
@@ -406,6 +494,7 @@ def _pack_native_a16_bias(
     w_raw_kn: np.ndarray,
     sidecar_bias_q: np.ndarray | None = None,
     drain_scale: np.ndarray | None = None,
+    weight_bits_override: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Pack native A16 bias/control records for 32-column HMX tiles."""
     k, n = w_raw_kn.shape
@@ -417,9 +506,10 @@ def _pack_native_a16_bias(
     sidecar_bias_q = sidecar_bias_q.astype(np.int32, copy=False).reshape(n)
     effective_i32 = ((-128 * sum_w).astype(np.int32) + sidecar_bias_q).astype(np.int32)
     packed = np.zeros((n // 32, 512), dtype=np.uint8)
-    if family.weight_bits == 4:
+    weight_bits = int(weight_bits_override if weight_bits_override is not None else family.weight_bits)
+    if weight_bits == 4:
         const_words = [0x5524, 0x8040, 0x0092, 0x4000]
-    elif family.weight_bits == 8:
+    elif weight_bits == 8:
         const_words = [0x4440, 0x8040, 0x0008, 0x4000]
     else:
         raise ValueError("native A16 bias pack is not decoded for this weight width")
@@ -457,19 +547,19 @@ def _load_python_case(family: Family, case_dir: str | None) -> dict | None:
         return None
     root = Path(case_dir).resolve()
     meta = json.loads((root / "case.json").read_text(encoding="utf-8"))
-    expected_family = {
-        "w4a8": "w4a8_per_channel",
-        "w8a16": "w8a16",
-        "w4a16": "w4a16_per_channel",
-    }.get(family.name)
-    if meta.get("family") != expected_family:
+    expected_families = {
+        "w4a8": {"w4a8_per_channel", "w4a8_lpbq"},
+        "w8a16": {"w8a16"},
+        "w4a16": {"w4a16_per_channel", "w4a16_lpbq"},
+    }.get(family.name, set())
+    if meta.get("family") not in expected_families:
         raise ValueError(
-            f"{family.name} custom case import expected family={expected_family!r}, "
+            f"{family.name} custom case import expected family in {sorted(expected_families)!r}, "
             f"got {meta.get('family')!r}"
         )
-    if meta.get("weight_schema_variant") != "per_output_channel":
+    if meta.get("weight_schema_variant") not in {"per_output_channel", "lpbq_blockwise_expansion"}:
         raise ValueError(
-            f"{family.name} custom case import currently supports per-output-channel only, "
+            f"{family.name} custom case import currently supports per-output-channel or LPBQ only, "
             f"got {meta.get('weight_schema_variant')!r}"
         )
     files = meta["files"]
@@ -479,7 +569,7 @@ def _load_python_case(family: Family, case_dir: str | None) -> dict | None:
     bias_q = np.load(root / files["bias_q_int32"]["npy"]).astype(np.int32).reshape(n)
     weight_scale = np.load(root / files["weight_scale"]["npy"]).astype(np.float32).reshape(n)
     output_ref_q = np.load(root / files["output_ref_q"]["npy"]).reshape(m, n)
-    return {
+    result = {
         "root": root,
         "meta": meta,
         "activation_q": activation_q,
@@ -488,6 +578,15 @@ def _load_python_case(family: Family, case_dir: str | None) -> dict | None:
         "weight_scale": weight_scale,
         "output_ref_q": output_ref_q,
     }
+    if "weight_lpbq_per_block_int_scale" in files:
+        result["lpbq_per_block_int_scale"] = np.load(
+            root / files["weight_lpbq_per_block_int_scale"]["npy"]
+        ).astype(np.uint8)
+    if "weight_lpbq_expanded_q_nk" in files:
+        result["lpbq_expanded_q_nk"] = np.load(
+            root / files["weight_lpbq_expanded_q_nk"]["npy"]
+        ).astype(np.int16)
+    return result
 
 
 def _weight_initializer(
@@ -651,6 +750,7 @@ def _bias_initializer(
     bias_layout: str,
     bias_fold: str,
     case_data: dict | None = None,
+    weight_bits_override: int | None = None,
 ) -> tuple:
     n = w_raw_kn.shape[1]
     n_t = n // 32
@@ -682,6 +782,7 @@ def _bias_initializer(
                 w_raw_kn,
                 sidecar_bias_q=sidecar_bias_q,
                 drain_scale=drain_scale,
+                weight_bits_override=weight_bits_override,
             )
             init = numpy_helper.from_array(
                 bias_fold_bytes.view(np.int32).reshape(1, n_t, 1, 128).copy(),
@@ -690,7 +791,7 @@ def _bias_initializer(
             return init, bias_q, effective_i32
         if family.out_bits != 8:
             raise ValueError("Python-case bias import is currently implemented for U8-output families")
-        if family.name == "w4a8":
+        if family.name == "w4a8" and weight_bits_override != 8:
             effective_i32 = qnn_htp_perchannel_w4a8_sidecar_effective_i32(
                 bias_q,
                 act_scale,
@@ -708,7 +809,7 @@ def _bias_initializer(
         exact_scale = (
             np.float32(512.0) * act_scale * weight_scale / output_scale
         ).astype(np.float32)
-        if family.name == "w4a8":
+        if family.name == "w4a8" and weight_bits_override != 8:
             exact_scale = (exact_scale / np.float32(16.0)).astype(np.float32)
         scale_u16, control_u16 = qnn_htp_u8_drain_scale_control(exact_scale)
         bias_fold_bytes = np.zeros((n_t, 256), dtype=np.uint8)
@@ -733,7 +834,11 @@ def _bias_initializer(
         if not _is_native_a16_family(family):
             raise ValueError("native_a16 bias layout is only valid for A16/U16 families")
         bias_q = np.zeros(n, dtype=np.int32)
-        bias_fold_bytes, effective_i32 = _pack_native_a16_bias(family, w_raw_kn)
+        bias_fold_bytes, effective_i32 = _pack_native_a16_bias(
+            family,
+            w_raw_kn,
+            weight_bits_override=weight_bits_override,
+        )
         init = numpy_helper.from_array(
             bias_fold_bytes.view(np.int32).reshape(1, n_t, 1, 128).copy(),
             name="bias",
@@ -743,7 +848,11 @@ def _bias_initializer(
         if family.name != "w4a16":
             raise ValueError("native_a16_w4compact is currently decoded only for w4a16")
         bias_q = np.zeros(n, dtype=np.int32)
-        bias_fold_bytes, effective_i32 = _pack_native_a16_bias(family, w_raw_kn)
+        bias_fold_bytes, effective_i32 = _pack_native_a16_bias(
+            family,
+            w_raw_kn,
+            weight_bits_override=weight_bits_override,
+        )
         init = numpy_helper.from_array(
             bias_fold_bytes[:, :256].view(np.int32).reshape(1, n_t, 1, 64).copy(),
             name="bias",
@@ -891,8 +1000,8 @@ def generate(family: Family, args: argparse.Namespace) -> None:
     case_data = _load_python_case(family, args.case_dir)
     if case_data is not None:
         args.M, args.K, args.N = [int(v) for v in case_data["meta"]["shape_mkn"]]
-        if args.chain != 1 or args.mode not in {"chain", "chain_qdq"}:
-            raise ValueError("--case-dir currently supports --chain 1 --mode chain/chain_qdq only")
+        if args.chain != 1 or args.mode not in {"chain", "chain_qdq", "direct"}:
+            raise ValueError("--case-dir currently supports --chain 1 --mode chain/chain_qdq/direct only")
         if args.mode == "chain_qdq" and not _is_native_a16_family(family):
             raise ValueError("--case-dir --mode chain_qdq is currently supported only for A16 families")
     assert args.M % 32 == 0 and args.K % 32 == 0 and args.N % 32 == 0
@@ -971,6 +1080,23 @@ def generate(family: Family, args: argparse.Namespace) -> None:
         w_raw_kn = case_data["weight_q_nk"].astype(_signed_dtype(family.weight_bits)).T.copy()
     else:
         w_raw_kn = _make_weight(family, k, n, args.weight_limit)
+    lpbq_custom_expand = family.name in {"w4a8", "w4a16"} and args.w4_encoding == "lpbq"
+    lpbq_per_block = None
+    w_compute_kn = w_raw_kn
+    if lpbq_custom_expand:
+        if case_data is not None and "lpbq_per_block_int_scale" in case_data:
+            lpbq_per_block = case_data["lpbq_per_block_int_scale"].astype(np.uint8)
+        else:
+            lpbq_per_block = _lpbq_block_scale_pattern(family.name, k, n, args.w4_lpbq_block_size)
+        if case_data is not None and "lpbq_expanded_q_nk" in case_data:
+            w_compute_kn = np.clip(case_data["lpbq_expanded_q_nk"], -128, 127).astype(np.int8).T.copy()
+        else:
+            w_compute_kn = _expand_lpbq_logical_kn(w_raw_kn, lpbq_per_block, args.w4_lpbq_block_size)
+        if lpbq_per_block.shape != (n, k // args.w4_lpbq_block_size):
+            raise ValueError(
+                f"LPBQ per-block scale shape mismatch: got {lpbq_per_block.shape}, "
+                f"want {(n, k // args.w4_lpbq_block_size)}"
+            )
     reference_contract = args.reference_contract
     if reference_contract == "auto":
         reference_contract = "native" if _is_native_a16_family(family) and args.a16_quant_contract == "native" else "legacy"
@@ -984,7 +1110,7 @@ def generate(family: Family, args: argparse.Namespace) -> None:
         col0 = split_idx * split_n
         col1 = col0 + split_n
         w_part = w_raw_kn if w16_native_split_layout else w_raw_kn[:, col0:col1]
-        bias_w_part = w_raw_kn[:, col0:col1]
+        bias_w_part = w_compute_kn[:, col0:col1]
         if family.name == "w16a16" and args.w16_weight_carrier_dtype in ("int8", "uint8"):
             w16_payload_shape = w_part.shape
             if args.w16_weight_sidecar_raw:
@@ -1021,15 +1147,20 @@ def generate(family: Family, args: argparse.Namespace) -> None:
                 name="weight",
             )
         else:
-            wt_part = _weight_initializer(
-                family,
-                w_part,
-                args.w4_pack_order,
-                args.w4_nibble_encoding,
-                args.w4_native_sidecar_raw,
-                args.w8_pack_order,
-                args.w8_carrier_dtype,
-            )
+            if lpbq_custom_expand:
+                if split_count != 1:
+                    raise ValueError("W4 LPBQ custom expand currently supports only unsplit weights")
+                wt_part = None
+            else:
+                wt_part = _weight_initializer(
+                    family,
+                    w_part,
+                    args.w4_pack_order,
+                    args.w4_nibble_encoding,
+                    args.w4_native_sidecar_raw,
+                    args.w8_pack_order,
+                    args.w8_carrier_dtype,
+                )
         bias_part, bias_q_part, effective_i32_part = _bias_initializer(
             family,
             bias_w_part,
@@ -1038,6 +1169,7 @@ def generate(family: Family, args: argparse.Namespace) -> None:
             args.bias_layout,
             args.bias_fold,
             case_data,
+            weight_bits_override=(8 if lpbq_custom_expand and family.name in {"w4a8", "w4a16"} else None),
         )
         if _is_native_a16_family(family) and args.a16_bias_sidecar_raw:
             raw = np.fromfile(args.a16_bias_sidecar_raw, dtype=np.uint8)
@@ -1066,13 +1198,14 @@ def generate(family: Family, args: argparse.Namespace) -> None:
         if native_split_layout:
             wt_part.name = f"weight_{split_idx}"
             bias_part.name = f"bias_{split_idx}"
-        wt_inits.append(wt_part)
+        if wt_part is not None:
+            wt_inits.append(wt_part)
         bias_inits.append(bias_part)
         bias_q_parts.append(bias_q_part)
         effective_i32_parts.append(effective_i32_part)
     bias_q = np.concatenate(bias_q_parts).astype(np.int32)
     effective_i32 = np.concatenate(effective_i32_parts).astype(np.int32)
-    if family.name == "w4a16":
+    if family.name == "w4a16" and not lpbq_custom_expand:
         scratch_input_name = "control"
         scratch_init = numpy_helper.from_array(np.array([1], dtype=np.int32), name=scratch_input_name)
     elif family.name == "w16a16" and args.w16_scratch_sidecar_raw:
@@ -1098,6 +1231,12 @@ def generate(family: Family, args: argparse.Namespace) -> None:
     act_tp = _uint_tensorproto(family.act_bits)
     out_tp = _uint_tensorproto(family.out_bits)
     initializers = [*wt_inits, *bias_inits, scratch_init, in_reshape_dims, out_reshape_dims]
+    matmul_op = family.op
+    if lpbq_custom_expand:
+        if lpbq_per_block is None:
+            raise ValueError("LPBQ custom expand path is missing per-block scales")
+        matmul_op = "HmxU8I8ToU8MatMul" if family.name == "w4a8" else "HmxU16I8ToU16MatMul"
+        initializers[:0] = _lpbq_initializers(w_raw_kn, lpbq_per_block, args.w4_lpbq_block_size)
     if args.mode == "chain_qdq":
         act_q_scale = 1.0
         if _is_native_a16_family(family) and args.a16_quant_contract == "native":
@@ -1110,6 +1249,15 @@ def generate(family: Family, args: argparse.Namespace) -> None:
     outputs_info = []
     value_infos = []
     nodes = []
+    if lpbq_custom_expand:
+        nodes.append(helper.make_node(
+            "HmxW4LpbqExpandToI8",
+            ["weight_lpbq", "weight_lpbq_per_block_int_scale"],
+            ["weight"],
+            name="expand_lpbq_weight",
+            domain=DOMAIN,
+        ))
+        value_infos.append(helper.make_tensor_value_info("weight", TensorProto.UINT8, [1, 1, k, n]))
 
     if args.mode in ("chain", "chain_float", "chain_qdq"):
         graph_act_tp = TensorProto.FLOAT if args.mode in ("chain_float", "chain_qdq") else act_tp
@@ -1151,7 +1299,7 @@ def generate(family: Family, args: argparse.Namespace) -> None:
             for split_idx in range(split_count):
                 out_name = f"hmx_{family.name}_part{split_idx}"
                 nodes.append(helper.make_node(
-                    family.op,
+                    matmul_op,
                     inputs=[f"bias_{split_idx}", f"weight_{split_idx}", prev, scratch_input_name],
                     outputs=[out_name],
                     name=f"hmx_{family.name}_split{split_idx}",
@@ -1195,7 +1343,7 @@ def generate(family: Family, args: argparse.Namespace) -> None:
                 else:
                     out_name = f"hmx_{family.name}"
                 nodes.append(helper.make_node(
-                    family.op,
+                    matmul_op,
                     inputs=["bias", "weight", prev, scratch_input_name],
                     outputs=[out_name],
                     name=f"hmx_{family.name}_chain{i}",
@@ -1220,7 +1368,7 @@ def generate(family: Family, args: argparse.Namespace) -> None:
             else:
                 out_name = f"hmx_{family.name}_{i}" if i < chain - 1 else "out"
             nodes.append(helper.make_node(
-                family.op,
+                matmul_op,
                 inputs=["bias", "weight", prev, scratch_input_name],
                 outputs=[out_name],
                 name=f"hmx_{family.name}_direct{i}",
@@ -1247,7 +1395,7 @@ def generate(family: Family, args: argparse.Namespace) -> None:
             outputs_info.append(helper.make_tensor_value_info(out_name, out_tp, graph_out_shape))
             nodes.append(helper.make_node("Reshape", [in_name, in_shape_name], [act4d_name], name=f"reshape_in_{i}"))
             nodes.append(helper.make_node(
-                family.op,
+                matmul_op,
                 inputs=["bias", "weight", act4d_name, scratch_input_name],
                 outputs=[mm_name],
                 name=f"hmx_{family.name}_indep{i}",
@@ -1284,6 +1432,8 @@ def generate(family: Family, args: argparse.Namespace) -> None:
     bias_enc = _symmetric_encoding(32)
     if args.mode in ("chain", "chain_float", "chain_qdq", "direct", "direct_flat"):
         activation_encodings = {"act_raw": [act_enc]}
+        if lpbq_custom_expand and family.name == "w4a8":
+            activation_encodings["weight"] = [_activation_encoding(8)]
         if native_split_layout and args.native_split_output_mode == "separate":
             for split_idx in range(split_count):
                 activation_encodings[f"out_part{split_idx}"] = [out_enc]
@@ -1321,11 +1471,21 @@ def generate(family: Family, args: argparse.Namespace) -> None:
         if args.w4_encoding == "lpbq":
             if split_count != 1:
                 raise ValueError("W4 LPBQ custom flow currently supports only unsplit weights")
-            weight_dims = tuple(int(dim) for dim in wt_inits[0].dims)
-            param_encodings["weight"] = [
-                _w4_lpbq_encoding("weight", weight_dims, args.w4_lpbq_block_size)
-            ]
-            use_lpbq_v1_quant_overrides = True
+            if lpbq_custom_expand:
+                param_encodings["weight_lpbq"] = [_activation_encoding(8)]
+                param_encodings["weight_lpbq_per_block_int_scale"] = [_activation_encoding(8)]
+            else:
+                weight_dims = tuple(int(dim) for dim in wt_inits[0].dims)
+                param_encodings["weight"] = [
+                    _w4_lpbq_encoding(
+                        "weight",
+                        weight_dims,
+                        args.w4_lpbq_block_size,
+                        family_name=family.name,
+                        case_data=case_data,
+                    )
+                ]
+                use_lpbq_v1_quant_overrides = True
         else:
             param_encodings["weight"] = [_symmetric_encoding(4)]
     if family.name == "w16a16" and args.w16_weight_carrier_dtype == "int8":
@@ -1349,7 +1509,7 @@ def generate(family: Family, args: argparse.Namespace) -> None:
     native_input_name = f"act_{family.name}.raw"
     native_input_rel = f"runtime_inputs_u8/{native_input_name}"
     native_input_storage = _uint_storage(family.act_bits)
-    if args.mode in ("chain", "chain_float", "chain_qdq", "direct_flat"):
+    if args.mode in ("chain", "chain_float", "chain_qdq", "direct", "direct_flat"):
         if case_data is not None:
             a0 = case_data["activation_q"].astype(_uint_dtype(family.act_bits)).reshape(1, 1, m, k)
         else:
@@ -1357,6 +1517,8 @@ def generate(family: Family, args: argparse.Namespace) -> None:
         if w4_native_conv_input_layout:
             act_nchw = a0.reshape(m, k).T.reshape(1, k, 1, m)
             act_nchw.tofile(os.path.join(runtime_dir, native_input_name))
+        elif args.mode == "direct" and not native_act_layout:
+            a0.reshape(1, row_groups, row_tile, k).tofile(os.path.join(runtime_dir, native_input_name))
         elif args.mode == "chain_float":
             native_input_storage = "float32_le"
             a0.astype(np.float32).tofile(os.path.join(runtime_dir, native_input_name))
@@ -1369,7 +1531,7 @@ def generate(family: Family, args: argparse.Namespace) -> None:
             out_ref = case_data["output_ref_q"].astype(_uint_dtype(family.out_bits))
         else:
             for _ in range(chain):
-                cur = _make_reference_step(family, cur, w_raw_kn, bias_q, reference_contract)
+                cur = _make_reference_step(family, cur, w_compute_kn, bias_q, reference_contract)
             out_ref = cur
     else:
         input_parts = []
@@ -1383,9 +1545,9 @@ def generate(family: Family, args: argparse.Namespace) -> None:
             f.write(" ".join(input_parts) + "\n")
         a0 = _make_activation(family, m, k, 0, args.activation_mode, args.activation_k).reshape(m, k)
         if reference_contract == "legacy":
-            out_ref = _make_reference(family, a0, w_raw_kn, bias_q)
+            out_ref = _make_reference(family, a0, w_compute_kn, bias_q)
         else:
-            out_ref = _make_reference_step(family, a0, w_raw_kn, bias_q, reference_contract)
+            out_ref = _make_reference_step(family, a0, w_compute_kn, bias_q, reference_contract)
 
     with open(os.path.join(out_dir, "native_io.json"), "w", encoding="utf-8") as f:
         json.dump(
@@ -1411,18 +1573,23 @@ def generate(family: Family, args: argparse.Namespace) -> None:
                 "op_input_layout": args.op_input_layout,
                 "a16_quant_contract": args.a16_quant_contract,
                 "reference_contract": reference_contract,
+                "lpbq_expand_custom_op": bool(lpbq_custom_expand),
+                "lpbq_matmul_op": matmul_op,
             },
             f,
             indent=2,
         )
 
     np.save(out_path + ".wRaw_KN.npy", w_raw_kn)
+    if lpbq_custom_expand:
+        np.save(out_path + ".wExpanded_KN.npy", w_compute_kn)
+        np.save(out_path + ".lpbq_per_block_int_scale.npy", lpbq_per_block)
     np.save(out_path + ".bias_q_int32.npy", bias_q)
     np.save(out_path + ".effective_int32.npy", effective_i32)
     np.save(out_path + f".out_ref_u{family.out_bits}.npy", out_ref)
 
     print(f"  -> {out_path}")
-    print(f"  graph: {family.op} x {chain} ({args.mode})")
+    print(f"  graph: {matmul_op} x {chain} ({args.mode})")
     print(f"  shape: M={m} K={k} N={n}; W{family.weight_bits} A{family.act_bits}; weight encodings are carried by the native packer")
     print(f"  ref out[0..3,0]: {out_ref[:4, 0].tolist()}")
 

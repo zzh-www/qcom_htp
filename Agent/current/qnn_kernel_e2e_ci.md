@@ -5,9 +5,9 @@ QNN-free handwritten HMX MatMul runtime:
 
 | Group | Scope | CI entry |
 |---|---|---|
-| correctness | same-hardware exactness and CHAIN=1 precision | `tests/qnn_kernel_e2e/run_correctness.sh` |
+| correctness | promoted same-hardware exactness, LPBQ native-match, and CHAIN=1 precision | `tests/qnn_kernel_e2e/run_correctness.sh` |
 | performance | per-channel canonical profile / CHAIN=8 E2E | `tests/qnn_kernel_e2e/run_performance.sh` |
-| lpbq | lower-priority LPBQ performance smoke | `scripts/run_qnn_kernel_e2e_ci.sh lpbq` |
+| lpbq | explicit W4 LPBQ native-match plus canonical profile gate | `scripts/run_qnn_kernel_e2e_ci.sh lpbq` |
 
 Leaf entries:
 
@@ -17,12 +17,14 @@ Leaf entries:
 | performance | `w4a8_per_channel` | `tests/qnn_kernel_e2e/performance/test_w4a8_per_channel_e2e.sh` | per-channel CHAIN=8 custom/native profile |
 | performance | `w8a16` | `tests/qnn_kernel_e2e/performance/test_w8a16_e2e.sh` | canonical CHAIN=8 custom/native profile |
 | performance | `w4a16_per_channel` | `tests/qnn_kernel_e2e/performance/test_w4a16_per_channel_e2e.sh` | per-channel CHAIN=8 custom/native profile |
-| lpbq | `w4a8_lpbq` | `tests/qnn_kernel_e2e/performance/test_w4a8_lpbq_e2e.sh` | explicit lower-priority smoke |
-| lpbq | `w4a16_lpbq` | `tests/qnn_kernel_e2e/performance/test_w4a16_lpbq_e2e.sh` | explicit lower-priority smoke |
+| lpbq | `w4a8_lpbq` | `tests/qnn_kernel_e2e/performance/test_w4a8_lpbq_e2e.sh` | pass canonical LPBQ CHAIN=8 profile |
+| lpbq | `w4a16_lpbq` | `tests/qnn_kernel_e2e/performance/test_w4a16_lpbq_e2e.sh` | pass canonical LPBQ CHAIN=8 profile |
 | correctness | `u8i8_native_match` | `tests/qnn_kernel_e2e/correctness/test_u8i8_native_match_e2e.sh` | pass/promoted |
 | correctness | `w4a8_per_channel_native_match` | `tests/qnn_kernel_e2e/correctness/test_w4a8_per_channel_native_match_e2e.sh` | pass/promoted |
+| correctness | `w4a8_lpbq_native_match` | `tests/qnn_kernel_e2e/correctness/test_w4a8_lpbq_native_match_e2e.sh` | pass/promoted LPBQ correctness |
 | correctness | `w8a16_per_channel_native_match` | `tests/qnn_kernel_e2e/correctness/test_w8a16_per_channel_native_match_e2e.sh` | pass/promoted |
 | correctness | `w4a16_per_channel_native_match` | `tests/qnn_kernel_e2e/correctness/test_w4a16_per_channel_native_match_e2e.sh` | pass/promoted |
+| correctness | `w4a16_lpbq_native_match` | `tests/qnn_kernel_e2e/correctness/test_w4a16_lpbq_native_match_e2e.sh` | pass/promoted LPBQ correctness |
 | correctness | `w4a16_per_channel_chain1` | `tests/qnn_kernel_e2e/correctness/test_w4a16_per_channel_chain1_e2e.sh` | pass/promoted |
 | correctness | `handwritten_hmx_matmul` | `tests/qnn_kernel_e2e/correctness/test_handwritten_hmx_matmul_e2e.sh` | pass/promoted |
 
@@ -47,7 +49,8 @@ The hook rejects `ARTIFACT_ONLY=1`; push-time validation must run on the device.
 
 The full gate first runs correctness CI, then performance CI.  Correctness CI
 prioritizes same-hardware exactness and explicitly runs only the promoted leaf
-entries in `tests/qnn_kernel_e2e/run_correctness.sh`.  The `u8i8_native_match`
+entries in `tests/qnn_kernel_e2e/run_correctness.sh`, including the ready
+W4A8/W4A16 LPBQ native-match gates.  The `u8i8_native_match`
 entry generates a
 float-derived u8i8 Python/QNN case, runs QNN Native Conv1x1, builds the custom
 HMX op with the recovered per-channel HTP prepare bias rule, and checks sidecar plus output
@@ -65,7 +68,7 @@ Native first, syncs the custom static bias to QNN Native's quantized DLC `B`,
 then checks both the generated W4A8 sidecar and same-hardware custom/native
 output exactness.  Current evidence:
 `/tmp/qcom_htp_w4a8_per_channel_native_match_ci/analysis/custom_native_compare_summary.json`
-with every case `65536/65536`, maxabs `0`, and sidecar `2048/2048`.
+with every case `65536/65536`, max integer delta `0`, and sidecar `2048/2048`.
 
 The `w8a16_per_channel_native_match` entry is promoted.  It runs the 7
 float-derived W8A16 cases (`normal_random`, `zp_neutral`,
@@ -76,13 +79,14 @@ A16 sidecar from the recovered generated drain/control and effective-bias
 rules, then checks same-hardware custom/native output exactness.  Current
 evidence:
 `/tmp/qcom_htp_w8a16_ci_default_generated/output_w8a16_per_channel_native_match_ci/analysis/custom_native_compare_summary.json`
-with every case `65536/65536`, maxabs `0`.  The recovered W8A16 drain scale
-uses QNN's two-stage normalized scale path instead of the direct per-channel
-`act_scale * weight_scale / output_scale` expression.  The prior `zp_neutral`
-native-final-sidecar blocker and the rejected `HMX_W8A16_INTERNAL_SPLIT_N128`
-hypothesis are recorded in `Agent/current/w8a16_zp_neutral_optrace.md`.  The
-custom/native sidecar ABI difference and generated-sidecar implementation are
-documented in `Agent/guides/qnn_htp_w8a16_perchannel_sidecar.md`.
+with every case `65536/65536`, max integer delta `0`.  The recovered W8A16
+drain scale uses QNN's two-stage normalized scale path instead of the direct
+per-channel `act_scale * weight_scale / output_scale` expression.  The prior
+`zp_neutral` native-final-sidecar blocker and the rejected
+`HMX_W8A16_INTERNAL_SPLIT_N128` hypothesis are recorded in
+`Agent/current/w8a16_zp_neutral_optrace.md`.  The custom/native sidecar ABI
+difference and generated-sidecar implementation are documented in
+`Agent/guides/qnn_htp_w8a16_perchannel_sidecar.md`.
 
 The `w4a16_per_channel_native_match` entry is promoted.  It runs the same 7
 float-derived Python/QNN cases at `256x256x256`, syncs the custom case to QNN
@@ -93,7 +97,8 @@ only matched effective-bias fields and left the 512-byte sidecar wrong.
 Current evidence:
 `/tmp/qcom_htp_w4a16_per_channel_native_match_generated_ci2/output_w4a16_per_channel_native_match_ci/analysis/custom_native_compare_summary.json`
 with every case sidecar `4096/4096`, control bytes `2048/2048`, effective
-fields `256/256`, and same-hardware output `65536/65536`, maxabs `0`.
+fields `256/256`, and same-hardware output `65536/65536`, max integer delta
+`0`.
 
 Performance CI is now limited to the per-channel canonical profile / CHAIN=8 E2E
 flows: `u8i8`, `w4a8_per_channel`, `w8a16`, and `w4a16_per_channel`.  It rebuilds each QNN op package,
@@ -109,13 +114,115 @@ custom op, then blocks on both custom/native exactness and
 custom/Python-reference exactness.  This is the regression gate for the W4A16
 floor256 accumulator-drain model.  Override the case list with
 `W4A16_CHAIN1_CASES="default zp k2 k31"` when probing extra K lanes.
-LPBQ entries are intentionally lower priority.  They are retained as explicit
-targets under `scripts/run_qnn_kernel_e2e_ci.sh lpbq`; they are not part of the
-default performance group while the active work is per-channel custom/native
-alignment.  When run explicitly, the W4 LPBQ entries still verify that
-`quant_overrides.json` uses QAIRT v1.0.0 LPBQ metadata for the `weight` tensor
-(`compressed_bw=4`, `block_size=32`) so a symmetric W4 run cannot accidentally
-satisfy the LPBQ CI case.
+LPBQ now has a real-native correctness target separate from the default
+per-channel gate.  The `w4a8_lpbq_native_match` and
+`w4a16_lpbq_native_match` runners generate dedicated LPBQ case families with
+weight metadata generated in the same order as QNN's LPBQ description: signed
+int4 K32 per-group scales first, then a per-channel base scale plus
+non-degenerate `per_block_int_scale`.  They run QNN Native Conv with
+`enc_type=LPBQ` and validate that ctxgen produced
+`Conv2d_w_blk_exp_scale -> expand_block_quant_to_pc_int8_weights`.
+
+Current status: the real-native LPBQ correctness targets are promoted for the
+same 7 generated cases as the per-channel gates.  The custom path splits LPBQ
+the same way as QNN Native: `HmxW4LpbqExpandToI8` models
+`expand_block_quant_to_pc_int8_weights`, const-folds static LPBQ weights during
+prepare so QNN inserts `weights_to_vtcm`, and then feeds the existing W8 HMX
+compute op.
+
+- `/tmp/qcom_htp_lpbq_w4a8_full_pergroup`: W4A8 LPBQ
+  `normal_random`, `zp_neutral`, `positive_boundary`, `negative_boundary`,
+  `single_k_impulse`, `bias_only`, and `scale_only`; every custom/native output
+  is `65536/65536`, max integer delta `0`, and sidecar records are `2048/2048`.
+- `/tmp/qcom_htp_lpbq_w4a16_full_pergroup`: W4A16 LPBQ with the same 7
+  cases; every custom/native output is `65536/65536`, max integer delta `0`,
+  and A16 sidecar records are `4096/4096`.  The custom graph uses direct tiled
+  A16 input to avoid float/QDQ fallback while preserving the same-hardware
+  native-output exactness gate.
+- `/tmp/qcom_htp_lpbq_full_ci/` is older evidence for degenerate all-one LPBQ
+  metadata and should not be treated as proof of real LPBQ expansion support.
+
+Current correctness comparison matrices are archived below.  These are
+same-shape `256x256x256`, CHAIN=1, 7-case device results unless otherwise
+noted.  The native/Python integer columns are oracle tolerance checks.  The
+dequant float columns use the final output encoding formula
+`(q + qnn_offset) * output_scale` on both QNN Native and Python reference
+outputs.  The promoted gate is the same-hardware custom/native output
+exactness column.
+
+The `u8i8` promoted gate is a single `normal_random` case:
+custom/native `65536/65536`, max integer delta `0`, sidecar `2048/2048`.
+
+### W4A8 per-channel
+
+Source evidence: `/tmp/qcom_htp_display_perchannel_w4a8`.
+
+| case | Native vs Python exact ints | Max int delta | Mean int delta | Max dequant float delta | Mean dequant float delta | Custom vs native exact | Custom vs native max int delta | Sidecar bytes | Sidecar control | Sidecar effective |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `normal_random` | 64761/65536 | 1 | 0.01183 | 0.058093 | 0.000687 | 65536/65536 | 0 | 2048/2048 | 1024/1024 | 1024/1024 |
+| `zp_neutral` | 65536/65536 | 0 | 0.00000 | 0.000000 | 0.000000 | 65536/65536 | 0 | 2048/2048 | 1024/1024 | 1024/1024 |
+| `positive_boundary` | 63826/65536 | 1 | 0.02609 | 0.503116 | 0.013128 | 65536/65536 | 0 | 2048/2048 | 1024/1024 | 1024/1024 |
+| `negative_boundary` | 65536/65536 | 0 | 0.00000 | 0.000000 | 0.000000 | 65536/65536 | 0 | 2048/2048 | 1024/1024 | 1024/1024 |
+| `single_k_impulse` | 64000/65536 | 1 | 0.02344 | 0.000623 | 0.000015 | 65536/65536 | 0 | 2048/2048 | 1024/1024 | 1024/1024 |
+| `bias_only` | 64796/65536 | 1 | 0.01129 | 0.003399 | 0.000038 | 65536/65536 | 0 | 2048/2048 | 1024/1024 | 1024/1024 |
+| `scale_only` | 64788/65536 | 1 | 0.01141 | 0.477660 | 0.005452 | 65536/65536 | 0 | 2048/2048 | 1024/1024 | 1024/1024 |
+
+### W8A16 per-channel
+
+Source evidence: `/tmp/qcom_htp_display_perchannel_w8a16`.
+
+| case | Native vs Python exact ints | Max int delta | Mean int delta | Max dequant float delta | Mean dequant float delta | Custom vs native exact | Custom vs native max int delta | Sidecar bytes | Sidecar control | Sidecar effective |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `normal_random` | 61666/65536 | 1 | 0.05905 | 0.000726 | 0.000043 | 65536/65536 | 0 | 4096/4096 | 2048/2048 | 256/256 |
+| `zp_neutral` | 65536/65536 | 0 | 0.00000 | 0.000000 | 0.000000 | 65536/65536 | 0 | 4095/4096 | 2048/2048 | 255/256 |
+| `positive_boundary` | 64987/65536 | 1 | 0.00838 | 0.006156 | 0.000052 | 65536/65536 | 0 | 4096/4096 | 2048/2048 | 256/256 |
+| `negative_boundary` | 65231/65536 | 1 | 0.00465 | 0.006152 | 0.000029 | 65536/65536 | 0 | 4096/4096 | 2048/2048 | 256/256 |
+| `single_k_impulse` | 33024/65536 | 1 | 0.49609 | 0.000008 | 0.000000 | 65536/65536 | 0 | 4096/4096 | 2048/2048 | 256/256 |
+| `bias_only` | 64665/65536 | 1 | 0.01329 | 0.000028 | 0.000000 | 65536/65536 | 0 | 4096/4096 | 2048/2048 | 256/256 |
+| `scale_only` | 62976/65536 | 1 | 0.03906 | 0.005532 | 0.000216 | 65536/65536 | 0 | 4096/4096 | 2048/2048 | 256/256 |
+
+### W4A16 per-channel
+
+Source evidence: `/tmp/qcom_htp_display_perchannel_w4a16`.
+
+| case | Native vs Python exact ints | Max int delta | Mean int delta | Max dequant float delta | Mean dequant float delta | Custom vs native exact | Custom vs native max int delta | Sidecar bytes | Sidecar control | Sidecar effective |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `normal_random` | 18182/65536 | 3 | 1.03569 | 0.001710 | 0.000590 | 65536/65536 | 0 | 4096/4096 | 2048/2048 | 256/256 |
+| `zp_neutral` | 65536/65536 | 0 | 0.00000 | 0.000000 | 0.000000 | 65536/65536 | 0 | 4096/4096 | 2048/2048 | 256/256 |
+| `positive_boundary` | 53853/65536 | 1 | 0.17827 | 0.004648 | 0.000829 | 65536/65536 | 0 | 4096/4096 | 2048/2048 | 256/256 |
+| `negative_boundary` | 61743/65536 | 1 | 0.05788 | 0.004619 | 0.000267 | 65536/65536 | 0 | 4096/4096 | 2048/2048 | 256/256 |
+| `single_k_impulse` | 18688/65536 | 35 | 9.32422 | 0.000199 | 0.000053 | 65536/65536 | 0 | 4096/4096 | 2048/2048 | 256/256 |
+| `bias_only` | 50490/65536 | 1 | 0.22958 | 0.000026 | 0.000006 | 65536/65536 | 0 | 4096/4096 | 2048/2048 | 256/256 |
+| `scale_only` | 20527/65536 | 2 | 0.80811 | 0.007646 | 0.003089 | 65536/65536 | 0 | 4096/4096 | 2048/2048 | 256/256 |
+
+### W4A8 LPBQ
+
+Source evidence: `/tmp/qcom_htp_lpbq_w4a8_full_pergroup`.
+
+| case | Native vs Python exact ints | Max int delta | Mean int delta | Max dequant float delta | Mean dequant float delta | Custom vs native exact | Custom vs native max int delta | Sidecar bytes | Sidecar control | Sidecar effective |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `normal_random` | 64705/65536 | 1 | 0.01268 | 0.058170 | 0.000738 | 65536/65536 | 0 | 2048/2048 | 1024/1024 | 1024/1024 |
+| `zp_neutral` | 65536/65536 | 0 | 0.00000 | 0.000000 | 0.000000 | 65536/65536 | 0 | 2048/2048 | 1024/1024 | 1024/1024 |
+| `positive_boundary` | 63581/65536 | 1 | 0.02983 | 0.506812 | 0.015119 | 65536/65536 | 0 | 2048/2048 | 1024/1024 | 1024/1024 |
+| `negative_boundary` | 65536/65536 | 0 | 0.00000 | 0.000000 | 0.000000 | 65536/65536 | 0 | 2048/2048 | 1024/1024 | 1024/1024 |
+| `single_k_impulse` | 64768/65536 | 1 | 0.01172 | 0.000625 | 0.000007 | 65536/65536 | 0 | 2048/2048 | 1024/1024 | 1024/1024 |
+| `bias_only` | 64732/65536 | 1 | 0.01227 | 0.003345 | 0.000041 | 65536/65536 | 0 | 2048/2048 | 1024/1024 | 1024/1024 |
+| `scale_only` | 64728/65536 | 1 | 0.01233 | 0.403659 | 0.004977 | 65536/65536 | 0 | 2048/2048 | 1024/1024 | 1024/1024 |
+
+### W4A16 LPBQ
+
+Source evidence: `/tmp/qcom_htp_lpbq_w4a16_full_pergroup`.
+
+| case | Native vs Python exact ints | Max int delta | Mean int delta | Max dequant float delta | Mean dequant float delta | Custom vs native exact | Custom vs native max int delta | Sidecar bytes | Sidecar control | Sidecar effective |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `normal_random` | 20881/65536 | 3 | 0.93990 | 0.001591 | 0.000498 | 65536/65536 | 0 | 4096/4096 | 2048/2048 | 256/256 |
+| `zp_neutral` | 65536/65536 | 0 | 0.00000 | 0.000000 | 0.000000 | 65536/65536 | 0 | 4096/4096 | 2048/2048 | 256/256 |
+| `positive_boundary` | 54051/65536 | 1 | 0.17525 | 0.004621 | 0.000810 | 65536/65536 | 0 | 4096/4096 | 2048/2048 | 256/256 |
+| `negative_boundary` | 61773/65536 | 1 | 0.05742 | 0.004608 | 0.000265 | 65536/65536 | 0 | 4096/4096 | 2048/2048 | 256/256 |
+| `single_k_impulse` | 30720/65536 | 2 | 0.54688 | 0.000011 | 0.000000 | 65536/65536 | 0 | 4096/4096 | 2048/2048 | 256/256 |
+| `bias_only` | 52997/65536 | 1 | 0.19133 | 0.000027 | 0.000005 | 65536/65536 | 0 | 4096/4096 | 2048/2048 | 256/256 |
+| `scale_only` | 22455/65536 | 2 | 0.73369 | 0.007855 | 0.002882 | 65536/65536 | 0 | 4096/4096 | 2048/2048 | 256/256 |
+
 Use `ARTIFACT_ONLY=1` only as a cheap local smoke test when no device is
 available:
 

@@ -97,8 +97,8 @@ echo "=== [3/4] qairt-converter -> qairt-quantizer ==="
 if [ "${W4_ENCODING:-symmetric}" = "lpbq" ]; then
     cp "$OUT_DIR/w4a8_encoded.dlc" "$OUT_DIR/w4a8.dlc"
     {
-        echo "LPBQ custom-op path uses converter-applied v1.0.0 encodings."
-        echo "qairt-quantizer is intentionally skipped because QAIRT only rewrites LPBQ for built-in row-wise or Conv consumers."
+        echo "LPBQ custom-op path is already quantized as expand_block_quant_to_pc_int8_weights + W8 HMX compute."
+        echo "qairt-quantizer is intentionally skipped for the two-custom-op graph."
     } > "$OUT_DIR/quantize.log"
 else
     qairt_quantize_encoded_dlc \

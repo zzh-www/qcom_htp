@@ -27,6 +27,8 @@ mkdir -p "$OUT"
 SRCS=(
     "$SCRIPT_DIR/src/QnnHmxMatMulW4A8Interface.cpp"
     "$SCRIPT_DIR/src/HmxU8I4ToU8MatMulOp.cpp"
+    "$ROOT_DIR/example/qnn_hmx_matmul_common/HmxW4LpbqExpandToI8Op.cpp"
+    "$ROOT_DIR/example/qnn_hmx_matmul_u8i8/src/HmxU8I8ToU8MatMulOp.cpp"
 )
 
 FLAGS=(
@@ -34,6 +36,7 @@ FLAGS=(
     -nostdinc++ -I "$HEXAGON_TOOLS_ROOT/target/hexagon/include/c++/v1"
     -D__HVXDBL__ -DUSE_OS_LINUX -DPREPARE_DISABLED
     -DHMX_W4A8_ENABLE_QHPI_PRECOMPUTE
+    -DHMX_U8I8_ENABLE_QHPI_PRECOMPUTE
     "-DTHIS_PKG_NAME=$PACKAGE_NAME"
     -I "$QNN_SDK_ROOT/include/QNN"
     -fvisibility=default

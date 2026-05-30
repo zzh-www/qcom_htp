@@ -32,6 +32,7 @@ class Family:
     out_bits: int
     weight_schema: str = "per_output_channel"
     kernel_family: str | None = None
+    lpbq_block_size: int = 32
 
     @property
     def act_zp(self) -> int:
@@ -88,6 +89,14 @@ FAMILIES = {
         weight_schema="per_group",
         kernel_family="w4a8",
     ),
+    "w4a8_lpbq": Family(
+        "w4a8_lpbq",
+        act_bits=8,
+        weight_bits=4,
+        out_bits=8,
+        weight_schema="lpbq_blockwise_expansion",
+        kernel_family="w4a8",
+    ),
     "w8a16": Family("w8a16", act_bits=16, weight_bits=8, out_bits=16),
     "w4a16_per_channel": Family(
         "w4a16_per_channel",
@@ -103,6 +112,14 @@ FAMILIES = {
         weight_bits=4,
         out_bits=16,
         weight_schema="per_group",
+        kernel_family="w4a16",
+    ),
+    "w4a16_lpbq": Family(
+        "w4a16_lpbq",
+        act_bits=16,
+        weight_bits=4,
+        out_bits=16,
+        weight_schema="lpbq_blockwise_expansion",
         kernel_family="w4a16",
     ),
 }
@@ -167,6 +184,20 @@ def affine_scale_from_minmax(min_v: float, max_v: float, qmin: int, qmax: int, z
 
 def symmetric_scale_from_minmax(min_v: float, max_v: float, qmax: int) -> float:
     return max(abs(min_v), abs(max_v), 1.0e-12) / float(qmax)
+
+
+def lpbq_factorize_group_scales(group_scales: np.ndarray, max_int_scale: int = 16) -> tuple[float, np.ndarray]:
+    """Approximate per-group scales as one base scale times integer block scales."""
+    if group_scales.ndim != 1:
+        raise ValueError(f"LPBQ group scales must be rank-1 per channel, got {group_scales.shape}")
+    if max_int_scale <= 0:
+        raise ValueError(f"invalid LPBQ max_int_scale={max_int_scale}")
+    max_scale = max(float(group_scales.max()), 1.0e-12)
+    min_scale = max(float(group_scales.min()), 1.0e-12)
+    base_scale = max(min_scale, max_scale / float(max_int_scale))
+    factors = np.ceil(group_scales.astype(np.float64) / base_scale - 1.0e-9)
+    factors = np.clip(factors, 1, max_int_scale).astype(np.uint8)
+    return base_scale, factors
 
 
 def quantize_affine_aimet_qnn(
@@ -286,6 +317,78 @@ def quantize_weight(
         }
         return q, scales, deq, qparams
 
+    if family.weight_schema == "lpbq_blockwise_expansion":
+        block_size = family.lpbq_block_size
+        if k <= block_size or k % block_size:
+            raise ValueError(f"{family.name}: LPBQ K={k} must be > {block_size} and divisible by {block_size}")
+        blocks = k // block_size
+        group_scales = np.empty((n, blocks), dtype=np.float32)
+        scales = np.empty((n,), dtype=np.float32)
+        block_int_scale = np.empty((n, blocks), dtype=np.uint8)
+        compressed_q = np.empty((n, k), dtype=q_dtype)
+        expanded_q = np.empty((n, k), dtype=np.int16)
+        deq = np.empty((n, k), dtype=np.float32)
+
+        for out_ch in range(n):
+            row = w[out_ch, :]
+            for block in range(blocks):
+                start = block * block_size
+                stop = start + block_size
+                raw_block = row[start:stop]
+                group_scales[out_ch, block] = symmetric_scale_from_minmax(
+                    float(raw_block.min()),
+                    float(raw_block.max()),
+                    qmax,
+                )
+
+            scale, factors = lpbq_factorize_group_scales(group_scales[out_ch, :])
+            scales[out_ch] = scale
+            block_int_scale[out_ch, :] = factors
+            for block in range(blocks):
+                start = block * block_size
+                stop = start + block_size
+                factor = int(block_int_scale[out_ch, block])
+                effective_scale = float(scale) * float(factor)
+                block_int_scale[out_ch, block] = factor
+                q_block = np.clip(
+                    np.rint(row[start:stop].astype(np.float64) / effective_scale),
+                    -qmax,
+                    qmax,
+                ).astype(q_dtype)
+                compressed_q[out_ch, start:stop] = q_block
+                expanded = q_block.astype(np.int16) * np.int16(factor)
+                expanded_q[out_ch, start:stop] = expanded
+                deq[out_ch, start:stop] = expanded.astype(np.float32) * scale
+        qparams = {
+            "schema": "signed_symmetric_lpbq_from_per_group",
+            "axis": "N",
+            "block_axis": "K",
+            "block_size": block_size,
+            "bitwidth": 8,
+            "compressed_bitwidth": family.weight_bits,
+            "scale_shape": list(scales.shape),
+            "pre_lpbq_group_size": block_size,
+            "pre_lpbq_group_scale_shape": list(group_scales.shape),
+            "per_block_int_scale_shape": list(block_int_scale.shape),
+            "per_block_int_scale_range": [int(block_int_scale.min()), int(block_int_scale.max())],
+            "zero_point": 0,
+            "offset": -128,
+            "signed_range": [-qmax, qmax],
+            "expanded_signed_range": [int(expanded_q.min()), int(expanded_q.max())],
+            "observed_min": float(w.min()),
+            "observed_max": float(w.max()),
+            "note": (
+                "LPBQ first derives signed int4 per-group scales on K32 blocks, "
+                "then represents each group scale as per-channel scale * per-block integer scale. "
+                "weight_q_nk stores compressed int4 values; output_ref_q uses expanded_q * per-channel scale"
+            ),
+        }
+        return compressed_q, scales, deq, qparams | {
+            "_pre_group_scale": group_scales.astype(np.float32),
+            "_per_block_int_scale": block_int_scale.astype(np.uint8),
+            "_expanded_q_nk": expanded_q.astype(np.int16),
+        }
+
     group_size = family.weight_group_size
     if group_size is None:
         raise ValueError(f"{family.name}: missing W4 group size")
@@ -337,6 +440,9 @@ def quantize_case(family: Family, x: np.ndarray, w: np.ndarray, bias: np.ndarray
     out_offset = -family.out_zp
     x_q = quantize_affine_aimet_qnn(x, act_scale, act_offset, 0, family.act_qmax, family.act_dtype)
     w_q, weight_scales, w_deq, weight_qparams = quantize_weight(family, w)
+    lpbq_per_block_int_scale = weight_qparams.pop("_per_block_int_scale", None)
+    lpbq_expanded_q_nk = weight_qparams.pop("_expanded_q_nk", None)
+    lpbq_pre_group_scale = weight_qparams.pop("_pre_group_scale", None)
     if weight_scales.ndim == 1:
         bias_scale = act_scale * weight_scales.astype(np.float64)
         bias_q = np.rint(bias.astype(np.float64) / bias_scale)
@@ -381,9 +487,15 @@ def quantize_case(family: Family, x: np.ndarray, w: np.ndarray, bias: np.ndarray
         "weight_q_nk": w_q,
         "weight_q_kn": w_q.T.copy(),
         "weight_scale": weight_scales,
+        "weight_lpbq_per_block_int_scale": lpbq_per_block_int_scale,
+        "weight_lpbq_expanded_q_nk": lpbq_expanded_q_nk,
+        "weight_lpbq_pre_group_scale": lpbq_pre_group_scale,
         "bias_q_int32": bias_q,
         "bias_quantized_path_float": bias_deq.astype(np.float32),
         "output_q": output_q,
+        "weight_float_source": w_deq.astype(np.float32)
+        if family.weight_schema == "lpbq_blockwise_expansion"
+        else w.astype(np.float32),
         "qparams": {
             "activation": {
                 "schema": "aimet_qnn_affine_fixed_offset",
@@ -431,7 +543,7 @@ def generate_case(root: Path, family: Family, case: str, m: int, k: int, n: int)
 
     files = {
         "activation_float": write_array(out_dir / "activation_float", x.astype(np.float32)),
-        "weight_float_nk": write_array(out_dir / "weight_float_nk", w.astype(np.float32)),
+        "weight_float_nk": write_array(out_dir / "weight_float_nk", q["weight_float_source"]),
         "bias_float": write_array(out_dir / "bias_float", bias.astype(np.float32)),
         "bias_q_int32": write_array(out_dir / "bias_q_int32", q["bias_q_int32"]),
         "bias_quantized_path_float": write_array(
@@ -449,6 +561,19 @@ def generate_case(root: Path, family: Family, case: str, m: int, k: int, n: int)
         "weight_q_kn": write_array(out_dir / "weight_q_kn", q["weight_q_kn"]),
         "output_ref_q": write_array(out_dir / "output_ref_q", q["output_q"]),
     }
+    if family.weight_schema == "lpbq_blockwise_expansion":
+        files["weight_lpbq_per_block_int_scale"] = write_array(
+            out_dir / "weight_lpbq_per_block_int_scale",
+            q["weight_lpbq_per_block_int_scale"],
+        )
+        files["weight_lpbq_pre_group_scale"] = write_array(
+            out_dir / "weight_lpbq_pre_group_scale",
+            q["weight_lpbq_pre_group_scale"],
+        )
+        files["weight_lpbq_expanded_q_nk"] = write_array(
+            out_dir / "weight_lpbq_expanded_q_nk",
+            q["weight_lpbq_expanded_q_nk"],
+        )
 
     payload = {
         "schema": "qnn_hmx_matmul_python_case.v2",
@@ -511,6 +636,8 @@ def main() -> int:
         selected_families.append(FAMILIES[family_name])
     if any(f.weight_bits == 4 for f in selected_families) and (args.k <= 64 or args.k % 64):
         raise SystemExit("W4 channel dimension K must be > 64 and divisible by 64")
+    if any(f.weight_schema == "lpbq_blockwise_expansion" for f in selected_families) and args.k % 32:
+        raise SystemExit("W4 LPBQ K must be divisible by 32")
 
     out_root = args.out_root.resolve()
     if out_root.exists() and not args.no_clean:
