@@ -7,7 +7,7 @@ how that common prepared value is projected by each observed per-channel
 kernel family.
 
 Implementation-level numeric details are in
-[docs/qnn_htp_perchannel_bias_prepare_algorithm.md](/home/zzh/work/qcom_htp/docs/qnn_htp_perchannel_bias_prepare_algorithm.md).
+[docs/qnn_htp_perchannel_bias_prepare_algorithm.md](../../docs/qnn_htp_perchannel_bias_prepare_algorithm.md).
 
 The covered families are:
 
@@ -38,7 +38,7 @@ layout issues, activation layout issues, or qairt-quantizer bias bugs.
 ## Call Chain
 
 The relevant lowering path is visible with the ctxgen gdb helper
-[scripts/gdb_dump_u8i8_bias_prepare.py](/home/zzh/work/qcom_htp/scripts/gdb_dump_u8i8_bias_prepare.py):
+[scripts/gdb_dump_u8i8_bias_prepare.py](../../scripts/gdb_dump_u8i8_bias_prepare.py):
 
 ```text
 Conv2d_w_scale(..., B sFxp32, scale float32)
@@ -194,7 +194,7 @@ effective = 16 * (-128 * sum_k(weight_w4_dequant_codes) + prepared)
 ```
 
 The U8 drain scale/control fields use
-[scripts/qnn_htp_u8_drain.py](/home/zzh/work/qcom_htp/scripts/qnn_htp_u8_drain.py).
+[scripts/qnn_htp_u8_drain.py](../../scripts/qnn_htp_u8_drain.py).
 This is separate from bias prepare, but it lives in the same 256B record.
 
 Drain scale/control rule:
@@ -362,16 +362,16 @@ same-hardware custom/native output: 65536/65536, maxdiff=0
 
 ## Public Files
 
-- [scripts/qnn_htp_bias_prepare.py](/home/zzh/work/qcom_htp/scripts/qnn_htp_bias_prepare.py):
+- [scripts/qnn_htp_bias_prepare.py](../../scripts/qnn_htp_bias_prepare.py):
   common prepare algorithm and A8/A16 projection helpers.
-- [scripts/qnn_htp_u8_drain.py](/home/zzh/work/qcom_htp/scripts/qnn_htp_u8_drain.py):
+- [scripts/qnn_htp_u8_drain.py](../../scripts/qnn_htp_u8_drain.py):
   U8 drain scale/control encoding, including the A8 overflow boundary.
-- [scripts/analyze_u8i8_native_bias_record.py](/home/zzh/work/qcom_htp/scripts/analyze_u8i8_native_bias_record.py):
+- [scripts/analyze_u8i8_native_bias_record.py](../../scripts/analyze_u8i8_native_bias_record.py):
   context-sidecar extractor and comparator for U8 records.
-- [scripts/dump_u8i8_bias_prepare_stages.py](/home/zzh/work/qcom_htp/scripts/dump_u8i8_bias_prepare_stages.py):
+- [scripts/dump_u8i8_bias_prepare_stages.py](../../scripts/dump_u8i8_bias_prepare_stages.py):
   diagnostic stage dump for comparing generated arrays, DLC `B`, gdb evidence,
   and final sidecar fields.
-- [example/qnn_hmx_matmul_u8i8/bias_prepare_probe/](/home/zzh/work/qcom_htp/example/qnn_hmx_matmul_u8i8/bias_prepare_probe/):
+- [example/qnn_hmx_matmul_u8i8/bias_prepare_probe/](../../example/qnn_hmx_matmul_u8i8/bias_prepare_probe/):
   reproducible u8i8 probe for the DLC-to-context boundary.
 
 ## Non-Goals

@@ -88,13 +88,17 @@ compute op.
 
 Current promoted evidence:
 
-| Target | Evidence | Result |
-|---|---|---|
-| `w4a8_lpbq_native_match` | `/tmp/qcom_htp_lpbq_w4a8_full_pergroup` | 7 cases, custom/native `65536/65536`, max integer delta `0` |
-| `w4a16_lpbq_native_match` | `/tmp/qcom_htp_lpbq_w4a16_full_pergroup` | 7 cases, custom/native `65536/65536`, max integer delta `0` |
+Evidence is regenerated, not stored; each runner writes its summary to
+`$KERNEL_E2E_OUT_ROOT/output_<family>_lpbq_native_match_ci/analysis/custom_native_compare_summary.json`.
 
-The older `/tmp/qcom_htp_lpbq_full_ci/` evidence used degenerate all-one LPBQ
-metadata and must not be used as proof of real blockwise expansion support.
+| Target | Reproduce | Result |
+|---|---|---|
+| `w4a8_lpbq_native_match` | `tests/qnn_kernel_e2e/correctness/test_w4a8_lpbq_native_match_e2e.sh` | 7 cases, custom/native `65536/65536`, max integer delta `0` |
+| `w4a16_lpbq_native_match` | `tests/qnn_kernel_e2e/correctness/test_w4a16_lpbq_native_match_e2e.sh` | 7 cases, custom/native `65536/65536`, max integer delta `0` |
+
+Older degenerate all-one LPBQ metadata runs (no per-group scale variation) must
+not be used as proof of real blockwise expansion support; only the 7-case
+per-group runners above are promoted.
 
 ## Handwritten HMX MatMul
 

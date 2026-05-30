@@ -135,7 +135,7 @@
 <body>
 <main>
   <h1>W4A16 Python Reference 与 HMX Native Drain 对齐报告</h1>
-  <p class="meta">仓库：<code>/home/zzh/work/qcom_htp</code>。基于本地 artifact 和设备 probe，更新日期：2026-05-14。</p>
+  <p class="meta">仓库：<code>qcom_htp</code>。基于设备 probe，更新日期：2026-05-14。下方 probe 证据为按需重新生成，非仓库存档。</p>
 
   <section class="callout">
     <strong>最终结论：</strong>
@@ -194,20 +194,19 @@ out = saturate_u16(round(acc_hmx / 7 + 32768))</code></pre>
     </tbody>
   </table>
 
-  <h2>5. 关键 artifact</h2>
-  <table>
-    <thead>
-      <tr><th>artifact</th><th>路径</th><th>用途</th></tr>
-    </thead>
-    <tbody>
-      <tr><td>canonical W4A16 custom chain8</td><td><code>example/qnn_matmul_profile/output_w4a16_aligned_e2e_256/</code></td><td>保留的 accepted custom/HMX artifact。</td></tr>
-      <tr><td>canonical W4A16 native chain8</td><td><code>example/qnn_matmul_profile/output_w4a16_native_ref_e2e_256/</code></td><td>QNN native oracle。</td></tr>
-      <tr><td>default chain1 probe</td><td><code>/tmp/qcom_htp_w4a16_chain1_formula_probe/</code></td><td>隔离单层 drain。</td></tr>
-      <tr><td>native chain1 probe</td><td><code>/tmp/qcom_htp_w4a16_native_chain1_formula_probe/</code></td><td>证明 custom chain1 与 QNN native chain1 exact。</td></tr>
-      <tr><td>floor256 probes</td><td><code>/tmp/qcom_htp_w4a16_drain_probe_zp_-1/</code>, <code>/tmp/qcom_htp_w4a16_drain_probe_k_impulse_{0,1,7}/</code></td><td>证明 floor256 drain 语义。</td></tr>
-      <tr><td>regenerated reference</td><td><code>/tmp/qcom_htp_w4a16_ref_floor256_gen2/</code></td><td>patched generator 重新生成 chain8 reference，并与 retained HMX output exact。</td></tr>
-    </tbody>
-  </table>
+  <h2>5. 如何复现</h2>
+  <p>本节的证据全部按需重新生成，不在仓库中存档。chain1 / floor256 / native-chain1 probe 都由
+  W4A16 per-channel chain1 correctness gate 产生，它本身就是 floor256 drain 的回归门：</p>
+  <pre><code># default / zp / k_impulse{0,1,7} 全部 case，单层 drain 隔离 + custom vs native exact
+tests/qnn_kernel_e2e/correctness/test_w4a16_per_channel_chain1_e2e.sh
+
+# 探额外 K lane 时覆盖 case 列表
+W4A16_CHAIN1_CASES="default zp k_impulse0 k_impulse1 k_impulse7" \
+  tests/qnn_kernel_e2e/correctness/test_w4a16_per_channel_chain1_e2e.sh</code></pre>
+  <p>canonical chain8 的 accepted custom/HMX artifact 与 QNN native oracle 由仓库标准的 W4A16
+  per-channel profile flow 重建（输出落在
+  <code>example/qnn_matmul_profile/output_w4a16_*_e2e_256/</code>，该目录已 gitignore，属可重建产物）。
+  gate 定义见 <code>Agent/current/qnn_kernel_e2e_ci.md</code>。</p>
 
   <h2>6. 影响和边界</h2>
   <ul>

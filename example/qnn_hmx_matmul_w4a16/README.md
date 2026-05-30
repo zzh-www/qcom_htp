@@ -77,7 +77,7 @@ LPBQ_ONLY=1 bash example/qnn_hmx_matmul_w4a16/build.sh
 LPBQ_ONLY=1 bash example/qnn_hmx_matmul_w4a16/build_x86.sh
 
 W4_ENCODING=lpbq CHAIN=8 MODE=chain_qdq M=256 K=256 N=256 \
-VERIFY_NATIVE_RAW=/home/zzh/work/qcom_htp/example/qnn_matmul_profile/output_w4a16_native_ref_e2e_256/device_out/Y.raw \
+VERIFY_NATIVE_RAW=example/qnn_matmul_profile/output_w4a16_native_ref_e2e_256/device_out/Y.raw \
 VERIFY_NATIVE_TRANSPOSE=1 \
 OUT_DIR=/tmp/qcom_htp_w4a16_lpbq_hmx_chain8 \
 bash example/qnn_hmx_matmul_w4a16/standard_flow/custom_w4a16/run_w4a16_chain.sh

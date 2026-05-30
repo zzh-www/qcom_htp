@@ -429,12 +429,21 @@ w4a8_per_channel:
 
 w8a16:
   7/7 native-match cases output exact with generated custom sidecar
-  evidence: /tmp/qcom_htp_w8a16_ci_default_generated/output_w8a16_per_channel_native_match_ci/analysis/custom_native_compare_summary.json
 
 w4a16_per_channel:
   7/7 native-match cases full 512B sidecar byte-exact with generated sidecar
   same-hardware output exact for all 7 cases
-  evidence: /tmp/qcom_htp_w4a16_per_channel_native_match_generated_ci2/output_w4a16_per_channel_native_match_ci/analysis/custom_native_compare_summary.json
+```
+
+Reproduce these on device (evidence is regenerated, not stored).  Set
+`KERNEL_E2E_OUT_ROOT` to any writable directory; the per-case summary lands at
+`$KERNEL_E2E_OUT_ROOT/output_<family>_native_match_ci/analysis/custom_native_compare_summary.json`:
+
+```bash
+KERNEL_E2E_OUT_ROOT="$PWD/ci_evidence" \
+  tests/qnn_kernel_e2e/correctness/test_w8a16_per_channel_native_match_e2e.sh
+KERNEL_E2E_OUT_ROOT="$PWD/ci_evidence" \
+  tests/qnn_kernel_e2e/correctness/test_w4a16_per_channel_native_match_e2e.sh
 ```
 
 Useful checks:

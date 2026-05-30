@@ -215,12 +215,12 @@ Current device evidence:
 
 ```text
 command:
-  KERNEL_E2E_OUT_ROOT=/tmp/qcom_htp_display_perchannel_w8a16 \
+  KERNEL_E2E_OUT_ROOT="$PWD/ci_evidence" \
     BUILD_PACKAGES=0 DEVICE=oneplus \
     tests/qnn_kernel_e2e/correctness/test_w8a16_per_channel_native_match_e2e.sh
 
 summary:
-  /tmp/qcom_htp_display_perchannel_w8a16/analysis/custom_native_compare_summary.json
+  $KERNEL_E2E_OUT_ROOT/output_w8a16_per_channel_native_match_ci/analysis/custom_native_compare_summary.json
 
 result:
   all 7 cases passed
