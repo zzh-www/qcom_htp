@@ -71,20 +71,39 @@ within the 1.5e-2 tolerance. The final DLC encodings match the intended symmetri
 decomposes into a **systematic ~16% magnitude shrink** (best-fit scale 0.84) + **~25% residual
 quantization noise**.
 
-Localization so far:
-- **Faithful simulator** (bit-faithful to the deployed selector/padded solve, symmetric int16) =
-  oc **3.4e-3** on real golden — so the scheme, the requant chain, and the scales are NOT the gap.
-- **Transcendental probe** (`scripts/gdn_probe_ops.py` / `example/gdn_native/probe_htp.sh`,
-  isolates exp & l2norm on HTP at real ranges): HTP **exp is faithful** (htp-vs-quantin 2e-5);
-  HTP **rsqrt/l2norm has a 1.55e-2 LUT error**, but injecting that into the full sim
-  (`GDN_L2_ERR`) yields only ~1.1% oc → **not enough to explain 27%**.
+### Root cause (localized by device probes)
 
-=> Transcendentals are largely exonerated. The residual lives in the quantized int16 MatMul/solve
-chain AS EXECUTED ON HTP — the simulator (float-then-quantize per op) underestimates the on-device
-noise by ~70×. Prime suspects: the auto-inserted per-MatMul bias quantization (the sim has no
-bias) and int16 accumulation/requant rounding across 91 matmuls. Next: per-stage device probe of
-a small int16 MatMul chain vs the sim; inspect the bias tensors in `gdn_quant.dlc`; and chase the
-systematic 0.84 scale (a single corrective scale may recover much of the magnitude).
+Three isolation probes show the individual HTP ops are FAITHFUL to the simulator:
+- `gdn_probe_ops.py`/`probe_htp.sh`: HTP **exp faithful** (htp-vs-quantin 2e-5); the **fused
+  `LpNormalization`→L2Norm op faithful** (2e-4) — but the *manual* sumsq/rsqrt l2norm had a 1.55e-2
+  error because it exposes a per-tensor-quantized sum-of-squares.
+- `gdn_probe_chain.py`/`probe_chain.sh`: a 2-deep **int16 MatMul chain matches the sim** (3.4e-3).
+
+**Fix 1 applied — fused L2Norm.** Replacing the manual l2norm with the `LpNormalization` op
+(`_L2Norm`/`l2norm_lastdim`) cut device oc **27% → 17%**.
+
+**The remaining 17% = per-tensor (head-shared) quantization of a multi-head graph + deep-chain
+requant noise.** GDN runs 32 heads as a batch dim, but QNN quantizes each `[1,32,…]` tensor with
+ONE scale set by the max-norm head:
+- Error concentrates in **small-norm heads** (`corr(head_norm, head_relerr) = −0.53`; head 21
+  norm 4e-4 → relerr 686%) — they're crushed by the shared scale. (Small absolute weight in the
+  global norm, so a minor contributor.)
+- **Large/well-conditioned heads still carry ~15–22%** — accumulated requant noise across the
+  ~190 quantized op outputs. The deployed solve alone adds ~50 matmuls (the selector/padded-block
+  realization), each output requantized. The simulator models only ~50 boundaries with exact
+  transcendentals, hence its optimistic 3.4e-3.
+
+### Path to alignment (next)
+
+1. **Leaner solve to cut requant points** — replace selector-MatMul block extraction with **Slice**
+   (data movement, no requant / preserves encoding) and accumulate `U`,`W` block-wise instead of
+   assembling `T`, to remove the dominant requant chain. (Slice works at int16 — the `g[...,-1:]`
+   slice already does; only Concat is rejected.)
+2. **Per-head dynamic range** — QNN per-tensor activation quant cannot give per-head scales (head =
+   batch axis). This is the structural limit of the QNN-native auto-quant route for multi-head GDN,
+   and is exactly what the project's **custom HMX route handles per-GEMM (explicit drain / scale
+   per head-GEMM)**. If the leaner solve doesn't reach tol, the GEMMs likely need the custom-HMX
+   path, with QNN-native used for orchestration only.
 
 ## Reproduce
 
