@@ -22,14 +22,16 @@ import torch.nn as nn
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gdn_ref_kernel import gdn_chunk, bf16_to_f32, relerr  # noqa
-from gdn_onnx_kernel import _golden_chunk_args, CHUNK, EPS  # noqa
+from gdn_onnx_kernel import _golden_chunk_args, CHUNK, EPS, l2norm_lastdim  # noqa
+
+FUSED = os.environ.get("GDN_FUSED_L2", "1") == "1"            # use the fused LpNormalization op
 
 
 class ProbeOps(nn.Module):
     """exp(g) and l2norm(x) — the GDN transcendentals, nothing else."""
     def forward(self, g, x):
         exp_g = torch.exp(g)
-        l2_x = x * torch.rsqrt((x * x).sum(-1, keepdim=True) + EPS)
+        l2_x = l2norm_lastdim(x) if FUSED else x * torch.rsqrt((x * x).sum(-1, keepdim=True) + EPS)
         return exp_g, l2_x
 
 

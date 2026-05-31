@@ -48,6 +48,23 @@ def _masks(C, device, dtype):
     return tril_incl, strict_low, cumsum_U, eye
 
 
+class _L2Norm(torch.autograd.Function):
+    """l2norm over the last dim that exports as one ONNX LpNormalization node (-> QNN's fused
+    int16 L2Norm op). Doing it as separate sum/rsqrt/mul exposes the per-tensor-quantized
+    sum-of-squares, whose huge per-head dynamic range crushes small-norm heads on HTP (~27%)."""
+    @staticmethod
+    def forward(ctx, x):
+        return x * torch.rsqrt((x * x).sum(-1, keepdim=True) + EPS)
+
+    @staticmethod
+    def symbolic(g, x):
+        return g.op("LpNormalization", x, axis_i=-1, p_i=2)
+
+
+def l2norm_lastdim(x):
+    return _L2Norm.apply(x)
+
+
 def sel_array(i, C=CHUNK, bl=16, bp=32):
     """The padded 0/1 selector sel[i] [bp,C]: picks block i's bl rows into a bp-tall tile."""
     s = np.zeros((bp, C), dtype=np.float32)
@@ -128,8 +145,8 @@ def gdn_chunk_onnx(qc, kc, vc, gc, betac, S_in, masks=None, solve_block=16, cons
         cumsum_U = consts["cumsum_U"]
 
     # --- preprocessing ---
-    qc = qc * torch.rsqrt((qc * qc).sum(-1, keepdim=True) + EPS)        # l2norm
-    kc = kc * torch.rsqrt((kc * kc).sum(-1, keepdim=True) + EPS)
+    qc = l2norm_lastdim(qc)                                             # fused L2Norm (QNN op)
+    kc = l2norm_lastdim(kc)
     qc = qc * (1.0 / (Dk ** 0.5))
     betac = betac.unsqueeze(-1)
     v_beta = vc * betac
