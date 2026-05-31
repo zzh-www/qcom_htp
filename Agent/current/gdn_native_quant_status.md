@@ -66,12 +66,25 @@ S_out ~3.8e-1**, far from the host simulator's prediction.
 asymmetric **1.9e-3**, symmetric (HTP-faithful) **3.4e-3**, worst over 6 prompts **~7e-3** — all
 within the 1.5e-2 tolerance. The final DLC encodings match the intended symmetric scales exactly.
 
-**=> The gap is faithfulness, not scheme.** The deployed graph quantizes ~190 activation tensors
-(the full selector / padded-block requant chain, plus HTP's quantized Exp/Sqrt/rsqrt LUTs); the
-simulator models only ~40 op boundaries with exact transcendentals. Next step: make the simulator
-bit-faithful to the deployed graph (quantize the exact `gdn_chunk_onnx`/`solve_T_blocked` tensors,
-model HTP's quantized exp/rsqrt) to localize the dominant error, then lean the solve's requant
-depth or raise bits where it dominates.
+**=> The gap is precision, not a bug.** The HTP output is **highly correlated with the reference
+(corr 0.97 oc / 0.93 S)** — the all-integer computation is fundamentally CORRECT. The 27%
+decomposes into a **systematic ~16% magnitude shrink** (best-fit scale 0.84) + **~25% residual
+quantization noise**.
+
+Localization so far:
+- **Faithful simulator** (bit-faithful to the deployed selector/padded solve, symmetric int16) =
+  oc **3.4e-3** on real golden — so the scheme, the requant chain, and the scales are NOT the gap.
+- **Transcendental probe** (`scripts/gdn_probe_ops.py` / `example/gdn_native/probe_htp.sh`,
+  isolates exp & l2norm on HTP at real ranges): HTP **exp is faithful** (htp-vs-quantin 2e-5);
+  HTP **rsqrt/l2norm has a 1.55e-2 LUT error**, but injecting that into the full sim
+  (`GDN_L2_ERR`) yields only ~1.1% oc → **not enough to explain 27%**.
+
+=> Transcendentals are largely exonerated. The residual lives in the quantized int16 MatMul/solve
+chain AS EXECUTED ON HTP — the simulator (float-then-quantize per op) underestimates the on-device
+noise by ~70×. Prime suspects: the auto-inserted per-MatMul bias quantization (the sim has no
+bias) and int16 accumulation/requant rounding across 91 matmuls. Next: per-stage device probe of
+a small int16 MatMul chain vs the sim; inspect the bias tensors in `gdn_quant.dlc`; and chase the
+systematic 0.84 scale (a single corrective scale may recover much of the magnitude).
 
 ## Reproduce
 
