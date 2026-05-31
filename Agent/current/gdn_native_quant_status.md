@@ -2,157 +2,98 @@
 
 Status of the goal **"先在 qnn native 上实现 gdn kernel对齐输出"** — implement the GDN chunk
 kernel as a QNN-native graph and align its output to the fp64 reference, on the **HTP backend**,
-**fully quantized (all-integer, no fp16)**.
+quantized (no fp16). The executable math spec is `scripts/gdn_ref_kernel.py::gdn_chunk`; the
+kernel/quant contract is `gdn_kernel_reference.md`. This page is the QNN-native realization.
 
-The executable spec for the math is `scripts/gdn_ref_kernel.py::gdn_chunk`; this page covers the
-QNN-native realization. See `gdn_kernel_reference.md` for the kernel/quant contract.
+## TL;DR (verified root cause)
+
+The all-integer GDN graph **composes and runs correctly on the v75 HTP** (structure is right,
+corr 0.97), but the device output is **~16% (p00) … 43% (p29)** — and the cause is now pinned:
+
+> **`int16 × int16` MatMul OVERFLOWS the HTP int32 accumulator.** Each int16×int16 product is
+> ~2³⁰; the GDN GEMMs contract over the **128-dim head**, so the accumulator sums to ~**2³⁷ ≫ 2³¹**
+> (int32). It saturates/wraps on outlier-heavy dot-products → the 16–43% (data-dependent).
+
+Proof — `scripts/gdn_faithful_sim.py` runs the exact deployed graph with a faithful int32
+accumulator (real golden L00, oc relerr p00/p29):
+
+| matmul accumulator | p00 | p29 |
+|---|---|---|
+| **float** (the trap — what my earlier sims used) | 0.001 | 0.001 |
+| **int32-saturating, w16a16** | **0.146** | **0.693** | ← matches device 0.164 / 0.431 |
+| int32-saturating, **w8a16** (one operand int8) | 0.053 | 0.049 |
+
+So **"全程 int16" (int16×int16 matmul) is physically impossible** for the 128-dim GEMMs on HTP.
+The matmul **weight-port must be int8** (w8a16) so int8×int16×128 ≈ 5.3e8 < 2³¹ fits; **activations
+stay int16**. This is exactly why `gdn_kernel_reference.md` §4 / the kickoff memory locked **w8a16,
+not w16a16** ("int16×int16 over contract-128 ≈ 2³⁷ > int32"). Everything else — the native L2Norm,
+exp, the `(I-A)⁻¹` solve, all elementwise — is **fine at int16**.
+
+**Earlier wrong conclusions in this file's history (now corrected):** "needs ~24-bit",
+"data-dependent shrink", "deep-chain requant floor", "fp16/custom-HMX required". All were artifacts
+of a non-faithful simulator: it (a) **accumulated matmuls in float** (so it never saw the int32
+overflow), and (b) **quantized the l2norm internals** (`x*x`) which the device fuses into the
+native L2Norm op. With both fixed, the only real blocker is the accumulator → w8a16.
 
 ## Files
 
 | file | role |
 |---|---|
-| `scripts/gdn_onnx_kernel.py` | `gdn_chunk` as a static, ONNX-exportable graph. `GDNChunk` (float, baked-const) and `GDNChunkQ` (quantized path: structural constants are runtime inputs). Exact vs fp64 (ORT 3.7e-7). |
-| `scripts/gdn_quant_sim.py` | host fixed-point simulator — quantizes every op output, two-pass calibrate/eval on real golden chunks. Iterate the scheme in seconds, no device. |
-| `example/gdn_native/run_gdn_native.sh` | float native path: ONNX→DLC→qnn-net-run (`BACKEND=cpu` host fp32, or `BACKEND=htp` device fp16). |
-| `example/gdn_native/run_gdn_native_quant.sh` | **all-integer HTP path**: two-pass symmetric int16 → context binary → device run → compare. |
-| `example/gdn_native/ctxgen_check.sh` | host-only export→convert→quantize→ctxgen (no device) — fast HTP-composition gate. |
+| `scripts/gdn_onnx_kernel.py` | `gdn_chunk` as a static ONNX graph. `GDNChunk` (float) / `GDNChunkQ` (quant path, structural consts as inputs). l2norm uses `F.normalize` → fuses to native QNN **L2Norm**. ORT exact 3.8e-7. |
+| `scripts/gdn_faithful_sim.py` | **device-faithful** sim: int32 matmul accumulator + fused L2Norm. `ACC=int32 WBITS=16/8`. Reproduces the device. |
+| `scripts/gdn_quant_sim.py` | older partial sim (float-accumulate, optimistic — kept for the per-GEMM scheme study only). |
+| `example/gdn_native/run_gdn_native_quant.sh` | all-int HTP path: two-pass symmetric quantize → ctx → device → compare. |
+| `example/gdn_native/run_gdn_native.sh` | float native path (CPU fp32 exact; HTP fp16 overflows real data). |
+| `example/gdn_native/ctxgen_check.sh` | host-only compose gate (no device). |
+| `example/gdn_native/{probe_htp,probe_chain}.sh`, `scripts/gdn_probe_*.py` | isolate single HTP ops (exp, L2Norm, matmul chain) vs sim. |
 
-## The triangular solve is the crux
+## The triangular solve (static reformulation — works, not the problem)
 
-`gdn_chunk` has a sequential `T = (I-A)^-1` (forward substitution, [SEQ]). To make it a static
-graph it must be reformulated:
+`gdn_chunk` has a sequential `T = (I-A)⁻¹`. Made static as **block forward substitution**
+(`solve_T_blocked`): logical block 16 / physical block 32 (matmuls 32-aligned — HTP rejects 16×16),
+block extract by **Slice+Pad**, no Concat. The Neumann product `∏(I+A^(2^i))` was rejected (its
+powers reach ~1e7). The solve quantizes fine at int16 (the faithful sim confirms).
 
-- **Neumann product** `∏(I+A^(2^i))` — algebraically exact (A strictly-lower 64×64 is nilpotent)
-  and fine in fp64/fp32, but the matrix powers transiently reach **~1e7** before the nilpotent
-  collapse → destroys int16 and overflows fp16. **Rejected.**
-- **Block forward substitution** (the deployed form, `solve_T_blocked`): every intermediate stays
-  O(10). LOGICAL block 16 (small enough the per-block inverse stays bounded) but PHYSICAL block 32
-  (every block padded to 32×32 so all matmuls are 32-aligned — HTP rejects 16×16). Block
-  place/extract uses constant 0/1 **selector** matmuls (no Concat/Slice — HTP rejects quantized
-  Concat of differently-scaled tensors).
+## HTP-composition recipe (the real, reusable constraint cascade)
 
-## Float native path — DONE (but fp16 is rejected for deployment)
+Getting a fully-quantized int16 graph to **compose** on HTP (per `HtpOpDefSupplement.html`):
+1. **No runtime mask ops** — bake masks as numpy-backed constant initializers (no EyeLike/Compare).
+2. **32-aligned matmul dims** — logical-16 / physical-32 block padding (16×16 rejected).
+3. **No Concat of differently-scaled tensors** — Slice+Pad block extraction.
+4. **act×act MatMul, not FullyConnected** — feed structural constants (`cumsum_U`, `sel0..3`) as
+   runtime INPUTS so their matmuls stay MatMul (a constant operand → FC, int16 FC unsupported).
+5. **Symmetric operands (offset −32768)** — two-pass: calibrate → `--dump_encoding_json` →
+   `symmetric_overrides_from_dump` rewrites every encoding symmetric → re-convert. → ctxgen OK.
+6. **l2norm must be the native op** — use `torch.nn.functional.normalize` (→ ONNX ReduceL2/Div →
+   QNN `L2Norm`, verified with `qairt-dlc-info`); a hand-built LpNormalization / manual
+   sum-rsqrt-mul risks decomposing into per-op-quantized primitives.
 
-`run_gdn_native.sh` converts the graph and runs it through the real QNN runtime:
-- **CPU host backend, fp32**: oc 3.5e-7 / S_out 6.9e-7 vs fp64 ref — the QNN-native graph is exact.
-- **HTP device backend, fp16**: 2.7e-3 on well-conditioned inputs, **but overflows to NaN on real
-  Qwen activations** (heavy-tailed, abs-max ~25, crest ~185). Confirms fp16 is unusable → the
-  deployment must be all-integer.
+## Float native path — DONE (fp16 rejected for deployment)
 
-## All-integer HTP path — graph COMPOSES + RUNS; accuracy tuning open
+- **CPU host fp32**: oc 3.5e-7 vs fp64 — the QNN-native graph is exact.
+- **HTP fp16**: aligns on mild prompts but **overflows to NaN** on heavy-tailed real Qwen
+  activations (the l2norm sum-of-squares; abs-max ~25) → fp16 unusable.
 
-`run_gdn_native_quant.sh` produces a fully-quantized int16 graph (no float fallback: the 8 GEMMs,
-Exp, Sqrt/rsqrt, and the solve all run as QNN quantized HTP kernels). Getting it to **compose on
-HTP** required clearing a cascade of int16-MatMul constraints (per the HTP Backend Op Definition
-Supplement, `tools/qnn-sdk/docs/.../HtpOpDefSupplement.html`):
+## Next (to discuss, not yet built)
 
-1. **No runtime mask ops** — `torch.eye`/compares export as EyeLike/GreaterOrEqual (no QNN
-   translation) → bake masks as constants / numpy-backed initializers.
-2. **32-aligned matmul dims** — 16×16 block matmuls rejected → logical-16 / physical-32 padding.
-3. **No Concat of differently-scaled tensors** — assemble T with selector MatMul+Add, not Concat.
-4. **activation×activation MatMul, not FullyConnected** — a constant matmul operand is lowered to
-   FC (int16 FC unsupported) → feed the structural constants (`cumsum_U`, `sel0..3`) as runtime
-   INPUTS so they quantize as activations (`GDNChunkQ` / `const_inputs`).
-5. **Symmetric operands (offset −32768)** — HTP int16 MatMul needs symmetric operands, but
-   qairt-quantizer assigns offset 0 to non-negative tensors. Fix = **two-pass**: calibrate once
-   (`--dump_encoding_json`), rewrite every encoding symmetric (`symmetric_overrides_from_dump`,
-   offset −32768, scale = max-abs / 32767), re-convert encoding-driven. → **ctxgen OK**.
-
-**Current device result (L00, real golden chunk):** the all-integer graph composes, runs on the
-v75 HTP from a context binary, and emits structured output — but accuracy is **oc ~2.7e-1 /
-S_out ~3.8e-1**, far from the host simulator's prediction.
-
-**The simulator says this scheme should align:** all-int16, blocked solve, on real golden chunks —
-asymmetric **1.9e-3**, symmetric (HTP-faithful) **3.4e-3**, worst over 6 prompts **~7e-3** — all
-within the 1.5e-2 tolerance. The final DLC encodings match the intended symmetric scales exactly.
-
-**=> The gap is precision, not a bug.** The HTP output is **highly correlated with the reference
-(corr 0.97 oc / 0.93 S)** — the all-integer computation is fundamentally CORRECT. The 27%
-decomposes into a **systematic ~16% magnitude shrink** (best-fit scale 0.84) + **~25% residual
-quantization noise**.
-
-### Root cause (localized by device probes)
-
-Three isolation probes show the individual HTP ops are FAITHFUL to the simulator:
-- `gdn_probe_ops.py`/`probe_htp.sh`: HTP **exp faithful** (htp-vs-quantin 2e-5); the **fused
-  `LpNormalization`→L2Norm op faithful** (2e-4) — but the *manual* sumsq/rsqrt l2norm had a 1.55e-2
-  error because it exposes a per-tensor-quantized sum-of-squares.
-- `gdn_probe_chain.py`/`probe_chain.sh`: a 2-deep **int16 MatMul chain matches the sim** (3.4e-3).
-
-**Fix 1 applied — fused L2Norm.** Replacing the manual l2norm with the `LpNormalization` op
-(`_L2Norm`/`l2norm_lastdim`) cut device oc **27% → 17%**.
-
-**The remaining 17% = per-tensor (head-shared) quantization of a multi-head graph + deep-chain
-requant noise.** GDN runs 32 heads as a batch dim, but QNN quantizes each `[1,32,…]` tensor with
-ONE scale set by the max-norm head:
-- Error concentrates in **small-norm heads** (`corr(head_norm, head_relerr) = −0.53`; head 21
-  norm 4e-4 → relerr 686%) — they're crushed by the shared scale. (Small absolute weight in the
-  global norm, so a minor contributor.)
-- **Large/well-conditioned heads still carry ~15–22%** — accumulated requant noise across the
-  ~190 quantized op outputs. The deployed solve alone adds ~50 matmuls (the selector/padded-block
-  realization), each output requantized. The simulator models only ~50 boundaries with exact
-  transcendentals, hence its optimistic 3.4e-3.
-
-### Definitive characterization (all levers tried)
-
-The 16% device error decomposes as a **systematic 0.843 magnitude shrink + 4.9% residual**:
-`oc ≈ 0.843·ref`, residual-after-global-scale 4.9%, residual-after-**per-head**-scale **2.8%**.
-
-Levers tried (each a device run):
-- **Fused L2Norm**: 27% → 16% (kept).
-- **Leaner solve** (Slice+Pad block extraction, MatMul 91→77, no-requant): 17% → 16% (negligible).
-- **Per-head pre-scale** of v,S_in (`per_head_vscale`, `vscale`/`inv_vscale` inputs; output ×inv):
-  no change — the dominant error is NOT per-head input crushing.
-- **Headroom** on the symmetric scales (`GDN_HEADROOM`): 1.0 (max-abs) is optimal; 2.0 → worse
-  (0.455 scale, coarser → more small-value-rounding shrink); 0.5/0.7 → catastrophic (outliers clip).
-
-**Root cause = irreducible, DATA-DEPENDENT deep-int16-chain noise.** The shrink is small values
-rounding toward zero across the ~50-op recurrence/solve (worse with coarser quant), not clipping
-and not op-count. It resists every global lever (leaner solve, per-head pre-scale, headroom).
-
-**Static bias correction does NOT work — the error is data-dependent.** Reusing one ctx across 5
-real prompts (chunk0, L00), raw device oc relerr is **16% (p00), 27% (p01), 68% (p15), 24% (p20),
-43% (p29)** — large and prompt-specific. A per-(head,token) correction fit on p00 itself gives
-0.6%, but **leave-one-out it does NOT generalize** (calib on 4, test held-out: p00 16→7%, but
-p15 68→**129%**, p29 43→**231%**) because the per-element shrink depends on which values round to
-zero, which is data-dependent. So no offline-calibrated scale/bias correction reaches tol.
-
-### Conclusion — PROVEN by docs research + a fully-faithful simulator
-
-Deep QNN-doc research (HtpOpDefSupplement, QAIRT Quantization Spec, HTP design guides) + a
-**fully-faithful fixed-point sim** (`scripts/gdn_faithful_sim.py`, quantizes EVERY one of the 147
-compute-op outputs via TorchFunctionMode) settle it quantitatively:
-
-1. **QNN/HTP requantizes every compute-op output to its declared bitwidth.** int16 MatMul/Conv
-   `out[0]` is always 16-bit (the int32 only exists as the bias `in[2]` and the in-kernel
-   accumulator — never a graph tensor). The only super-group/fusion that skips the boundary is
-   `Conv + pointwise-activation`; there is **no MatMul→MatMul fusion** and **no int32 activation**.
-2. **Bit-width sweep (faithful sim, real golden L00):** int16 → **0.39/1.04/0.89** (fails);
-   int20 → 0.20/0.13/0.07; **int24 → 0.004/0.003/0.008 (aligns)**; int32 → ~0. **GDN's deep
-   recurrence needs ~24-bit intermediates.**
-3. **It's the NON-GEMM ops.** Quantizing only the 8 GEMM operands at int16 = **4.3e-4** (aligns);
-   quantizing the exp/l2norm/decay/**solve**/elementwise/state at int16 = 40–100%. The earlier
-   3.4e-3 sim was optimistic because it quantized ~50 of 147 ops.
-4. **The QAIRT accuracy tools don't rescue it:** percentile/mse calibration is empirically WORSE
-   (heavy-tailed v/S need full range); per-channel/per-row/AdaRound/CLE are **weight-operand only**,
-   but GDN GEMMs are all-activation; HTP MatMul has **no per-axis activation** encoding.
-
-**=> QNN-native auto-quant caps activations at int16, and GDN needs ~24-bit on the non-GEMM path,
-so it cannot reach 1.5e-2.** The two ways to supply >16-bit on the non-GEMM path: (a) fp16 (the §4
-design — but project forbids fp16), or (b) **custom HMX kernel** that keeps the state/solve/
-intermediates in int32 in VTCM and quantizes to int16 only at the HMX GEMM inputs (= FlashLA-style
-fusion, the project's route). Reusable from this work: exact float reference, HTP-compose recipe,
-the partial + fully-faithful simulators, the device probes, and the bit-width requirement.
+Implement **w8a16 per-GEMM** with the §4 `ASYM_SIDE` orientation (int8 on the bounded operand,
+int16 on the outlier-prone one) so the accumulator fits AND int8 lands on the better-conditioned
+operand. Faithful-sim w8a16 (naive orientation) = 5%; the project's oriented w8a16 host study =
+**1.28e-2** (`tests/gdn/test_gdn_layer.py`). To realize on the device-native graph, each
+precision-critical matmul needs a designated int8 weight-port (today all operands are forced int16
+by `symmetric_overrides_from_dump`).
 
 ## Reproduce
 
 ```bash
-# scheme validation (host, seconds): asymmetric / symmetric int16 on real golden chunks
-PYTHONPATH=scripts .venv/bin/python scripts/gdn_quant_sim.py            # asym ~1.9e-3
-PYTHONPATH=scripts GDN_SYM=1 .venv/bin/python scripts/gdn_quant_sim.py  # sym  ~3.4e-3
-# float native (rejected fp16, but proves the graph): CPU exact, HTP overflows real data
-./example/gdn_native/run_gdn_native.sh                 # CPU fp32: oc 3.5e-7
-# all-integer HTP graph composes (host-only gate) + runs on device
-./example/gdn_native/ctxgen_check.sh                   # -> CTXGEN OK
-GDN_LAYER=0 TEST_PROMPT=p00 TEST_CHUNK=0 ./example/gdn_native/run_gdn_native_quant.sh
+# device-faithful simulator — the int32 accumulator is the whole story
+ACC=float WBITS=16 .venv/bin/python scripts/gdn_faithful_sim.py   # 0.001 (float accumulate = trap)
+ACC=int32 WBITS=16 .venv/bin/python scripts/gdn_faithful_sim.py   # 0.146/0.693 == device (overflow)
+ACC=int32 WBITS=8  .venv/bin/python scripts/gdn_faithful_sim.py   # 0.05  (w8a16 fits int32)
+# float native graph is exact through the QNN runtime
+./example/gdn_native/run_gdn_native.sh                            # CPU fp32: oc 3.5e-7
+# all-int16 HTP device run (composes, runs, but ~16% due to the int32-accumulator overflow)
+GDN_LAYER=0 TEST_PROMPT=p00 ./example/gdn_native/run_gdn_native_quant.sh
+# inspect what each op became in the DLC (verify native L2Norm etc.)
+qairt-dlc-to-json -i example/gdn_native/quant_w16a16_L0/gdn_quant.dlc -o /tmp/q.json
 ```

@@ -15,3 +15,5 @@ sym_overrides.json
 quant_overrides.json
 input_list.txt
 native_io.json
+_config_host.json
+_htp_ext.json

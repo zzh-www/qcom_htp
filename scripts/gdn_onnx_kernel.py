@@ -48,21 +48,14 @@ def _masks(C, device, dtype):
     return tril_incl, strict_low, cumsum_U, eye
 
 
-class _L2Norm(torch.autograd.Function):
-    """l2norm over the last dim that exports as one ONNX LpNormalization node (-> QNN's fused
-    int16 L2Norm op). Doing it as separate sum/rsqrt/mul exposes the per-tensor-quantized
-    sum-of-squares, whose huge per-head dynamic range crushes small-norm heads on HTP (~27%)."""
-    @staticmethod
-    def forward(ctx, x):
-        return x * torch.rsqrt((x * x).sum(-1, keepdim=True) + EPS)
-
-    @staticmethod
-    def symbolic(g, x):
-        return g.op("LpNormalization", x, axis_i=-1, p_i=2)
-
-
 def l2norm_lastdim(x):
-    return _L2Norm.apply(x)
+    """l2norm over the last dim via the STANDARD torch op so the QAIRT converter recognizes the
+    ReduceL2/Div pattern and FUSES it into the native QNN **L2Norm** op (verified: torch
+    F.normalize -> ONNX ReduceL2/Clip/Div -> DLC `L2Norm` op).  This is critical for int16: the
+    native L2Norm computes its sum-of-squares / rsqrt INTERNALLY at high precision, instead of
+    exposing a per-tensor-quantized x*x (whose values^2 overflow int16 and destroy accuracy).
+    A hand-built LpNormalization / manual sum-rsqrt-mul does NOT reliably map to the fused op."""
+    return torch.nn.functional.normalize(x, p=2.0, dim=-1, eps=EPS)
 
 
 def sel_array(i, C=CHUNK, bl=16, bp=32):
@@ -215,6 +208,9 @@ VSCALE_NAMES = ["vscale", "inv_vscale"]
 def per_head_vscale(vc, S_in):
     """Per-head pre-scale s_h [1,32,1,1] = 1/max(|v_h|, |S_in_h|) so v and S_in are head-uniform
     (~unit) before per-tensor int16 quant; returns (vscale, inv_vscale) as float32 tensors."""
+    if os.environ.get("GDN_NO_VSCALE") == "1":               # per-head scaling OFF (identity)
+        o = torch.ones(vc.shape[0], vc.shape[1], 1, 1)
+        return o.float(), o.float()
     av = vc.abs().amax(dim=(-2, -1), keepdim=True)            # [1,32,1,1]
     aS = S_in.abs().amax(dim=(-2, -1), keepdim=True)
     m = torch.maximum(av, aS).clamp_min(1e-6)

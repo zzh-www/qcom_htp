@@ -42,9 +42,9 @@ LAY=(); for n in "${INPUTS[@]}"; do LAY+=(--source_model_input_layout "$n" NONTR
 for n in oc S_out; do LAY+=(--source_model_output_layout "$n" NONTRIVIAL --desired_output_layout "$n" NONTRIVIAL); done
 sed 's#:=#:=calib/#g' calib/calib_list.txt > calib_list_abs.txt
 
-echo "[2/7] pass-1 convert + calibrate ($CALIB) -> dump per-tensor ranges"
-# CALIB: min-max (crude, outlier-driven) | percentile (clips heavy tails) | mse | sqnr
+# CALIB: min-max (default) | percentile (clips heavy tails) | mse | sqnr
 CALIB="${CALIB:-min-max}"; PCT="${PCT:-99.9}"
+echo "[2/7] pass-1 convert + calibrate ($CALIB) -> dump per-tensor ranges"
 CAL_FLAGS=(--act_quantizer_calibration "$CALIB" --param_quantizer_calibration "$CALIB")
 [ "$CALIB" = percentile ] && CAL_FLAGS+=(--percentile_calibration_value "$PCT")
 qairt-converter -i gdn_chunk.onnx --target_backend HTP "${LAY[@]}" -o gdn_float.dlc > _convert.log 2>&1
