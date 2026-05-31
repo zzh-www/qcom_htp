@@ -42,11 +42,15 @@ LAY=(); for n in "${INPUTS[@]}"; do LAY+=(--source_model_input_layout "$n" NONTR
 for n in oc S_out; do LAY+=(--source_model_output_layout "$n" NONTRIVIAL --desired_output_layout "$n" NONTRIVIAL); done
 sed 's#:=#:=calib/#g' calib/calib_list.txt > calib_list_abs.txt
 
-echo "[2/7] pass-1 convert + calibrate -> dump per-tensor ranges"
+echo "[2/7] pass-1 convert + calibrate ($CALIB) -> dump per-tensor ranges"
+# CALIB: min-max (crude, outlier-driven) | percentile (clips heavy tails) | mse | sqnr
+CALIB="${CALIB:-min-max}"; PCT="${PCT:-99.9}"
+CAL_FLAGS=(--act_quantizer_calibration "$CALIB" --param_quantizer_calibration "$CALIB")
+[ "$CALIB" = percentile ] && CAL_FLAGS+=(--percentile_calibration_value "$PCT")
 qairt-converter -i gdn_chunk.onnx --target_backend HTP "${LAY[@]}" -o gdn_float.dlc > _convert.log 2>&1
 qairt-quantizer --input_dlc gdn_float.dlc --input_list calib_list_abs.txt \
     --act_bitwidth "$ACT_BW" --weights_bitwidth "$W_BW" --bias_bitwidth 32 \
-    --dump_encoding_json --output_dlc gdn_cal.dlc > _calib.log 2>&1
+    "${CAL_FLAGS[@]}" --dump_encoding_json --output_dlc gdn_cal.dlc > _calib.log 2>&1
 
 echo "[3/7] force every encoding SYMMETRIC (HTP int16 MatMul operand requirement)"
 "$PY" - "$ROOT_DIR" <<'PY' >/dev/null

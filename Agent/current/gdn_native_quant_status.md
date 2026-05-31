@@ -117,19 +117,32 @@ real prompts (chunk0, L00), raw device oc relerr is **16% (p00), 27% (p01), 68% 
 p15 68→**129%**, p29 43→**231%**) because the per-element shrink depends on which values round to
 zero, which is data-dependent. So no offline-calibrated scale/bias correction reaches tol.
 
-### Conclusion
+### Conclusion — PROVEN by docs research + a fully-faithful simulator
 
-The QNN-native auto-quantized int16 route gets GDN **running with correct structure on HTP**
-(corr 0.97 on p00) and is a valid **float reference** (CPU fp32 exact), but as an *aligned
-quantized kernel it does not work*: real-prompt device error is **16–68%, data-dependent, and not
-correctable** by any static scale/bias. The blocker is intrinsic to QNN auto-quant — int16 requant
-after **every** node, so the deep GDN recurrence/solve accumulates data-dependent rounding loss.
+Deep QNN-doc research (HtpOpDefSupplement, QAIRT Quantization Spec, HTP design guides) + a
+**fully-faithful fixed-point sim** (`scripts/gdn_faithful_sim.py`, quantizes EVERY one of the 147
+compute-op outputs via TorchFunctionMode) settle it quantitatively:
 
-**Reaching the 1.5e-2 tol requires int32 accumulation WITHOUT per-op requant** — i.e. the project's
-**custom HMX GEMM route** (per-head-GEMM drain / explicit static scale; the §4 design), with
-QNN-native used only for orchestration. The work here delivers: the exact float QNN-native reference,
-the HTP-composition recipe (the constraint cascade + two-pass symmetric flow), the fixed-point
-simulator, and the device probes — all reusable for the custom-HMX bring-up.
+1. **QNN/HTP requantizes every compute-op output to its declared bitwidth.** int16 MatMul/Conv
+   `out[0]` is always 16-bit (the int32 only exists as the bias `in[2]` and the in-kernel
+   accumulator — never a graph tensor). The only super-group/fusion that skips the boundary is
+   `Conv + pointwise-activation`; there is **no MatMul→MatMul fusion** and **no int32 activation**.
+2. **Bit-width sweep (faithful sim, real golden L00):** int16 → **0.39/1.04/0.89** (fails);
+   int20 → 0.20/0.13/0.07; **int24 → 0.004/0.003/0.008 (aligns)**; int32 → ~0. **GDN's deep
+   recurrence needs ~24-bit intermediates.**
+3. **It's the NON-GEMM ops.** Quantizing only the 8 GEMM operands at int16 = **4.3e-4** (aligns);
+   quantizing the exp/l2norm/decay/**solve**/elementwise/state at int16 = 40–100%. The earlier
+   3.4e-3 sim was optimistic because it quantized ~50 of 147 ops.
+4. **The QAIRT accuracy tools don't rescue it:** percentile/mse calibration is empirically WORSE
+   (heavy-tailed v/S need full range); per-channel/per-row/AdaRound/CLE are **weight-operand only**,
+   but GDN GEMMs are all-activation; HTP MatMul has **no per-axis activation** encoding.
+
+**=> QNN-native auto-quant caps activations at int16, and GDN needs ~24-bit on the non-GEMM path,
+so it cannot reach 1.5e-2.** The two ways to supply >16-bit on the non-GEMM path: (a) fp16 (the §4
+design — but project forbids fp16), or (b) **custom HMX kernel** that keeps the state/solve/
+intermediates in int32 in VTCM and quantizes to int16 only at the HMX GEMM inputs (= FlashLA-style
+fusion, the project's route). Reusable from this work: exact float reference, HTP-compose recipe,
+the partial + fully-faithful simulators, the device probes, and the bit-width requirement.
 
 ## Reproduce
 
