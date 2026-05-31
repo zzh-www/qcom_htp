@@ -73,8 +73,14 @@ def chunk_q(qc, kc, vc, gc, betac, S_in, Q, gemm_only=False, solve="neumann"):
     qc = A("in_q", qc); kc = A("in_k", kc); vc = A("in_v", vc)
     gc = A("in_g", gc); betac = A("in_beta", betac); S_in = A("in_S", S_in)
 
-    qc = A("q_l2", qc * torch.rsqrt((qc * qc).sum(-1, keepdim=True) + EPS))
-    kc = A("k_l2", kc * torch.rsqrt((kc * kc).sum(-1, keepdim=True) + EPS))
+    l2e = float(os.environ.get("GDN_L2_ERR", "0"))            # inject HTP rsqrt-LUT-like rel error
+    def _l2(t, nm):
+        r = t * torch.rsqrt((t * t).sum(-1, keepdim=True) + EPS)
+        if l2e:                                               # structured (sign-stable) perturbation
+            r = r * (1.0 + l2e * torch.sin(torch.arange(r.shape[-1], device=r.device).double() * 1.3))
+        return A(nm, r)
+    qc = _l2(qc, "q_l2")
+    kc = _l2(kc, "k_l2")
     qc = A("q_sc", qc * (1.0 / (Dk ** 0.5)))
     betac = betac.unsqueeze(-1)
     v_beta = A("v_beta", vc * betac)
