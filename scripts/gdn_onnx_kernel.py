@@ -101,8 +101,11 @@ def solve_T_blocked(A, bl=16, bp=32, sel=None):
         sel = [c4(sel_array(i, C, bl, bp)) for i in range(nb)]
     selT = [s.transpose(-1, -2) for s in sel]                  # [1,1,C,bp]
 
-    SA = [torch.matmul(sel[i], A) for i in range(nb)]          # [bp,C] = padded rows of block-row i
-    Aij = [[torch.matmul(SA[i], selT[j]) for j in range(nb)] for i in range(nb)]  # [bp,bp] blocks
+    # Block extraction by Slice+Pad (data movement, preserves encoding -> NO requant), instead of
+    # selector matmuls (20 extra requant points). Slice the bl×bl block, zero-pad to bp×bp.
+    pad = (0, bp - bl, 0, bp - bl)
+    Aij = [[torch.nn.functional.pad(A[..., i*bl:(i+1)*bl, j*bl:(j+1)*bl], pad)
+            for j in range(nb)] for i in range(nb)]            # [bp,bp] blocks, 32-aligned
 
     def inv_block(d):                                          # (I-d)^-1, d strictly-lower (active bl)
         Tb = eyb + d; Ap = d
@@ -206,6 +209,17 @@ def const_inputs(C=CHUNK, bl=16, bp=32):
 
 
 CONST_INPUT_NAMES = list(const_inputs().keys())              # cumsum_U, sel0..sel3
+VSCALE_NAMES = ["vscale", "inv_vscale"]
+
+
+def per_head_vscale(vc, S_in):
+    """Per-head pre-scale s_h [1,32,1,1] = 1/max(|v_h|, |S_in_h|) so v and S_in are head-uniform
+    (~unit) before per-tensor int16 quant; returns (vscale, inv_vscale) as float32 tensors."""
+    av = vc.abs().amax(dim=(-2, -1), keepdim=True)            # [1,32,1,1]
+    aS = S_in.abs().amax(dim=(-2, -1), keepdim=True)
+    m = torch.maximum(av, aS).clamp_min(1e-6)
+    vscale = (1.0 / m).float()
+    return vscale, (1.0 / vscale).float()
 
 
 class GDNChunkQ(nn.Module):
@@ -220,12 +234,19 @@ class GDNChunkQ(nn.Module):
         for n, t in (("tril_incl", tl), ("strict_low", sl), ("eye", ey)):
             self.register_buffer(n, t)
 
-    def forward(self, qc, kc, vc, gc, betac, S_in, cumsum_U, sel0, sel1, sel2, sel3):
+    def forward(self, qc, kc, vc, gc, betac, S_in, cumsum_U, sel0, sel1, sel2, sel3,
+                vscale, inv_vscale):
         masks = (self.tril_incl, self.strict_low, None, self.eye)
         r4 = lambda s: s.reshape(1, 1, *s.shape[-2:])          # 4D so matmuls stay MatMul, not FC
         consts = {"cumsum_U": r4(cumsum_U), "sel": [r4(sel0), r4(sel1), r4(sel2), r4(sel3)]}
-        return gdn_chunk_onnx(qc, kc, vc, gc, betac, S_in, masks=masks,
-                              solve_block=self.solve_block, consts=consts)
+        # PER-HEAD pre-scale (vscale [1,32,1,1]): v and S_in carry the per-head magnitude that
+        # per-tensor (head-shared) int16 quant would crush. Scale both by s_h so the internal
+        # activations are head-uniform; o and S_out scale linearly with v,S so divide back out.
+        vc = vc * vscale
+        S_in = S_in * vscale
+        oc, S_out = gdn_chunk_onnx(qc, kc, vc, gc, betac, S_in, masks=masks,
+                                   solve_block=self.solve_block, consts=consts)
+        return oc * inv_vscale, S_out * inv_vscale
 
 
 def _rand_case(device="cpu", dtype=torch.float32, with_state=True, seed=0):
@@ -263,9 +284,10 @@ def symmetric_overrides_from_dump(dump_path, out_path, bits=16):
     while keeping each tensor's calibrated range."""
     d = json.load(open(dump_path))
     qmax = (1 << (bits - 1)) - 1
+    hr = float(os.environ.get("GDN_HEADROOM", "1.0"))         # widen scales to avoid clipping
     def fix(enc):
         e = enc[0] if isinstance(enc, list) else enc
-        mx = max(abs(float(e.get("min", 0.0))), abs(float(e.get("max", 0.0)))) or 1.0
+        mx = (max(abs(float(e.get("min", 0.0))), abs(float(e.get("max", 0.0)))) or 1.0) * hr
         out = {"bitwidth": bits, "dtype": "int", "is_symmetric": "True",
                "scale": mx / qmax, "offset": -(1 << (bits - 1)), "min": -mx, "max": mx}
         return [out]
@@ -349,8 +371,14 @@ def emit_golden_io(out_dir, golden_dir="tests/gdn/golden", layer=0, chunk=0, sto
         a.float().numpy().astype(f"<{storage}").tofile(os.path.join(out_dir, f"{n}.raw"))
     cnames = write_consts(out_dir, storage) if consts else []
     cref = "".join(f" {c}:={c}.raw" for c in cnames)
+    vref = ""
+    if consts:                                                # per-head pre-scale for the quant path
+        vs, ivs = per_head_vscale(args[2], args[5])
+        vs.numpy().astype(f"<{storage}").tofile(os.path.join(out_dir, "vscale.raw"))
+        ivs.numpy().astype(f"<{storage}").tofile(os.path.join(out_dir, "inv_vscale.raw"))
+        vref = "".join(f" {v}:={v}.raw" for v in VSCALE_NAMES)
     with open(os.path.join(out_dir, "input_list.txt"), "w") as f:
-        f.write(" ".join(f"{n}:={n}.raw" for n in INPUT_NAMES) + cref + "\n")
+        f.write(" ".join(f"{n}:={n}.raw" for n in INPUT_NAMES) + cref + vref + "\n")
     oc_ref, S_ref = gdn_chunk(*args)
     oc_ref.float().numpy().astype("<f4").tofile(os.path.join(out_dir, "oc_ref.raw"))
     S_ref.float().numpy().astype("<f4").tofile(os.path.join(out_dir, "S_out_ref.raw"))
@@ -399,9 +427,14 @@ def emit_calib(out_dir, golden_dir="tests/gdn/golden", layer=0, max_samples=16, 
                 break
             sub = os.path.join(out_dir, f"s{n:02d}")
             os.makedirs(sub, exist_ok=True)
-            for nm, a in zip(INPUT_NAMES, _golden_chunk_args(p, chunk)):
+            args = _golden_chunk_args(p, chunk)
+            for nm, a in zip(INPUT_NAMES, args):
                 a.float().numpy().astype("<f4").tofile(os.path.join(sub, f"{nm}.raw"))
-            lines.append(" ".join(f"{nm}:=s{n:02d}/{nm}.raw" for nm in INPUT_NAMES) + cref)
+            vs, ivs = per_head_vscale(args[2], args[5])
+            vs.numpy().astype("<f4").tofile(os.path.join(sub, "vscale.raw"))
+            ivs.numpy().astype("<f4").tofile(os.path.join(sub, "inv_vscale.raw"))
+            vref = "".join(f" {v}:=s{n:02d}/{v}.raw" for v in VSCALE_NAMES)
+            lines.append(" ".join(f"{nm}:=s{n:02d}/{nm}.raw" for nm in INPUT_NAMES) + cref + vref)
             n += 1
     with open(os.path.join(out_dir, "calib_list.txt"), "w") as fh:
         fh.write("\n".join(lines) + "\n")
@@ -458,19 +491,23 @@ def export_onnx_q(path, opset=17):
     args = _rand_case(dtype=torch.float32)
     cs = const_inputs()
     cargs = tuple(torch.from_numpy(cs[n]) for n in CONST_INPUT_NAMES)
-    names = INPUT_NAMES + CONST_INPUT_NAMES
-    torch.onnx.export(m, args + cargs, path, opset_version=opset,
+    vs, ivs = per_head_vscale(args[2], args[5])
+    vargs = (vs, ivs)
+    names = INPUT_NAMES + CONST_INPUT_NAMES + VSCALE_NAMES
+    torch.onnx.export(m, args + cargs + vargs, path, opset_version=opset,
                       input_names=names, output_names=["oc", "S_out"], dynamo=False)
     print(f"wrote {path} (quantized-path, {len(names)} inputs)")
-    return args, cargs
+    return args, cargs, vargs
 
 
-def _ort_check(path, args, cargs=None):
+def _ort_check(path, args, cargs=None, vargs=None):
     import onnxruntime as ort
     sess = ort.InferenceSession(path, providers=["CPUExecutionProvider"])
     feed = {n: a.numpy() for n, a in zip(INPUT_NAMES, args)}
     if cargs is not None:
         feed.update({n: a.numpy() for n, a in zip(CONST_INPUT_NAMES, cargs)})
+    if vargs is not None:
+        feed.update({n: a.numpy() for n, a in zip(VSCALE_NAMES, vargs)})
     oc_ort, S_ort = sess.run(None, feed)
     oc_ref, S_ref = gdn_chunk(*[a.double() for a in args])
     eo = relerr(torch.from_numpy(oc_ort), oc_ref)
@@ -520,8 +557,8 @@ def main():
         a = export_onnx(args.export)
         _ort_check(args.export, a)
     if args.export_q:
-        a, c = export_onnx_q(args.export_q)
-        _ort_check(args.export_q, a, c)
+        a, c, v = export_onnx_q(args.export_q)
+        _ort_check(args.export_q, a, c, v)
     if args.emit_io:
         emit_io(args.emit_io)
     if args.compare:

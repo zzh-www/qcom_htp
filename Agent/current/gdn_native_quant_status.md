@@ -93,17 +93,34 @@ ONE scale set by the max-norm head:
   realization), each output requantized. The simulator models only ~50 boundaries with exact
   transcendentals, hence its optimistic 3.4e-3.
 
-### Path to alignment (next)
+### Definitive characterization (all levers tried)
 
-1. **Leaner solve to cut requant points** — replace selector-MatMul block extraction with **Slice**
-   (data movement, no requant / preserves encoding) and accumulate `U`,`W` block-wise instead of
-   assembling `T`, to remove the dominant requant chain. (Slice works at int16 — the `g[...,-1:]`
-   slice already does; only Concat is rejected.)
-2. **Per-head dynamic range** — QNN per-tensor activation quant cannot give per-head scales (head =
-   batch axis). This is the structural limit of the QNN-native auto-quant route for multi-head GDN,
-   and is exactly what the project's **custom HMX route handles per-GEMM (explicit drain / scale
-   per head-GEMM)**. If the leaner solve doesn't reach tol, the GEMMs likely need the custom-HMX
-   path, with QNN-native used for orchestration only.
+The 16% device error decomposes as a **systematic 0.843 magnitude shrink + 4.9% residual**:
+`oc ≈ 0.843·ref`, residual-after-global-scale 4.9%, residual-after-**per-head**-scale **2.8%**.
+
+Levers tried (each a device run):
+- **Fused L2Norm**: 27% → 16% (kept).
+- **Leaner solve** (Slice+Pad block extraction, MatMul 91→77, no-requant): 17% → 16% (negligible).
+- **Per-head pre-scale** of v,S_in (`per_head_vscale`, `vscale`/`inv_vscale` inputs; output ×inv):
+  no change — the dominant error is NOT per-head input crushing.
+- **Headroom** on the symmetric scales (`GDN_HEADROOM`): 1.0 (max-abs) is optimal; 2.0 → worse
+  (0.455 scale, coarser → more small-value-rounding shrink); 0.5/0.7 → catastrophic (outliers clip).
+
+**Root cause = irreducible deep-int16-chain noise.** The shrink is small values rounding toward
+zero across the ~50-op recurrence/solve (worse with coarser quant), not clipping and not op-count.
+It resists every global lever. A **per-head bias correction** (calibrate the 0.78–1.00 per-head
+shrink offline, fold 1/s_h into `inv_vscale` — legitimate, like the HMX drain scale) recovers it to
+**~2.8%**, but the **~2.8% residual is the chain-noise floor** — below it requires *less int16
+requant*, which QNN-native auto-quant cannot provide (per-op requant after every node, no int32
+accumulation across ops).
+
+### Conclusion / path to 1.5% tol
+
+The QNN-native auto-quantized int16 route gets GDN **running correctly on HTP** (corr 0.97) but has
+a **~2.8% noise floor** it cannot beat for GDN's deep recurrence — short of the 1.5e-2 tolerance.
+Reaching tol needs **int32 accumulation without per-op requant**, i.e. the project's **custom HMX
+GEMM route** (per-head-GEMM drain / explicit scale), with QNN-native used for orchestration only.
+Optionally implement the per-head bias correction to bank the ~2.8% if that is acceptable interim.
 
 ## Reproduce
 

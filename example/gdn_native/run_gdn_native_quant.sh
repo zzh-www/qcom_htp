@@ -26,7 +26,7 @@ export PATH="$QNN_SDK_ROOT/bin/x86_64-linux-clang:$PATH"
 export PYTHONPATH="$QNN_SDK_ROOT/lib/python${PYTHONPATH:+:$PYTHONPATH}"
 export LD_LIBRARY_PATH="$QNN_SDK_ROOT/lib/x86_64-linux-clang${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 PY="$ROOT_DIR/.venv/bin/python"; K="$ROOT_DIR/scripts/gdn_onnx_kernel.py"
-INPUTS=(qc kc vc gc betac S_in cumsum_U sel0 sel1 sel2 sel3)
+INPUTS=(qc kc vc gc betac S_in cumsum_U sel0 sel1 sel2 sel3 vscale inv_vscale)
 mkdir -p "$WORK"; cd "$WORK"
 
 echo "[1/7] export quantized-path ONNX (const inputs) + calib set + real test chunk"
