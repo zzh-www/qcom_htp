@@ -106,21 +106,30 @@ Levers tried (each a device run):
 - **Headroom** on the symmetric scales (`GDN_HEADROOM`): 1.0 (max-abs) is optimal; 2.0 → worse
   (0.455 scale, coarser → more small-value-rounding shrink); 0.5/0.7 → catastrophic (outliers clip).
 
-**Root cause = irreducible deep-int16-chain noise.** The shrink is small values rounding toward
-zero across the ~50-op recurrence/solve (worse with coarser quant), not clipping and not op-count.
-It resists every global lever. A **per-head bias correction** (calibrate the 0.78–1.00 per-head
-shrink offline, fold 1/s_h into `inv_vscale` — legitimate, like the HMX drain scale) recovers it to
-**~2.8%**, but the **~2.8% residual is the chain-noise floor** — below it requires *less int16
-requant*, which QNN-native auto-quant cannot provide (per-op requant after every node, no int32
-accumulation across ops).
+**Root cause = irreducible, DATA-DEPENDENT deep-int16-chain noise.** The shrink is small values
+rounding toward zero across the ~50-op recurrence/solve (worse with coarser quant), not clipping
+and not op-count. It resists every global lever (leaner solve, per-head pre-scale, headroom).
 
-### Conclusion / path to 1.5% tol
+**Static bias correction does NOT work — the error is data-dependent.** Reusing one ctx across 5
+real prompts (chunk0, L00), raw device oc relerr is **16% (p00), 27% (p01), 68% (p15), 24% (p20),
+43% (p29)** — large and prompt-specific. A per-(head,token) correction fit on p00 itself gives
+0.6%, but **leave-one-out it does NOT generalize** (calib on 4, test held-out: p00 16→7%, but
+p15 68→**129%**, p29 43→**231%**) because the per-element shrink depends on which values round to
+zero, which is data-dependent. So no offline-calibrated scale/bias correction reaches tol.
 
-The QNN-native auto-quantized int16 route gets GDN **running correctly on HTP** (corr 0.97) but has
-a **~2.8% noise floor** it cannot beat for GDN's deep recurrence — short of the 1.5e-2 tolerance.
-Reaching tol needs **int32 accumulation without per-op requant**, i.e. the project's **custom HMX
-GEMM route** (per-head-GEMM drain / explicit scale), with QNN-native used for orchestration only.
-Optionally implement the per-head bias correction to bank the ~2.8% if that is acceptable interim.
+### Conclusion
+
+The QNN-native auto-quantized int16 route gets GDN **running with correct structure on HTP**
+(corr 0.97 on p00) and is a valid **float reference** (CPU fp32 exact), but as an *aligned
+quantized kernel it does not work*: real-prompt device error is **16–68%, data-dependent, and not
+correctable** by any static scale/bias. The blocker is intrinsic to QNN auto-quant — int16 requant
+after **every** node, so the deep GDN recurrence/solve accumulates data-dependent rounding loss.
+
+**Reaching the 1.5e-2 tol requires int32 accumulation WITHOUT per-op requant** — i.e. the project's
+**custom HMX GEMM route** (per-head-GEMM drain / explicit static scale; the §4 design), with
+QNN-native used only for orchestration. The work here delivers: the exact float QNN-native reference,
+the HTP-composition recipe (the constraint cascade + two-pass symmetric flow), the fixed-point
+simulator, and the device probes — all reusable for the custom-HMX bring-up.
 
 ## Reproduce
 
