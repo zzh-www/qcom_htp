@@ -93,26 +93,30 @@ static void gdn_solve_head_hvx(const uint16_t *Au, int C, int zpA, float sA,
      *    A code is replicated into both halves (x * 0x10001) — otherwise odd columns multiply by 0. */
     const HVX_Vector vrnd = Q6_V_vsplat_R(1 << (GDN_F - 1));
     const int ei = (int)(1.0f / sT + 0.5f);               /* diagonal e_i code = round(1/sT) */
+    const int two = (NV > 1);                             /* C=64 -> 2 col-vectors; C<=32 -> 1 */
     for (int i = 0; i < C; ++i) {
-        HVX_Vector a0[2], a1[2];                          /* 2 int32 accumulators per col-vector (ILP) */
-        for (int v = 0; v < NV; ++v) { a0[v] = Q6_V_vzero(); a1[v] = Q6_V_vzero(); }
+        /* SCALAR (not array) accumulators so they stay in the VRF across the k-loop — an a0[2]/a1[2]
+         * array is spilled to stack + reloaded every MAC (~2.5 pkt/MAC); named locals -> ~1 pkt/MAC.
+         * Two accumulators (k-even/k-odd) per col-vector for ILP; col-vec 1 only used when C>32. */
+        HVX_Vector e0 = Q6_V_vzero(), o0 = Q6_V_vzero(), e1 = Q6_V_vzero(), o1 = Q6_V_vzero();
         int k = 0;
         for (; k + 1 < i; k += 2) {
             int s0 = (Afx[i*C + k] & 0xFFFF) * 0x10001, s1 = (Afx[i*C + k + 1] & 0xFFFF) * 0x10001;
-            for (int v = 0; v < NV; ++v) {
-                a0[v] = Q6_Vw_vmpyiacc_VwVwRh(a0[v], *(HVX_Vector *)(Tc + k*C + v*32), s0);
-                a1[v] = Q6_Vw_vmpyiacc_VwVwRh(a1[v], *(HVX_Vector *)(Tc + (k+1)*C + v*32), s1);
-            }
+            const HVX_Vector *T0 = (const HVX_Vector *)(Tc + k*C), *T1 = (const HVX_Vector *)(Tc + (k+1)*C);
+            e0 = Q6_Vw_vmpyiacc_VwVwRh(e0, T0[0], s0);
+            o0 = Q6_Vw_vmpyiacc_VwVwRh(o0, T1[0], s1);
+            if (two) { e1 = Q6_Vw_vmpyiacc_VwVwRh(e1, T0[1], s0);
+                       o1 = Q6_Vw_vmpyiacc_VwVwRh(o1, T1[1], s1); }
         }
         for (; k < i; ++k) {
             int s0 = (Afx[i*C + k] & 0xFFFF) * 0x10001;
-            for (int v = 0; v < NV; ++v)
-                a0[v] = Q6_Vw_vmpyiacc_VwVwRh(a0[v], *(HVX_Vector *)(Tc + k*C + v*32), s0);
+            const HVX_Vector *T0 = (const HVX_Vector *)(Tc + k*C);
+            e0 = Q6_Vw_vmpyiacc_VwVwRh(e0, T0[0], s0);
+            if (two) e1 = Q6_Vw_vmpyiacc_VwVwRh(e1, T0[1], s0);
         }
-        for (int v = 0; v < NV; ++v) {
-            HVX_Vector acc = Q6_Vw_vadd_VwVw(a0[v], a1[v]);
-            *(HVX_Vector *)(Tc + i*C + v*32) = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(acc, vrnd), GDN_F);
-        }
+        HVX_Vector *Ti = (HVX_Vector *)(Tc + i*C);
+        Ti[0] = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_Vw_vadd_VwVw(e0, o0), vrnd), GDN_F);
+        if (two) Ti[1] = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_Vw_vadd_VwVw(e1, o1), vrnd), GDN_F);
         Tc[i*C + i] += ei;                                /* + e_i (diagonal); acc[c>i]==0 already */
     }
 
