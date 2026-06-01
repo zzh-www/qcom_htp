@@ -55,53 +55,102 @@ static inline void gdn_free_slot(int s) { __sync_lock_release(&g_slot_busy[s]); 
  * multiply.  AXPY: int16×int16 -> int32 via Q6_Vw_vmpyiacc_VwVwRh (A scalar in a register, lane-clean,
  * no splat/widen/even-odd-shuffle).  Requant: Tc = (acc + 2^(F-1)) >> F (Q6_Vw_vasr).  T is genuinely
  * lower-triangular so acc[c>i]=0 -> no explicit mask.  int32 acc peak ~5e8 < 2^31 (host-validated). */
-static void gdn_solve_head_hvx(const uint16_t *Au, int C, int zpA, float sA,
+/* fixed-point multiplier for the float fold scale sA*2^F = M*2^-S (M in int16 range). Scalar, compute ONCE
+ * per kernel call (sA is per-tensor, same for all heads) — not per head. */
+static inline void gdn_fold_MS(float sA, int *pM, int *pS) {
+    float sf = sA * (float)(1 << GDN_F);
+    int S = 14;
+    while (S < 30 && sf * (float)(1 << (S + 1)) < 30000.0f) ++S;
+    while (S >  0 && sf * (float)(1 <<  S)      > 32760.0f) --S;
+    *pM = (int)(sf * (float)(1 << S) + 0.5f); *pS = S;
+}
+
+/* fold A -> int32 codes Afx=(A_code*M+2^(S-1))>>S (scale 2^-GDN_F), pure integer.  vzxt splits even/odd
+ * cols, vshuff restores order.  M,S precomputed by gdn_fold_MS. */
+static void gdn_fold_A(const uint16_t *Au, int32_t *Afx, int n, int zpA, int M, int S) {
+    const int Mrep = (M & 0xFFFF) * 0x10001;              /* vmpyi_VwRh uses both scalar halfwords */
+    const HVX_Vector vzp = Q6_V_vsplat_R(zpA), vrndS = Q6_V_vsplat_R(1 << (S - 1)), m16 = Q6_V_vsplat_R(0xFFFF);
+    const HVX_UVector *Av = (const HVX_UVector *)Au;
+    HVX_Vector *Afxv = (HVX_Vector *)Afx;
+    for (int b = 0; b < n / 64; ++b) {
+        HVX_VectorPair w = Q6_Wuw_vzxt_Vuh(Av[b]);
+        HVX_Vector c0 = Q6_Vw_vsub_VwVw(Q6_V_lo_W(w), vzp), c1 = Q6_Vw_vsub_VwVw(Q6_V_hi_W(w), vzp);
+        HVX_Vector i0 = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_Vw_vmpyi_VwRh(c0, Mrep), vrndS), S);
+        HVX_Vector i1 = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_Vw_vmpyi_VwRh(c1, Mrep), vrndS), S);
+        HVX_VectorPair s = Q6_W_vshuff_VVR(i1, i0, -4);    /* even/odd -> col order */
+        /* replicate code into both halfwords here (fused) so the AXPY's Rt is a plain load.  The pair
+         * path re-extracts low16, so this is harmless there. */
+        HVX_Vector tl = Q6_V_vand_VV(Q6_V_lo_W(s), m16), th = Q6_V_vand_VV(Q6_V_hi_W(s), m16);
+        Afxv[2*b]   = Q6_V_vor_VV(tl, Q6_Vw_vasl_VwR(tl, 16));
+        Afxv[2*b+1] = Q6_V_vor_VV(th, Q6_Vw_vasl_VwR(th, 16));
+    }
+}
+
+/* C=16 PACKED: solve 2 heads at once, interleaved in 32 lanes (even=hA, odd=hB), so a 16-col row fills
+ * a full HVX vector instead of half.  Uses vmpyi_VwRh's both-halfword behaviour (even word-lanes x Rt.h0,
+ * odd x Rt.h1) -> put hA's A code in the low half, hB's in the high half; one MAC does both heads. */
+static void gdn_solve_pair16_hvx(const uint16_t *AuA, const uint16_t *AuB, int zpA, int M, int S,
+                                 float sT, int zpT, uint16_t *TuA, uint16_t *TuB, int slot) {
+    int32_t *Tc = g_Tc[slot];                              /* 16 rows x 32 lanes, interleaved (even=A,odd=B) */
+    int32_t *AfxA = g_Afx[slot], *AfxB = g_Afx[slot] + 256;
+    gdn_fold_A(AuA, AfxA, 256, zpA, M, S);
+    gdn_fold_A(AuB, AfxB, 256, zpA, M, S);
+    /* build interleaved multiplier in AfxA (in place): low16 = hA code, high16 = hB code -> one scalar
+     * feeds both heads via vmpyi's both-halfword behaviour.  Vectorized; removes the per-k combine. */
+    {
+        const HVX_Vector m16 = Q6_V_vsplat_R(0xFFFF);
+        HVX_Vector *pa = (HVX_Vector *)AfxA; const HVX_Vector *pb = (const HVX_Vector *)AfxB;
+        for (int b = 0; b < 256/32; ++b)
+            pa[b] = Q6_V_vor_VV(Q6_V_vand_VV(pa[b], m16), Q6_Vw_vasl_VwR(Q6_V_vand_VV(pb[b], m16), 16));
+    }
+    const HVX_Vector vrnd = Q6_V_vsplat_R(1 << (GDN_F - 1));
+    const int ei = (int)(1.0f / sT + 0.5f);
+    for (int i = 0; i < 16; ++i) {
+        HVX_Vector e0 = Q6_V_vzero(), o0 = Q6_V_vzero();
+        int k = 0;
+        for (; k + 1 < i; k += 2) {
+            e0 = Q6_Vw_vmpyiacc_VwVwRh(e0, ((const HVX_Vector *)(Tc + k*32))[0],     AfxA[i*16+k]);
+            o0 = Q6_Vw_vmpyiacc_VwVwRh(o0, ((const HVX_Vector *)(Tc + (k+1)*32))[0], AfxA[i*16+k+1]);
+        }
+        for (; k < i; ++k)
+            e0 = Q6_Vw_vmpyiacc_VwVwRh(e0, ((const HVX_Vector *)(Tc + k*32))[0], AfxA[i*16+k]);
+        ((HVX_Vector *)(Tc + i*32))[0] = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_Vw_vadd_VwVw(e0, o0), vrnd), GDN_F);
+        Tc[i*32 + 2*i] += ei; Tc[i*32 + 2*i + 1] += ei;    /* hA, hB diagonals */
+    }
+    /* vectorized de-interleave output: 4 interleaved rows -> vdeal to A/B -> pack -> 64-uint16 store/head */
+    const HVX_Vector vzpT = Q6_V_vsplat_R(zpT);
+    for (int i = 0; i < 16; i += 4) {
+        HVX_Vector v0 = Q6_Vw_vadd_VwVw(((const HVX_Vector *)(Tc + (i+0)*32))[0], vzpT);
+        HVX_Vector v1 = Q6_Vw_vadd_VwVw(((const HVX_Vector *)(Tc + (i+1)*32))[0], vzpT);
+        HVX_Vector v2 = Q6_Vw_vadd_VwVw(((const HVX_Vector *)(Tc + (i+2)*32))[0], vzpT);
+        HVX_Vector v3 = Q6_Vw_vadd_VwVw(((const HVX_Vector *)(Tc + (i+3)*32))[0], vzpT);
+        HVX_VectorPair d01 = Q6_W_vdeal_VVR(v1, v0, -4);   /* lo = A(rows i,i+1) words, hi = B */
+        HVX_VectorPair d23 = Q6_W_vdeal_VVR(v3, v2, -4);
+        ((HVX_UVector *)(TuA + i*16))[0] = Q6_Vuh_vpack_VwVw_sat(Q6_V_lo_W(d23), Q6_V_lo_W(d01));
+        ((HVX_UVector *)(TuB + i*16))[0] = Q6_Vuh_vpack_VwVw_sat(Q6_V_hi_W(d23), Q6_V_hi_W(d01));
+    }
+}
+
+static void gdn_solve_head_hvx(const uint16_t *Au, int C, int zpA, int M, int S,
                                float sT, int zpT, uint16_t *Tu, int slot) {
     int32_t *Tc = g_Tc[slot];
     int32_t *Afx = g_Afx[slot];
     const int NV = (C + 31) / 32;
-
-    /* 1) fold A -> int32 codes at scale 2^-F: Afx = round((Au-zpA)*sA*2^F).  The float scale sA*2^F is
-     *    turned into a fixed-point multiplier (M*2^-S, M in int16 range) ONCE per call (standard quantized-
-     *    kernel setup; the only float, scalar not vector); the per-element path is pure integer:
-     *    Afx = (A_code*M + 2^(S-1)) >> S.  vzxt splits even/odd cols, vshuff restores order. */
-    {
-        float sf = sA * (float)(1 << GDN_F);              /* fold factor; normalize to M in [2^14, 2^15) */
-        int S = 14;
-        while (S < 30 && sf * (float)(1 << (S + 1)) < 30000.0f) ++S;
-        while (S >  0 && sf * (float)(1 <<  S)      > 32760.0f) --S;
-        const int M = (int)(sf * (float)(1 << S) + 0.5f);
-        const int Mrep = (M & 0xFFFF) * 0x10001;          /* vmpyi_VwRh uses both scalar halfwords */
-        const HVX_Vector vzp = Q6_V_vsplat_R(zpA), vrndS = Q6_V_vsplat_R(1 << (S - 1));
-        const HVX_UVector *Av = (const HVX_UVector *)Au;
-        HVX_Vector *Afxv = (HVX_Vector *)Afx;             /* 32 int32 / vector */
-        const int nblk = (C*C) / 64;
-        for (int b = 0; b < nblk; ++b) {
-            HVX_VectorPair w = Q6_Wuw_vzxt_Vuh(Av[b]);    /* uint16 -> int32 (even/odd cols) */
-            HVX_Vector c0 = Q6_Vw_vsub_VwVw(Q6_V_lo_W(w), vzp);   /* A code (int32) */
-            HVX_Vector c1 = Q6_Vw_vsub_VwVw(Q6_V_hi_W(w), vzp);
-            HVX_Vector i0 = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_Vw_vmpyi_VwRh(c0, Mrep), vrndS), S);
-            HVX_Vector i1 = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_Vw_vmpyi_VwRh(c1, Mrep), vrndS), S);
-            HVX_VectorPair s = Q6_W_vshuff_VVR(i1, i0, -4); /* even/odd -> sequential cols */
-            Afxv[2*b]   = Q6_V_lo_W(s);
-            Afxv[2*b+1] = Q6_V_hi_W(s);
-        }
-    }
+    gdn_fold_A(Au, Afx, C*C, zpA, M, S);                   /* 1) fold A -> int32 codes (replicated; scale 2^-GDN_F) */
 
     /* 2) forward substitution: acc = Σ_{k<i} Afx[i,k]·Tc[k,:] (int32), Tc[i,:] = (acc + 2^(F-1)) >> F.
-     *    vmpyi_VwRh consumes BOTH halfwords of the scalar reg (even lanes h0, odd lanes h1), so the
-     *    A code is replicated into both halves (x * 0x10001) — otherwise odd columns multiply by 0. */
+     *    Afx is pre-replicated (both halfwords = code) -> Rt is a plain scalar load. */
     const HVX_Vector vrnd = Q6_V_vsplat_R(1 << (GDN_F - 1));
     const int ei = (int)(1.0f / sT + 0.5f);               /* diagonal e_i code = round(1/sT) */
     const int two = (NV > 1);                             /* C=64 -> 2 col-vectors; C<=32 -> 1 */
     for (int i = 0; i < C; ++i) {
-        /* SCALAR (not array) accumulators so they stay in the VRF across the k-loop — an a0[2]/a1[2]
-         * array is spilled to stack + reloaded every MAC (~2.5 pkt/MAC); named locals -> ~1 pkt/MAC.
-         * Two accumulators (k-even/k-odd) per col-vector for ILP; col-vec 1 only used when C>32. */
+        /* scalar (not array) accumulators -> no stack spill; 2 (k-even/odd) per col-vec for ILP.
+         * Reads are UNALIGNED (HVX_UVector): for C=16 the row offset k*16 int32 = k*64 B is only
+         * 128-aligned on even k, so an aligned load would fetch wrong data on odd rows. */
         HVX_Vector e0 = Q6_V_vzero(), o0 = Q6_V_vzero(), e1 = Q6_V_vzero(), o1 = Q6_V_vzero();
         int k = 0;
         for (; k + 1 < i; k += 2) {
-            int s0 = (Afx[i*C + k] & 0xFFFF) * 0x10001, s1 = (Afx[i*C + k + 1] & 0xFFFF) * 0x10001;
+            int s0 = Afx[i*C + k], s1 = Afx[i*C + k + 1];
             const HVX_Vector *T0 = (const HVX_Vector *)(Tc + k*C), *T1 = (const HVX_Vector *)(Tc + (k+1)*C);
             e0 = Q6_Vw_vmpyiacc_VwVwRh(e0, T0[0], s0);
             o0 = Q6_Vw_vmpyiacc_VwVwRh(o0, T1[0], s1);
@@ -109,7 +158,7 @@ static void gdn_solve_head_hvx(const uint16_t *Au, int C, int zpA, float sA,
                        o1 = Q6_Vw_vmpyiacc_VwVwRh(o1, T1[1], s1); }
         }
         for (; k < i; ++k) {
-            int s0 = (Afx[i*C + k] & 0xFFFF) * 0x10001;
+            int s0 = Afx[i*C + k];
             const HVX_Vector *T0 = (const HVX_Vector *)(Tc + k*C);
             e0 = Q6_Vw_vmpyiacc_VwVwRh(e0, T0[0], s0);
             if (two) e1 = Q6_Vw_vmpyiacc_VwVwRh(e1, T0[1], s0);
@@ -120,12 +169,15 @@ static void gdn_solve_head_hvx(const uint16_t *Au, int C, int zpA, float sA,
         Tc[i*C + i] += ei;                                /* + e_i (diagonal); acc[c>i]==0 already */
     }
 
-    /* 3) output: Tu = Tc + zpT, narrow int32->uint16 saturating.  Upper-tri Tc==0 -> zpT (correct). */
+    /* 3) output: Tu = Tc + zpT, narrow int32->uint16 saturating.  FLAT over C*C in 64-elem chunks
+     * (works for any C with C*C%64==0: C=64/32/16) — Tc/Tu are row-major contiguous so flat order is
+     * correct, and upper-tri Tc==0 -> zpT.  (Row-by-row +32 read corrupted neighbours when C<64.) */
     const HVX_Vector vzpT = Q6_V_vsplat_R(zpT);
-    for (int r = 0; r < C; ++r) {
-        HVX_Vector q0 = Q6_Vw_vadd_VwVw(*(HVX_Vector *)(Tc + r*C),      vzpT);
-        HVX_Vector q1 = Q6_Vw_vadd_VwVw(*(HVX_Vector *)(Tc + r*C + 32), vzpT);
-        *(HVX_UVector *)(Tu + r*C) = Q6_Vuh_vpack_VwVw_sat(q1, q0);
+    const int nout = (C * C) / 64;
+    for (int b = 0; b < nout; ++b) {
+        HVX_Vector q0 = Q6_Vw_vadd_VwVw(*(HVX_Vector *)(Tc + b*64),      vzpT);
+        HVX_Vector q1 = Q6_Vw_vadd_VwVw(*(HVX_Vector *)(Tc + b*64 + 32), vzpT);
+        *(HVX_UVector *)(Tu + b*64) = Q6_Vuh_vpack_VwVw_sat(q1, q0);
     }
 }
 #endif  /* __hexagon__ */
@@ -172,11 +224,25 @@ static uint32_t gdn_solve_kernel(
 #else
     int slot = (int)(sl < GDN_MAX_SLICES ? sl : 0);
 #endif
-    for (uint32_t h = h0; h < h1; ++h) {
+    uint32_t h = h0;
+#if defined(__hexagon__)
+    int M, S; gdn_fold_MS(sA, &M, &S);                     /* fold multiplier: once per call, not per head */
+    if (C == 16) {                                         /* PACKED: 2 heads/vector (16 cols fill half a vec alone) */
+        for (; h + 1 < h1; h += 2)
+            gdn_solve_pair16_hvx(Au + (size_t)h*256, Au + (size_t)(h+1)*256, zpA, M, S, sT, zpT,
+                                 Tu + (size_t)h*256, Tu + (size_t)(h+1)*256, slot);
+        if (h < h1) {                                      /* odd leftover: self-pair (head path is aligned, C%32==0 only) */
+            gdn_solve_pair16_hvx(Au + (size_t)h*256, Au + (size_t)h*256, zpA, M, S, sT, zpT,
+                                 Tu + (size_t)h*256, Tu + (size_t)h*256, slot);
+            h = h1;
+        }
+    }
+#endif
+    for (; h < h1; ++h) {
         const uint16_t *Ah = Au + (size_t)h*C*C;
         uint16_t *Th = Tu + (size_t)h*C*C;
 #if defined(__hexagon__)
-        gdn_solve_head_hvx(Ah, C, zpA, sA, sT, zpT, Th, slot);
+        gdn_solve_head_hvx(Ah, C, zpA, M, S, sT, zpT, Th, slot);
 #else
         gdn_solve_head_scalar(Ah, C, zpA, sA, sT, zpT, Th, slot);
 #endif
