@@ -113,6 +113,22 @@ Bottom-level perf analysis MUST reach the hardware-unit layer, not stop at per-o
 - **`data.dominant_path_htp_0`** — the actual critical path as an ordered list of HTP ops (where the
   wall really goes).
 
+**But the summary is DERIVED — the raw `chrometrace.json` trace timeline is the ground truth.** The QHAS
+summary gives aggregates/averages (total cycles, mean cyc/pkt, instance counts) and can hide what
+actually happened. To know whether N op-instances ran in *parallel* or *serial*, where the gaps are, and
+where the real wall went, read the raw `ph=X` events' **timeline** — `ts`, `dur`, and the track
+(`pid`/`tid`) — and check overlap:
+```python
+g=[e for e in ev if e["ph"]=="X" and "MyOp" in e["name"]]
+span=max(e["ts"]+e["dur"] for e in g)-min(e["ts"] for e in g)
+busy=sum(e["dur"] for e in g)               # sum >> span  ⇒  instances overlap (parallel)
+# sweep ts/(ts+dur) for max-concurrent to see the real thread count
+```
+e.g. GdnSolve: summary says "24 instances"; the trace shows them **overlapping ~4-wide** (busy 23.5M ≫
+span 3.6M, max-concurrent = 4 HVX threads) ⇒ genuinely parallel, wall ≈ span not sum. The summary alone
+could not have told you that. (Gotcha: each event is duplicated on a process-track and a thread-track —
+de-dup or halve the concurrency count.)
+
 Example (GdnSolve HVX op): HMX util 2.5% (idle — it's HVX, not matmul), 4 HVX threads at 59–80%, op
 tiled into **24 HTP instances**, **6.9 cyc/packet** vs native `mul_op` 2.5 / `L2Norm` 3.5 — i.e. the
 kernel has ~2–3× packet-efficiency headroom (acc-chain + scalar dequant/quant stalls), invisible at the
