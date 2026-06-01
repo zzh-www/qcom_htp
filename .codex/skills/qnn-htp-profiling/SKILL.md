@@ -20,9 +20,19 @@ are the **thread-AGGREGATE** (summed across the HVX threads that ran the op). A 
 the cycles its wall corresponds to. **Never compare aggregate cycles for perf.**
 
 Two numbers are real:
-1. **Graph wall** = `QNN accelerator (execute) time` (µs) from `qnn-profile-viewer` — the headline.
+1. **Graph wall** = `QNN accelerator (execute) time` (µs) — real elapsed accelerator time for one
+   inference, **including the per-op dispatch/scheduling overhead between ops**. THIS is the latency
+   headline. Do NOT use `Accelerator (execute) time` (µs) for it — that is the **compute-busy** time
+   only (op-in-flight, no inter-op gaps); a graph of many tiny ops can have small compute-busy but huge
+   wall (e.g. baseline 363 int8-matmul ops: `Accelerator` 3.2 ms vs `QNN accelerator` 68 ms — 65 ms is
+   pure per-op overhead). Replacing those 363 ops with 1 op cut the wall to 11.6 ms even though its
+   compute-busy (4.7 ms) is *higher* — the win is overhead, not raw compute.
 2. **Per-op wall** = `args["Dominant Path Cycles"]` (DPC) from the decoded `chrometrace.json`
    (`ph=X`, `pid=0` events) — NOT `Duration (cycles)`.
+
+Field map (they nest `NetRun > RPC > QNN accelerator > Accelerator`): `Accelerator (execute) time
+(cycles)` = thread-AGGREGATE cycles; `Accelerator (execute) time` µs = compute-busy wall; `QNN
+accelerator (execute) time` µs = **full-graph wall (use this)**; `RPC`/`NetRun` add transport/host.
 
 **Sanity tell-tale:** if `cycles / µs` exceeds the core clock (v75 ≈ 1.0–1.4 GHz), the cycle number is
 aggregate, not wall. e.g. 12M cycles / 3000 µs = 4 "GHz" ⇒ aggregate over ~4 threads, real wall ≈ 3 ms.
