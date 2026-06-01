@@ -160,19 +160,30 @@ def gdn_chunk_onnx(qc, kc, vc, gc, betac, S_in, masks=None, solve_block=16, cons
     sel = consts["sel"] if consts is not None else None
     T = solve_T_blocked(A, bl=solve_block, bp=2 * solve_block, sel=sel)
 
-    U = torch.matmul(T, v_beta)
-    W = torch.matmul(T, k_beta * eg)
+    # v_beta carries the heavy-tailed v magnitude (outlier); keep it on in[0] 16-bit, T (bounded
+    # ~O(1)) on the in[1] int8 port:  T @ v_beta = (v_betaᵀ @ Tᵀ)ᵀ.
+    U = torch.matmul(v_beta.transpose(-1, -2), T.transpose(-1, -2)).transpose(-1, -2)
+    # W = T @ (k_β·eg): k_β·eg is HEAVY-TAILED (sparse attention key); transpose so it lands on the
+    # int16 in[0] port (256× finer step) instead of int8 in[1] where its small values get crushed; T
+    # (solve's 8-bit floor anyway) takes int8 in[1].  W = ((k_β·eg)ᵀ @ Tᵀ)ᵀ.  Device: W 4.3e-2→1.6e-2.
+    W = torch.matmul((k_beta * eg).transpose(-1, -2), T.transpose(-1, -2)).transpose(-1, -2)
 
     # --- inter-chunk with state ---
+    # S_in is the heavy-tailed OUTLIER operand. The HTP int16×int8 MatMul primitive requires the
+    # int8 operand on in[1]; to keep S_in on the int16 in[0] port and put the int8 weight-port on
+    # the bounded operand (W, qc·eg), compute X @ S_in as (S_inᵀ @ Xᵀ)ᵀ so X lands on in[1].
     P = (torch.matmul(qc, kc.transpose(-1, -2)) * decay) * tril_incl
-    v_new = U - torch.matmul(W, S_in)
-    attn_inter = torch.matmul(qc * eg, S_in)
-    oc = attn_inter + torch.matmul(P, v_new)
+    St = S_in.transpose(-1, -2)
+    v_new = U - torch.matmul(St, W.transpose(-1, -2)).transpose(-1, -2)
+    attn_inter = torch.matmul(St, (qc * eg).transpose(-1, -2)).transpose(-1, -2)
+    # v_new is the outlier; keep it on in[0], P (bounded) on the in[1] int8 port.
+    oc = attn_inter + torch.matmul(v_new.transpose(-1, -2), P.transpose(-1, -2)).transpose(-1, -2)
 
     g_last = g[..., -1:]                                               # [B,H,1] keepdim
     e_glast = torch.exp(g_last).unsqueeze(-1)                          # [B,H,1,1]
     dec_k = torch.exp(g_last - g).unsqueeze(-1)                        # [B,H,C,1]
-    S_out = S_in * e_glast + torch.matmul((kc * dec_k).transpose(-1, -2), v_new)
+    # v_new outlier on in[0]; (kc·dec_k) bounded on the in[1] int8 port.
+    S_out = S_in * e_glast + torch.matmul(v_new.transpose(-1, -2), kc * dec_k).transpose(-1, -2)
     return oc, S_out
 
 
@@ -277,25 +288,36 @@ def symmetric_overrides_from_dump(dump_path, out_path, bits=16):
     """Read qairt-quantizer's --dump_encoding_json and rewrite EVERY tensor as symmetric
     (offset=-(2^(b-1)), scale=max_abs/(2^(b-1)-1)).  HTP int16 MatMul requires symmetric
     operands, but qairt assigns offset 0 to non-negative tensors; this forces them symmetric
-    while keeping each tensor's calibrated range."""
+    while keeping each tensor's calibrated range.
+
+    MIXED-PRECISION (the real HMX MatMul primitive): a MatMul cannot run int16×int16 (the int32
+    accumulator overflows over the 128-dim contraction — i16·i16·128 ≈ 2^37 ≫ 2^31). One operand
+    of each 128-contraction GEMM must be int8 so the accumulator fits (i8·i16·128 ≈ 2^29 < 2^31).
+    Pass those operand tensor names via env `GDN_I8_TENSORS` (comma-separated); they get a
+    bitwidth-8 SYMMETRIC encoding, everything else stays symmetric int16. The faithful sim
+    (gdn_faithful_sim.py, SCHEME=hmx I16=sym) puts this at oc relerr ~1.4e-2 (vs 16-69% all-i16)."""
     d = json.load(open(dump_path))
-    qmax = (1 << (bits - 1)) - 1
     hr = float(os.environ.get("GDN_HEADROOM", "1.0"))         # widen scales to avoid clipping
-    def fix(enc):
+    i8 = set(t for t in os.environ.get("GDN_I8_TENSORS", "").split(",") if t)
+    def fix(name, enc):
+        b = 8 if name in i8 else bits                          # int8 operand port vs int16
+        qmax = (1 << (b - 1)) - 1
         e = enc[0] if isinstance(enc, list) else enc
         mx = (max(abs(float(e.get("min", 0.0))), abs(float(e.get("max", 0.0)))) or 1.0) * hr
-        out = {"bitwidth": bits, "dtype": "int", "is_symmetric": "True",
-               "scale": mx / qmax, "offset": -(1 << (bits - 1)), "min": -mx, "max": mx}
+        out = {"bitwidth": b, "dtype": "int", "is_symmetric": "True",
+               "scale": mx / qmax, "offset": -(1 << (b - 1)), "min": -mx, "max": mx}
         return [out]
     ov = {"activation_encodings": {}, "param_encodings": {}}
     for grp in ("activation_encodings", "param_encodings"):
         for name, enc in d.get(grp, {}).items():
             if name.endswith("_converted_unsigned_symmetric"):
                 continue
-            ov[grp][name] = fix(enc)
+            ov[grp][name] = fix(name, enc)
+    hit = [t for t in i8 if t in ov["activation_encodings"] or t in ov["param_encodings"]]
     json.dump(ov, open(out_path, "w"), indent=1)
     print(f"wrote {out_path}: {len(ov['activation_encodings'])} act + "
-          f"{len(ov['param_encodings'])} param symmetric encodings")
+          f"{len(ov['param_encodings'])} param symmetric encodings; "
+          f"int8 ports: {len(hit)}/{len(i8)} {sorted(hit)}")
     return ov
 
 

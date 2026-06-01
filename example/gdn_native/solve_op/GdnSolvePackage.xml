@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OpDefCollection
+        PackageName="GdnSolvePackage"
+        Domain="gdn"
+        Version="1.0">
+    <OpDefList>
+        <OpDef>
+            <Name>GdnSolve</Name>
+            <Description>
+                <Content>GDN triangular solve T=(I-A)^-1 for a strictly-lower A. KDA-style int16 forward-substitution (int32 accum, requant once) on the HTP; replaces the int8-matmul Neumann chain. A and T are per-tensor int16; same shape [B,H,C,C], C a multiple of 16.</Content>
+            </Description>
+            <Input>
+                <Name>A</Name>
+                <Mandatory>true</Mandatory>
+                <Datatype>QNN_DATATYPE_FLOAT_32</Datatype>
+                <Datatype>QNN_DATATYPE_UINT_16</Datatype>
+                <Datatype>QNN_DATATYPE_UFIXED_POINT_16</Datatype>
+                <Shape>
+                    <Rank>4D</Rank>
+                    <Layout>NONTRIVIAL</Layout>
+                    <Text>[B, H, C, C]</Text>
+                </Shape>
+            </Input>
+            <Output>
+                <Name>T</Name>
+                <Mandatory>true</Mandatory>
+                <Datatype>QNN_DATATYPE_FLOAT_32</Datatype>
+                <Datatype>QNN_DATATYPE_UINT_16</Datatype>
+                <Datatype>QNN_DATATYPE_UFIXED_POINT_16</Datatype>
+                <Shape>
+                    <Rank>4D</Rank>
+                    <Layout>NONTRIVIAL</Layout>
+                    <Text>[B, H, C, C]</Text>
+                </Shape>
+            </Output>
+            <SupportedBackend>HTP</SupportedBackend>
+        </OpDef>
+    </OpDefList>
+</OpDefCollection>
