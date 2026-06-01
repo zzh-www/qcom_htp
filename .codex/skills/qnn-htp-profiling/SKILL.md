@@ -1,0 +1,100 @@
+---
+name: qnn-htp-profiling
+description: Measure QNN HTP op/graph PERFORMANCE correctly via optrace in qcom_htp. Use this BEFORE making ANY HTP perf claim (op cycles, graph latency, "faster/slower", parallelism/threads). It pins the one metric that matters (WALL µs + per-op Dominant Path Cycles) and the exact ctxgen→net-run→decode flow, so you never again misread qnn-profile-viewer aggregate "Duration (cycles)" as wall.
+---
+
+# QNN HTP Profiling (perf, not pictures)
+
+Use this skill whenever you need a **performance number** from the HTP backend — op cycles, graph
+latency, "X is faster/slower than Y", or "does this op use multiple HVX threads". For drawing the
+op-flow graph as an SVG, use `qnn-optrace-svg` instead; this skill is about the *numbers*.
+
+**Read this skill BEFORE quoting any perf number.** Skipping it once produced a fully-inverted
+conclusion ("op is 1.4× slower / single-thread / needs manual qurt") that was actually **5.5× faster
+and already multithreaded** — a pure metric misread.
+
+## Cardinal rule: WALL, not aggregate
+
+`qnn-profile-viewer`'s default per-op `(cycles)` and the graph `Accelerator (execute) time (cycles)`
+are the **thread-AGGREGATE** (summed across the HVX threads that ran the op). A 4-thread op reports ~4×
+the cycles its wall corresponds to. **Never compare aggregate cycles for perf.**
+
+Two numbers are real:
+1. **Graph wall** = `QNN accelerator (execute) time` (µs) from `qnn-profile-viewer` — the headline.
+2. **Per-op wall** = `args["Dominant Path Cycles"]` (DPC) from the decoded `chrometrace.json`
+   (`ph=X`, `pid=0` events) — NOT `Duration (cycles)`.
+
+**Sanity tell-tale:** if `cycles / µs` exceeds the core clock (v75 ≈ 1.0–1.4 GHz), the cycle number is
+aggregate, not wall. e.g. 12M cycles / 3000 µs = 4 "GHz" ⇒ aggregate over ~4 threads, real wall ≈ 3 ms.
+
+## Flow A — graph wall µs (quick headline)
+
+Net-run with optrace already gives the wall:
+
+```bash
+# device run already uses: --profiling_level detailed --profiling_option optrace
+ssh "$DEVICE" "cd $W && ... ../qnn-net-run ... --profiling_option optrace ..."
+# pull qnn-profiling-data_0.log (binary — use tar, not cat), then:
+qnn-profile-viewer --input_log prof.bin | grep "QNN accelerator (execute) time"   # <- WALL µs
+```
+Compare two configs by their WALL µs. (Same graph, same #inferences, burst, warm run.)
+
+## Flow B — per-op Dominant Path Cycles (who owns the wall, tiling/threads)
+
+DPC needs the **optrace schematic**, which only ctxgen-with-optrace emits (into CWD, ignoring
+`--output_dir`):
+
+```bash
+# 1) ctxgen WITH optrace -> drops <name>_schematic.bin in CWD
+qnn-context-binary-generator --dlc_path g.dlc --backend .../libQnnHtp.so \
+    [--op_packages <x86_pkg>:<Provider>] --config_file _cfg.json \
+    --profiling_level detailed --profiling_option optrace \
+    --binary_file g_ctx --output_dir ctx_ot
+ls *_schematic.bin                       # <- pairs with the run log below
+
+# 2) device net-run on THAT ctx, with optrace (binary log: pull via tar)
+#    ... qnn-net-run --retrieve_context g_ctx.bin ... --profiling_option optrace ...
+
+# 3) decode log + schematic -> optrace/chrometrace.json  (source scripts/env.sh first!)
+.venv/bin/python scripts/decode_qnn_optrace.py <out_dir> \
+    --profile-log <out_dir>/qnn-profiling-data_0.log --schematic <name>_schematic.bin
+
+# 4) read Dominant Path Cycles per op (ph=X, pid=0). Tiled ops show as MULTIPLE instances.
+.venv/bin/python - <<'PY'
+import json
+ev=json.load(open("<out_dir>/optrace/chrometrace.json"))["traceEvents"]
+rows=[(int(e["args"]["Dominant Path Cycles"]), e["name"])
+      for e in ev if e.get("ph")=="X" and e.get("pid")==0 and "Dominant Path Cycles" in e.get("args",{})]
+rows.sort(reverse=True)
+print("total DPC", f"{sum(d for d,_ in rows):,}")
+for d,n in rows[:10]: print(f"{d:>10,}  {n}")
+PY
+```
+
+The reader lib is `$QNN_SDK_ROOT/lib/x86_64-linux-clang/libQnnHtpOptraceProfilingReader.so`
+(decode_qnn_optrace.py wires it up). Standard artifacts land in `<out_dir>/optrace/`:
+`chrometrace.json` (timing), `chrometrace_htp.json` (node flow — feed to `qnn-optrace-svg`).
+
+## Reading it
+
+- **Same op appearing N times** in the DPC list = the central tiler split it into N tiles (parallelism
+  is real). Their DPC may be partly sequential on the critical path; the graph **wall µs** is the truth.
+- DPC-sum ≈ wall only when ops are sequential on the dominant path; don't assume sum = wall.
+- To test if a custom op *self-parallelizes at all*, isolate it (`A→Op→T` standalone graph, no
+  downstream consumer) and read its wall; or probe `qhpi_num_slices` by writing it into an output elem.
+
+## Pitfalls (each cost real time)
+
+- Reading qnn-profile-viewer per-op `(cycles)` as wall → it's aggregate. Use DPC or wall µs.
+- `cat`-ing the binary `qnn-profiling-data_0.log` over ssh corrupts it → pull with `tar`.
+- Running decode without `source scripts/env.sh` → `QNN_SDK_ROOT not set`.
+- `.venv/bin/python` is repo-root-relative → use the absolute venv path when cwd ≠ repo root.
+- ctxgen without `--profiling_option optrace` → no `*_schematic.bin` → decoder gives
+  "No Valid Input Schematics".
+- Cold first-inference includes load/warmup; compare warm runs, `--perf_profile burst`.
+
+## Related
+
+- `qnn-optrace-svg` — render `chrometrace_htp.json` as a fixed-layout SVG (diagram, not numbers).
+- `example/qnn_matmul_profile/profile_all.sh` + `parse_chrometrace.py` — a full multi-config profiler.
+- `scripts/decode_qnn_optrace.py` — the log+schematic → chrometrace decoder used above.
