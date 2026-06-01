@@ -107,6 +107,16 @@ Bottom-level perf analysis MUST reach the hardware-unit layer, not stop at per-o
 - **`data.htp_overall_summary…htp_resources`** — per HW unit (HMX, the 4 HVX threads): `utilization`,
   `cycles_used`, plus graph `percent_idle`, `total_vtcm`, `total_dram`, `peak_vtcm_alloc`. Tells you
   WHICH unit the work is on and whether you're compute-bound, idle, or memory-bound.
+
+  **DOMAIN CYCLE = real performance; TOTAL (summed) cycle = work volume only.** The units run in PARALLEL
+  (HMX ∥ the 4 HVX threads), so the op's REAL TIME = the BUSIEST domain's `cycles_used` (HMX, and the MAX
+  over the 4 HVX threads), NOT their sum. Summing all threads/units gives *work volume* (~4× the HVX
+  domain when 4 threads are busy) and over-counts parallel work — quoting it mis-ranks approaches. When
+  comparing kernels/algorithms, lead with **domain cycle = max(HMX_cycles_used, max HVX-thread
+  cycles_used)**. Two units overlap, so e.g. a matmul whose HVX-glue domain (45k) exceeds its HMX domain
+  (32k) is HVX-bound — the HMX∥HVX overlap saves nothing, real time ≈ the HVX domain. (A pure-HVX custom
+  op has HMX domain = 0; its real time = the busiest HVX thread.) Cross-ref
+  [[feedback_kernel_efficiency_compute_cycles_not_wall]]; worked example `example/gdn_native/solve_op/BENCHMARKS.md`.
 - **`data.htp_op_instances`** — per HTP sub-op: booleans **`hmx` / `hvx` / `dma`**, **`cycles_per_packet`**,
   `cycles`, `num_dominant_path_cycles`, `vtcm_read/write`, `dram_read/write`. A custom op shows as many
   instances (its tiles). `cycles_per_packet` is the key efficiency number — compare to native ops.
