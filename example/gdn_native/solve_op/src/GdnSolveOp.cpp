@@ -33,50 +33,96 @@
  * int16-quantized A and int16 output T — the accumulator type is immaterial for these bounded values,
  * and fp32 avoids the int16 even/odd width-double shuffle).  One Tf scratch per slice (thread).
  */
-static float __attribute__((aligned(128))) g_Tf[GDN_MAX_SLICES][GDN_CMAX * GDN_CMAX];
-static float __attribute__((aligned(128))) g_Af[GDN_MAX_SLICES][GDN_CMAX * GDN_CMAX];
+static int32_t __attribute__((aligned(128))) g_Tc[GDN_MAX_SLICES][GDN_CMAX * GDN_CMAX];   /* int32 T codes (scale sT) */
+static int32_t __attribute__((aligned(128))) g_Afx[GDN_MAX_SLICES][GDN_CMAX * GDN_CMAX];  /* folded A codes (scale 2^-GDN_F); low 16b used */
 
-static inline HVX_Vector splat_f(float f) { int w; __builtin_memcpy(&w, &f, 4); return Q6_V_vsplat_R(w); }
-static inline int rnd_i(float x) { return (int)(x >= 0.0f ? x + 0.5f : x - 0.5f); }  /* libcall-free round */
+/* Per-CALL scratch ownership.  qhpi_slice_number is 0-based PER op-instance, so concurrent tile-ops
+ * (the central tiler splits H into several tiles that run on different HVX threads at the same time)
+ * all see slice 0 and would race on g_Tf[0]/g_Af[0].  Claim a globally-unique free slot per call
+ * (atomic CAS) and release it at the end — distinct concurrent threads always get distinct scratch. */
+static volatile int g_slot_busy[GDN_MAX_SLICES];
+static int gdn_claim_slot(void) {
+    for (;;)
+        for (int s = 0; s < GDN_MAX_SLICES; ++s)
+            if (__sync_bool_compare_and_swap(&g_slot_busy[s], 0, 1)) return s;
+}
+static inline void gdn_free_slot(int s) { __sync_lock_release(&g_slot_busy[s]); }
 
-/* HVX kernel: AXPY over 64 cols (2 fp32 vecs/row, qf32) with 2 accumulators to break the acc latency
- * chain.  Dequant + output quant are scalar but libcall-free (no lroundf).  No HVX pack/unpack (those
- * even/odd-split and scramble column order) — keeps the layout trivially correct. */
+#define GDN_F 15   /* fold scale: Afx = round(A*2^GDN_F); keeps |Afx| < 2^15 (valid int16 mul operand) */
+
+/* HVX kernel — PURE INTEGER (no fp internal).  A,T are int16 codes; the per-row requant ×sA is FOLDED
+ * into A as a power-of-2 fixed-point (Afx = round(A·2^F)), so requant is an arithmetic shift, not a
+ * multiply.  AXPY: int16×int16 -> int32 via Q6_Vw_vmpyiacc_VwVwRh (A scalar in a register, lane-clean,
+ * no splat/widen/even-odd-shuffle).  Requant: Tc = (acc + 2^(F-1)) >> F (Q6_Vw_vasr).  T is genuinely
+ * lower-triangular so acc[c>i]=0 -> no explicit mask.  int32 acc peak ~5e8 < 2^31 (host-validated). */
 static void gdn_solve_head_hvx(const uint16_t *Au, int C, int zpA, float sA,
                                float sT, int zpT, uint16_t *Tu, int slot) {
-    float *Tf = g_Tf[slot];
-    float *Af = g_Af[slot];
+    int32_t *Tc = g_Tc[slot];
+    int32_t *Afx = g_Afx[slot];
     const int NV = (C + 31) / 32;
-    for (int i = 0; i < C*C; ++i) Af[i] = (float)((int)Au[i] - zpA) * sA;   /* dequant A (libcall-free) */
 
+    /* 1) fold A -> int32 codes at scale 2^-F: Afx = round((Au-zpA)*sA*2^F).  The float scale sA*2^F is
+     *    turned into a fixed-point multiplier (M*2^-S, M in int16 range) ONCE per call (standard quantized-
+     *    kernel setup; the only float, scalar not vector); the per-element path is pure integer:
+     *    Afx = (A_code*M + 2^(S-1)) >> S.  vzxt splits even/odd cols, vshuff restores order. */
+    {
+        float sf = sA * (float)(1 << GDN_F);              /* fold factor; normalize to M in [2^14, 2^15) */
+        int S = 14;
+        while (S < 30 && sf * (float)(1 << (S + 1)) < 30000.0f) ++S;
+        while (S >  0 && sf * (float)(1 <<  S)      > 32760.0f) --S;
+        const int M = (int)(sf * (float)(1 << S) + 0.5f);
+        const int Mrep = (M & 0xFFFF) * 0x10001;          /* vmpyi_VwRh uses both scalar halfwords */
+        const HVX_Vector vzp = Q6_V_vsplat_R(zpA), vrndS = Q6_V_vsplat_R(1 << (S - 1));
+        const HVX_UVector *Av = (const HVX_UVector *)Au;
+        HVX_Vector *Afxv = (HVX_Vector *)Afx;             /* 32 int32 / vector */
+        const int nblk = (C*C) / 64;
+        for (int b = 0; b < nblk; ++b) {
+            HVX_VectorPair w = Q6_Wuw_vzxt_Vuh(Av[b]);    /* uint16 -> int32 (even/odd cols) */
+            HVX_Vector c0 = Q6_Vw_vsub_VwVw(Q6_V_lo_W(w), vzp);   /* A code (int32) */
+            HVX_Vector c1 = Q6_Vw_vsub_VwVw(Q6_V_hi_W(w), vzp);
+            HVX_Vector i0 = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_Vw_vmpyi_VwRh(c0, Mrep), vrndS), S);
+            HVX_Vector i1 = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_Vw_vmpyi_VwRh(c1, Mrep), vrndS), S);
+            HVX_VectorPair s = Q6_W_vshuff_VVR(i1, i0, -4); /* even/odd -> sequential cols */
+            Afxv[2*b]   = Q6_V_lo_W(s);
+            Afxv[2*b+1] = Q6_V_hi_W(s);
+        }
+    }
+
+    /* 2) forward substitution: acc = Σ_{k<i} Afx[i,k]·Tc[k,:] (int32), Tc[i,:] = (acc + 2^(F-1)) >> F.
+     *    vmpyi_VwRh consumes BOTH halfwords of the scalar reg (even lanes h0, odd lanes h1), so the
+     *    A code is replicated into both halves (x * 0x10001) — otherwise odd columns multiply by 0. */
+    const HVX_Vector vrnd = Q6_V_vsplat_R(1 << (GDN_F - 1));
+    const int ei = (int)(1.0f / sT + 0.5f);               /* diagonal e_i code = round(1/sT) */
     for (int i = 0; i < C; ++i) {
-        HVX_Vector a0[2], a1[2];                          /* 2 accumulators per col-vector (ILP) */
+        HVX_Vector a0[2], a1[2];                          /* 2 int32 accumulators per col-vector (ILP) */
         for (int v = 0; v < NV; ++v) { a0[v] = Q6_V_vzero(); a1[v] = Q6_V_vzero(); }
         int k = 0;
         for (; k + 1 < i; k += 2) {
-            HVX_Vector s0 = splat_f(Af[i*C + k]), s1 = splat_f(Af[i*C + k + 1]);
+            int s0 = (Afx[i*C + k] & 0xFFFF) * 0x10001, s1 = (Afx[i*C + k + 1] & 0xFFFF) * 0x10001;
             for (int v = 0; v < NV; ++v) {
-                a0[v] = Q6_Vqf32_vadd_Vqf32Vqf32(a0[v], Q6_Vqf32_vmpy_VsfVsf(s0, *(HVX_Vector *)(Tf + k*C + v*32)));
-                a1[v] = Q6_Vqf32_vadd_Vqf32Vqf32(a1[v], Q6_Vqf32_vmpy_VsfVsf(s1, *(HVX_Vector *)(Tf + (k+1)*C + v*32)));
+                a0[v] = Q6_Vw_vmpyiacc_VwVwRh(a0[v], *(HVX_Vector *)(Tc + k*C + v*32), s0);
+                a1[v] = Q6_Vw_vmpyiacc_VwVwRh(a1[v], *(HVX_Vector *)(Tc + (k+1)*C + v*32), s1);
             }
         }
         for (; k < i; ++k) {
-            HVX_Vector s0 = splat_f(Af[i*C + k]);
+            int s0 = (Afx[i*C + k] & 0xFFFF) * 0x10001;
             for (int v = 0; v < NV; ++v)
-                a0[v] = Q6_Vqf32_vadd_Vqf32Vqf32(a0[v], Q6_Vqf32_vmpy_VsfVsf(s0, *(HVX_Vector *)(Tf + k*C + v*32)));
+                a0[v] = Q6_Vw_vmpyiacc_VwVwRh(a0[v], *(HVX_Vector *)(Tc + k*C + v*32), s0);
         }
-        for (int v = 0; v < NV; ++v)
-            *(HVX_Vector *)(Tf + i*C + v*32) = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(a0[v], a1[v]));
-        Tf[i*C + i] += 1.0f;                              /* + e_i */
+        for (int v = 0; v < NV; ++v) {
+            HVX_Vector acc = Q6_Vw_vadd_VwVw(a0[v], a1[v]);
+            *(HVX_Vector *)(Tc + i*C + v*32) = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(acc, vrnd), GDN_F);
+        }
+        Tc[i*C + i] += ei;                                /* + e_i (diagonal); acc[c>i]==0 already */
     }
 
-    const float invsT = 1.0f / sT;                        /* output: uint16-midpoint codes @ sT */
-    for (int r = 0; r < C; ++r)
-        for (int c = 0; c < C; ++c) {
-            long q = ((c > r) ? 0 : rnd_i(Tf[r*C + c] * invsT)) + zpT;
-            if (q < 0) q = 0; if (q > 65535) q = 65535;
-            Tu[r*C + c] = (uint16_t)q;
-        }
+    /* 3) output: Tu = Tc + zpT, narrow int32->uint16 saturating.  Upper-tri Tc==0 -> zpT (correct). */
+    const HVX_Vector vzpT = Q6_V_vsplat_R(zpT);
+    for (int r = 0; r < C; ++r) {
+        HVX_Vector q0 = Q6_Vw_vadd_VwVw(*(HVX_Vector *)(Tc + r*C),      vzpT);
+        HVX_Vector q1 = Q6_Vw_vadd_VwVw(*(HVX_Vector *)(Tc + r*C + 32), vzpT);
+        *(HVX_UVector *)(Tu + r*C) = Q6_Vuh_vpack_VwVw_sat(q1, q0);
+    }
 }
 #endif  /* __hexagon__ */
 
@@ -116,17 +162,24 @@ static uint32_t gdn_solve_kernel(
     /* self-slice across HVX threads: this thread handles heads [h0, h1) */
     uint32_t ns = qhpi_num_slices(handle), sl = qhpi_slice_number(handle);
     if (ns == 0) ns = 1;
-    if (sl >= GDN_MAX_SLICES) sl = GDN_MAX_SLICES - 1;
     uint32_t h0 = (uint64_t)heads * sl / ns, h1 = (uint64_t)heads * (sl + 1) / ns;
+#if defined(__hexagon__)
+    int slot = gdn_claim_slot();                       /* unique scratch per concurrent thread */
+#else
+    int slot = (int)(sl < GDN_MAX_SLICES ? sl : 0);
+#endif
     for (uint32_t h = h0; h < h1; ++h) {
         const uint16_t *Ah = Au + (size_t)h*C*C;
         uint16_t *Th = Tu + (size_t)h*C*C;
 #if defined(__hexagon__)
-        gdn_solve_head_hvx(Ah, C, zpA, sA, sT, zpT, Th, (int)sl);
+        gdn_solve_head_hvx(Ah, C, zpA, sA, sT, zpT, Th, slot);
 #else
-        gdn_solve_head_scalar(Ah, C, zpA, sA, sT, zpT, Th, (int)sl);
+        gdn_solve_head_scalar(Ah, C, zpA, sA, sT, zpT, Th, slot);
 #endif
     }
+#if defined(__hexagon__)
+    gdn_free_slot(slot);
+#endif
     return QHPI_Success;
 }
 
