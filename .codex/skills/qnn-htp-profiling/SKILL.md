@@ -27,6 +27,11 @@ Cycles"]` (`ph=X`, `pid=0`; NOT `Duration (cycles)`). This says *where* the time
 compute vs inter-op overhead, and whether an op was tiled/parallelized (a tiled op appears as multiple
 instances). See Flow B.
 
+**Low level (root cause / kernel optimization) = HTP op → HVX/HMX → packet** — for any "why is it slow"
+or kernel-tuning question you MUST go down to the hardware-unit layer (QHAS): which unit (HMX/HVX/DMA),
+its utilization, and **`cycles_per_packet`** per HTP sub-op, plus VTCM/DRAM traffic and the dominant
+path. Per-op cycles alone never tell you this. See Flow C.
+
 **Why both are mandatory (they can disagree):** `Accelerator (execute) time` (compute) vs `QNN
 accelerator (execute) time` (full-graph WALL incl. per-op dispatch/scheduling overhead) can tell
 opposite stories. Real case — GdnSolve op vs 363-node int8-matmul solve:
@@ -91,7 +96,29 @@ PY
 
 The reader lib is `$QNN_SDK_ROOT/lib/x86_64-linux-clang/libQnnHtpOptraceProfilingReader.so`
 (decode_qnn_optrace.py wires it up). Standard artifacts land in `<out_dir>/optrace/`:
-`chrometrace.json` (timing), `chrometrace_htp.json` (node flow — feed to `qnn-optrace-svg`).
+`chrometrace.json` (timing), `chrometrace_htp.json` (node flow — feed to `qnn-optrace-svg`),
+`chrometrace_qnn_htp_analysis_summary.json` (QHAS — the low-level layer, see Flow C).
+
+## Flow C — low level: HTP op → HVX / HMX → packet (MANDATORY for any "why is it slow" claim)
+
+Bottom-level perf analysis MUST reach the hardware-unit layer, not stop at per-op cycles. It lives in
+`optrace/chrometrace_qnn_htp_analysis_summary.json` (QHAS). Read:
+
+- **`data.htp_overall_summary…htp_resources`** — per HW unit (HMX, the 4 HVX threads): `utilization`,
+  `cycles_used`, plus graph `percent_idle`, `total_vtcm`, `total_dram`, `peak_vtcm_alloc`. Tells you
+  WHICH unit the work is on and whether you're compute-bound, idle, or memory-bound.
+- **`data.htp_op_instances`** — per HTP sub-op: booleans **`hmx` / `hvx` / `dma`**, **`cycles_per_packet`**,
+  `cycles`, `num_dominant_path_cycles`, `vtcm_read/write`, `dram_read/write`. A custom op shows as many
+  instances (its tiles). `cycles_per_packet` is the key efficiency number — compare to native ops.
+- **`data.dominant_path_htp_0`** — the actual critical path as an ordered list of HTP ops (where the
+  wall really goes).
+
+Example (GdnSolve HVX op): HMX util 2.5% (idle — it's HVX, not matmul), 4 HVX threads at 59–80%, op
+tiled into **24 HTP instances**, **6.9 cyc/packet** vs native `mul_op` 2.5 / `L2Norm` 3.5 — i.e. the
+kernel has ~2–3× packet-efficiency headroom (acc-chain + scalar dequant/quant stalls), invisible at the
+per-op-cycles level. This is the layer where kernel optimization decisions get made. Pairs with
+[[feedback_perf_gap_must_check_trace]]: never claim "the gap is in X" without the packet count + cyc/pkt
+from here.
 
 ## Reading it
 
