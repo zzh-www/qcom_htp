@@ -155,6 +155,19 @@ v73deep breakthrough); if both-operands-int8 exceeds the merge accuracy ceiling,
 `scripts/gdn_merge_precision_probe.py` (w16a16/w8a16/w8a8≡u8i8 host compare — needs C=128/256 golden;
 the C=64 p00 golden is degenerate, only ~13 real tokens) + end-to-end oc on device.
 
+**M2a accuracy result (2026-06-02) — measured on REAL C=128 data, merge non-degenerate.**
+`scripts/gdn_blockrec_c128_probe.py` builds A at CHUNK=128 from real ≥128-token golden (192 such files;
+||T21||/||T||≈0.10, merge matters) and runs the 2-block (BL=64) recursion with int16 diagonals + quantized
+merge. Across 5 prompts (135–226 tok):
+- **T relerr:** w16a16 7e-5 (=fwd-subst), w8a16 3e-3, u8i8 7e-3.
+- **Downstream (T consumed at int8, the real metric):** **w8a16 ≈ or slightly better than the int16
+  fwd-subst baseline** (W ~1.97–2.10e-2 vs fwd 2.05–2.12e-2); **u8i8 ~6–13% worse** (W ~2.20–2.39e-2).
+  The 100× worse u8i8 T-relerr does NOT propagate — the int8 quant of T at consumption dominates.
+- **Refined decision:** both are viable. Since at BL≈32 the pipeline is **HVX-bound** (merge HMX cost
+  hidden, [[feedback_perf_wall_not_aggregate_cycles]]), **w8a16 is the safer DEFAULT** — int16-baseline
+  accuracy at no wall cost when HVX-bound. u8i8 (1×) only wins when HMX-bound at very small BL. Build the
+  merge parameterized for BOTH; let M5 real-oc pick. (Supersedes the earlier "u8i8 first" cost-only call.)
+
 Measured inputs: 64×64 HVX block inverse = **3,150 cyc/head**, 32×32 = **959** (`gdn_shape.sh` steady);
 glue-free HMX 256³ = **9,429 cyc** at w16a16 (handwritten oracle `example/handwritten_hmx_matmul/oracles.json`,
 chain-8 ÷8) → **5.6e-4 cyc/MAC** — w8a16 ≈½ that, u8i8 ≈¼ (so the merge gets *cheaper* than this estimate,
