@@ -597,12 +597,17 @@ RAW device numbers (C=256, H=16, real v75, per head; busiest tile/8 for Op1, max
   (per-op cyc now printed); `cd ../../solve_diag_op/standalone && EXTRA_DEFS=-DGDN_DIAG_SKIP_TILEWRITE
   CB=256 H=16 bash gdn_diag.sh` (tile-write ablation); add `-DGDN_MERGE_1PASS` to gdn_split.sh for lever B.
 
-## METHOD MANDATE (2026-06-02) — every perf step: render the full per-thread ASCII timeline from the trace
-Before/after EVERY perf change, parse `chrometrace.json` and draw the complete per-thread ASCII timeline
-(HVX tids 512–515 / HMX tid 256 rows, op spans + GAPS, + QNN boundary ops Spill/Fill/Concat/flat_from_vtcm).
-Aggregate per-stage cyc HID the two facts that decide #2; the timeline showed them at a glance. This is how
-you reach the optimum. Renderer + rationale in skill `qnn-htp-profiling` ("MANDATORY: render the full
-per-thread ASCII timeline") and [[feedback_always_render_ascii_timeline_from_trace]].
+## METHOD MANDATE (2026-06-02/03) — every perf step: (1) ASCII timeline AND (2) compiled op-graph vs expected
+**(1)** Parse `chrometrace.json` and draw the complete per-thread ASCII timeline (HVX 512–515 / HMX 256 rows,
+op spans + GAPS, + QNN boundary ops Spill/Fill/Concat/flat_from_vtcm). Aggregate per-stage cyc HID the facts
+that decide #2; the timeline showed them at a glance.
+**(2)** ALSO parse `chrometrace_htp.json` (`graph.nodes` input_names/output_names) into the actual
+op-dependency DAG and DIFF it against the op-graph you EXPECTED (draw expected in ASCII first). The HTP
+compiler fuses/inserts ops AND **dedups byte-identical constants into one shared tensor** — which silently
+merged the M8 per-chunk `Hs_0`/`Hs_1` scratch into a shared `$Const_17` → false cross-chain dep →
+serialization (the "no overlap" wrongly blamed on QNN). netron on the `.onnx` shows the PRE-compile graph
+only; `chrometrace_htp.json` is the authority for what actually ran. Renderer/rationale in skill
+`qnn-htp-profiling` + [[feedback_always_render_ascii_timeline_from_trace]].
 
 ## M8 (2026-06-03, in progress) — ROOT CAUSE found via the timeline: batching all heads through one Op1→Op2 boundary
 The M6/M7 split's real trace (`merge_hmx_op/.../out_s/optrace/chrometrace.json`, C=256 H=16, total span

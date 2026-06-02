@@ -32,6 +32,29 @@ or kernel-tuning question you MUST go down to the hardware-unit layer (QHAS): wh
 its utilization, and **`cycles_per_packet`** per HTP sub-op, plus VTCM/DRAM traffic and the dominant
 path. Per-op cycles alone never tell you this. See Flow C.
 
+## MANDATORY: visualize the ACTUAL compiled op-graph and compare to your EXPECTED graph
+
+The graph QNN actually runs ≠ your ONNX intent. The HTP compiler rewrites it — fuses, inserts
+ForceFormat/Slice/Concat, and **deduplicates identical constants into one shared tensor**. That dedup can
+silently merge per-branch scratch buffers into a single shared one → a FALSE write-after-write dependency
+that serializes branches you designed to be independent. So **every perf step, also dump the compiled
+op-dependency graph and check it against the graph you expected:**
+- Parse `out_s/optrace/chrometrace_htp.json` → `graph.nodes` (each has `input_names`/`output_names`) +
+  `graph.tensors`. Build the producer map (tensor→node) and print each node's predecessors. Look for a
+  tensor used by >1 node that you intended to be private (e.g. per-chain scratch) — that's a dedup-induced
+  false dep. Also use **netron** on the `.onnx` to eyeball the pre-compile graph — BUT note netron shows
+  the ONNX (pre-dedup); the dedup/fusion only appears in `chrometrace_htp.json`, so the htp.json parse is
+  the authority for what actually ran.
+- Draw your EXPECTED op-DAG (ASCII) first, then diff the actual against it. Mismatches = the bug.
+
+Real case (GDN solve-#2 M8): per-chunk split was designed as N independent `GdnSolveDiag→GdnMergeHmx`
+chains with one scratch each (`Hs_0`,`Hs_1` — distinct in the ONNX). The htp.json dependency graph showed
+BOTH `GdnMergeHmx_0` and `GdnMergeHmx_1` taking the SAME `$Const_17` — QNN deduped the byte-identical
+all-zero scratch constants into one shared VTCM buffer → false cross-chain dep → forced serialization (the
+"no overlap" I'd wrongly blamed on QNN not overlapping custom ops). Fix: make per-branch scratch
+non-dedupable (distinct content, or graph inputs not constants). The bug was invisible in the timeline and
+in netron(onnx); only the htp.json op-graph parse revealed it.
+
 ## MANDATORY: render the full per-thread ASCII timeline from the trace, every time
 
 Before ANY perf analysis or optimization, AND after every change, **load `chrometrace.json` and draw the
