@@ -11,6 +11,54 @@ stage). Goal: make that inverse optimal at C=128/256 on the current v75 HTP.
 70,201 cyc/head, ~3.6×). Graph-level HVX∥HMX overlap is structurally unreachable on QNN. The shipped
 int16-packed HVX `GdnSolve` op remains the prefill optimum.** Milestone-by-milestone detail below (M1→M9).
 
+## HVX∥HMX concurrency — DEFINITIVELY RESOLVED (2026-06-03)
+
+This supersedes the earlier "HVX∥HMX overlap measured 98% on device" claim, which was **WRONG (a metric
+artifact)**. The truth: **QNN gives custom/plugin (QHPI) ops ZERO HVX∥HMX concurrency; the overlap that
+exists is a compiler `supertile` feature reserved for native ops.** Mechanism + measurement + positive
+control all agree — the conclusion is now closed-loop.
+
+**Mechanism (RE of `libQnnHtp.so` x86 compiler + `libQnnHtpV75Skel.so` device executor).** HTP scheduling
+is **compile-time static**: the graph is baked into per-unit runlists (vector=HVX tids 512–515 / matrix=HMX
+tid 256), the device replays them in fixed order synced by compile-time `@DmaCheckpointSet/Wait`. There is
+**no runtime dynamic dispatch**. HVX∥HMX overlap happens ONLY inside compiler-built **supertile** fusion
+regions. The compiler carries an explicit predicate — string `no supertiling for … is_plugin_op=%d` —
+that **excludes every plugin/QHPI custom op from supertiling**. So a custom op is a serial barrier; the
+only (inaccessible-via-public-`qhpi.h`) escapes are `PluginOpWithCompiler` (register tiling rules) or the
+internal `background HMX worker` (no public knob, did not engage for our case).
+
+**Measurement (real v75, O3 + hvx_threads=4; `solve_op/standalone/gdn_concurrency_probe.sh`).** Computed
+overlap as actual HMX-vs-HVX *timestamp* intersection on tid 256 vs 512–515 (NOT a derived ratio):
+
+| graph | structure | HMX∩HVX overlap |
+|---|---|---|
+| **native** u8i8 8-matmul chain (positive control) | all-native, supertiled | **22%** (HVX `ForceFormat` ∥ HMX matmul, interleaved) |
+| native u8i8 single-matmul ref | all-native | 17% |
+| custom GdnSolve → native MatMul (dependent) | plugin producer | **0%** (matmul scheduled strictly AFTER solve) |
+| custom GdnSolve ∥ native MatMul (INDEPENDENT, C=64) | plugin + native, no dep | **0%** |
+| custom GdnSolve ∥ native MatMul (INDEPENDENT, C=128) | plugin + native, no dep | **0%** |
+| custom GdnSolveDiag → GdnMergeHmx (M9 split) | plugin → plugin | **0%** (the old "2%") |
+
+So it is NOT "v75 can't overlap" (native does, 22%); it is specifically `is_plugin_op` excluding custom
+ops. A plugin op anywhere in a producer→consumer chain breaks the supertile fusion, so even a *native*
+HMX consumer of a custom HVX producer runs serial.
+
+**Why the old 98% was bogus.** `gdn_overlap.sh` computed `overlap=(S+M−X)/max(S,M)` where the matmul-only
+reference M hit the pathological 2.99-BILLION-cyc path (a matmul reading a fresh uint16 activation from
+DDR). With M≈3e9, the formula ≈1.0 regardless of any real overlap. The actual tid-256 op timeline is fully
+serial (the HMX `ConvLayer_s1.opt` starts only after the HVX `GdnSolve` finishes).
+
+**Consequence.** The "split into separate HVX + HMX ops so QNN pipelines them" idea is dead for custom ops,
+and the "~8–10× pipelined" target below is unreachable. The ONLY HVX∥HMX concurrency a custom op can get is
+manual qurt threads INSIDE one op (HMX on main, HVX glue on workers — M3 proved feasible), capped ~2.5×;
+since the HMX kernel is already ~free, that only threads the HVX glue and still loses to the shipped HVX
+baseline. **The shipped int16-packed HVX `GdnSolve` is the prefill optimum; stop chasing the HMX pipeline.**
+Reproduce: `solve_op/standalone/gdn_concurrency_probe.sh` (C=64/128, OPT=3 HVXT=4) + the native positive
+control `qnn_hmx_matmul_u8i8/standard_flow/native_baseline/run_native_chain.sh` (SIZE=256 CHAIN=8); decode
+with `scripts/decode_qnn_optrace.py`, then read tid-256 op timestamps vs the HVX span.
+
+---
+
 **The journey (cyc/head @ C=256, H=16, real v75):** fused op M_op 3.2M → M3 optimized → M6 two-op split
 740K → M7 redundancy squeeze (killed the 234K tile→natural→tile round-trip + vectorized the scalar
 tile-write) → **239–255K** → M8 per-chunk pipeline (boundary Spill/Fill 56K→0) → M9 (fixed a const-dedup
@@ -21,11 +69,12 @@ false dep). All squeezing is done; **floor ≈ 255K (3.6×)**.
    crouton+k-major pack / depack / requant for the 16 small 64³ merges, ~165–240K/head). HMX can't help:
    it can't do a triangular solve (diagonals stay HVX) and can't run on a spawned worker (faults).
 2. **QNN does NO inter-op concurrency for custom (QHPI) ops** — even two FULLY-independent chains
-   (M9: distinct scratch, clean independent DAG verified in `chrometrace_htp.json`) run **serial, 2%
-   overlap**. So splitting into ops/chains can NEVER overlap HVX∥HMX. (The old 98% overlap was a NATIVE
-   MatMul consumer, which QNN streams; a custom consumer op does not.) ⇒ graph-level overlap is dead.
-   Also: byte-identical scratch constants get **deduped** by QNN into one shared tensor → false WAR dep
-   (M9 fix = make per-branch scratch byte-distinct).
+   (M9: distinct scratch, clean independent DAG verified in `chrometrace_htp.json`) run **serial, 0%
+   overlap**. So splitting into ops/chains can NEVER overlap HVX∥HMX. **⇒ graph-level overlap is dead —
+   now PROVEN at the mechanism level + corrected, see the "HVX∥HMX concurrency — DEFINITIVELY RESOLVED"
+   section right below.** (The previously-claimed "98% overlap" was a MEASUREMENT ARTIFACT, not a real
+   native-streaming result.) Also: byte-identical scratch constants get **deduped** by QNN into one shared
+   tensor → false WAR dep (M9 fix = make per-branch scratch byte-distinct).
 
 **Why the baseline wins (root):** it does ONE monolithic int16 O(C²) HVX solve — no int8 quantization, no
 tiling, no per-block packing, no 16× bookkeeping. Decomposing into 16 free HMX matmuls trades that for 16×
@@ -241,17 +290,15 @@ hand-written **Crouton-resident** kernel: double-buffer the 64×64 blocks in VTC
 in place. If the handoff serializes or spills to DDR, the overlap collapses toward the sequential ~4×.
 Validate the overlap before building (see "Overlap validation" below).
 
-## Overlap validation — HVX ∥ HMX confirmed (98%)
+## Overlap validation — ⚠️ RETRACTED: the "98%" was a metric artifact, real overlap is 0%
 
-Built a combined graph `A[1,B,C,C] → GdnSolve(HVX) → T → MatMul(T, V)(HMX) → P` (C=64, B=64, sized to
-fit VTCM) and read the optrace timeline (`example/gdn_native/solve_op/standalone/gdn_overlap.sh`,
-`scripts/gdn_overlap_probe.py`):
-
-- **GdnSolve runs on tids 512–515 (4 HVX threads); the MatMul `q::ConvLayer_s1` runs on tid 256 (HMX)**
-  — distinct units. Their timelines **overlap 98%**: the HMX matmul (span 461,178 cyc) starts mid-solve
-  and runs concurrently with the HVX forward-subst (span 769,775 cyc).
-- Wall (`Accelerator (execute) time`): solve-only **1329 µs**, combined **1360 µs** — the 282,264-cyc
-  HMX matmul (~157 µs of HMX work) added only **+31 µs** to the wall (~80–98% hidden).
+**This section's original conclusion is WRONG.** See "HVX∥HMX concurrency — DEFINITIVELY RESOLVED
+(2026-06-03)" at the top. The combined graph `A → GdnSolve(HVX) → T → MatMul(T,V)(HMX) → P` does NOT
+overlap: reading the tid-256 op timestamps directly, the HMX `q::ConvLayer_s1.opt` starts only AFTER the
+HVX `GdnSolve` finishes (0% concurrent), at O3+4threads. The "98%" came from the overlap formula being
+fed the pathological 2.99-billion-cyc matmul-only reference (uint16 act from DDR), which pins the ratio at
+≈1.0 independent of reality. A custom (plugin) producer breaks supertile fusion even into a native HMX
+consumer. Kept here only as a record of the corrected error.
 
 This confirms the pipeline premise: **HVX and HMX genuinely run concurrently**, so #2's throughput is
 bounded by max(HVX, HMX), not the sum — the ~8–10× pipelined estimate is achievable.
