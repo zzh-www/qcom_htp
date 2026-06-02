@@ -245,7 +245,7 @@ HVX diagonal solves ∥ Crouton-resident HMX merge, target **~7–8.7K cyc/head 
    fully-owned handwritten kernel — confirm cyc/MAC (≤5.6e-4; cheaper than the w16a16 oracle) and that
    it reads/writes VTCM-resident operands. (De-risks the merge primitive.)
 2. **C=128 inverse** (nb=4 @ BL=32, or nb=2 @ BL=64): diagonal HVX + merge HMX, single head, no pipeline
-   — validate accuracy (relerr vs `np.linalg.inv`, target ~4e-5) + cyc.
+   — validate accuracy (relerr vs `np.linalg.inv`, target ~4e-5) + cyc. **[M2b DONE 2026-06-02 — see below.]**
 3. Add the **HVX∥HMX pipeline** across heads (B>1); confirm wall ≈ max(HVX,HMX) (the 98%-overlap result).
 4. Scale to **C=256**; tune BL; hit ~7–9K cyc/head.
 5. Integrate: replace GdnSolve for prefill C in the real GDN graph (`scripts/gdn_insert_solve_op.py`),
@@ -301,6 +301,30 @@ computes a correct **64×64×64 u8×i8 matmul in ONE call**, VTCM-resident, glue
 
 **Remaining M1 tail (deferred):** 32³ HMX (alt-A arm) only needed if BL=32; M2 starts at **BL=64 (nb=2,
 C=128)** on the validated 64³ path. w8a16 (M1b) deferred to merge-accuracy gating.
+
+**M2b DONE (2026-06-02) — C=128 block-recursive merge chain PROVEN in hexagon-sim.**
+`scripts/gdn_blockrec_sim.py` (extends `gdn_hmx_matmul_sim.py`). Two chained signed-operand 64³ u8i8 HMX
+merges + requant + assembly produce `T=(I−A)⁻¹` whose relerr vs `np.linalg.inv` tracks the host u8i8
+ceiling on real C=128 data (golden p15_L00, 32 heads): **sim 8.33e-3 vs host-u8i8 6.19e-3 vs host-BR
+7.17e-3**, requant **≤1 ULP**. HVX diagonal solve is fed from host `solve_int16` (already proven by the
+GdnSolve op); M2b isolates+validates the NEW thing = the HMX merge chain. Reproduce:
+`GDN_NO_VSCALE=1 uv run python scripts/gdn_blockrec_sim.py --verify-control` (drain encoding, 0/4096) and
+`--heads 3` (chain).
+- **LOAD-BEARING for M3/M4/M5 — the signed-merge HMX choreography:**
+  - HMX conv1x1 drain: `out_u8 = clip( FLOOR(P_int·scale_f16/512) + (baseline_u16>>7), 0, 255)` where
+    `P_int = Σ(act_u8−128)·wt_i8` is the signed int matmul (effective bias `−128·Σwt` cancels the act zp).
+  - **The drain rounds with FLOOR (toward −∞), NOT trunc.** (`reconstruct_hmx_u8_drain.py`'s `np.trunc` is
+    latent-wrong — only ever used at gain=1.0 where there's no fraction; harmless there, do not rely on it
+    for fractional gains.)
+  - **Control word per N32 tile = `(baseline_u16<<16) | f16_bits(scale_f16)`.** M1's `0x6000`=`f16(512)`
+    ⇒ gain 1.0, baseline 0. Set `baseline_u16 = 128<<7 = 16384` to inject the +128 output zero-point so a
+    SIGNED merge result fits u8 (recover `int8 = out_u8 − 128`).
+  - Chaining: merge1 `M=A21@T11` (act=A21 zp128 / wt=T11 i8) → output `M_int8 = out_u8−128` at scale
+    `s_M=max|M|/127`, `scale_f16=(s_A21·s_T11/s_M)·512`. **Re-pack M_int8 as the i8 WEIGHT** of merge2
+    `T21=T22@M` (act=T22 zp128). Dequant `T21=(out_u8−128)·s_T21`, assemble `T=[[T11,0],[T21,T22]]`.
+  - Residual: ≤1-ULP sim↔host requant diff on ~2% of merge-output elements (HMX f16 drain rounds the last
+    bit slightly differently from the host floor model); sub-LSB, does NOT affect assembled-T relerr.
+- cyc: 2× 64³ merges = 834 sim pcyc/head single-call (prologue-dominated); steady ~4.2e-4 cyc/MAC (M1).
 
 ## Reproduce
 
