@@ -16,8 +16,11 @@
 #include <cstdint>
 #include <cmath>
 
-#define GDN_BR_C   128   /* chunk size handled by this op */
+#ifndef GDN_BR_C
+#define GDN_BR_C   256   /* chunk size handled by this op (128 or 256) */
+#endif
 #define GDN_BR_BL  64    /* recursion block size (one HMX 64^3 merge per off-diag block) */
+#define GDN_BR_NB  (GDN_BR_C / GDN_BR_BL)   /* number of diagonal blocks (2 for C=128, 4 for C=256) */
 #define GDN_BR_F   15    /* diagonal fold scale (matches GdnSolveOp GDN_F) */
 #define GDN_BR_TI  (2.0f/32767.0f)   /* fixed internal int16 T scale for diagonals (|T|<2) */
 

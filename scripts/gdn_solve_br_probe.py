@@ -20,8 +20,8 @@ from onnx import helper, TensorProto
 
 outdir = sys.argv[1]
 H = int(sys.argv[2]) if len(sys.argv) > 2 else 16
-MIN_TOK = int(sys.argv[3]) if len(sys.argv) > 3 else 128
-C = 128
+C = int(sys.argv[3]) if len(sys.argv) > 3 else int(os.environ.get("CB", "128"))
+MIN_TOK = int(sys.argv[4]) if len(sys.argv) > 4 else C
 os.makedirs(outdir, exist_ok=True)
 
 
@@ -60,8 +60,10 @@ sA = max(abs(A).max() / 32767.0, 1e-12)
 sT = 2.0 / 32767.0
 
 # scratch VTCM workspace input S (uint8 zeros): the op carves act/wt/bias/out/tables out of it.
-# Buffers are spaced 64KB apart (see GdnSolveBROp gdn_vtcm_from); 0x60000 covers the layout.
-SCRATCH = 0x60000
+# Buffers are spaced 64KB apart (see GdnSolveBROp gdn_vtcm_from); each worker thread uses a 0x60000
+# region, NT threads -> NT*0x60000.  NT=4 default => 4*0x60000 = 0x180000 (1.5 MB VTCM).
+NT = int(os.environ.get("GDN_BR_NT", "4"))
+SCRATCH = NT * 0x60000
 io = lambda n: helper.make_tensor_value_info(n, TensorProto.FLOAT, [1, H, C, C])
 S_const = helper.make_tensor("S", TensorProto.UINT8, [1, 1, 1, SCRATCH], np.zeros(SCRATCH, dtype=np.uint8).tobytes(), raw=True)
 gs = helper.make_node("GdnSolveBR", ["A", "S"], ["T"], name="GdnSolveBR_0", domain="gdn")

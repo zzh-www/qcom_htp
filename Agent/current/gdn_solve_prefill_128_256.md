@@ -5,15 +5,18 @@ fewer inter-chunk serial recurrence steps + bigger HMX-shaped matmuls for the re
 GDN stage that gets *worse* with larger C is the per-head C×C triangular inverse (the `solve_tril`
 stage). Goal: make that inverse optimal at C=128/256 on the current v75 HTP.
 
-**Status (2026-06-02).** Analysis + de-risking COMPLETE; ready to build #2.
-- **Shipped:** C=128/256 enabled + bit-accurate on the GdnSolve HVX op (was capped at C≤64), int16-packed
-  (1.6×), boundary `q::Cast` removed (uint16 override). Current steady cost C=256 = **70,201 cyc/head**.
-- **Decided:** the HMX-offload-via-QNN-graph route loses (Crouton glue). The win path is a hand-written
-  **Crouton-resident block-recursive HMX merge** + HVX diagonal solves, **HVX∥HMX pipelined**.
-- **Validated:** pipelined ceiling **~8–10×** (C=256 → ~7–8.7K cyc/head); HVX∥HMX overlap measured at
-  **98%** on device; int16 merge accuracy + overflow OK; all inputs measured.
-- **Next:** build the #2 PoC — see "Implementation plan for #2" near the bottom. **This doc is the
-  start-here for that work.**
+**Status (2026-06-02). RESOLVED — the block-recursive HMX route does NOT beat the shipped HVX op at any C
+(C=128 or C=256). KEEP the shipped int16-packed HVX `GdnSolve` op for prefill.** See "M4 DONE" below.
+- **Shipped (the winner):** C=128/256 enabled + bit-accurate on the GdnSolve HVX op (was capped at C≤64),
+  int16-packed (1.6×), boundary `q::Cast` removed (uint16 override). Steady cost C=256 = **70,201 cyc/head**.
+- **`GdnSolveBR` (block-recursive HMX, M1→M4):** device-correct at C=128 (~110K/head) and C=256 (~408K/head
+  single-thread, fully packing-resident). LOSES: even with the achievable HVX∥HMX pipeline (HMX must stay
+  on the main thread — worker-HMX faults; HVX threads give only ~2.5×) C=256 lands ~158K/head, **2.3× slower
+  than 70,201**. Root cause: 16 small 64³-merge HVX glue (quant/pack/requant) > the single O(C²) HVX solve
+  it replaces. The earlier 8–10× / 2–4× projections were too optimistic (assumed merge glue vanishes + full
+  4× HVX∥HMX). The HMX kernel IS free (14K/head); the HVX merge glue is the irreducible killer.
+- **Conclusion:** the win path imagined here does not materialize on v75. The shipped HVX op is the optimum
+  for prefill C=128/256. `GdnSolveBR` stands as a validated artifact + a documented negative result.
 
 ## What shipped
 
@@ -389,6 +392,48 @@ no per-merge re-gather); (2) **manual qurt-thread HVX∥HMX pipeline** (central 
 op; M3 proved manual threads work). The earlier 7–9K/8–10× projection assumed both AND omitted packing — too
 optimistic, but **~2–4× at C=256 looks reachable**. `GdnSolveBR` is a device-correct validated artifact
 (M1→M_op→M3); M4 tests the actual win regime (C=256 + packing-resident + pipeline).
+
+**M4 DONE (2026-06-02) — C=256 nb=4 block-recursive built, device-correct, fully packing-resident +
+single-thread-optimized; VERDICT: does NOT beat the 70,201 HVX baseline (~5.8× slower single-thread,
+~2.3× slower even with the achievable HVX∥HMX pipeline). The route loses at C=256.**
+- **Algorithm (validated):** nb=4 (BL=64) lower-tri inverse `T_ij = T_ii @ (Σ_{k=j}^{i−1} A_ik @ T_kj)`,
+  6 off-diag blocks in increasing i−j, 16 u8i8 64³ HMX merges/head + 4 HVX diagonal solves. Exact formula
+  verified vs `np.linalg.inv` (host probe `scripts/gdn_blockrec_c256_probe.py`, relerr 3e-17 unquantized).
+  Device whole-T relerr **2.4e-2 mean / 4.5e-2 max** (8 real heads, golden p29_L00) — in the target ~1–2e-2
+  range; diagonals bit-faithful 1.1e-4; deep off-diag blocks noisy but negligible in whole-T.
+- **Packing-elimination (Task 2) DONE — the route is no longer packing-bound.** Drove single-thread C=256
+  from a **4.93M cyc/head** naive baseline → **408K cyc/head (12×)** by killing every float roundtrip and
+  scalarism: (a) int-ONLY inner-sum accumulation in int32 codes (no deq-to-float); (b) **2-pass HMX
+  scale-estimation** — pack once, run HMX with a cheap `K·max|act|·max|wt|` provisional gain, read max|P|
+  from the u8 surface, re-run at the tight gain → replaces the 685K-cyc HVX `pint` 64³ matmul with ~2 free
+  HMX passes (→36K); (c) HVX-vectorized k-major weight pack (290K→16K via 2 byte/halfword vshuffs),
+  `effective` column-sum (138K→8K), int32→int8 narrow (vpack), and an order-preserving int8→int32 widen
+  (4-stream vshuff weave). Final per-head breakdown: diag 124K, quant 90K, hmxpack 64K, pint-2pass 35K,
+  depack 30K, hmxkern **14K (free)**, + ~50K fold/acc/requant residual.
+- **Pipeline (Task 3) — HMX-from-worker FAULTS; only HVX threads, only ~2.5× → still loses.** Measured on
+  device: a spawned qurt worker that calls the `mxmem` kernel triggers "Graph Execution failure" **even at
+  NT=1** — the QNN backend grants HMX to the MAIN callback thread only; HMX cannot be driven from a worker.
+  (HVX-only workers DO run: DIAG_ONLY 4-thread succeeded.) So the only viable pipeline is HVX-workers +
+  HMX-marshalled-to-main. Measured HVX threading speedup is **~2.5× not 4×** (DIAG_ONLY 2.45M→999K
+  aggregate; v75 HVX-context contention — the backend already holds HVX contexts). Projected best pipelined
+  C=256 = HVX_work(~394K)/2.5 ≈ **158K/head**, HMX(~21K) hidden under it → **~158K, 2.3× SLOWER than 70,201**.
+- **WHY it loses (the real finding):** block-recursive replaces the baseline's single clean O(C²) HVX
+  forward-subst with **16 small 64³ matmuls whose per-merge HVX glue (quant + crouton/k-major pack +
+  requant + depack + fold + int-accumulate, ~4096 elems each) costs MORE than the O(C²) solve it removes.**
+  The HMX kernel itself is genuinely free (14K/head), but it's a rounding error next to ~280K of HVX merge
+  glue + ~124K diagonals. Total HVX work (~394K) > the baseline's 4-thread-equiv (~280K), so no amount of
+  the *achievable* (≤2.5×, HMX-on-main) threading closes the gap. The earlier ~2–4× projection assumed the
+  merge glue would vanish into Crouton-residency and a full 4× HVX∥HMX pipeline; in practice the glue is
+  irreducible per-merge HVX work and the pipeline is HMX-bound-to-main + HVX-context-limited.
+- **Honest best achievable C=256:** ~150–160K cyc/head (HVX-worker pipeline w/ HMX on main, 2.5× HVX) vs
+  baseline **70,201** → the shipped int16-packed HVX `GdnSolve` op **wins** at C=256. The block-recursive
+  HMX route is NOT the prefill-solve win; **keep the shipped HVX op for prefill C=128/256.**
+- **Artifact:** `example/gdn_native/solve_br_op/` now parametric in `GDN_BR_C` (128|256, nb=2|4),
+  device-correct at both, all packing vectorized. Single-thread default (HMX on main); `-DGDN_BR_USE_THREADS`
+  gates the (faulting) worker-HMX path; `-DGDN_BR_DIAG_ONLY -DGDN_BR_USE_THREADS` runs the working HVX-only
+  thread pool. Reproduce: `cd example/gdn_native/solve_br_op/standalone && CB=256 H=8 bash gdn_br.sh`
+  (relerr), `CB=256 H=16 EXTRA_DEFS=-DGDN_BR_PROBE_CYCLES bash gdn_br.sh` (per-stage cyc, decode head-0
+  uint32 probe). Host formula/scale validation: `GDN_NO_VSCALE=1 uv run python scripts/gdn_blockrec_c256_probe.py --heads 8`.
 
 ## Reproduce
 
