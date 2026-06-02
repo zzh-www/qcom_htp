@@ -597,6 +597,34 @@ RAW device numbers (C=256, H=16, real v75, per head; busiest tile/8 for Op1, max
   (per-op cyc now printed); `cd ../../solve_diag_op/standalone && EXTRA_DEFS=-DGDN_DIAG_SKIP_TILEWRITE
   CB=256 H=16 bash gdn_diag.sh` (tile-write ablation); add `-DGDN_MERGE_1PASS` to gdn_split.sh for lever B.
 
+## METHOD MANDATE (2026-06-02) — every perf step: render the full per-thread ASCII timeline from the trace
+Before/after EVERY perf change, parse `chrometrace.json` and draw the complete per-thread ASCII timeline
+(HVX tids 512–515 / HMX tid 256 rows, op spans + GAPS, + QNN boundary ops Spill/Fill/Concat/flat_from_vtcm).
+Aggregate per-stage cyc HID the two facts that decide #2; the timeline showed them at a glance. This is how
+you reach the optimum. Renderer + rationale in skill `qnn-htp-profiling` ("MANDATORY: render the full
+per-thread ASCII timeline") and [[feedback_always_render_ascii_timeline_from_trace]].
+
+## M8 (2026-06-03, in progress) — ROOT CAUSE found via the timeline: batching all heads through one Op1→Op2 boundary
+The M6/M7 split's real trace (`merge_hmx_op/.../out_s/optrace/chrometrace.json`, C=256 H=16, total span
+4,907,214 = 306,700/head) ASCII timeline:
+```
+Op1 GdnSolveDiag (HVX) ████████████                                  span 33k–1,538k  (~94K/head)
+boundary Spill/Fill/Concat/flat_from_vtcm   ▓▓▓▓▓▓                    971k–1,925k      (~58K/head)
+Op2 GdnMergeHmx (HMX)               ██████████████████████████████   1,925k–4,772k    (~178K/head)
+overlap = 0%
+```
+**Both pathologies have ONE root cause (user insight): all H=16 independent heads go through a single
+Op1→Op2 boundary.** ⇒ (a) Op2 waits for ALL of Op1 → **0% HVX∥HMX overlap**; (b) all 16 heads' handoff
+intermediate is materialized at once → exceeds VTCM → **~545K @Spill/@Fill** (Spill 273K + Fill 271K) in
+the gap. Heads are independent, so the fix is **per-head / small-chunk pipelining**: emit ceil(H/CK)
+independent `GdnSolveDiag(chunk)→GdnMergeHmx(chunk)` chains so QNN overlaps chain-i's HMX Op2 with
+chain-(i+1)'s HVX Op1, and only one chunk's (~40KB) intermediate is live (fits VTCM, no spill). Expected:
+kill the ~58K/head boundary glue + overlap Op1(94K) under Op2(178K) → ~178K/head, then attack Op2's
+single-thread merge glue. **STATUS: per-chunk graph half-implemented in `scripts/gdn_split_probe.py`
+(chunk sweep CK=1/2/4); device sweep NOT yet measured (background run was interrupted). NEXT: finish +
+measure does-Spill/Fill-vanish + does-overlap-appear per CK.** Open QNN question: will it actually schedule
+independent chains concurrently, or still serialize them?
+
 ## Reproduce
 
 ```bash
