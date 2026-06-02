@@ -334,6 +334,36 @@ GdnSolve op); M2b isolates+validates the NEW thing = the HMX merge chain. Reprod
     bit slightly differently from the host floor model); sub-LSB, does NOT affect assembled-T relerr.
 - cyc: 2× 64³ merges = 834 sim pcyc/head single-call (prologue-dominated); steady ~4.2e-4 cyc/MAC (M1).
 
+**M_op DONE (2026-06-02) — `GdnSolveBR` QHPI op runs the C=128 block-recursive inverse on REAL v75 device.**
+`example/gdn_native/solve_br_op/` (sibling of `solve_op/`): a deployable QHPI custom op = HVX int16 diagonal
+forward-subst + **two HMX u8i8 64³ merges driven from inside the op** (runtime Crouton/weight/bias packing
+in VTCM, no DDR round-trip). Validated on `ssh oneplus` vs `np.linalg.inv` (real C=128 p15_L00, 16 heads):
+**whole-T relerr mean 1.11e-2 / max 2.0e-2; device == sim** (M2b sim on same heads = 1.114e-2). T11/T22
+diagonals 1.1e-4 (HVX bit-faithful); T21 off-diag ~8.4e-2 (double-int8 merge noise, dominated by the
+well-conditioned diagonals in whole-T). Reproduce: `cd example/gdn_native/solve_br_op/standalone &&
+EXTRA_DEFS="" H=4 bash gdn_br.sh` (input/ref gen `scripts/gdn_solve_br_probe.py`; bring-up ladder
+`-DGDN_BR_SKIP_KERNEL/-DGDN_BR_DIAG_ONLY/-DGDN_BR_DUMP_M`, `-DGDN_BR_PROBE_CYCLES`).
+- **Device cyc breakdown (single graph, per head, PROBE_CYCLES) — KEY FOR M3/M4:** HVX diagonals 684K;
+  **scalar scale-estimation (2 float 64³ matmuls for s_M/s_T21) + float→int8 packing = 2.27M ← DOMINANT;**
+  HMX merges only 275K. The bottleneck is NOT intrinsic merge work — it's the scalar scale-estimation
+  matmuls. **M3/M4 must kill these** (HVX-vectorize the pack/requant, and replace the scale-probe matmuls
+  with an analytic range bound or fold the range into the drain). Current op is single-HMX-thread, no head
+  pipeline, scalar packing → wall high (expected for M_op); ~7–9K target needs the M3 pipeline + this fix.
+- **Device gotchas (load-bearing for the productization):**
+  - **HMX operands MUST live in VTCM, not BSS.** Static aligned BSS in the HTP package lands in DDR; the
+    `mxmem` kernel faults ("Graph Execution failure"). Fix: carve HMX surfaces from a scratch tensor
+    declared `QHPI_MemLoc_TCM_Only` — add a 2nd op input `S` (a uint8 zero constant in the graph);
+    `qhpi_tensor_raw_data(inputs[1])` returns its VTCM addr (same trick as `HvxHmxOp.cpp`).
+  - **`QHPI_RESOURCE_HVX|HMX` (0x6) is REJECTED** at x86 prepare ("invalid resource flag 0x6"), and
+    `multithreaded=true` on an HMX op → "Can't set self_slicing on non-HVX op". Fix: declare
+    **`QHPI_RESOURCE_HMX` ALONE, `multithreaded=false`** — HVX intrinsics still work inside it. ⇒ **no
+    central-tiler head self-slicing; M3 pipeline must use manual qurt threads.**
+  - **VTCM buffer spacing matters:** tight packing corrupted the 2nd N-tile of the HMX output; space each
+    surface 64 KB apart (the M1 sim layout). The kernel reads/writes with more slack than the 4 KB surface.
+  - Converter XML must declare the scratch input (`<Input>S</Input>`) or `qairt-converter` throws
+    IndexError; do NOT put a quant override on the uint8 constant `S` (quantizer rejects UINT_8).
+  - All packers/descriptor/FLOOR-drain/control-word ported to C **byte-identical** to the M1/M2b sim.
+
 ## Reproduce
 
 ```bash
