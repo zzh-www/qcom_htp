@@ -238,10 +238,31 @@ HVX diagonal solves ∥ Crouton-resident HMX merge, target **~7–8.7K cyc/head 
 5. Integrate: replace GdnSolve for prefill C in the real GDN graph (`scripts/gdn_insert_solve_op.py`),
    re-check oc end-to-end.
 
-**Risks/unknowns to watch:** (a) Crouton layout management for non-256³ block shapes (the handwritten
-kernels are 256³-canonical — may need a 64³/32³ variant or tiling); (b) driving HMX from inside a QHPI
-op (vs the existing standalone-kernel harness) — may need manual qurt/HMX descriptor setup; (c) keeping
-the pipeline fed (enough independent heads) — fine at prefill scale.
+**Risks/unknowns to watch:** (a) ~~Crouton layout management for non-256³ block shapes~~ **LARGELY
+RESOLVED (2026-06-02):** the owned **u8i8 kernel is fully descriptor-driven — NO hardcoded shape
+immediates.** Every loop trip is loaded from the out/act descriptors at runtime: `r28=n_tiles_pow2>>1`
+(K-MAC outer), `r13=ceil(K/32)`, `r20=ceil(M_t/8)`, `r12=M_t` (kernel P5–P11); `loop0/loop1` use those
+registers. "256³-canonical" = where it was byte-verified, not a hardcoded limit. A 64×64×64 matmul
+(N=64→n_tiles=2→`p0` true, `ep[0]=1`→`p2` true) drives the **same main K-MAC path**; 32³ (n_tiles=1)
+takes the alt-A arm (present, less-tested). `prepare_owned_inputs.py::generated_descriptor_tables` already
+computes all descriptor fields + offset tables from m/k/n parametrically, and for **u8i8 the mask/RT
+control words are shape-INDEPENDENT constants** (`conv1x1_words(0x700,0,0,0,0x20)`, `extra=[1,0]`). So
+M1 needs **no new kernel** — just a 64³/32³ artifact. Residual: confirm the alt-A (n_tiles=1) arm for
+32³, and verify the activation-surface/output Crouton layout at small shapes (tile contracts: K%32, N%32,
+M steps by 8). (b) driving HMX from inside a QHPI op (vs the standalone-kernel harness) — may need manual
+qurt/HMX descriptor setup; (c) keeping the pipeline fed (enough independent heads) — fine at prefill scale.
+
+**M1 groundwork done (2026-06-02).** Exec path validated end-to-end WITHOUT device: handwritten kernels
+run in **hexagon-sim** via the bare-metal h2 harness (`scripts/check_handwritten_hmx_body_entry_sim.py`
+builds `tools/body_entry_smoke.c` with `hexagon-clang -mv75 -mhvx -mhmx -moslib=h2` + booter; all 4
+families enter-and-return OK). Shape-driven numeric runs go through `scripts/run_handwritten_artifact_body_sim.py
+--family u8i8 --artifact <dir>` — it reads `prepared_state/{activation,packed_weight,folded_bias,
+output_surface,mask_control,activation_table,output_table}.raw` + an `abi_manifest` + minimal `oracle`
+(for the output compare), emits a C harness, runs in sim, diffs sim output vs `oracle.raw_output`. The
+u8i8 requant reference is `scripts/reconstruct_hmx_u8_drain.py`: `drain_in = ΣactW + (−128·Σw + bias_q)`,
+`out_u8 = clamp(trunc(drain_in·scale/512) + (baseline>>7),0,255)`. **Next concrete step:** synthesize a
+64³ u8i8 artifact (reuse `prepare_owned_inputs` packers + that drain ref; pick scale=512/baseline=0 for a
+trivial cvt), run the sim, confirm bit-correct 64³ matmul + record cyc. Then 32³ (alt-A arm), then w8a16.
 
 ## Reproduce
 
