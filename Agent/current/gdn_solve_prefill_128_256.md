@@ -364,6 +364,28 @@ EXTRA_DEFS="" H=4 bash gdn_br.sh` (input/ref gen `scripts/gdn_solve_br_probe.py`
     IndexError; do NOT put a quant override on the uint8 constant `S` (quantizer rejects UINT_8).
   - All packers/descriptor/FLOOR-drain/control-word ported to C **byte-identical** to the M1/M2b sim.
 
+**M3 DONE (2026-06-02) — optimized 13.9× + manual HVX∥HMX threads proven; BUT re-baselining shows the
+approach LOSES to the shipped HVX op.** `GdnSolveBR` optimized: killed the scalar scale-estimation
+(exact HVX int-matmul max-reduce), tuned-vectorized diagonals + packing. Device cyc/head C=128:
+**3,228K (M_op) → 231K (13.9×)**, relerr held 1.11e-2, wall H=4 75.8ms→1.85ms. Breakdown: scale-est+pack
+121K, HMX merges 66K (kernel only **1.4K** — free), diagonals 44K, int8 quant 45K. Manual qurt-thread
+HVX∥HMX overlap **proven feasible on device** (`qurt_thread_create`+`qurt_hvx_lock` succeed inside the
+HMX-resource callback, `-DGDN_BR_THREAD_TEST`) — retires the threading risk.
+
+**⚠ DECISIVE NEGATIVE FINDING — the block-recursive HMX route does NOT beat the shipped HVX op.**
+The shipped int16-packed **HVX-only** GdnSolve op is **11,425 cyc/head at C=128** (this doc, above). The
+block-recursive HMX `GdnSolveBR` is **231K single-thread**, **~50–90K even with the 4-worker pipeline** (M3
+estimate) → **5–8× SLOWER**. Root cause: the HMX merge is free (1.4K), but the **runtime Crouton/k-major
+packing that feeds HMX (~165K/head) dominates**, and the HVX op it replaces was **already O(C²)** (not the
+O(C³) the win-premise assumed). The earlier ~7–9K/8–10× projection (and the [[reference_hmx_dsp_vs_descriptor]]
+ceiling table) **omitted the runtime packing cost** — that was the flaw. The only way HMX could win is a
+**true Crouton-RESIDENT** kernel where the HVX diagonal solve writes its output DIRECTLY in Crouton layout
+(no per-merge gather) so packing is ~free — a major restructure, uncertain payoff, and even then it must
+beat an already-efficient O(C²) HVX op. `GdnSolveBR` stands as a device-correct, fully-validated artifact
+(M1→M_op→M3) but is **not a perf win** as built. Open decision (see M4): attempt the Crouton-resident
+restructure, measure C=256 first (where the HVX op is most expensive, 70,201 — the only place HMX might
+win), or conclude the perf goal isn't met by this route.
+
 ## Reproduce
 
 ```bash
