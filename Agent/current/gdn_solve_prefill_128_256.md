@@ -652,6 +652,32 @@ sweep now ~minutes) + `scripts/gdn_timeline.py` (the mandated ASCII-timeline ren
 - **Gotcha (cost a debug cycle):** a killed/interrupted `qnn-net-run` holds the HMX lock and wedges ALL
   subsequent graphs ("Graph Execution failure") until `pkill -9 -f qnn-net-run` on device.
 
+**M8b DONE (2026-06-03) — const-dedup confound FIXED, overlap STILL ~2% (the REFUTE is real, not an artifact).**
+The CK=8 (2-chain) `chrometrace_htp.json` showed both `GdnMergeHmx_0`/`GdnMergeHmx_1` taking the SAME 3rd
+input `$Const 0x...0017`: the HTP compiler had DEDUPED the byte-identical all-zero per-chain scratch `Hs_0`/
+`Hs_1` into one tensor → a false WAR/WAW dep → suspected forced serialization. Fix (`gdn_split_probe.py`):
+make each `Hs_i` byte-DISTINCT (`hs_buf[0]=ci+1`) — merge overwrites scratch before reading, so init content
+is correctness-irrelevant. **Verified at the compiled-graph layer (the fix took):** post-fix CK=8 graph has
+`GdnMergeHmx_0 scratch=0x0000105600000017` vs `GdnMergeHmx_1 scratch=0x0000105700000020` — DISTINCT tensors,
+each consumed by exactly 1 node, NO shared `$Const`. The two chains are now a fully-independent DAG.
+**Result (RAW, C=256 H=16, real v75): the false dep was NOT the overlap blocker.**
+
+| CK | chains | scratch | boundary glue | HVX∥HMX overlap (col / min-unit) | cyc/head | vs 70,201 | relerr |
+|---|---|---|---|---|---|---|---|
+| 16 | 1 | n/a | 56,598/head | 1% | 296,469 | 4.22× | 7.17e-2 |
+| **8** | **2** | **DISTINCT** | **0** | **2% / 2%** | **255,112** | **3.63×** | 7.17e-2 |
+
+Per-physical-tid timeline (CK=8): HVX tids 512–515 run `GdnSolveDiag_0` (cols 0–20) → HMX tid 256 runs
+`GdnMergeHmx_0` (cols 20–47) → HVX 512–515 run `GdnSolveDiag_1` (cols 51–62) → HMX 256 runs `GdnMergeHmx_1`
+(cols 63–91). `GdnSolveDiag_1`(HVX) does NOT overlap `GdnMergeHmx_0`(HMX) — chain-1's HVX waits for chain-0's
+HMX merge to finish. BOTH-busy = 2/92 cols. **DECISIVE: with the chains truly DAG-independent, QNN STILL
+serializes them (~2%). QNN does NO inter-op concurrency for a custom HMX consumer even when fully
+independent — the 2× HVX∥HMX lever is structurally unreachable, confirmed from the clean-DAG side.** (The
+98% overlap was `GdnSolve(HVX)→NATIVE MatMul(HMX)` inside one fine-grain-streamed native consumer; a custom
+op reads its full input before starting.) The dedup confound only mattered for the M8 narrative; the floor
+is unchanged. KEEP the shipped int16-packed HVX `GdnSolve` op for prefill. Reproduce:
+`cd example/gdn_native/merge_hmx_op/standalone && CKS="16 8" H=16 CB=256 bash gdn_split_sweep.sh`.
+
 **Net for #2 (all architectures now measured):** the route floors at **~3.4× over the 70,201 baseline**
 (239K/head, CK=8). The 2× HVX∥HMX-overlap lever is **unreachable** — QNN won't overlap a custom HMX op,
 manual worker-HMX faults, and the merge stays single-HMX-thread. The shipped int16-packed HVX `GdnSolve`

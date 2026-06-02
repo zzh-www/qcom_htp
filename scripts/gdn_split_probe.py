@@ -101,8 +101,16 @@ for ci in range(n_chunks):
         encs.append({"name": Ai, "output_dtype": "uint16", "y_scale": sA, "y_zero_point": 32768})
 
     # Per-chain Op2 HMX-surface scratch (one constant per chain so concurrent chains never collide).
+    # MUST be byte-DISTINCT per chain: byte-identical all-zero buffers get DEDUPED by the HTP compiler
+    # into ONE shared $Const (verified: chrometrace_htp.json showed both GdnMergeHmx_0/_1 taking the
+    # same scratch tensor) -> a false WAR/WAW dep -> QNN serializes the chains (overlap 1%). The merge
+    # op overwrites the scratch before reading, so the initial content is correctness-irrelevant; the
+    # unique first byte (= chain id + 1) only exists to defeat dedup so each chain gets a SEPARATE
+    # VTCM scratch region.
+    hs_buf = np.zeros(SCRATCH_HS, dtype=np.uint8)
+    hs_buf[0] = (ci + 1) & 0xFF
     inits.append(helper.make_tensor(Hsi, TensorProto.UINT8, [1, 1, 1, SCRATCH_HS],
-                                    np.zeros(SCRATCH_HS, dtype=np.uint8).tobytes(), raw=True))
+                                    hs_buf.tobytes(), raw=True))
     # Op1: Ai -> {T1_i (block-diag uint16), Hd_i (int8 tile handoff, a real graph edge)}.
     nodes.append(helper.make_node("GdnSolveDiag", [Ai], [T1i, Hdi],
                                   name=f"GdnSolveDiag_{ci}", domain="gdn"))
