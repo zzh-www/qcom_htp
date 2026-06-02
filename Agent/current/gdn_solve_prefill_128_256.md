@@ -9,12 +9,14 @@ stage). Goal: make that inverse optimal at C=128/256 on the current v75 HTP.
 (C=128 or C=256). KEEP the shipped int16-packed HVX `GdnSolve` op for prefill.** See "M4 DONE" below.
 - **Shipped (the winner):** C=128/256 enabled + bit-accurate on the GdnSolve HVX op (was capped at C≤64),
   int16-packed (1.6×), boundary `q::Cast` removed (uint16 override). Steady cost C=256 = **70,201 cyc/head**.
-- **`GdnSolveBR` (block-recursive HMX, M1→M4):** device-correct at C=128 (~110K/head) and C=256 (~408K/head
-  single-thread, fully packing-resident). LOSES: even with the achievable HVX∥HMX pipeline (HMX must stay
-  on the main thread — worker-HMX faults; HVX threads give only ~2.5×) C=256 lands ~158K/head, **2.3× slower
-  than 70,201**. Root cause: 16 small 64³-merge HVX glue (quant/pack/requant) > the single O(C²) HVX solve
-  it replaces. The earlier 8–10× / 2–4× projections were too optimistic (assumed merge glue vanishes + full
-  4× HVX∥HMX). The HMX kernel IS free (14K/head); the HVX merge glue is the irreducible killer.
+- **`GdnSolveBR` (block-recursive HMX, M1→M5):** device-correct at C=128 (relerr 1.29e-2) and C=256
+  (relerr 2.38e-2). Definitive measured floor (M5, steady op_dur/head): **441,570 cyc/head single-thread
+  (tuned int16-packed diag), ~170K best-threaded** (2.5× HVX ceiling, HMX-on-main; worker-HMX faults). LOSES
+  by **2.4×**. The binding constraint is the single-thread HVX *work volume* of the 16-merge decomposition
+  (~427K HVX glue: quant/pack/depack/fold/requant) — it out-weighs the one O(C²) HVX solve the baseline does
+  (70,201, already threaded), and HMX (free, 14K) can't absorb it (can't do a triangular solve, can't run on a
+  worker). The earlier 8–10× / 2–4× projections were too optimistic. The HMX kernel IS free; the HVX merge
+  glue is the irreducible killer. **See "M5 DONE" below for the full per-lever breakdown.**
 - **Conclusion:** the win path imagined here does not materialize on v75. The shipped HVX op is the optimum
   for prefill C=128/256. `GdnSolveBR` stands as a validated artifact + a documented negative result.
 
@@ -434,6 +436,65 @@ single-thread-optimized; VERDICT: does NOT beat the 70,201 HVX baseline (~5.8× 
   thread pool. Reproduce: `cd example/gdn_native/solve_br_op/standalone && CB=256 H=8 bash gdn_br.sh`
   (relerr), `CB=256 H=16 EXTRA_DEFS=-DGDN_BR_PROBE_CYCLES bash gdn_br.sh` (per-stage cyc, decode head-0
   uint32 probe). Host formula/scale validation: `GDN_NO_VSCALE=1 uv run python scripts/gdn_blockrec_c256_probe.py --heads 8`.
+
+**M5 DONE (2026-06-02) — the definitive Crouton-resident push.  Both levers driven to a real measured floor;
+verdict UNCHANGED: `GdnSolveBR` loses to the 70,201 HVX baseline by ~2.4×.  This is the floor, not a tuning gap.**
+Replaced the wall-µs/work-volume estimates with the canonical metric = the chrometrace **op `dur` (concurrent
+wall cycles) ÷ heads** (the per-tile steady metric), and instrumented the FULL residual.
+
+- **Full single-thread breakdown, C=256, measured op_dur/head (was estimated at 408K — true op_dur is higher):**
+  diag 121K · quant 90K · hmxpack 64K (eff 9K + actpack 39K + wtpack 16K) · fold 63K (DDR-bound A read) ·
+  pint-2pass 35K · requant 36K · depack 30K · hmxkern **14K (free)** · acc 12K · widen 4K · zero 4K
+  → **op_dur 480,219 cyc/head**.  (Decode head-0 probe: codes = `clip(round(f/sT)+zpT,0,65535)` then
+  `view(uint32)`; sT=6.1037e-5, zpT=32768; p[0]=diag…p[16]=zero, all ÷nheads = per-head work-volume.)
+
+- **Lever B (threading) — definitive ceiling = 2.5×, measured on real device, and it is NOT the binding
+  constraint.**  Worker-HMX **re-confirmed faulting** (full path `-DGDN_BR_USE_THREADS` NT=2 → RUNFAIL; the
+  backend grants HMX to the main callback thread only).  HVX-only threading ceiling, measured as DIAG_ONLY
+  **op_dur/head** vs NT (the real concurrent wall, not the summed `g_c_*` work-volume): NT=1 156,654 →
+  NT=2 82,778 (1.89×) → NT=3 66,054 → NT=4 59,152 → **2.65× at NT=4** (tuned-diag build: 125K→49.9K = 2.51×).
+  v75 HVX-context contention caps it ~2.5–2.65× because the backend already holds HVX contexts.  **Key point:
+  even a HYPOTHETICAL full N-way head pipeline with HMX-on-workers (which faults) at 2.65× on the whole
+  471K = 178K/head — still loses.**  The binding constraint is the single-thread HVX *work volume* (~457K of
+  glue), not the thread count: the baseline does ONE O(C²) HVX solve (70,201, already 4-thread) where BR does
+  457K of per-merge glue that out-weighs the threading win.
+
+- **Lever A (glue fusion) — pushed the biggest reducible lever, measured the slope, confirmed it can't close
+  2.4×.**  (1) **Diagonal tuned** to the shipped int16-packed forward-subst (ported `Q6_Ww_vmpyacc_WwVhRh`
+  64-col/instr + int16 `Tc16` buffer + one `vasr_VwVwR_rnd_sat` narrow, widen to int32 once at the end):
+  **diag 121K→92K**, full op_dur **480K→441,570 cyc/head**, relerr bit-identical (diag 1.077e-4, whole-T
+  2.378e-2).  The diag floor is **DDR-read-bound on A** (the fold dominates, not the MAC) — the baseline reads
+  A once and amortizes over O(C²); BR re-reads A blocks per merge.  (2) Operand-caching analysis (counted
+  reuse: 10 inner merges over only **6 distinct** A-folds + **6 distinct** T-weights; 3 reused T_ii acts) ⇒
+  max ~56K saveable → ~385K → /2.51 = **153K**, still 2.2× over.  Quant (90K, 32 calls) + pack (64K) + depack
+  (30K) are intrinsic per-merge HVX glue, not redundancy.
+
+- **DEFINITIVE NUMBERS (C=256, real v75, steady op_dur/head):**
+  | config | single-thread | best-threaded (2.51×, HMX hidden) | vs 70,201 |
+  |---|---|---|---|
+  | M4 (as committed) | 480,219 | ~191K | 2.7× slower |
+  | M5 tuned-diag (current) | **441,570** | **~170K** | **2.4× slower** |
+  | M5 + full operand-caching (estimate) | ~385K | ~153K | ~2.2× slower |
+  Baseline shipped int16-packed HVX op | — | **70,201** | 1.0× |
+
+- **THE DEFINITIVE BLOCKER (quantified):** NOT the threading ceiling, NOT residual glue tuning, NOT diagonals —
+  it is the **raw single-thread HVX work volume of the 16-merge decomposition (~427K HVX after tuning) vs the
+  baseline's single O(C²) solve (70,201, already threaded).**  Block-recursion trades one clean O(C²) HVX
+  forward-subst for 16 dense 64³ matmuls, and each matmul's *irreducible* HVX glue (quant act + quant wt +
+  crouton-pack + k-major-pack + 2-pass scale + depack + widen + requant, ~4096 elems each) sums to far more
+  HVX work than the solve it removes.  The HMX kernel is genuinely free (14K), but HMX cannot do a triangular
+  solve and cannot run on a worker, so it cannot absorb the glue.  **No achievable combination of the two
+  levers crosses 70,201.**
+
+- **HONEST VERDICT:** best achievable C=256 ≈ **150–170K cyc/head** (tuned diag + full glue fusion + 2.5×
+  HVX threading + HMX-on-main).  That is **2.2–2.4× SLOWER** than the shipped 70,201.  More is NOT extractable:
+  the diag is DDR-bound, the merge glue is intrinsic, threading is HVX-context-capped, and HMX-on-worker faults.
+  **This is the floor of the Crouton-resident path.  KEEP the shipped int16-packed HVX `GdnSolve` op for
+  prefill C=128/256.**  `GdnSolveBR` is a fully-validated device-correct artifact + a now-quantified negative
+  result; the tuned int16-packed diagonal (correctness-preserving) is left in `gdn_solve_diag64`.
+  Reproduce M5: `cd example/gdn_native/solve_br_op/standalone && EXTRA_DEFS=-DGDN_BR_PROBE_CYCLES CB=256 H=16 bash gdn_br.sh`
+  then decode head-0 probe (uint32 view, ÷16); op_dur/head from `out_s/optrace/chrometrace.json` GdnSolveBR
+  `dur`÷16; threading sweep `EXTRA_DEFS="-DGDN_BR_DIAG_ONLY -DGDN_BR_USE_THREADS -DGDN_BR_NT=<1|2|4>"`.
 
 ## Reproduce
 

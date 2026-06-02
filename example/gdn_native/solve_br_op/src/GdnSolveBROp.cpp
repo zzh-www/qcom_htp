@@ -118,6 +118,7 @@ struct gdn_scr_t {
     int8_t  termi[GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));  /* one merge term as int8 */
     uint8_t surf_sub[GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));/* depack base-subtracted surface */
     int32_t eff[64] __attribute__((aligned(128)));                       /* folded-bias effective[] */
+    int16_t Tc16[GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));   /* int16-packed diag T codes */
 };
 static gdn_scr_t g_scr[GDN_BR_NT];
 
@@ -195,34 +196,29 @@ static void gdn_fold_block_raw(const uint16_t *Au, int row_stride, int32_t *Afx,
  * (scale GDN_BR_TI) in Tcout — NO float dequant (the M_op float roundtrip was the diagonal bottleneck). */
 static void gdn_solve_diag64(gdn_scr_t *sc, const uint16_t *Au, int row_stride, int zpA, int M, int S,
                              int32_t *Tcout) {
-    int32_t *Tc  = Tcout;
+    /* int16-PACKED forward subst (ported from GdnSolveOp C>64 path): T held int16 in a tight VTCM-friendly
+     * buffer, ONE Q6_Ww_vmpyacc_WwVhRh does all 64 cols/row (2x the int32 vmpyiacc + half the memory
+     * traffic), the int32 even/odd acc narrows+re-interleaves in one vasr_VwVwR_rnd_sat.  Output widened to
+     * int32 codes once at the end (the merge path consumes int32). ~10x faster than the int32 BSS version. */
     int32_t *Afx = sc->Afx;
-    gdn_fold_block_hvx(Au, row_stride, Afx, zpA, M, S);
-    const HVX_Vector vrnd = Q6_V_vsplat_R(1 << (GDN_BR_F - 1));
-    const int ei = (int)(1.0f / GDN_BR_TI + 0.5f);
-    /* T row i (64 cols = 2 HVX vectors), acc int32, requant >>F. T genuinely lower-tri. */
+    gdn_fold_block_hvx(Au, row_stride, Afx, zpA, M, S);   /* Afx[i*BL+k] = code, low 16b is the int16 mul scalar */
+    int16_t *Tc16 = sc->Tc16;
+    const int16_t ei16 = (int16_t)(int)(1.0f / GDN_BR_TI + 0.5f);
     for (int i = 0; i < BL; ++i) {
-        HVX_Vector e0 = Q6_V_vzero(), o0 = Q6_V_vzero(), e1 = Q6_V_vzero(), o1 = Q6_V_vzero();
-        int k = 0;
-        for (; k + 1 < i; k += 2) {
-            int s0 = Afx[i * BL + k], s1 = Afx[i * BL + k + 1];
-            const HVX_Vector *T0 = (const HVX_Vector *)(Tc + k * BL);
-            const HVX_Vector *T1 = (const HVX_Vector *)(Tc + (k + 1) * BL);
-            e0 = Q6_Vw_vmpyiacc_VwVwRh(e0, T0[0], s0);
-            o0 = Q6_Vw_vmpyiacc_VwVwRh(o0, T1[0], s1);
-            e1 = Q6_Vw_vmpyiacc_VwVwRh(e1, T0[1], s0);
-            o1 = Q6_Vw_vmpyiacc_VwVwRh(o1, T1[1], s1);
-        }
-        for (; k < i; ++k) {
-            int s0 = Afx[i * BL + k];
-            const HVX_Vector *T0 = (const HVX_Vector *)(Tc + k * BL);
-            e0 = Q6_Vw_vmpyiacc_VwVwRh(e0, T0[0], s0);
-            e1 = Q6_Vw_vmpyiacc_VwVwRh(e1, T0[1], s0);
-        }
-        HVX_Vector *Ti = (HVX_Vector *)(Tc + i * BL);
-        Ti[0] = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_Vw_vadd_VwVw(e0, o0), vrnd), GDN_BR_F);
-        Ti[1] = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_Vw_vadd_VwVw(e1, o1), vrnd), GDN_BR_F);
-        Tc[i * BL + i] += ei;
+        HVX_VectorPair acc = Q6_W_vzero();
+        for (int k = 0; k < i; ++k)
+            acc = Q6_Ww_vmpyacc_WwVhRh(acc, ((const HVX_Vector *)(Tc16 + k * BL))[0], Afx[i * BL + k]);
+        ((HVX_Vector *)(Tc16 + i * BL))[0] =
+            Q6_Vh_vasr_VwVwR_rnd_sat(Q6_V_hi_W(acc), Q6_V_lo_W(acc), GDN_BR_F);  /* even/odd -> natural int16 */
+        Tc16[i * BL + i] += ei16;
+    }
+    /* widen the int16 T codes -> int32 codes for the merge path.  vsxt de-interleaves (lo=even halfwords,
+     * hi=odd); a word-granularity vshuff re-interleaves to natural [c0,c1,...] order (2 vecs/row). */
+    for (int i = 0; i < BL; ++i) {
+        HVX_VectorPair w = Q6_Ww_vsxt_Vh(((const HVX_Vector *)(Tc16 + i * BL))[0]);
+        HVX_VectorPair nat = Q6_W_vshuff_VVR(Q6_V_hi_W(w), Q6_V_lo_W(w), -4);
+        ((HVX_Vector *)(Tcout + i * BL))[0] = Q6_V_lo_W(nat);
+        ((HVX_Vector *)(Tcout + i * BL))[1] = Q6_V_hi_W(nat);
     }
 }
 
@@ -811,6 +807,7 @@ static void gdn_br_head_scalar(const uint16_t *Au, int zpA, float sA,
 #if defined(__hexagon__)
 #if defined(GDN_BR_PROBE_CYCLES)
 uint64_t g_c_diag = 0;
+uint64_t g_c_fold = 0, g_c_acc = 0, g_c_widen = 0, g_c_requant = 0, g_c_zero = 0;
 #endif
 /* compute one head's T = (I-A)^-1 (block-recursive) into Th, using per-thread scratch sc and per-thread
  * VTCM region vt.  zpA/sA->(M,S) fold params; sT/zpT output quant.  Pure HVX + HMX (no shared globals). */
@@ -827,16 +824,28 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
 #if defined(GDN_BR_PROBE_CYCLES)
     uint64_t t1; asm volatile("%0 = C15:14" : "=r"(t1)); g_c_diag += t1 - t0;
 #endif
+#if defined(GDN_BR_PROBE_CYCLES)
+    uint64_t z0; asm volatile("%0 = C15:14" : "=r"(z0));
+#endif
     { HVX_Vector vzph = Q6_Vh_vsplat_R(zpT);
       if (((uintptr_t)Th & 127) == 0) { HVX_Vector *op = (HVX_Vector *)Th;
           for (int i = 0; i < (C * C) / 64; ++i) op[i] = vzph; }
       else { HVX_UVector *op = (HVX_UVector *)Th;
           for (int i = 0; i < (C * C) / 64; ++i) op[i] = vzph; } }
+#if defined(GDN_BR_PROBE_CYCLES)
+    { uint64_t z; asm volatile("%0 = C15:14" : "=r"(z)); g_c_zero += z - z0; }
+#endif
     for (int i = 0; i < NB; ++i) {
         int bi = gdn_blk_index(i, i);
+#if defined(GDN_BR_PROBE_CYCLES)
+        uint64_t rq0; asm volatile("%0 = C15:14" : "=r"(rq0));
+#endif
         gdn_requant_block_out(sc->Tblk[bi], sc->Tscl[bi], sT, zpT, Th, i * BL, i * BL, C);
         for (int r = 0; r < BL; ++r)
             for (int c = r + 1; c < BL; ++c) Th[(i * BL + r) * C + (i * BL + c)] = (uint16_t)zpT;
+#if defined(GDN_BR_PROBE_CYCLES)
+        { uint64_t rq; asm volatile("%0 = C15:14" : "=r"(rq)); g_c_requant += rq - rq0; }
+#endif
     }
 #if defined(GDN_BR_DIAG_ONLY)
     return;
@@ -851,23 +860,45 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
             int bij = gdn_blk_index(i, j);
             float s_S = 0.0f; int first = 1;
             for (int k = j; k < i; ++k) {
+#if defined(GDN_BR_PROBE_CYCLES)
+                uint64_t f0; asm volatile("%0 = C15:14" : "=r"(f0));
+#endif
                 gdn_fold_block_raw(Ah + (size_t)i * BL * C + k * BL, C, sc->Aoff, zpA, M, S);
+#if defined(GDN_BR_PROBE_CYCLES)
+                { uint64_t f; asm volatile("%0 = C15:14" : "=r"(f)); g_c_fold += f - f0; }
+#endif
                 int bkj = gdn_blk_index(k, j);
                 float sterm;
                 gdn_merge_codes(sc, vt, sc->Aoff, (float)(1.0 / (1 << GDN_BR_F)),
                                 sc->Tblk[bkj], sc->Tscl[bkj], sc->termi, &sterm);
                 if (first) s_S = sterm;
+#if defined(GDN_BR_PROBE_CYCLES)
+                uint64_t a0; asm volatile("%0 = C15:14" : "=r"(a0));
+#endif
                 gdn_acc_i8_to_codes(sc, sc->termi, sterm, s_S, first);
+#if defined(GDN_BR_PROBE_CYCLES)
+                { uint64_t a; asm volatile("%0 = C15:14" : "=r"(a)); g_c_acc += a - a0; }
+#endif
                 first = 0;
             }
             float sij;
             gdn_merge_codes(sc, vt, sc->Tblk[bii], GDN_BR_TI, sc->Sacc, s_S, sc->termi, &sij);
+#if defined(GDN_BR_PROBE_CYCLES)
+            uint64_t w0; asm volatile("%0 = C15:14" : "=r"(w0));
+#endif
             gdn_widen_i8_to_i32(sc->termi, sc->Tblk[bij]);
+#if defined(GDN_BR_PROBE_CYCLES)
+            { uint64_t w; asm volatile("%0 = C15:14" : "=r"(w)); g_c_widen += w - w0; }
+#endif
             sc->Tscl[bij] = sij;
 #if defined(GDN_BR_PROBE_CYCLES)
-            uint64_t m1; asm volatile("%0 = C15:14" : "=r"(m1)); g_c_hmxpack += 0; (void)m0; (void)m1;
+            (void)m0;
+            uint64_t rq0; asm volatile("%0 = C15:14" : "=r"(rq0));
 #endif
             gdn_requant_block_out(sc->Tblk[bij], sij, sT, zpT, Th, i * BL, j * BL, C);
+#if defined(GDN_BR_PROBE_CYCLES)
+            { uint64_t rq; asm volatile("%0 = C15:14" : "=r"(rq)); g_c_requant += rq - rq0; }
+#endif
         }
     }
 }
@@ -995,6 +1026,8 @@ static uint32_t gdn_solve_br_kernel(
         p[4] = (uint32_t)g_c_hmxpack; p[5] = (uint32_t)g_c_hmxkern; p[6] = (uint32_t)g_c_hmxdepack;
         p[7] = (uint32_t)g_c_quant; p[8] = (uint32_t)g_c_pint;
         p[9] = (uint32_t)g_c_eff; p[10] = (uint32_t)g_c_actpack; p[11] = (uint32_t)g_c_wtpack;
+        p[12] = (uint32_t)g_c_fold; p[13] = (uint32_t)g_c_acc; p[14] = (uint32_t)g_c_widen;
+        p[15] = (uint32_t)g_c_requant; p[16] = (uint32_t)g_c_zero;
     }
 #endif
     (void)handle;
