@@ -620,10 +620,38 @@ the gap. Heads are independent, so the fix is **per-head / small-chunk pipelinin
 independent `GdnSolveDiag(chunk)→GdnMergeHmx(chunk)` chains so QNN overlaps chain-i's HMX Op2 with
 chain-(i+1)'s HVX Op1, and only one chunk's (~40KB) intermediate is live (fits VTCM, no spill). Expected:
 kill the ~58K/head boundary glue + overlap Op1(94K) under Op2(178K) → ~178K/head, then attack Op2's
-single-thread merge glue. **STATUS: per-chunk graph half-implemented in `scripts/gdn_split_probe.py`
-(chunk sweep CK=1/2/4); device sweep NOT yet measured (background run was interrupted). NEXT: finish +
-measure does-Spill/Fill-vanish + does-overlap-appear per CK.** Open QNN question: will it actually schedule
-independent chains concurrently, or still serialize them?
+single-thread merge glue.
+
+**M8 DONE (2026-06-03) — per-chunk pipeline MEASURED on device (C=256, H=16). DDR-spill half CONFIRMED,
+overlap half REFUTED.** `scripts/gdn_split_probe.py` (per-chunk via `GDN_CK`) + fast harness
+`merge_hmx_op/standalone/gdn_split_sweep.sh` (build ONCE + loop CK; replaces the wasteful per-CK rebuild —
+sweep now ~minutes) + `scripts/gdn_timeline.py` (the mandated ASCII-timeline renderer). Verified:
+
+| CK | chains | boundary Spill/Fill | HVX∥HMX overlap | cyc/head | vs 70,201 |
+|---|---|---|---|---|---|
+| 16 | 1 | 56,041/head | 1% | 287,571 | 4.10× |
+| **8** | **2** | **0 (vanished)** | **1%** | **239,501** | **3.41×** |
+| 4 | 4 | — | — | **HANG** (DDR thrash) | — |
+| 1 | 16 | — | — | **HANG** | — |
+
+- **DDR-spill root cause CONFIRMED:** 1→2 chains drops boundary Spill/Fill from **56K→0/head** (smaller
+  per-chunk handoff stays VTCM-resident) → 287K→239K. The user's insight was right.
+- **Overlap REFUTED (decisive new finding):** QNN **serializes the independent chains — overlap stays 1%**
+  even at 2 chains. QNN's scheduler does NOT stream/overlap a **custom** consumer op. (The earlier 98%
+  overlap was `GdnSolve(HVX)→NATIVE MatMul(HMX)` — QNN fine-grain-streams a *native* consumer; a custom
+  merge op reads its full input before starting → serial. So you can have a cheap custom merge OR overlap,
+  not both: native MatMul overlaps but re-imposes the ~2M ForceFormat tax.)
+- **≥4 chains DDR-thrash-HANG:** multiple chains' TCM_Only handoff + HMX scratch can't all stay VTCM-
+  resident → un-tile falls into the billion-cycle DDR path; ctxgen's static `spill_bytes=0` doesn't predict
+  it. Usable window = 1–2 chains.
+- **Gotcha (cost a debug cycle):** a killed/interrupted `qnn-net-run` holds the HMX lock and wedges ALL
+  subsequent graphs ("Graph Execution failure") until `pkill -9 -f qnn-net-run` on device.
+
+**Net for #2 (all architectures now measured):** the route floors at **~3.4× over the 70,201 baseline**
+(239K/head, CK=8). The 2× HVX∥HMX-overlap lever is **unreachable** — QNN won't overlap a custom HMX op,
+manual worker-HMX faults, and the merge stays single-HMX-thread. The shipped int16-packed HVX `GdnSolve`
+op (70,201) remains the prefill optimum. The block-recursive HMX route = device-correct validated artifact
++ rigorously-quantified negative result, redundancy fully squeezed (740K→239K), floor is structural.
 
 ## Reproduce
 
