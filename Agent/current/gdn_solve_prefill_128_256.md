@@ -262,8 +262,16 @@ computes all descriptor fields + offset tables from m/k/n parametrically, and fo
 control words are shape-INDEPENDENT constants** (`conv1x1_words(0x700,0,0,0,0x20)`, `extra=[1,0]`). So
 M1 needs **no new kernel** — just a 64³/32³ artifact. Residual: confirm the alt-A (n_tiles=1) arm for
 32³, and verify the activation-surface/output Crouton layout at small shapes (tile contracts: K%32, N%32,
-M steps by 8). (b) driving HMX from inside a QHPI op (vs the standalone-kernel harness) — may need manual
-qurt/HMX descriptor setup; (c) keeping the pipeline fed (enough independent heads) — fine at prefill scale.
+M steps by 8). (b) ~~driving HMX from inside a QHPI op~~ **RESOLVED (2026-06-02): trivially possible + production
+precedent.** A QHPI op drives HMX by declaring `QHPI_RESOURCE_HMX` (`tools/qnn-sdk/include/QNN/HTP/core/qhpi.h:871`,
+bitmask in `QHPI_Kernel_v1::resources`); the QNN backend acquires/locks HMX at graph load (HAP), so the op
+callback just runs HMX inline asm — NO in-op `h2_mxaccess_acquire`/`HAP_compute_res_hmx_lock` needed.
+**Production ops in THIS repo already drive the same u8i8 v73deep kernel on real v75 from a QHPI op:**
+`example/qnn_hmx_matmul_u8i8/src/HmxU8I8ToU8MatMulOp.cpp` (`.resources=QHPI_RESOURCE_HMX`), also w4a8/w8a16/w4a16
+siblings, and a MIXED HVX+HMX op `docs/hexagon-tutorial/qnn-tutorial/ch03-qnn-custom-op/src/dsp/HvxHmxOp.cpp`.
+So `GdnSolveBR` = GdnSolveOp's HVX/QHPI structure + that op's HMX-drive pattern + the M2b merge choreography,
+declaring `QHPI_RESOURCE_HVX|QHPI_RESOURCE_HMX`. (c) keeping the pipeline fed (enough independent heads) —
+fine at prefill scale.
 
 **M1 groundwork done (2026-06-02).** Exec path validated end-to-end WITHOUT device: handwritten kernels
 run in **hexagon-sim** via the bare-metal h2 harness (`scripts/check_handwritten_hmx_body_entry_sim.py`
