@@ -260,9 +260,34 @@ families enter-and-return OK). Shape-driven numeric runs go through `scripts/run
 output_surface,mask_control,activation_table,output_table}.raw` + an `abi_manifest` + minimal `oracle`
 (for the output compare), emits a C harness, runs in sim, diffs sim output vs `oracle.raw_output`. The
 u8i8 requant reference is `scripts/reconstruct_hmx_u8_drain.py`: `drain_in = ΣactW + (−128·Σw + bias_q)`,
-`out_u8 = clamp(trunc(drain_in·scale/512) + (baseline>>7),0,255)`. **Next concrete step:** synthesize a
-64³ u8i8 artifact (reuse `prepare_owned_inputs` packers + that drain ref; pick scale=512/baseline=0 for a
-trivial cvt), run the sim, confirm bit-correct 64³ matmul + record cyc. Then 32³ (alt-A arm), then w8a16.
+`out_u8 = clamp(trunc(drain_in·scale/512) + (baseline>>7),0,255)`.
+
+**M1 DONE (2026-06-02) — u8i8 64³ matmul PROVEN bit-exact in hexagon-sim.** `scripts/gdn_hmx_matmul_sim.py`
+(self-contained generator + bare-metal C harness + sim runner + numpy verifier). The owned u8i8 kernel
+computes a correct **64×64×64 u8×i8 matmul in ONE call**, VTCM-resident, glue-free: **max_abs_diff=0,
+0/4096 mismatches** on real-slice + random full-range u8/i8 (seeds 7,42) + ramp. Reproduce:
+`uv run python scripts/gdn_hmx_matmul_sim.py --mode real` (or `--mode random --seed 42`).
+- **cyc/MAC: ~4.2e-4 steady-state** (back-to-back amortized ~109 pcyc/call; cold single-call 417 pcyc =
+  1.59e-3, dominated by the ~430-cyc fixed prologue/drain on this tiny shape). Steady **beats the w16a16
+  oracle's 5.6e-4** → confirms u8i8 ≈¼ cost, the cheapest merge primitive. (sim pcycles, no DDR/cache.)
+- **Authoritative 64³ descriptor** (feeds M2): `out_desc={out_table_stride_dwords:2, out_y_stride_words:8,
+  n_tiles_pow2:8, m_total_minus_step:8, k_total_bytes:64}`, `act_desc={n_act_pairs:2,
+  act_table_y_stride_words:8}`, `extra=[1,0]`, mask=`conv1x1_words(0x700,0,0,0,0x20)`. Single call covers
+  all 64 M-rows + both K-tiles.
+- **CRITICAL activation-layout finding (load-bearing for M2's VTCM layout).** The `prepare_owned_inputs.py:247`
+  crouton8 packer interleaves `kt` INSIDE the row8 loop, which scatters K-tiles → kernel reads WRONG act
+  columns for k≥32. **Correct = each K-tile a SEPARATE contiguous crouton8 tile of `m*32` bytes laid
+  end-to-end** (kt0@0, kt1@`m*32`), `act_table[kt]=kt*m*32` (offsets [0,2048] for 64³). See
+  `gdn_hmx_matmul_sim.py::pack_act_crouton8`.
+- **Output crouton8 de-pack (closed form, validated):** `out[r,c]` at byte
+  `nt*2048 + r8*512 + m32*256 + rsub*32 + cw*4 + bsub` (`nt=c//32, m32=r//32, r8=(r%32)//8, rsub=r%8,
+  cw=(c%32)//4, bsub=c%4`).
+- Gotchas: recompute `effective64[n]=−128·Σ_{k<64}W[:64,n]+bias_q[n]` for the K-slice (don't reuse 256-K
+  effective); 256³ `out_ref_u8.npy` is chain-8 (not a single-matmul golden); shipped `A.raw` is degenerate
+  (identical rows) — random data is the real gate.
+
+**Remaining M1 tail (deferred):** 32³ HMX (alt-A arm) only needed if BL=32; M2 starts at **BL=64 (nb=2,
+C=128)** on the validated 64³ path. w8a16 (M1b) deferred to merge-accuracy gating.
 
 ## Reproduce
 
