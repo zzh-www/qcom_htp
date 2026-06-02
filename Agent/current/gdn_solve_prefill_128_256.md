@@ -5,27 +5,57 @@ fewer inter-chunk serial recurrence steps + bigger HMX-shaped matmuls for the re
 GDN stage that gets *worse* with larger C is the per-head C×C triangular inverse (the `solve_tril`
 stage). Goal: make that inverse optimal at C=128/256 on the current v75 HTP.
 
-**Status (2026-06-02). RESOLVED — the block-recursive HMX route does NOT beat the shipped HVX op at any C,
-in EITHER form: the fused one-op (M1→M5) NOR the co-designed two-op SPLIT (M6). KEEP the shipped
-int16-packed HVX `GdnSolve` op for prefill.** See "M4 DONE" and "M6 DONE" below.
-- **M6 (two-op split, 2026-06-02):** built it.  `multithreaded=true` on a pure-HVX Op1 DID self-slice 4 HVX
-  threads (diag 18.6K/head, ~4.8× recovery) and the opaque-VTCM int8-tile handoff DID avoid the ForceFormat
-  tax (no adapter op needed).  But the two graph nodes run **0% overlapped** (serial T1→Op2 edge, no
-  cross-head pipeline) and Op2 (HMX, can't self-slice) is single-thread 524K/head → total **740K/head,
-  ~10.5× slower** than 70,201.  Confirms M5's blocker from the split side: the per-merge HVX glue is the
-  irreducible cost; splitting relocates but doesn't shrink it, and adds a serial op boundary.
-- **Shipped (the winner):** C=128/256 enabled + bit-accurate on the GdnSolve HVX op (was capped at C≤64),
-  int16-packed (1.6×), boundary `q::Cast` removed (uint16 override). Steady cost C=256 = **70,201 cyc/head**.
-- **`GdnSolveBR` (block-recursive HMX, M1→M5):** device-correct at C=128 (relerr 1.29e-2) and C=256
-  (relerr 2.38e-2). Definitive measured floor (M5, steady op_dur/head): **441,570 cyc/head single-thread
-  (tuned int16-packed diag), ~170K best-threaded** (2.5× HVX ceiling, HMX-on-main; worker-HMX faults). LOSES
-  by **2.4×**. The binding constraint is the single-thread HVX *work volume* of the 16-merge decomposition
-  (~427K HVX glue: quant/pack/depack/fold/requant) — it out-weighs the one O(C²) HVX solve the baseline does
-  (70,201, already threaded), and HMX (free, 14K) can't absorb it (can't do a triangular solve, can't run on a
-  worker). The earlier 8–10× / 2–4× projections were too optimistic. The HMX kernel IS free; the HVX merge
-  glue is the irreducible killer. **See "M5 DONE" below for the full per-lever breakdown.**
-- **Conclusion:** the win path imagined here does not materialize on v75. The shipped HVX op is the optimum
-  for prefill C=128/256. `GdnSolveBR` stands as a validated artifact + a documented negative result.
+## CURRENT STATE & RESUME (2026-06-03) — read this first
+
+**Status: block-recursive HMX route is device-correct but does NOT beat the shipped HVX op (best 255K vs
+70,201 cyc/head, ~3.6×). Graph-level HVX∥HMX overlap is structurally unreachable on QNN. The shipped
+int16-packed HVX `GdnSolve` op remains the prefill optimum.** Milestone-by-milestone detail below (M1→M9).
+
+**The journey (cyc/head @ C=256, H=16, real v75):** fused op M_op 3.2M → M3 optimized → M6 two-op split
+740K → M7 redundancy squeeze (killed the 234K tile→natural→tile round-trip + vectorized the scalar
+tile-write) → **239–255K** → M8 per-chunk pipeline (boundary Spill/Fill 56K→0) → M9 (fixed a const-dedup
+false dep). All squeezing is done; **floor ≈ 255K (3.6×)**.
+
+**Two decisive, device-confirmed findings (the wall):**
+1. **HMX kernel is essentially free (~14K/head); the cost is the HVX merge "glue"** (per-merge quant /
+   crouton+k-major pack / depack / requant for the 16 small 64³ merges, ~165–240K/head). HMX can't help:
+   it can't do a triangular solve (diagonals stay HVX) and can't run on a spawned worker (faults).
+2. **QNN does NO inter-op concurrency for custom (QHPI) ops** — even two FULLY-independent chains
+   (M9: distinct scratch, clean independent DAG verified in `chrometrace_htp.json`) run **serial, 2%
+   overlap**. So splitting into ops/chains can NEVER overlap HVX∥HMX. (The old 98% overlap was a NATIVE
+   MatMul consumer, which QNN streams; a custom consumer op does not.) ⇒ graph-level overlap is dead.
+   Also: byte-identical scratch constants get **deduped** by QNN into one shared tensor → false WAR dep
+   (M9 fix = make per-branch scratch byte-distinct).
+
+**Why the baseline wins (root):** it does ONE monolithic int16 O(C²) HVX solve — no int8 quantization, no
+tiling, no per-block packing, no 16× bookkeeping. Decomposing into 16 free HMX matmuls trades that for 16×
+the quant/pack/depack glue, which is single-thread-bound and out-weighs the solve it replaces.
+
+**Only remaining untested lever (marginal):** intra-op manual HVX-worker threading — inside ONE op, drive
+HMX on the main thread while spawning HVX worker threads to multithread the merge glue (M3 proved HVX
+workers run + HMX-on-main works; only HMX-on-worker faults). NOTE: this is NOT "HVX∥HMX overlap" (HMX is
+free); it's multithreading the HVX glue, capped at the measured **~2.5× HVX-worker ceiling** → est.
+~100–130K/head best case = **~1.5× SLOWER** than baseline, with the C=256 multi-level int8 accuracy already
+at 7e-2. Poor odds. Alternative direction (not tried): **mixed-chunk** — keep the solve at small C (cheap)
+while other GDN stages use big C, sidestepping the O(C²)-solve-gets-expensive premise entirely.
+
+**Artifacts (device-correct, validated):** `example/gdn_native/solve_br_op/` (fused GdnSolveBR, M1→M5);
+`example/gdn_native/solve_diag_op/` (HVX-diag op) + `example/gdn_native/merge_hmx_op/` (HMX-merge op, M6→M9
+split). Sim de-risk: `scripts/gdn_hmx_matmul_sim.py`, `gdn_blockrec_sim.py`. Probes:
+`scripts/gdn_blockrec_c128_probe.py`, `gdn_blockrec_c256_probe.py`, `gdn_merge_precision_probe.py`,
+`gdn_split_probe.py`. Harness+tools: `merge_hmx_op/standalone/gdn_split_sweep.sh` (fast build-once/loop-CK),
+`scripts/gdn_timeline.py` (mandated ASCII-timeline renderer). optrace on disk:
+`merge_hmx_op/standalone/out_{8,16}/optrace/` (C=256 split), `solve_diag_op/standalone/out_s/optrace/`
+(HVX-diag); **C=256 pure-HVX baseline optrace NOT on disk** (regen via `solve_op/standalone` `CS=256 ./gdn_shape.sh`).
+
+**Commits (branch gdn-kernel-ref):** 615174f(M1) a8aeaa8(M2a) b16a16b(M2b) ff1a831(riskB) 774b2a5(M_op)
+ae6808f(M3) d48c9c9(M4) eedead3(M5) aeaddba(M6/M7) eda7874(M8) 84aa31a(method-mandate) 01fc136(M9).
+
+**OPEN (user has more questions — TBD):** (a) intra-op HVX-worker multithreading of the merge glue —
+build+measure or skip? (b) mixed-chunk direction? (c) the C=256 pure-HVX baseline optrace regen for
+apples-to-apples comparison.
+
+---
 
 ## What shipped
 
@@ -704,4 +734,13 @@ EXTRA_DEFS=-DGDN_BR_PROBE_CYCLES CB=256 H=16 bash gdn_split.sh # per-stage work-
 EXTRA_DEFS=-DGDN_BR_DIAG_ONLY    CB=256 H=16 bash gdn_split.sh # diag-only (handoff diag precision)
 cd ../../solve_diag_op/standalone
 CB=256 H=16 bash gdn_diag.sh                                   # Op1 alone: multithreaded diag, 4 HVX tids
+
+# M8/M9 per-chunk pipeline — FAST sweep (build ONCE, loop CK) + the MANDATED ASCII timeline:
+cd ../../merge_hmx_op/standalone
+CKS="16 8" H=16 CB=256 bash gdn_split_sweep.sh                 # per-CK: relerr + cyc/head + boundary glue + overlap
+python ../../../../scripts/gdn_timeline.py out_8/optrace/chrometrace.json 16 out_8/Result_0/T.raw 256  # ASCII timeline
+# compiled op-dependency graph (post-dedup) — diff vs expected (look for a scratch tensor shared across merges):
+python -c "import json;d=json.load(open('out_8/optrace/chrometrace_htp.json'));[print(n.get('grouping'),n.get('input_names')) for n in d['graph']['nodes'].values()]"
+# NOTE: after any interrupted device run, clear the HMX lock: ssh oneplus 'pkill -9 -f qnn-net-run'
+# NOTE: C=256 pure-HVX baseline optrace is NOT on disk — regen: (cd ../../solve_op/standalone && CS=256 ./gdn_shape.sh)
 ```
