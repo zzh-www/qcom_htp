@@ -372,19 +372,23 @@ approach LOSES to the shipped HVX op.** `GdnSolveBR` optimized: killed the scala
 HVX∥HMX overlap **proven feasible on device** (`qurt_thread_create`+`qurt_hvx_lock` succeed inside the
 HMX-resource callback, `-DGDN_BR_THREAD_TEST`) — retires the threading risk.
 
-**⚠ DECISIVE NEGATIVE FINDING — the block-recursive HMX route does NOT beat the shipped HVX op.**
-The shipped int16-packed **HVX-only** GdnSolve op is **11,425 cyc/head at C=128** (this doc, above). The
-block-recursive HMX `GdnSolveBR` is **231K single-thread**, **~50–90K even with the 4-worker pipeline** (M3
-estimate) → **5–8× SLOWER**. Root cause: the HMX merge is free (1.4K), but the **runtime Crouton/k-major
-packing that feeds HMX (~165K/head) dominates**, and the HVX op it replaces was **already O(C²)** (not the
-O(C³) the win-premise assumed). The earlier ~7–9K/8–10× projection (and the [[reference_hmx_dsp_vs_descriptor]]
-ceiling table) **omitted the runtime packing cost** — that was the flaw. The only way HMX could win is a
-**true Crouton-RESIDENT** kernel where the HVX diagonal solve writes its output DIRECTLY in Crouton layout
-(no per-merge gather) so packing is ~free — a major restructure, uncertain payoff, and even then it must
-beat an already-efficient O(C²) HVX op. `GdnSolveBR` stands as a device-correct, fully-validated artifact
-(M1→M_op→M3) but is **not a perf win** as built. Open decision (see M4): attempt the Crouton-resident
-restructure, measure C=256 first (where the HVX op is most expensive, 70,201 — the only place HMX might
-win), or conclude the perf goal isn't met by this route.
+**Finding (corrected) — C=128 is the WORST case; the win lives at C=256+.** At C=128 `GdnSolveBR` is
+231K single-thread (~50–90K pipelined) vs the shipped int16-packed HVX op's **11,425 cyc/head** → loses.
+BUT C=128 is the worst shape for this route, and M3 left the two decisive levers undone (packing
+elimination + threading). Why C scaling flips it: block-recursive keeps diagonal blocks at **64×64
+regardless of C**, so the irreducible HVX diagonal work is `nb × (64×64 solve)` while the baseline HVX does
+a full O(C²) solve:
+- C=128 (nb=2): diag ≈ 2×3,150 = 6,300 (tuned, 4-thread) vs baseline 11,425 → ceiling only **~1.8×**.
+- C=256 (nb=4): diag ≈ 4×3,150 = 12,600; merges (≈6–12× 64³, HMX kernel ~1.4K each, pipelined UNDER the
+  HVX diagonals per the 98%-overlap result) → steady ≈ max(HVX≈12.6K, HMX≈17K) vs baseline **70,201** →
+  ceiling **~2–4×, growing with C** (diag fraction shrinks: ½ at C=128, ¼ at C=256, ⅛ at C=512).
+**Two hard prerequisites for the win (both undone in M3):** (1) **eliminate the runtime Crouton/k-major
+packing** (~165K/head at C=128 — the actual dominant cost; the route is packing-bound, not compute-bound)
+via a **Crouton-RESIDENT** design (HVX diagonal solve writes its output directly in HMX/Crouton int8 layout,
+no per-merge re-gather); (2) **manual qurt-thread HVX∥HMX pipeline** (central tiler can't self-slice an HMX
+op; M3 proved manual threads work). The earlier 7–9K/8–10× projection assumed both AND omitted packing — too
+optimistic, but **~2–4× at C=256 looks reachable**. `GdnSolveBR` is a device-correct validated artifact
+(M1→M_op→M3); M4 tests the actual win regime (C=256 + packing-resident + pipeline).
 
 ## Reproduce
 
