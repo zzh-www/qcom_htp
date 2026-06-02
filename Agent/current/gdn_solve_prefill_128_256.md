@@ -5,8 +5,15 @@ fewer inter-chunk serial recurrence steps + bigger HMX-shaped matmuls for the re
 GDN stage that gets *worse* with larger C is the per-head C×C triangular inverse (the `solve_tril`
 stage). Goal: make that inverse optimal at C=128/256 on the current v75 HTP.
 
-**Status (2026-06-02). RESOLVED — the block-recursive HMX route does NOT beat the shipped HVX op at any C
-(C=128 or C=256). KEEP the shipped int16-packed HVX `GdnSolve` op for prefill.** See "M4 DONE" below.
+**Status (2026-06-02). RESOLVED — the block-recursive HMX route does NOT beat the shipped HVX op at any C,
+in EITHER form: the fused one-op (M1→M5) NOR the co-designed two-op SPLIT (M6). KEEP the shipped
+int16-packed HVX `GdnSolve` op for prefill.** See "M4 DONE" and "M6 DONE" below.
+- **M6 (two-op split, 2026-06-02):** built it.  `multithreaded=true` on a pure-HVX Op1 DID self-slice 4 HVX
+  threads (diag 18.6K/head, ~4.8× recovery) and the opaque-VTCM int8-tile handoff DID avoid the ForceFormat
+  tax (no adapter op needed).  But the two graph nodes run **0% overlapped** (serial T1→Op2 edge, no
+  cross-head pipeline) and Op2 (HMX, can't self-slice) is single-thread 524K/head → total **740K/head,
+  ~10.5× slower** than 70,201.  Confirms M5's blocker from the split side: the per-merge HVX glue is the
+  irreducible cost; splitting relocates but doesn't shrink it, and adds a serial op boundary.
 - **Shipped (the winner):** C=128/256 enabled + bit-accurate on the GdnSolve HVX op (was capped at C≤64),
   int16-packed (1.6×), boundary `q::Cast` removed (uint16 override). Steady cost C=256 = **70,201 cyc/head**.
 - **`GdnSolveBR` (block-recursive HMX, M1→M5):** device-correct at C=128 (relerr 1.29e-2) and C=256
@@ -496,6 +503,100 @@ wall cycles) ÷ heads** (the per-tile steady metric), and instrumented the FULL 
   then decode head-0 probe (uint32 view, ÷16); op_dur/head from `out_s/optrace/chrometrace.json` GdnSolveBR
   `dur`÷16; threading sweep `EXTRA_DEFS="-DGDN_BR_DIAG_ONLY -DGDN_BR_USE_THREADS -DGDN_BR_NT=<1|2|4>"`.
 
+## M6 DONE (2026-06-02) — co-designed two-op SPLIT (HVX-diag op ∥ HMX-merge op, opaque-VTCM handoff).
+**Built + device-measured on real v75.  Two NEW findings nail the route; verdict UNCHANGED: the split
+also LOSES to 70,201, and the reason is now fully attributed.  KEEP the shipped HVX op for prefill.**
+
+The split = Op1 `GdnSolveDiag` (`example/gdn_native/solve_diag_op/`, pure-HVX, `multithreaded=true`) +
+Op2 `GdnMergeHmx` (`example/gdn_native/merge_hmx_op/`, HMX) with the int8 32x32-tile handoff carried in
+a 2nd Op1 OUTPUT tensor `Hd` (a real graph edge).  Reproduce:
+`cd example/gdn_native/merge_hmx_op/standalone && CB=256 H=16 bash gdn_split.sh` (full-T relerr + per-op
+cyc + overlap); `cd ../../solve_diag_op/standalone && CB=256 H=16 bash gdn_diag.sh` (Op1 alone). Add
+`EXTRA_DEFS=-DGDN_BR_PROBE_CYCLES` for per-stage work-volume (head-0 uint32, ÷nheads).
+
+**RAW DEVICE NUMBERS (C=256, H=16, real v75):**
+- **FINDING 1 — `multithreaded=true` on a PURE-HVX op DOES self-slice across 4 HVX threads (tids 512–515).**
+  The central tiler (tiles of 8 heads, `gdn_diag_shape_required`/`build_tile`) makes parallel tile-ops —
+  the parallelism the fused HMX op structurally could NOT have (`QHPI_RESOURCE_HVX|HMX`=0x6 is rejected;
+  an HMX op can't be `multithreaded`).  Diagonal forward-subst alone (PROBE) = **18,647 cyc/head** vs the
+  fused single-thread diag **89–92K/head ⇒ ~4.8× threading recovery, confirmed.**  Op1 also does the
+  handoff prep (quant diag→i8 57K + offdiag-A quant 64K + requant 24K + i8 tile-write), so Op1's busiest-
+  thread WALL = **167K cyc/head** (not just the 18.6K solve).  Diag bit-faithful (relerr 1.08e-4 in T1).
+- **FINDING 2 — the opaque-VTCM handoff AVOIDS QNN's ForceFormat tax (the M6-v1 ~2M killer is GONE).**
+  Optrace node list between Op1→Op2 has **NO `ForceFormat_Crouton`/`convert_weights`** — only `@Fill`/
+  `@Spill` (≈17K/head total) + `flat_from_vtcm` (98K aggr) + `Concat` (67K aggr).  Confirms the milestone
+  premise: a 32x32 tile == row-major, so the int8-tile handoff needs no format conversion.  **No adapter
+  op needed.**  BUT the handoff MUST be VTCM-resident: as a plain DDR tensor edge the un-tile READ cost
+  **1.85M cyc/head** (the DDR-round-trip catastrophe); declaring `Hd`/Op2-input `QHPI_MemLoc_TCM_Only`
+  + a vectorized un-tile dropped it to **234K → wall 20,829µs → 7,426µs**.
+- **THE TWO KILLERS that still sink the split:**
+  1. **NO Op1∥Op2 overlap (measured 0%).**  As two graph nodes joined by the `T1→Op2` data edge, QNN runs
+     them strictly SERIAL (Op2 starts only after ALL of Op1).  The 98%-overlap result (`gdn_overlap.sh`)
+     was for HVX+HMX *inside one op*; splitting into two nodes does NOT pipeline across heads — the
+     central scheduler has no per-head software-pipeline.  So total ≈ Op1 + Op2 (sum), not max.
+  2. **Op2 is single-HMX-thread (524K cyc/head).**  HMX ops can't self-slice and the worker-HMX path
+     faults (M4/M5), so Op2 processes all 16 heads on tid 256 serially.  Its work is dominated by the
+     per-merge HVX glue that MOVED but did NOT shrink: read/un-tile 234K + quant 33K + actpack 39K +
+     hmxpack 24K + wtpack 16K + pint 13K + depack 11K + hmxkern only **5.3K (free)**.
+- **TOTAL: 167K (Op1) + 524K (Op2) serial = 740K cyc/head WALL** (combined span /16) vs baseline
+  **70,201 ⇒ ~10.5× SLOWER.**  Even crediting a hypothetical full Op1∥Op2 overlap (max not sum) = 524K
+  (Op2-bound) ⇒ still ~7.5× slower; even Op2's 4-thread-equivalent fantasy (524/4≈131K) + Op1 overlapped
+  ⇒ still ~1.9× slower.  Accuracy: C=128 single-merge full-T relerr **1.8e-2 (PASS, ~baseline)**; C=256
+  diag 9.4e-3 (int8 handoff) but the multi-level d≥2 merge chain is noisy (deep blocks ≈0 in ref so harmless
+  in abs/whole-T, but whole-T 7.3e-2 > fused 2.8e-2 — int8 diagonal act in the final merge is the regression).
+- **WHY the split doesn't rescue the route (the definitive attribution):** the SPLIT correctly (a) recovers
+  4× HVX threading for the diagonals and (b) eliminates the ForceFormat handoff tax — the two things M4/M5
+  lacked.  It does NOT help because the irreducible cost was never the diagonals or the format tax: it is
+  the **per-merge HVX glue volume (quant+pack+un-tile+depack+requant ≈ 380K/head across the 16 merges)**,
+  which is single-thread-bound in the HMX op (Op2) and out-weighs the baseline's one O(C²) solve — exactly
+  M5's "definitive blocker", now re-confirmed from the opposite (split) direction.  Splitting moved the
+  glue's diagonal portion onto threads but left the merge glue serial in the HMX op, and added a serial
+  Op1→Op2 boundary with no pipeline.  Artifacts (`solve_diag_op/`, `merge_hmx_op/`) are device-correct at
+  C=128 and stand as the validated negative result for the co-designed-split idea.
+
+## M7 (2026-06-02) — round-2 split squeeze: Op1 tile-write vectorized (−100K/head); 1-pass scale fails accuracy.
+RAW device numbers (C=256, H=16, real v75, per head; busiest tile/8 for Op1, max_dur/H for the un-tiled Op2).
+
+- **Op1 lever A — the `gdn_write_tiles_64` natural→(4×32×32-tile) re-pack was a SCALAR byte-scatter (4096
+  byte-copies × 10 blocks/head).  Vectorized it with one `Q6_W_vdeal_VVR(v1,v0,-32)` per 4 rows (32-byte-
+  granularity deal of a vector pair → lo=tileL rows, hi=tileR rows).  Bit-identical layout (split full-T
+  relerr UNCHANGED 7.17e-2).**  Isolated Op1 (`gdn_diag.sh`, busiest tile/8): full **183,846 → 59,314**
+  (skip-tilewrite ablation = 69,309 ⇒ scalar re-tile alone WAS ~114K/head; now ≈0).  This was the bulk of
+  the task's "off-diag A-quant ~127K" — it was the re-tile, not the fold/quant (both already vectorized).
+- **Split totals after lever A (2-pass scale, default, accuracy-neutral):**
+  | C | Op1/head | Op2/head | serial total | relerr | vs baseline |
+  |---|---|---|---|---|---|
+  | 256 | ~59–66K | ~180K | **~238–246K** | 7.17e-2 | 3.4× slower (base 70,201) |
+  | 128 | ~38–48K | ~24K  | **~62–72K**   | 1.48e-2 (PASS) | 5.5× slower (base 11,425) |
+  Down from the task's round-1 362K (C=256).  The mover was entirely Op1's scalar re-tile.
+- **Op2 breakdown (C=256, ablation):** DIAG_ONLY (T1→T copy only, no merges) = **26,587/head** (DDR-bound
+  128KB int16 T1 read+write); the **16 merges = ~152K/head** (~9.5K each: i8→u8 recenter + crouton/k-major
+  pack + 2-pass HMX scale + depack + accumulate + requant — all already HVX-vectorized, intrinsic per-merge
+  glue).  Op2 is single-HMX-thread (can't self-slice, worker-HMX faults) so all 16 heads serial on tid 256.
+- **Lever B (1-pass HMX scale via analytic bound) — MEASURED NEGATIVE, accuracy fails at BOTH C.**  Dropping
+  pass-1 (provisional HMX run + surface max|P| scan) saves only ~18K/head on Op2 (180K→161K @C=256; the 2
+  HMX runs are ~free, the saving is the surf scan + bias repack), but the analytic gain coarsens every
+  merge's int8 output scale:
+  | bound | scale slack vs true max\|P\| | C=256 whole-T relerr | C=128 whole-T relerr |
+  |---|---|---|---|
+  | loose `K·amax·wmax` | ~66× (~6 bits) | 1.77 | — |
+  | tight `amax·max_c Σ_k\|wt\|` (added) | ~2.7× mean / 4.7× max (~1.5 bits) | 0.239 | 0.134 |
+  | 2-pass true max\|P\| (kept) | 1.0× (full 127 levels) | **7.17e-2** | **1.48e-2** |
+  Even the tight bound (HVX column-sum `gdn_pint_tightbound`/`_tiled`, always ≥ true so no saturation) breaks
+  the merge chain: the d≥2 merges multiply already-quantized d=1 outputs, so ~1.5 bits of per-merge scale
+  slack compounds catastrophically (C=256 d≥2 heads → 0.4–0.5).  Even C=128 (single d=1 level) goes
+  1.48e-2 → 0.134.  The 2-pass per-merge TRUE-max scale is load-bearing.  Gated OFF by default
+  (`-DGDN_MERGE_1PASS` opt-in for the record).
+- **Standing verdict UNCHANGED:** the split at C=256 is **~3.4× slower** than the shipped 70,201 HVX op
+  (was ~10.5× in M6-v1, ~5.2× at the task's round-1 362K).  The two architectural killers remain: NO Op1∥Op2
+  overlap (serial graph edge) and Op2 single-HMX-thread (~180K serial); the ~152K of per-merge HVX glue is
+  intrinsic, and lever B can't shrink it without losing accuracy.  KEEP the shipped int16-packed HVX
+  `GdnSolve` op for prefill.  Op1's vectorized `gdn_write_tiles_64` + the `gdn_pint_tightbound[_tiled]`
+  helpers are left in place (the former is a pure correctness-neutral win, the latter for the negative-result
+  record).  Reproduce: `cd example/gdn_native/merge_hmx_op/standalone && CB=256 H=16 bash gdn_split.sh`
+  (per-op cyc now printed); `cd ../../solve_diag_op/standalone && EXTRA_DEFS=-DGDN_DIAG_SKIP_TILEWRITE
+  CB=256 H=16 bash gdn_diag.sh` (tile-write ablation); add `-DGDN_MERGE_1PASS` to gdn_split.sh for lever B.
+
 ## Reproduce
 
 ```bash
@@ -508,4 +609,12 @@ MM_DTYPE=w16a16 CS="64 128 256" ./gdn_mm.sh                     # int16 HMX matm
 C=64 B=64 ./gdn_overlap.sh                                      # HVX∥HMX overlap (solve->matmul timeline)
 GDN_NO_VSCALE=1 ../../../../.venv/bin/python ../../../../scripts/gdn_solve_squaring_probe.py
                                                                # int16-requant accuracy + overflow (host)
+
+# M6 two-op SPLIT (HVX-diag op ∥ HMX-merge op):
+cd ../../merge_hmx_op/standalone
+CB=256 H=16 bash gdn_split.sh                                  # full-T relerr + per-op cyc + Op1/Op2 overlap
+EXTRA_DEFS=-DGDN_BR_PROBE_CYCLES CB=256 H=16 bash gdn_split.sh # per-stage work-volume (head-0 uint32 ÷16)
+EXTRA_DEFS=-DGDN_BR_DIAG_ONLY    CB=256 H=16 bash gdn_split.sh # diag-only (handoff diag precision)
+cd ../../solve_diag_op/standalone
+CB=256 H=16 bash gdn_diag.sh                                   # Op1 alone: multithreaded diag, 4 HVX tids
 ```

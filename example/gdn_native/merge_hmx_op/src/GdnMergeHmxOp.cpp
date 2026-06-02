@@ -1,0 +1,1491 @@
+/*
+ * GdnSolveBROp.cpp — QNN/QHPI custom op "GdnSolveBR": T = (I - A)^-1 for a strictly-lower A,
+ * C=128, via 2-block (BL=64) block recursion.  HVX int16 forward-substitution for the two
+ * 64x64 diagonal inverses + TWO HMX u8i8 64^3 merges driven FROM INSIDE THE OP.
+ *
+ *   input[0]  A : QUInt16  [B,H,128,128]  (uint16-midpoint, scale sA, zp ~32768)
+ *   output[0] T : QUInt16  [B,H,128,128]  (uint16-midpoint, scale sT, zp ~32768)
+ *
+ * Algorithm (host-validated, scripts/gdn_blockrec_sim.py M2b):
+ *   T11 = inv(I - A[0:64,0:64]) ; T22 = inv(I - A[64:128,64:128])   (HVX forward-subst, int16)
+ *   A21 = A[64:128,0:64]
+ *   M   = A21 @ T11      -- merge 1 (HMX 64^3 u8i8, signed operands recentred to u8)
+ *   T21 = T22 @ M        -- merge 2 (HMX 64^3 u8i8)
+ *   T = [[T11,0],[T21,T22]]
+ *
+ * The HMX kernel is the owned V73DEEP Conv1x1 replica (same one the production
+ * example/qnn_hmx_matmul_u8i8 op drives).  Operands are DYNAMIC (computed in-op), so weight/
+ * activation/bias are packed at RUNTIME into static VTCM-aligned scratch and the descriptors
+ * are stitched in the hot callback.  Declares QHPI_RESOURCE_HVX|QHPI_RESOURCE_HMX; the backend
+ * acquires HMX at graph load, so the callback just runs the inline-asm body.
+ *
+ * Incremental bring-up debug modes (compile-time):
+ *   GDN_BR_SKIP_KERNEL : write a marker to T[0..] and return (proves package loads + runs).
+ *   GDN_BR_DIAG_ONLY   : T21=0 (block-diagonal); validates the HVX diagonals + I/O.
+ *   GDN_BR_DESC_DUMP   : dump merge-1 descriptors into T[0..] and return.
+ *   GDN_BR_DUMP_M      : write the recovered int8 M codes (merge 1 result) into T (inspect merge1).
+ *   GDN_BR_PROBE_CYCLES: record per-stage cycles (diag/pack/hmx) into T head 0.
+ */
+#include "HTP/core/qhpi.h"
+#include "gdn_merge_hmx_core.h"
+
+#define STRINGIZE_DETAIL(X) #X
+#define STRINGIZE(X) STRINGIZE_DETAIL(X)
+#define THIS_PKG_NAME_STR STRINGIZE(THIS_PKG_NAME)
+
+#define GDN_BR_MAX_SLICES 8
+
+static const int C  = GDN_BR_C;    /* 128 or 256 */
+static const int BL = GDN_BR_BL;   /* 64  */
+static const int NB = GDN_BR_NB;   /* 2 (C=128) or 4 (C=256) */
+#define GDN_BR_NBLK ((GDN_BR_NB * (GDN_BR_NB + 1)) / 2)   /* lower-tri block count (3 for nb=2, 10 for nb=4) */
+static inline int gdn_blk_index(int i, int j) { return (i * (i + 1)) / 2 + j; }  /* row-major lower-tri */
+
+#if defined(__hexagon__)
+#include <hexagon_types.h>
+#include <hexagon_protos.h>
+#include "qurt.h"            /* manual qurt worker threads for the HVX∥HMX head pipeline */
+
+#if defined(GDN_BR_THREAD_TEST)
+/* Feasibility probe: can a QHPI HMX-resource callback spawn a qurt worker thread?  The worker does
+ * a pure-HVX op (no HMX) and writes a sentinel; the callback joins it.  Tests whether manual qurt
+ * threading (the M3-pipeline prerequisite) is permitted inside the op, and whether a spawned thread
+ * can acquire an HVX context alongside the backend's own HVX threads. */
+static volatile int g_thr_sentinel = 0;
+static volatile int g_thr_hvx_ok   = 0;
+static char __attribute__((aligned(128))) g_thr_stack[16384];
+static void gdn_thr_worker(void *arg) {
+    (void)arg;
+    int rc = qurt_hvx_lock(QURT_HVX_MODE_128B);   /* try to grab an HVX context from the worker thread */
+    g_thr_hvx_ok = (rc == 0) ? 1 : (1000 + rc);
+    if (rc == 0) {
+        HVX_Vector v = Q6_V_vsplat_R(0x12345678);
+        int32_t lanes[32] __attribute__((aligned(128)));
+        *(HVX_Vector *)lanes = v;
+        g_thr_sentinel = lanes[7];               /* prove HVX actually executed on this thread */
+        qurt_hvx_unlock();
+    } else {
+        g_thr_sentinel = 0x5EED;                 /* spawn worked, HVX lock failed */
+    }
+}
+#endif
+
+/* native HMX descriptor ABI (matches the owned kernel; identical to the production op). */
+struct hmx_conv_out_desc_t {
+    int32_t *out_tile_ptr_table;
+    uint32_t out_table_stride_dwords;
+    uint32_t out_y_stride_words;
+    uint32_t n_tiles_pow2;
+    int32_t  m_total_minus_step;
+    uint32_t k_total_bytes;
+};
+struct hmx_conv_act_desc_t {
+    int32_t *act_ptr_pairs;
+    uint32_t n_act_pairs;
+    uint32_t act_table_y_stride_words;
+};
+struct hmx_conv_mask_desc_t {
+    int32_t  out_check;     uint32_t out_rt_mask;
+    int32_t  act_check;     uint32_t act_rt_base;
+    uint32_t filter_x_stride; uint32_t _pad14; uint32_t alt_rt;
+};
+#include "v73deep_conv1x1_kernel.h"
+#endif
+
+/* ----------------------------- scratch layout -----------------------------
+ * The diagonal-solve and fp-merge scratch can live in plain BSS (HVX/scalar reads DDR fine).
+ * The HMX merge SURFACES (packed activation crouton8, k-major weight, folded bias, output crouton8,
+ * pointer tables) MUST be in VTCM — HMX mxmem ops fault on DDR addresses.  We carve those out of a
+ * scratch tensor declared QHPI_MemLoc_TCM_Only (inputs[1]); qhpi_tensor_raw_data() returns its VTCM
+ * address.  (Static BSS is NOT VTCM and faults the kernel — verified on device.) */
+#if defined(__hexagon__)
+#ifndef GDN_BR_NT
+#define GDN_BR_NT 4                 /* number of worker threads (heads partitioned across them) */
+#endif
+/* Per-thread working scratch.  All the block buffers a single head's recursion touches live here so
+ * that GDN_BR_NT heads can be processed concurrently by GDN_BR_NT qurt worker threads with no races.
+ * (g_Sf is the dead float-accumulate path, retired by the int-only S accumulation.) */
+struct gdn_scr_t {
+    int32_t Tc  [GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));   /* general int32 scratch / pint W */
+    int32_t Afx [GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));   /* diag-solve fold scratch */
+    uint8_t actbuf[GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128))); /* u8 activation (zp128) */
+    int8_t  wtbuf [GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128))); /* i8 weight (k-major src) */
+    int32_t qbuf  [GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128))); /* quant / widen scratch */
+    int32_t Tblk[GDN_BR_NBLK][GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));
+    float   Tscl[GDN_BR_NBLK];
+    int32_t Aoff[GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));   /* A_ik folded codes @2^-F */
+    int32_t Sacc[GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));   /* inner-sum accumulator */
+    int8_t  termi[GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));  /* one merge term as int8 */
+    uint8_t surf_sub[GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));/* depack base-subtracted surface */
+    int32_t eff[64] __attribute__((aligned(128)));                       /* folded-bias effective[] */
+    int16_t Tc16[GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));   /* int16-packed diag T codes */
+    int8_t  blk_i8[GDN_BR_NBLK][GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128))); /* un-tiled i8 blocks from handoff (legacy path) */
+    int8_t  blk_tiles[GDN_BR_NBLK][GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128))); /* TILED computed merge outputs */
+    float   blk_scl[GDN_BR_NBLK];                                        /* per-block scales from handoff */
+    uint8_t actbuf2[GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));/* recentred u8 act for i8 merge */
+};
+static gdn_scr_t g_scr[GDN_BR_NT];
+
+/* ---- M6 handoff layout (must match GdnSolveDiagOp): per head, NBLK int8 blocks of 4096 B (each =
+ * 4 x 32x32 row-major tiles, tile-row-major) + a per-block float scale table.  Carried in Op1's 2nd
+ * OUTPUT tensor Hd = [B,H,C,C] uint8 -> C*C bytes/head (a real graph edge Op2 reads as input[1]). ---- */
+#define GDN_HANDOFF_BLK_BYTES   (GDN_BR_BL * GDN_BR_BL)
+#define GDN_HANDOFF_HEAD_STRIDE  ((size_t)GDN_BR_C * GDN_BR_C)
+
+/* VTCM scratch carved from the TCM_Only scratch tensor.  Buffers are spaced 0x10000 (64 KB) apart —
+ * matching the proven M1 sim harness layout — so any HMX over-write/alignment slack can't clobber a
+ * neighbouring buffer.  Total span < 0x60000 (384 KB; graph declares >= that). */
+struct gdn_vtcm_t {
+    uint8_t *act;     /* 4096 */
+    int8_t  *wt;      /* 4096 */
+    int32_t *bias;    /* 128 int32 = 512 B */
+    uint8_t *out;     /* 4096 */
+    int32_t *acttab;  /* 2 */
+    int32_t *outtab;  /* 2 */
+};
+static gdn_vtcm_t gdn_vtcm_from(uint8_t *base) {
+    gdn_vtcm_t v;
+    v.act    = base + 0x00000;
+    v.wt     = (int8_t *)(base + 0x10000);
+    v.bias   = (int32_t *)(base + 0x20000);
+    v.out    = base + 0x30000;
+    v.acttab = (int32_t *)(base + 0x40000);
+    v.outtab = (int32_t *)(base + 0x40080);
+    return v;
+}
+
+/* ---- diagonal 64x64 forward-subst (ported from GdnSolveOp C=64 path) ---- */
+static inline void gdn_fold_MS(float sA, int *pM, int *pS) {
+    float sf = sA * (float)(1 << GDN_BR_F);
+    int S = 14;
+    while (S < 30 && sf * (float)(1 << (S + 1)) < 30000.0f) ++S;
+    while (S >  0 && sf * (float)(1 <<  S)      > 32760.0f) --S;
+    *pM = (int)(sf * (float)(1 << S) + 0.5f); *pS = S;
+}
+
+/* VECTORIZED fold of one 64x64 block A (uint16 codes, row-stride=C) -> int32 codes Afx (scale 2^-F),
+ * with the code REPLICATED into both halfwords (so it is a plain scalar Rt for vmpyiacc_VwVwRh).
+ * Ported from GdnSolveOp::gdn_fold_A; handles a row stride (A sub-block sits in a C-wide tensor). */
+static void gdn_fold_block_hvx(const uint16_t *Au, int row_stride, int32_t *Afx, int zpA, int M, int S) {
+    const int Mrep = (M & 0xFFFF) * 0x10001;
+    const HVX_Vector vzp = Q6_V_vsplat_R(zpA), vrndS = Q6_V_vsplat_R(1 << (S - 1)), m16 = Q6_V_vsplat_R(0xFFFF);
+    for (int r = 0; r < BL; ++r) {
+        const HVX_UVector *Av = (const HVX_UVector *)(Au + r * row_stride);   /* 64 uint16 = 1 vec */
+        HVX_Vector *Afxv = (HVX_Vector *)(Afx + r * BL);                      /* 64 int32 = 2 vecs */
+        HVX_VectorPair w = Q6_Wuw_vzxt_Vuh(Av[0]);
+        HVX_Vector c0 = Q6_Vw_vsub_VwVw(Q6_V_lo_W(w), vzp), c1 = Q6_Vw_vsub_VwVw(Q6_V_hi_W(w), vzp);
+        HVX_Vector i0 = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_Vw_vmpyi_VwRh(c0, Mrep), vrndS), S);
+        HVX_Vector i1 = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_Vw_vmpyi_VwRh(c1, Mrep), vrndS), S);
+        HVX_VectorPair s = Q6_W_vshuff_VVR(i1, i0, -4);
+        HVX_Vector tl = Q6_V_vand_VV(Q6_V_lo_W(s), m16), th = Q6_V_vand_VV(Q6_V_hi_W(s), m16);
+        Afxv[0] = Q6_V_vor_VV(tl, Q6_Vw_vasl_VwR(tl, 16));
+        Afxv[1] = Q6_V_vor_VV(th, Q6_Vw_vasl_VwR(th, 16));
+    }
+}
+
+/* fold one 64x64 block A -> RAW int32 codes (scale 2^-F, sign-extended, NOT halfword-replicated).
+ * Used for A21 which is a QUANT operand (needs the plain code), unlike the diagonal-solve Afx which is
+ * a scalar multiplier (needs both halfwords set). */
+static void gdn_fold_block_raw(const uint16_t *Au, int row_stride, int32_t *Afx, int zpA, int M, int S) {
+    const int Mrep = (M & 0xFFFF) * 0x10001;
+    const HVX_Vector vzp = Q6_V_vsplat_R(zpA), vrndS = Q6_V_vsplat_R(1 << (S - 1));
+    for (int r = 0; r < BL; ++r) {
+        const HVX_UVector *Av = (const HVX_UVector *)(Au + r * row_stride);
+        HVX_Vector *Afxv = (HVX_Vector *)(Afx + r * BL);
+        HVX_VectorPair w = Q6_Wuw_vzxt_Vuh(Av[0]);
+        HVX_Vector c0 = Q6_Vw_vsub_VwVw(Q6_V_lo_W(w), vzp), c1 = Q6_Vw_vsub_VwVw(Q6_V_hi_W(w), vzp);
+        HVX_Vector i0 = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_Vw_vmpyi_VwRh(c0, Mrep), vrndS), S);
+        HVX_Vector i1 = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_Vw_vmpyi_VwRh(c1, Mrep), vrndS), S);
+        HVX_VectorPair s = Q6_W_vshuff_VVR(i1, i0, -4);   /* even/odd -> natural col order */
+        Afxv[0] = Q6_V_lo_W(s);
+        Afxv[1] = Q6_V_hi_W(s);
+    }
+}
+
+/* solve one 64x64 diagonal block: T = inv(I - A_block), int16-code forward subst, leave int32 CODES
+ * (scale GDN_BR_TI) in Tcout — NO float dequant (the M_op float roundtrip was the diagonal bottleneck). */
+static void gdn_solve_diag64(gdn_scr_t *sc, const uint16_t *Au, int row_stride, int zpA, int M, int S,
+                             int32_t *Tcout) {
+    /* int16-PACKED forward subst (ported from GdnSolveOp C>64 path): T held int16 in a tight VTCM-friendly
+     * buffer, ONE Q6_Ww_vmpyacc_WwVhRh does all 64 cols/row (2x the int32 vmpyiacc + half the memory
+     * traffic), the int32 even/odd acc narrows+re-interleaves in one vasr_VwVwR_rnd_sat.  Output widened to
+     * int32 codes once at the end (the merge path consumes int32). ~10x faster than the int32 BSS version. */
+    int32_t *Afx = sc->Afx;
+    gdn_fold_block_hvx(Au, row_stride, Afx, zpA, M, S);   /* Afx[i*BL+k] = code, low 16b is the int16 mul scalar */
+    int16_t *Tc16 = sc->Tc16;
+    const int16_t ei16 = (int16_t)(int)(1.0f / GDN_BR_TI + 0.5f);
+    for (int i = 0; i < BL; ++i) {
+        HVX_VectorPair acc = Q6_W_vzero();
+        for (int k = 0; k < i; ++k)
+            acc = Q6_Ww_vmpyacc_WwVhRh(acc, ((const HVX_Vector *)(Tc16 + k * BL))[0], Afx[i * BL + k]);
+        ((HVX_Vector *)(Tc16 + i * BL))[0] =
+            Q6_Vh_vasr_VwVwR_rnd_sat(Q6_V_hi_W(acc), Q6_V_lo_W(acc), GDN_BR_F);  /* even/odd -> natural int16 */
+        Tc16[i * BL + i] += ei16;
+    }
+    /* widen the int16 T codes -> int32 codes for the merge path.  vsxt de-interleaves (lo=even halfwords,
+     * hi=odd); a word-granularity vshuff re-interleaves to natural [c0,c1,...] order (2 vecs/row). */
+    for (int i = 0; i < BL; ++i) {
+        HVX_VectorPair w = Q6_Ww_vsxt_Vh(((const HVX_Vector *)(Tc16 + i * BL))[0]);
+        HVX_VectorPair nat = Q6_W_vshuff_VVR(Q6_V_hi_W(w), Q6_V_lo_W(w), -4);
+        ((HVX_Vector *)(Tcout + i * BL))[0] = Q6_V_lo_W(nat);
+        ((HVX_Vector *)(Tcout + i * BL))[1] = Q6_V_hi_W(nat);
+    }
+}
+
+/* ---- HVX integer helpers for scale-estimation + int8 packing (replace the scalar float path) ---- */
+
+/* max |code| over a 64x64 int32 buffer (scale-free; caller scales). 64 int32/row = 2 vecs. */
+static int32_t gdn_maxabs_codes(const int32_t *codes) {
+    HVX_Vector vmax = Q6_V_vzero();
+    const HVX_Vector *p = (const HVX_Vector *)codes;
+    for (int b = 0; b < (BL * BL) / 32; ++b)
+        vmax = Q6_Vw_vmax_VwVw(vmax, Q6_Vw_vabs_Vw(p[b]));
+    vmax = Q6_Vw_vmax_VwVw(vmax, Q6_V_vror_VR(vmax, 4*16));
+    vmax = Q6_Vw_vmax_VwVw(vmax, Q6_V_vror_VR(vmax, 4*8));
+    vmax = Q6_Vw_vmax_VwVw(vmax, Q6_V_vror_VR(vmax, 4*4));
+    vmax = Q6_Vw_vmax_VwVw(vmax, Q6_V_vror_VR(vmax, 4*2));
+    vmax = Q6_Vw_vmax_VwVw(vmax, Q6_V_vror_VR(vmax, 4*1));
+    int32_t lanes[32] __attribute__((aligned(128)));
+    *(HVX_Vector *)lanes = vmax;
+    return lanes[0];
+}
+
+/* quantize 64x64 int32 codes (value = code*scale_in) into int8 weight codes at symmetric scale
+ * sQ = maxabs_value/127.  Returns sQ.  Vectorized: multiplier = round(scale_in/sQ * 2^Q) fixed-point. */
+static float gdn_quant_i8_from_codes(gdn_scr_t *sc, const int32_t *codes, float scale_in, int8_t *out) {
+    int32_t mx = gdn_maxabs_codes(codes);
+    float maxval = (float)mx * scale_in;
+    float sQ = (maxval > 0.0f) ? (maxval / 127.0f) : 1e-12f;
+    /* code_q = round(code*g), g=scale_in/sQ.  Adaptive Q keeps Mg<2^15 so code(<2^15)*Mg < 2^30. */
+    float g = scale_in / sQ;
+    int Q = 14;
+    while (Q > 1  && g * (float)(1 << Q) >= 32768.0f) --Q;
+    while (Q < 28 && g * (float)(1 << (Q + 1)) < 16384.0f) ++Q;
+    int32_t Mg = (int32_t)(g * (float)(1 << Q) + 0.5f);
+    const HVX_Vector vrnd = Q6_V_vsplat_R(1 << (Q - 1));
+    const HVX_Vector vlim = Q6_V_vsplat_R(127), vnlim = Q6_V_vsplat_R(-127);
+    const HVX_Vector *p = (const HVX_Vector *)codes;
+    int32_t *qbuf = sc->qbuf;
+    HVX_Vector *qp = (HVX_Vector *)qbuf;
+    const int Mrep = (Mg & 0xFFFF) * 0x10001;   /* Mg fits int16; replicate into both halfwords for vmpyi_VwRh */
+    for (int b = 0; b < (BL * BL) / 32; ++b) {
+        HVX_Vector prod = Q6_Vw_vmpyi_VwRh(p[b], Mrep);
+        HVX_Vector q = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(prod, vrnd), Q);
+        q = Q6_Vw_vmin_VwVw(q, vlim); q = Q6_Vw_vmax_VwVw(q, vnlim);
+        qp[b] = q;
+    }
+    /* vectorized int32 -> int8 narrow (natural order): pack 4 i32 vecs -> 2 i16 -> 1 i8 per 128-lane. */
+    HVX_Vector *op = (HVX_Vector *)out;
+    for (int v = 0; v < (BL * BL) / 128; ++v) {
+        HVX_Vector h0 = Q6_Vh_vpack_VwVw_sat(qp[v*4+1], qp[v*4+0]);
+        HVX_Vector h1 = Q6_Vh_vpack_VwVw_sat(qp[v*4+3], qp[v*4+2]);
+        op[v] = Q6_Vb_vpack_VhVh_sat(h1, h0);
+    }
+    return sQ;
+}
+
+/* quantize 64x64 int32 codes into u8 activation (zp128) at symmetric scale sQ.  Returns sQ. */
+static float gdn_quant_u8_from_codes(gdn_scr_t *sc, const int32_t *codes, float scale_in, uint8_t *out) {
+    int32_t mx = gdn_maxabs_codes(codes);
+    float maxval = (float)mx * scale_in;
+    float sQ = (maxval > 0.0f) ? (maxval / 127.0f) : 1e-12f;
+    float g = scale_in / sQ;
+    int Q = 14;
+    while (Q > 1  && g * (float)(1 << Q) >= 32768.0f) --Q;
+    while (Q < 28 && g * (float)(1 << (Q + 1)) < 16384.0f) ++Q;
+    int32_t Mg = (int32_t)(g * (float)(1 << Q) + 0.5f);
+    const HVX_Vector vrnd = Q6_V_vsplat_R(1 << (Q - 1));
+    const HVX_Vector vlim = Q6_V_vsplat_R(127), vnlim = Q6_V_vsplat_R(-127), v128 = Q6_V_vsplat_R(128);
+    const HVX_Vector *p = (const HVX_Vector *)codes;
+    int32_t *qbuf = sc->qbuf;
+    HVX_Vector *qp = (HVX_Vector *)qbuf;
+    const int Mrep = (Mg & 0xFFFF) * 0x10001;
+    for (int b = 0; b < (BL * BL) / 32; ++b) {
+        HVX_Vector prod = Q6_Vw_vmpyi_VwRh(p[b], Mrep);
+        HVX_Vector q = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(prod, vrnd), Q);
+        q = Q6_Vw_vmin_VwVw(q, vlim); q = Q6_Vw_vmax_VwVw(q, vnlim);
+        qp[b] = Q6_Vw_vadd_VwVw(q, v128);
+    }
+    /* vectorized int32 -> u8 narrow (natural order): values in [1,255]. */
+    HVX_Vector *op = (HVX_Vector *)out;
+    for (int v = 0; v < (BL * BL) / 128; ++v) {
+        HVX_Vector h0 = Q6_Vh_vpack_VwVw_sat(qp[v*4+1], qp[v*4+0]);
+        HVX_Vector h1 = Q6_Vh_vpack_VwVw_sat(qp[v*4+3], qp[v*4+2]);
+        op[v] = Q6_Vub_vpack_VhVh_sat(h1, h0);
+    }
+    return sQ;
+}
+
+/* EXACT scale estimate: max|P_int| where P_int[i,c] = sum_k (act_u8[i,k]-128)*wt_i8[k,c].  This is the
+ * exact int product the HMX kernel computes, so the derived scale is exact (not a loose bound) AND HVX
+ * fast.  act is u8 (zp128), wt is i8, both 64x64 natural.  Returns max|P_int| (int32). */
+static int32_t gdn_pint_maxabs(gdn_scr_t *sc, const uint8_t *act_u8, const int8_t *wt_i8) {
+    /* pre-widen wt rows to int32 [64][64] in sc->Tc (reused scratch). */
+    int32_t *W = sc->Tc;
+    for (int k = 0; k < BL; ++k)
+        for (int c = 0; c < BL; ++c) W[k * BL + c] = (int32_t)wt_i8[k * BL + c];
+    HVX_Vector vmax = Q6_V_vzero();
+    const HVX_Vector v128 = Q6_V_vsplat_R(128);
+    for (int i = 0; i < BL; ++i) {
+        HVX_Vector a0 = Q6_V_vzero(), a1 = Q6_V_vzero();
+        for (int k = 0; k < BL; ++k) {
+            int s = (int)act_u8[i * BL + k] - 128;     /* signed scalar in [-128,127] */
+            int srep = (s & 0xFFFF) * 0x10001;         /* replicate into BOTH halfwords (h0=h1) */
+            const HVX_Vector *Wk = (const HVX_Vector *)(W + k * BL);
+            a0 = Q6_Vw_vmpyiacc_VwVwRh(a0, Wk[0], srep);
+            a1 = Q6_Vw_vmpyiacc_VwVwRh(a1, Wk[1], srep);
+        }
+        vmax = Q6_Vw_vmax_VwVw(vmax, Q6_Vw_vabs_Vw(a0));
+        vmax = Q6_Vw_vmax_VwVw(vmax, Q6_Vw_vabs_Vw(a1));
+    }
+    vmax = Q6_Vw_vmax_VwVw(vmax, Q6_V_vror_VR(vmax, 4*16));
+    vmax = Q6_Vw_vmax_VwVw(vmax, Q6_V_vror_VR(vmax, 4*8));
+    vmax = Q6_Vw_vmax_VwVw(vmax, Q6_V_vror_VR(vmax, 4*4));
+    vmax = Q6_Vw_vmax_VwVw(vmax, Q6_V_vror_VR(vmax, 4*2));
+    vmax = Q6_Vw_vmax_VwVw(vmax, Q6_V_vror_VR(vmax, 4*1));
+    int32_t lanes[32] __attribute__((aligned(128)));
+    *(HVX_Vector *)lanes = vmax;
+    return lanes[0];
+}
+
+/* requant a 64x64 int32-code block (value=code*scale_in) into the uint16 output Th at (roff,coff),
+ * scale sT, zp zpT.  Vectorized over the 64 cols (2 vecs/row); fixed-point multiply g=scale_in/sT.
+ * The strict-upper-of-diagonal lanes are written too (they're ~0 from the solve), harmless. */
+static void gdn_requant_block_out(const int32_t *codes, float scale_in, float sT, int zpT,
+                                  uint16_t *Th, int roff, int coff, int row_stride) {
+    /* adaptive Q: keep multiplier Mg in [2^13,2^15) so code(<2^15)*Mg stays < 2^30 (no int32 overflow). */
+    float g = scale_in / sT;
+    int Q = 14;
+    while (Q > 1  && g * (float)(1 << Q) >= 32768.0f) --Q;
+    while (Q < 28 && g * (float)(1 << (Q + 1)) < 16384.0f) ++Q;
+    int32_t Mg = (int32_t)(g * (float)(1 << Q) + 0.5f);
+    const int Mrep = (Mg & 0xFFFF) * 0x10001;
+    const HVX_Vector vrnd = Q6_V_vsplat_R(1 << (Q - 1));
+    const HVX_Vector vzpT = Q6_V_vsplat_R(zpT);
+    const HVX_Vector vlim = Q6_V_vsplat_R(32767), vnlim = Q6_V_vsplat_R(-32767);
+    for (int r = 0; r < BL; ++r) {
+        const HVX_Vector *cp = (const HVX_Vector *)(codes + r * BL);
+        int32_t q[64] __attribute__((aligned(128)));
+        HVX_Vector *qp = (HVX_Vector *)q;
+        for (int b = 0; b < 2; ++b) {
+            HVX_Vector prod = Q6_Vw_vmpyi_VwRh(cp[b], Mrep);
+            HVX_Vector qq = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(prod, vrnd), Q);
+            qq = Q6_Vw_vmin_VwVw(qq, vlim); qq = Q6_Vw_vmax_VwVw(qq, vnlim);
+            qp[b] = Q6_Vw_vadd_VwVw(qq, vzpT);
+        }
+        uint16_t *dst = Th + (roff + r) * row_stride + coff;
+        *(HVX_UVector *)dst = Q6_Vuh_vpack_VwVw_sat(qp[1], qp[0]);
+    }
+}
+
+/* widen a TILED i8 block (4x 32x32 row-major tiles) -> natural int32 [64][64] in `nat`.  Per tile,
+ * 4 contiguous tile-rows = 128 contiguous bytes -> one proven byte->word weave gives 128 natural-order
+ * int32 (rows g*4..g*4+3, cols 0..31), written to nat[tr*32 + g*4+rr][tc*32 + c].  32 weaves/block,
+ * all aligned loads. */
+static void gdn_widen_tiles_to_i32(const int8_t *tiles_i8, int32_t *nat) {
+    for (int tr = 0; tr < 2; ++tr)
+        for (int tc = 0; tc < 2; ++tc) {
+            const HVX_Vector *tp = (const HVX_Vector *)(tiles_i8 + (size_t)(tr * 2 + tc) * 1024);
+            for (int g = 0; g < 8; ++g) {
+                HVX_VectorPair w16 = Q6_Wh_vsxt_Vb(tp[g]);             /* 128 bytes = tile rows 4g..4g+3 */
+                HVX_VectorPair wlo = Q6_Ww_vsxt_Vh(Q6_V_lo_W(w16));
+                HVX_VectorPair whi = Q6_Ww_vsxt_Vh(Q6_V_hi_W(w16));
+                HVX_VectorPair pA = Q6_W_vshuff_VVR(Q6_V_lo_W(whi), Q6_V_lo_W(wlo), -4);
+                HVX_VectorPair pB = Q6_W_vshuff_VVR(Q6_V_hi_W(whi), Q6_V_hi_W(wlo), -4);
+                HVX_VectorPair s0 = Q6_W_vshuff_VVR(Q6_V_lo_W(pB), Q6_V_lo_W(pA), -8);
+                HVX_VectorPair s1 = Q6_W_vshuff_VVR(Q6_V_hi_W(pB), Q6_V_hi_W(pA), -8);
+                /* s0 lo/hi = natural int32 for tile rows 4g+0 (cols 0..31), 4g+1; s1 = 4g+2, 4g+3. */
+                HVX_Vector rows[4] = { Q6_V_lo_W(s0), Q6_V_hi_W(s0), Q6_V_lo_W(s1), Q6_V_hi_W(s1) };
+                for (int rr = 0; rr < 4; ++rr) {
+                    int row = tr * 32 + g * 4 + rr;
+                    *(HVX_Vector *)(nat + row * BL + tc * 32) = rows[rr];   /* 32 i32, aligned (BL=64) */
+                }
+            }
+        }
+}
+
+/* requant a TILED int8 block into Th at (roff,coff): widen tiles -> natural int32, then the proven fast
+ * int32 requant (gdn_requant_block_out).  Replaces the per-row gather; 32 weaves + the fast requant. */
+static void gdn_requant_tiles_out(gdn_scr_t *sc, const int8_t *tiles_i8, float scale_in, float sT, int zpT,
+                                  uint16_t *Th, int roff, int coff, int row_stride) {
+    gdn_widen_tiles_to_i32(tiles_i8, sc->qbuf);
+    gdn_requant_block_out(sc->qbuf, scale_in, sT, zpT, Th, roff, coff, row_stride);
+}
+
+/* ---- crouton8 activation packer (C transcription of gdn_hmx_matmul_sim.pack_act_crouton8, 64^3) ---- */
+static void gdn_pack_act_crouton8(const uint8_t *act_mk, uint8_t *out_buf) {
+    /* For fixed (kt,row8,m32,rsub) the 8 col_words x 4 bytes = 32 OUTPUT bytes are source row `row`,
+     * cols [k_base, k_base+32) in natural order (col_word*4 + b).  So each 32-byte output run is a
+     * contiguous 32-col slice of one source row -> a plain 32-byte copy (no per-elem scatter). */
+    int out = 0;
+    for (int kt = 0; kt < 2; ++kt) {
+        int k_base = kt * 32;
+        for (int row8_group = 0; row8_group < 4; ++row8_group)
+            for (int m32_group = 0; m32_group < 2; ++m32_group)
+                for (int row_sub = 0; row_sub < 8; ++row_sub) {
+                    int row = m32_group * 32 + row8_group * 8 + row_sub;
+                    const uint8_t *src = act_mk + row * 64 + k_base;
+                    uint8_t *dst = out_buf + out;
+                    *(uint64_t *)(dst + 0)  = *(const uint64_t *)(src + 0);
+                    *(uint64_t *)(dst + 8)  = *(const uint64_t *)(src + 8);
+                    *(uint64_t *)(dst + 16) = *(const uint64_t *)(src + 16);
+                    *(uint64_t *)(dst + 24) = *(const uint64_t *)(src + 24);
+                    out += 32;
+                }
+    }
+}
+
+/* ---- TILED-SOURCE activation crouton8 packer (lever 1: read Op1's 4x(32x32 row-major) handoff tiles
+ * DIRECTLY, skipping the un-tile to natural-64).  A handoff block is 4 tiles at offset (tr*2+tc)*1024,
+ * each tile row-major tile[trow*32+c].  The crouton8 output run for (kt,row8,m32,row_sub) is source
+ * row `m32*32+row8*8+row_sub`, cols [kt*32,kt*32+32) == tile(tr=m32,tc=kt) row (row8*8+row_sub).  Host-
+ * verified identical to pack_act_nat(read_tiles(...)).  Same 128 contiguous-32B copies, but the source
+ * pointer walks the tiles, so NO natural-64 intermediate is materialized. */
+static void gdn_pack_act_crouton8_tiles(const uint8_t *tiles_u8, uint8_t *out_buf) {
+    /* the 8 rsub of one (kt,row8,m32) are 8 CONSECUTIVE tile rows (trow=row8*8..+7) -> 256 contiguous
+     * tile bytes = 2 HVX vectors.  Copy 256B at a time (8x fewer ops than the per-32B form). */
+    HVX_Vector *dst = (HVX_Vector *)out_buf;
+    for (int kt = 0; kt < 2; ++kt)
+        for (int row8 = 0; row8 < 4; ++row8)
+            for (int m32 = 0; m32 < 2; ++m32) {
+                const HVX_Vector *src = (const HVX_Vector *)(tiles_u8 + (size_t)(m32 * 2 + kt) * 1024
+                                                             + (size_t)(row8 * 8) * 32);
+                *dst++ = src[0];   /* trows row8*8 .. +3 */
+                *dst++ = src[1];   /* trows row8*8+4 .. +7 */
+            }
+}
+
+/* ---- TILED-SOURCE k-major weight packer.  rows kb+4r4+b live in tile tr=kt; col nb+c in tile tc=nt;
+ * within tile byte (4r4+b)*32 + c.  Host-verified identical to pack_w_nat(read_tiles(...)). ---- */
+static void gdn_pack_w8_kmajor_tiles(const int8_t *tiles_i8, int8_t *packed) {
+    int out = 0;
+    for (int kt = 0; kt < 2; ++kt)
+        for (int nt = 0; nt < 2; ++nt) {
+            const int8_t *tile = tiles_i8 + (size_t)(kt * 2 + nt) * 1024;   /* tr=kt, tc=nt */
+            int8_t *otile = packed + out;
+            for (int r4 = 0; r4 < 8; ++r4) {
+                /* 4 k-rows (4r4+0..3) of this tile, 32 bytes each (cols 0..31 = the n-cols of this tile);
+                 * weave into out word c = (s0c,s1c,s2c,s3c) via two vshuffs (same as the natural packer). */
+                const int8_t *s0 = tile + (4*r4 + 0) * 32;
+                const int8_t *s1 = tile + (4*r4 + 1) * 32;
+                const int8_t *s2 = tile + (4*r4 + 2) * 32;
+                const int8_t *s3 = tile + (4*r4 + 3) * 32;
+                HVX_Vector v0 = *(const HVX_UVector *)s0, v1 = *(const HVX_UVector *)s1;
+                HVX_Vector v2 = *(const HVX_UVector *)s2, v3 = *(const HVX_UVector *)s3;
+                HVX_Vector p01 = Q6_V_lo_W(Q6_W_vshuff_VVR(v1, v0, -1));
+                HVX_Vector p23 = Q6_V_lo_W(Q6_W_vshuff_VVR(v3, v2, -1));
+                HVX_Vector w = Q6_V_lo_W(Q6_W_vshuff_VVR(p23, p01, -2));
+                *(HVX_UVector *)(otile + r4 * 128) = w;
+            }
+            out += 1024;
+        }
+}
+
+/* recenter a TILED i8 block to a TILED u8 block (zp128); per-byte +128 is layout-agnostic so the tile
+ * structure is preserved (the tiled-source act packer then reads it). */
+static void gdn_i8_to_u8_tiled(const int8_t *tiles_i8, uint8_t *tiles_u8) {
+    const HVX_Vector v128 = Q6_Vb_vsplat_R(128);
+    const HVX_Vector *sp = (const HVX_Vector *)tiles_i8;
+    HVX_Vector *op = (HVX_Vector *)tiles_u8;
+    for (int b = 0; b < (BL * BL) / 128; ++b) op[b] = Q6_Vb_vadd_VbVb(sp[b], v128);
+}
+
+/* ---- k-major weight packer (C transcription of prepare_owned_inputs.pack_w8_kmajor, 64^3) ----
+ * For a 32x32 tile: output word at (r4*128 + c*4) = bytes [row(4*r4+0)[c]..row(4*r4+3)[c]], i.e. the
+ * 4 k-rows {4r4..4r4+3} byte-interleaved per column c.  We build it as: for each r4 (8 groups), gather
+ * the 4 source rows (32 bytes each) into a 128-byte HVX vector via two vshuffs (4-way byte interleave)
+ * then store the 128-byte result.  ~10x fewer ops than the per-byte scatter. */
+static void gdn_pack_w8_kmajor(const int8_t *w_kn, int8_t *packed) {
+    int out = 0;
+    for (int kt = 0; kt < 2; ++kt) {
+        int k_base = kt * 32;
+        for (int nt = 0; nt < 2; ++nt) {
+            int n_base = nt * 32;
+            int8_t *tile = packed + out;   /* 1024 bytes = 8 groups of 128 */
+            for (int r4 = 0; r4 < 8; ++r4) {
+                /* 4 source rows (32 bytes each); want out word c = (s0[c],s1[c],s2[c],s3[c]).
+                 * HVX: byte-interleave (s0,s1)->p01, (s2,s3)->p23 (halfword c = (s0c,s1c)/(s2c,s3c)),
+                 * then halfword-interleave p01,p23 -> word c = (s0c,s1c,s2c,s3c).  Each row is 32B so the
+                 * useful data is in the low 64 bytes of the shuffle results. */
+                const int8_t *s0 = w_kn + (k_base + 4*r4 + 0) * 64 + n_base;
+                const int8_t *s1 = w_kn + (k_base + 4*r4 + 1) * 64 + n_base;
+                const int8_t *s2 = w_kn + (k_base + 4*r4 + 2) * 64 + n_base;
+                const int8_t *s3 = w_kn + (k_base + 4*r4 + 3) * 64 + n_base;
+                HVX_Vector v0 = *(const HVX_UVector *)s0, v1 = *(const HVX_UVector *)s1;
+                HVX_Vector v2 = *(const HVX_UVector *)s2, v3 = *(const HVX_UVector *)s3;
+                /* R=1: interleave bytes (shuff with element-size 1 byte). lo64 = (v0[0],v1[0],v0[1],v1[1]..) */
+                HVX_Vector p01 = Q6_V_lo_W(Q6_W_vshuff_VVR(v1, v0, -1));
+                HVX_Vector p23 = Q6_V_lo_W(Q6_W_vshuff_VVR(v3, v2, -1));
+                /* R=-2: interleave halfwords. lo128 = word c = (s0c,s1c,s2c,s3c) for c=0..31. */
+                HVX_Vector w = Q6_V_lo_W(Q6_W_vshuff_VVR(p23, p01, -2));
+                *(HVX_UVector *)(tile + r4 * 128) = w;
+            }
+            out += 1024;
+        }
+    }
+}
+
+/* effective[n] = -128*sum_k wt[k,n]; 64-wide.  HVX column-sum over int8 rows using a byte dot-product
+ * with a +1 constant vector: Q6_Vw_vrmpyacc_VwVbVb_b? Use vmpa? Simplest reliable HVX: sum int8 rows by
+ * widening with vsxt + the proper de-interleave is fiddly; the scalar form is correct and bounded (4096
+ * ops/merge, ~small vs pint).  Kept scalar for correctness; not the bottleneck. */
+static void gdn_effective(const int8_t *w_kn, int32_t *effective) {
+    /* HVX: sign-extend each 64-byte row to int16 (vsxt deals even/odd cols into lo/hi 32 lanes),
+     * accumulate even-col sums and odd-col sums separately (64 rows * 127 < 2^15, no overflow), then
+     * vshuff to restore natural col order.  *(-128) at the end. */
+    HVX_Vector acc_e = Q6_V_vzero(), acc_o = Q6_V_vzero();   /* int16 partials: even cols / odd cols */
+    for (int k = 0; k < BL; ++k) {
+        HVX_Vector row = *(const HVX_UVector *)(w_kn + k * BL);   /* 64 useful bytes in low half */
+        HVX_VectorPair w16 = Q6_Wh_vsxt_Vb(row);                  /* lo=even-byte sexts, hi=odd-byte sexts */
+        acc_e = Q6_Vh_vadd_VhVh(acc_e, Q6_V_lo_W(w16));
+        acc_o = Q6_Vh_vadd_VhVh(acc_o, Q6_V_hi_W(w16));
+    }
+    /* interleave even/odd halfwords back to natural [c0,c1,c2,...]; low 64 lanes hold cols 0..63. */
+    HVX_VectorPair nat = Q6_W_vshuff_VVR(acc_o, acc_e, -2);
+    int16_t cols[64] __attribute__((aligned(128)));
+    *(HVX_Vector *)cols = Q6_V_lo_W(nat);
+    for (int n = 0; n < 64; ++n) effective[n] = -128 * (int)cols[n];
+}
+
+/* f16 bits of a float (round-to-nearest-even via the hardware fp16 convert is not available on x86;
+ * do an explicit IEEE half conversion good enough for the gains we use). */
+static uint16_t gdn_f16_bits(float v) {
+    union { float f; uint32_t u; } in; in.f = v;
+    uint32_t x = in.u;
+    uint32_t sign = (x >> 16) & 0x8000u;
+    int32_t exp = (int32_t)((x >> 23) & 0xFF) - 127 + 15;
+    uint32_t mant = x & 0x7FFFFFu;
+    if (exp <= 0) {
+        if (exp < -10) return (uint16_t)sign;
+        mant |= 0x800000u;
+        int shift = 14 - exp;
+        uint32_t half = mant >> shift;
+        uint32_t rem = mant & ((1u << shift) - 1u);
+        if (rem > (1u << (shift - 1)) || (rem == (1u << (shift - 1)) && (half & 1))) half++;
+        return (uint16_t)(sign | half);
+    } else if (exp >= 0x1F) {
+        return (uint16_t)(sign | 0x7C00u);
+    }
+    uint16_t h = (uint16_t)(sign | (exp << 10) | (mant >> 13));
+    uint32_t rem = mant & 0x1FFFu;
+    if (rem > 0x1000u || (rem == 0x1000u && (h & 1))) h++;
+    return h;
+}
+
+/* per-N32 control word = (baseline_u16<<16) | f16_bits(scale_f16); pack folded bias for 64^3 (2 tiles). */
+static void gdn_pack_bias(const int32_t *effective, float scale_f16, int baseline_u16, int32_t *bias) {
+    uint32_t ctrl = ((uint32_t)(baseline_u16 & 0xFFFF) << 16) | (uint32_t)gdn_f16_bits(scale_f16);
+    int out = 0;
+    for (int start = 0; start < 64; start += 32) {
+        for (int i = 0; i < 32; ++i) bias[out++] = (int32_t)ctrl;
+        for (int i = 0; i < 32; ++i) bias[out++] = effective[start + i];
+    }
+}
+
+/* depack the 64x64 u8 crouton8 output surface (closed form, M1-validated). */
+static inline uint8_t gdn_depack_out(const uint8_t *surf, int r, int c) {
+    int nt = c / 32, m32 = r / 32, r8 = (r % 32) / 8, rsub = r % 8, cw = (c % 32) / 4, bsub = c % 4;
+    return surf[nt * 2048 + r8 * 512 + m32 * 256 + rsub * 32 + cw * 4 + bsub];
+}
+
+/* FAST depack: for fixed (nt,r8,m32,rsub) the 32 consecutive surface bytes at
+ * base = nt*2048 + r8*512 + m32*256 + rsub*32 are exactly output row (m32*32+r8*8+rsub),
+ * cols [nt*32, nt*32+32) in natural order (cw*4+bsub = 0..31).  So depack = 128 copies of a
+ * contiguous 32-byte run.  We subtract `base` (output zp) via a 32-byte vector op and write the
+ * signed int8 code directly into out_codes[row*64 + nt*32].  ~8x faster than the per-elem closed form. */
+static void gdn_depack_out_fast(gdn_scr_t *sc, const uint8_t *surf, int base, int8_t *out_codes) {
+    /* 1) subtract base over the whole 4096-byte surface with HVX (32 vecs). surf is VTCM-aligned. */
+    const HVX_Vector vb = Q6_Vb_vsplat_R(base);
+    const HVX_Vector *sp = (const HVX_Vector *)surf;
+    HVX_Vector *dp = (HVX_Vector *)sc->surf_sub;
+    for (int i = 0; i < (BL * BL) / 128; ++i) dp[i] = Q6_Vb_vsub_VbVb(sp[i], vb);
+    /* 2) rearrange the subtracted surface into natural [64][64] via contiguous 32-byte runs. */
+    int off = 0;
+    for (int nt = 0; nt < 2; ++nt)
+        for (int r8 = 0; r8 < 4; ++r8)
+            for (int m32 = 0; m32 < 2; ++m32)
+                for (int rsub = 0; rsub < 8; ++rsub) {
+                    int row = m32 * 32 + r8 * 8 + rsub;
+                    const int8_t *src = (const int8_t *)(sc->surf_sub + off);
+                    int8_t *dst = out_codes + row * 64 + nt * 32;
+                    *(uint64_t *)(dst + 0)  = *(const uint64_t *)(src + 0);
+                    *(uint64_t *)(dst + 8)  = *(const uint64_t *)(src + 8);
+                    *(uint64_t *)(dst + 16) = *(const uint64_t *)(src + 16);
+                    *(uint64_t *)(dst + 24) = *(const uint64_t *)(src + 24);
+                    off += 32;
+                }
+}
+
+
+/* TILED depack: same base-subtract over the 4096-byte surface, but write the 32-byte runs into the
+ * 4x(32x32) tile layout (tr=m32, tc=nt, tile row = r8*8+rsub) so the merge output is tile-resident for
+ * the next level (lever 3: no natural-64 round-trip between levels). */
+static void gdn_depack_out_tiles(gdn_scr_t *sc, const uint8_t *surf, int base, int8_t *out_tiles) {
+    const HVX_Vector vb = Q6_Vb_vsplat_R(base);
+    const HVX_Vector *sp = (const HVX_Vector *)surf;
+    HVX_Vector *dp = (HVX_Vector *)sc->surf_sub;
+    for (int i = 0; i < (BL * BL) / 128; ++i) dp[i] = Q6_Vb_vsub_VbVb(sp[i], vb);
+    int off = 0;
+    for (int nt = 0; nt < 2; ++nt)
+        for (int r8 = 0; r8 < 4; ++r8)
+            for (int m32 = 0; m32 < 2; ++m32) {
+                int8_t *tile = out_tiles + (size_t)(m32 * 2 + nt) * 1024;   /* tr=m32, tc=nt */
+                for (int rsub = 0; rsub < 8; ++rsub) {
+                    int trow = r8 * 8 + rsub;
+                    const int8_t *src = (const int8_t *)(sc->surf_sub + off);
+                    int8_t *dst = tile + trow * 32;
+                    *(uint64_t *)(dst + 0)  = *(const uint64_t *)(src + 0);
+                    *(uint64_t *)(dst + 8)  = *(const uint64_t *)(src + 8);
+                    *(uint64_t *)(dst + 16) = *(const uint64_t *)(src + 16);
+                    *(uint64_t *)(dst + 24) = *(const uint64_t *)(src + 24);
+                    off += 32;
+                }
+            }
+}
+
+#if defined(GDN_BR_PROBE_CYCLES)
+uint64_t g_c_hmxpack = 0, g_c_hmxkern = 0, g_c_hmxdepack = 0, g_c_quant = 0, g_c_pint = 0;
+#endif
+#if 0  /* retired single-pass merge (replaced by the 2-pass pack_only/run_only path) */
+static void gdn_hmx_merge(const gdn_vtcm_t *vt, const uint8_t *act_u8, const int8_t *wt_i8,
+                          float scale_f16, int baseline_u16, int8_t *out_codes) {
+    static int32_t __attribute__((aligned(128))) eff[64];
+    gdn_effective(wt_i8, eff);
+    gdn_pack_act_crouton8(act_u8, vt->act);
+    gdn_pack_w8_kmajor(wt_i8, vt->wt);
+    gdn_pack_bias(eff, scale_f16, baseline_u16, vt->bias);
+    { HVX_Vector z = Q6_V_vzero(); HVX_Vector *op = (HVX_Vector *)vt->out;
+      for (int i = 0; i < (BL * BL) / 128; ++i) op[i] = z; }   /* VTCM out surface = 4096 B = 32 vecs */
+#if defined(GDN_BR_PROBE_CYCLES)
+    uint64_t p1; asm volatile("%0 = C15:14" : "=r"(p1)); g_c_hmxpack += p1 - p0;
+#endif
+
+    vt->acttab[0] = (int32_t)(uintptr_t)(vt->act + 0);
+    vt->acttab[1] = (int32_t)(uintptr_t)(vt->act + 64 * 32);
+    vt->outtab[0] = (int32_t)(uintptr_t)(vt->out + 0);
+    vt->outtab[1] = (int32_t)(uintptr_t)(vt->out + 64 * 32);
+
+    uint32_t extra_param[2] __attribute__((aligned(16))) = {1u, 0u};
+    uint32_t mask_buf[16] __attribute__((aligned(16)));
+    for (int i = 0; i < 16; ++i) mask_buf[i] = GDN_BR_MASK_WORDS[i];
+
+    hmx_conv_out_desc_t out_desc __attribute__((aligned(64))) = {
+        vt->outtab, GDN_BR_OUT_TABLE_STRIDE, GDN_BR_OUT_Y_STRIDE,
+        GDN_BR_N_TILES_POW2, GDN_BR_M_TOTAL_MINUS_STEP, GDN_BR_K_TOTAL_BYTES };
+    hmx_conv_act_desc_t act_desc __attribute__((aligned(64))) = {
+        vt->acttab, GDN_BR_N_ACT_PAIRS, GDN_BR_ACT_Y_STRIDE };
+
+    our_v73deep_kernel(&out_desc, &act_desc, (const uint8_t *)vt->wt, (const uint8_t *)vt->bias,
+                       (const hmx_conv_mask_desc_t *)mask_buf, extra_param);
+#if defined(GDN_BR_PROBE_CYCLES)
+    uint64_t p2; asm volatile("%0 = C15:14" : "=r"(p2)); g_c_hmxkern += p2 - p1;
+#endif
+
+    int base = baseline_u16 >> 7;   /* output zero-point in u8 */
+    gdn_depack_out_fast(vt->out, base, out_codes);
+}
+#endif  /* retired single-pass merge */
+
+/* ---- 2-pass scale estimation: pack once, run HMX with a provisional (loose-bound) gain, read the
+ * actual max |product| from the u8 surface (free), then re-run at the tight gain.  Replaces the 685K
+ * HVX pint 64^3 matmul with ~2 free HMX passes. ---- */
+
+/* loose upper bound on max|P_int| for P = (act_u8-128) @ wt_i8 (both 64x64 natural), guaranteed >= the
+ * true max so the provisional pass cannot saturate: K * max|act-128| * max|wt|  (K=64).  Fully HVX
+ * (two int8 maxabs reductions); validated near-exact downstream (host probe: 1.29e-2 vs exact 1.20e-2). */
+static int32_t gdn_pint_loosebound(const uint8_t *act_u8, const int8_t *wt_i8) {
+    HVX_Vector vwmax = Q6_V_vzero(), vamax = Q6_V_vzero();
+    const HVX_Vector v128b = Q6_Vb_vsplat_R(128);
+    for (int b = 0; b < (BL * BL) / 128; ++b) {
+        HVX_Vector w = ((const HVX_Vector *)wt_i8)[b];
+        HVX_VectorPair w16 = Q6_Wh_vsxt_Vb(w);
+        vwmax = Q6_Vh_vmax_VhVh(vwmax, Q6_Vh_vabs_Vh(Q6_V_lo_W(w16)));
+        vwmax = Q6_Vh_vmax_VhVh(vwmax, Q6_Vh_vabs_Vh(Q6_V_hi_W(w16)));
+        /* act centered: (u8-128) as signed byte (wraps correctly mod 256), then abs via int16 widen. */
+        HVX_Vector a = Q6_Vb_vsub_VbVb(((const HVX_Vector *)act_u8)[b], v128b);
+        HVX_VectorPair a16 = Q6_Wh_vsxt_Vb(a);
+        vamax = Q6_Vh_vmax_VhVh(vamax, Q6_Vh_vabs_Vh(Q6_V_lo_W(a16)));
+        vamax = Q6_Vh_vmax_VhVh(vamax, Q6_Vh_vabs_Vh(Q6_V_hi_W(a16)));
+    }
+    int16_t wl[64] __attribute__((aligned(128))), al[64] __attribute__((aligned(128)));
+    *(HVX_Vector *)wl = vwmax; *(HVX_Vector *)al = vamax;
+    int wmax = 0, amax = 0;
+    for (int i = 0; i < 64; ++i) { if (wl[i] > wmax) wmax = wl[i]; if (al[i] > amax) amax = al[i]; }
+    int32_t b = (int32_t)BL * (int32_t)amax * (int32_t)wmax;
+    return b > 0 ? b : 1;
+}
+
+/* TIGHT analytic bound on max|P_int| for P=(act_u8-128)@wt_i8: amax * max_c(Sum_k |wt[k,c]|) (Hoelder
+ * over the contracted index k=0..63).  Always >= true max|P| (so no saturation), but ~2.7x (max ~4.7x)
+ * vs ~66x for the loose K*amax*wmax bound -> only ~1.5 bits coarser, vs the loose bound's ~6.  Lets the
+ * merge run ONE HMX pass with an analytic gain (no pass-1 HMX run + surface scan).  wt_i8 is natural
+ * k-major [k*64+c]; column-sum over k = vertical add of the 64 row-vectors (each row = lower 64 bytes). */
+static int32_t gdn_pint_tightbound(const uint8_t *act_u8, const int8_t *wt_i8) {
+    const HVX_Vector v128b = Q6_Vb_vsplat_R(128);
+    HVX_Vector vamax = Q6_V_vzero();
+    HVX_Vector vcol = Q6_V_vzero();   /* int16 column-sum accumulator (64 cols in low 64 lanes) */
+    for (int r = 0; r < BL; ++r) {
+        /* wt row r: 64 i8 at wt_i8 + r*64.  sxt the 64 bytes -> 64 int16 (lo half of the widen). */
+        HVX_Vector wrow = *(const HVX_UVector *)(wt_i8 + r * BL);
+        HVX_VectorPair w16 = Q6_Wh_vsxt_Vb(wrow);
+        vcol = Q6_Vh_vadd_VhVh(vcol, Q6_Vh_vabs_Vh(Q6_V_lo_W(w16)));   /* accumulate |wt[r,0..63]| */
+    }
+    for (int b = 0; b < (BL * BL) / 128; ++b) {
+        HVX_Vector a = Q6_Vb_vsub_VbVb(((const HVX_Vector *)act_u8)[b], v128b);
+        HVX_VectorPair a16 = Q6_Wh_vsxt_Vb(a);
+        vamax = Q6_Vh_vmax_VhVh(vamax, Q6_Vh_vabs_Vh(Q6_V_lo_W(a16)));
+        vamax = Q6_Vh_vmax_VhVh(vamax, Q6_Vh_vabs_Vh(Q6_V_hi_W(a16)));
+    }
+    int16_t cl[64] __attribute__((aligned(128))), al[64] __attribute__((aligned(128)));
+    *(HVX_Vector *)cl = vcol; *(HVX_Vector *)al = vamax;
+    int colmax = 0, amax = 0;
+    for (int i = 0; i < 64; ++i) { if (cl[i] > colmax) colmax = cl[i]; if (al[i] > amax) amax = al[i]; }
+    int32_t b = (int32_t)amax * (int32_t)colmax;
+    return b > 0 ? b : 1;
+}
+
+/* TIGHT bound for TILED wt (4x 32x32 row-major tiles).  Column c (output col) lives in tile-col tc=c/32;
+ * contracted index k spans tile-rows tr=0,1.  Accumulate |wt| down each tile's 32 rows into a 32-wide
+ * int16 colsum per tc, then take colmax over both tc.  act tiles -> amax (layout-invariant flat maxabs). */
+static int32_t gdn_pint_tightbound_tiled(const uint8_t *act_tiles_u8, const int8_t *wt_tiles_i8) {
+    const HVX_Vector v128b = Q6_Vb_vsplat_R(128);
+    HVX_Vector vcol0 = Q6_V_vzero(), vcol1 = Q6_V_vzero();   /* 32-wide int16 colsums for tc=0,1 */
+    for (int tr = 0; tr < 2; ++tr) {
+        const int8_t *t0 = wt_tiles_i8 + (tr * 2 + 0) * 1024;   /* tile(tr,0): 32 rows x 32 i8 */
+        const int8_t *t1 = wt_tiles_i8 + (tr * 2 + 1) * 1024;
+        for (int r = 0; r < 32; ++r) {
+            /* 32 i8 in the low 32 bytes; widen low half -> 32 int16. */
+            HVX_VectorPair w0 = Q6_Wh_vsxt_Vb(*(const HVX_UVector *)(t0 + r * 32));
+            HVX_VectorPair w1 = Q6_Wh_vsxt_Vb(*(const HVX_UVector *)(t1 + r * 32));
+            vcol0 = Q6_Vh_vadd_VhVh(vcol0, Q6_Vh_vabs_Vh(Q6_V_lo_W(w0)));
+            vcol1 = Q6_Vh_vadd_VhVh(vcol1, Q6_Vh_vabs_Vh(Q6_V_lo_W(w1)));
+        }
+    }
+    HVX_Vector vamax = Q6_V_vzero();
+    for (int b = 0; b < (BL * BL) / 128; ++b) {
+        HVX_Vector a = Q6_Vb_vsub_VbVb(((const HVX_Vector *)act_tiles_u8)[b], v128b);
+        HVX_VectorPair a16 = Q6_Wh_vsxt_Vb(a);
+        vamax = Q6_Vh_vmax_VhVh(vamax, Q6_Vh_vabs_Vh(Q6_V_lo_W(a16)));
+        vamax = Q6_Vh_vmax_VhVh(vamax, Q6_Vh_vabs_Vh(Q6_V_hi_W(a16)));
+    }
+    int16_t c0[64] __attribute__((aligned(128))), c1[64] __attribute__((aligned(128))), al[64] __attribute__((aligned(128)));
+    *(HVX_Vector *)c0 = vcol0; *(HVX_Vector *)c1 = vcol1; *(HVX_Vector *)al = vamax;
+    int colmax = 0, amax = 0;
+    for (int i = 0; i < 32; ++i) { if (c0[i] > colmax) colmax = c0[i]; if (c1[i] > colmax) colmax = c1[i]; }
+    for (int i = 0; i < 64; ++i) if (al[i] > amax) amax = al[i];
+    int32_t b = (int32_t)amax * (int32_t)colmax;
+    return b > 0 ? b : 1;
+}
+
+/* max |u8_code - base| over the depacked product surface (the crouton8 out surface), scanning the raw
+ * 4096-byte VTCM surface (order-independent for a max). */
+static int gdn_surf_maxabs(const uint8_t *surf, int base) {
+    const HVX_Vector vb = Q6_Vb_vsplat_R(base);
+    HVX_Vector vmax = Q6_V_vzero();
+    const HVX_Vector *sp = (const HVX_Vector *)surf;
+    for (int i = 0; i < (BL * BL) / 128; ++i) {
+        HVX_Vector d = Q6_Vb_vsub_VbVb(sp[i], vb);          /* signed code */
+        HVX_VectorPair d16 = Q6_Wh_vsxt_Vb(d);
+        vmax = Q6_Vh_vmax_VhVh(vmax, Q6_Vh_vabs_Vh(Q6_V_lo_W(d16)));
+        vmax = Q6_Vh_vmax_VhVh(vmax, Q6_Vh_vabs_Vh(Q6_V_hi_W(d16)));
+    }
+    int16_t l[64] __attribute__((aligned(128))); *(HVX_Vector *)l = vmax;
+    int m = 0; for (int i = 0; i < 64; ++i) if (l[i] > m) m = l[i];
+    return m;
+}
+
+/* pack act/wt/effective once (no bias control word). */
+#if defined(GDN_BR_PROBE_CYCLES)
+uint64_t g_c_eff = 0, g_c_actpack = 0, g_c_wtpack = 0;
+#endif
+static void gdn_hmx_pack_only(const gdn_vtcm_t *vt, const uint8_t *act_u8, const int8_t *wt_i8, int32_t *eff) {
+#if defined(GDN_BR_PROBE_CYCLES)
+    uint64_t e0; asm volatile("%0 = C15:14" : "=r"(e0));
+#endif
+    gdn_effective(wt_i8, eff);
+#if defined(GDN_BR_PROBE_CYCLES)
+    uint64_t e1; asm volatile("%0 = C15:14" : "=r"(e1)); g_c_eff += e1 - e0;
+#endif
+    gdn_pack_act_crouton8(act_u8, vt->act);
+#if defined(GDN_BR_PROBE_CYCLES)
+    uint64_t e2; asm volatile("%0 = C15:14" : "=r"(e2)); g_c_actpack += e2 - e1;
+#endif
+    gdn_pack_w8_kmajor(wt_i8, vt->wt);
+#if defined(GDN_BR_PROBE_CYCLES)
+    uint64_t e3; asm volatile("%0 = C15:14" : "=r"(e3)); g_c_wtpack += e3 - e2;
+#endif
+    vt->acttab[0] = (int32_t)(uintptr_t)(vt->act + 0);
+    vt->acttab[1] = (int32_t)(uintptr_t)(vt->act + 64 * 32);
+    vt->outtab[0] = (int32_t)(uintptr_t)(vt->out + 0);
+    vt->outtab[1] = (int32_t)(uintptr_t)(vt->out + 64 * 32);
+}
+
+/* TILED-SOURCE pack: act tiles (u8, zp128) + wt tiles (i8) -> HMX surfaces, no natural-64 intermediate.
+ * effective[] is layout-INVARIANT (column-sum over k) so it reads natural; but we have only tiles here.
+ * effective[n] = -128*sum_k wt[k,n]; with tiles, col n is in tile tc=n/32, summed over both k-tiles.
+ * We compute it from the tiled wt directly (two tile column-sums, concatenated). */
+static void gdn_effective_tiles(const int8_t *tiles_i8, int32_t *effective) {
+    /* for each n-tile (tc), sum its 64 k-rows (across kt=0,1 -> tiles tr=0 and tr=1) per the 32 cols. */
+    for (int tc = 0; tc < 2; ++tc) {
+        HVX_Vector acc_e = Q6_V_vzero(), acc_o = Q6_V_vzero();   /* int16 even/odd col partials, 32 cols */
+        for (int tr = 0; tr < 2; ++tr) {
+            const int8_t *tile = tiles_i8 + (size_t)(tr * 2 + tc) * 1024;
+            for (int r = 0; r < 32; ++r) {
+                HVX_Vector row = *(const HVX_UVector *)(tile + r * 32);   /* 32 useful bytes */
+                HVX_VectorPair w16 = Q6_Wh_vsxt_Vb(row);
+                acc_e = Q6_Vh_vadd_VhVh(acc_e, Q6_V_lo_W(w16));
+                acc_o = Q6_Vh_vadd_VhVh(acc_o, Q6_V_hi_W(w16));
+            }
+        }
+        HVX_VectorPair nat = Q6_W_vshuff_VVR(acc_o, acc_e, -2);
+        int16_t cols[64] __attribute__((aligned(128)));
+        *(HVX_Vector *)cols = Q6_V_lo_W(nat);
+        for (int n = 0; n < 32; ++n) effective[tc * 32 + n] = -128 * (int)cols[n];
+    }
+}
+static void gdn_hmx_pack_only_tiles(const gdn_vtcm_t *vt, const uint8_t *act_tiles_u8,
+                                    const int8_t *wt_tiles_i8, int32_t *eff) {
+#if defined(GDN_BR_PROBE_CYCLES)
+    uint64_t e0; asm volatile("%0 = C15:14" : "=r"(e0));
+#endif
+    gdn_effective_tiles(wt_tiles_i8, eff);
+#if defined(GDN_BR_PROBE_CYCLES)
+    uint64_t e1; asm volatile("%0 = C15:14" : "=r"(e1)); g_c_eff += e1 - e0;
+#endif
+    gdn_pack_act_crouton8_tiles(act_tiles_u8, vt->act);
+#if defined(GDN_BR_PROBE_CYCLES)
+    uint64_t e2; asm volatile("%0 = C15:14" : "=r"(e2)); g_c_actpack += e2 - e1;
+#endif
+    gdn_pack_w8_kmajor_tiles(wt_tiles_i8, vt->wt);
+#if defined(GDN_BR_PROBE_CYCLES)
+    uint64_t e3; asm volatile("%0 = C15:14" : "=r"(e3)); g_c_wtpack += e3 - e2;
+#endif
+    vt->acttab[0] = (int32_t)(uintptr_t)(vt->act + 0);
+    vt->acttab[1] = (int32_t)(uintptr_t)(vt->act + 64 * 32);
+    vt->outtab[0] = (int32_t)(uintptr_t)(vt->out + 0);
+    vt->outtab[1] = (int32_t)(uintptr_t)(vt->out + 64 * 32);
+}
+
+/* run the kernel with a freshly-packed bias (gain+baseline); leaves the u8 product surface in vt->out. */
+static void gdn_hmx_run_only(const gdn_vtcm_t *vt, const int32_t *eff, float scale_f16, int baseline_u16) {
+    gdn_pack_bias(eff, scale_f16, baseline_u16, vt->bias);
+    { HVX_Vector z = Q6_V_vzero(); HVX_Vector *op = (HVX_Vector *)vt->out;
+      for (int i = 0; i < (BL * BL) / 128; ++i) op[i] = z; }
+    uint32_t extra_param[2] __attribute__((aligned(16))) = {1u, 0u};
+    uint32_t mask_buf[16] __attribute__((aligned(16)));
+    for (int i = 0; i < 16; ++i) mask_buf[i] = GDN_BR_MASK_WORDS[i];
+    hmx_conv_out_desc_t out_desc __attribute__((aligned(64))) = {
+        vt->outtab, GDN_BR_OUT_TABLE_STRIDE, GDN_BR_OUT_Y_STRIDE,
+        GDN_BR_N_TILES_POW2, GDN_BR_M_TOTAL_MINUS_STEP, GDN_BR_K_TOTAL_BYTES };
+    hmx_conv_act_desc_t act_desc __attribute__((aligned(64))) = {
+        vt->acttab, GDN_BR_N_ACT_PAIRS, GDN_BR_ACT_Y_STRIDE };
+    our_v73deep_kernel(&out_desc, &act_desc, (const uint8_t *)vt->wt, (const uint8_t *)vt->bias,
+                       (const hmx_conv_mask_desc_t *)mask_buf, extra_param);
+}
+
+/* INT-ONLY merge: act from int32 codes @ s_act, wt from int32 codes @ s_wt.  Quants directly from
+ * codes (HVX-vectorized, no float roundtrip), 2-pass exact-ish scale, returns int8 product codes +
+ * scale s_out.  This is the Task-2 (packing-resident) building block — no deq-to-float / quant-from-f. */
+static void gdn_merge_codes(gdn_scr_t *sc, const gdn_vtcm_t *vt, const int32_t *act_codes, float s_act,
+                            const int32_t *wt_codes, float s_wt, int8_t *out_codes, float *s_out) {
+#if defined(GDN_BR_PROBE_CYCLES)
+    uint64_t q0; asm volatile("%0 = C15:14" : "=r"(q0));
+#endif
+    float sa = gdn_quant_u8_from_codes(sc, act_codes, s_act, sc->actbuf);
+    float sw = gdn_quant_i8_from_codes(sc, wt_codes, s_wt, sc->wtbuf);
+#if defined(GDN_BR_PROBE_CYCLES)
+    { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_quant += q - q0; }
+#endif
+    int32_t *eff = sc->eff;
+    /* pack act/wt/effective ONCE (shared by both HMX passes). */
+#if defined(GDN_BR_PROBE_CYCLES)
+    uint64_t pk0; asm volatile("%0 = C15:14" : "=r"(pk0));
+#endif
+    gdn_hmx_pack_only(vt, sc->actbuf, sc->wtbuf, eff);
+#if defined(GDN_BR_PROBE_CYCLES)
+    { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_hmxpack += q - pk0; }
+    uint64_t es0; asm volatile("%0 = C15:14" : "=r"(es0));
+#endif
+    /* PASS 1: provisional gain g1 = 127/loose (loose >= max|P|, no saturation), centered u8. */
+    int32_t loose = gdn_pint_loosebound(sc->actbuf, sc->wtbuf);
+    float g1 = 127.0f / (float)loose;
+    gdn_hmx_run_only(vt, eff, g1 * 512.0f, 128 << 7);
+    int code1 = gdn_surf_maxabs(vt->out, 128);                  /* max|P|*g1 */
+    float maxP = (float)code1 / g1; if (maxP < 1.0f) maxP = 1.0f;
+    float sP = (maxP * sa * sw) / 127.0f; if (sP <= 0.0f) sP = 1e-12f;
+#if defined(GDN_BR_PROBE_CYCLES)
+    { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_pint += q - es0; }
+#endif
+    /* PASS 2: tight gain g2 = 127/maxP, depack into out_codes. */
+    float g2 = 127.0f / maxP;
+#if defined(GDN_BR_PROBE_CYCLES)
+    uint64_t r0; asm volatile("%0 = C15:14" : "=r"(r0));
+#endif
+    gdn_hmx_run_only(vt, eff, g2 * 512.0f, 128 << 7);
+#if defined(GDN_BR_PROBE_CYCLES)
+    { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_hmxkern += q - r0; }
+    uint64_t d0; asm volatile("%0 = C15:14" : "=r"(d0));
+#endif
+    gdn_depack_out_fast(sc, vt->out, 128, out_codes);
+#if defined(GDN_BR_PROBE_CYCLES)
+    { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_hmxdepack += q - d0; }
+#endif
+    *s_out = sP;
+}
+
+/* ---- M6 SPLIT handoff: read Op1's int8 32x32 row-major tiles back to a natural 64x64 i8 block ----
+ * each tile row is 32 contiguous bytes -> 4x uint64 copies (no per-byte scatter). */
+static void gdn_read_tiles_64(const int8_t *src_tiles, int8_t *blk_natural) {
+    for (int tr = 0; tr < 2; ++tr)
+        for (int tc = 0; tc < 2; ++tc) {
+            const int8_t *tile = src_tiles + (tr * 2 + tc) * 1024;
+            for (int r = 0; r < 32; ++r) {
+                int8_t *dst = blk_natural + (tr * 32 + r) * 64 + tc * 32;
+                const int8_t *src = tile + r * 32;
+                *(uint64_t *)(dst + 0)  = *(const uint64_t *)(src + 0);
+                *(uint64_t *)(dst + 8)  = *(const uint64_t *)(src + 8);
+                *(uint64_t *)(dst + 16) = *(const uint64_t *)(src + 16);
+                *(uint64_t *)(dst + 24) = *(const uint64_t *)(src + 24);
+            }
+        }
+}
+
+/* recenter an i8 block to u8 (zp128) for use as the HMX activation. */
+static void gdn_i8_to_u8(const int8_t *src, uint8_t *out) {
+    const HVX_Vector v128 = Q6_Vb_vsplat_R(128);
+    const HVX_Vector *sp = (const HVX_Vector *)src;
+    HVX_Vector *op = (HVX_Vector *)out;
+    for (int b = 0; b < (BL * BL) / 128; ++b) op[b] = Q6_Vb_vadd_VbVb(sp[b], v128);
+}
+
+/* M6 i8-merge: act and wt are PRE-QUANTIZED int8 blocks (from Op1's handoff) at scales s_act/s_wt.
+ * NO re-quant, NO re-fold (Op1 did them on HVX threads).  Recenter act to u8, pack once, 2-pass scale,
+ * depack -> int8 product codes + scale.  This is the merge with the HVX glue moved to Op1. */
+static void gdn_merge_i8(gdn_scr_t *sc, const gdn_vtcm_t *vt, const int8_t *act_i8, float s_act,
+                         const int8_t *wt_i8, float s_wt, int8_t *out_codes, float *s_out) {
+    gdn_i8_to_u8(act_i8, sc->actbuf2);
+    int32_t *eff = sc->eff;
+    gdn_hmx_pack_only(vt, sc->actbuf2, wt_i8, eff);
+    int32_t loose = gdn_pint_loosebound(sc->actbuf2, wt_i8);
+    float g1 = 127.0f / (float)loose;
+    gdn_hmx_run_only(vt, eff, g1 * 512.0f, 128 << 7);
+    int code1 = gdn_surf_maxabs(vt->out, 128);
+    float maxP = (float)code1 / g1; if (maxP < 1.0f) maxP = 1.0f;
+    float sP = (maxP * s_act * s_wt) / 127.0f; if (sP <= 0.0f) sP = 1e-12f;
+    float g2 = 127.0f / maxP;
+    gdn_hmx_run_only(vt, eff, g2 * 512.0f, 128 << 7);
+    gdn_depack_out_fast(sc, vt->out, 128, out_codes);
+    *s_out = sP;
+}
+
+/* TILED-source i8 merge: act + wt are TILED i8 blocks (Op1 handoff tiles or prior tiled merge output),
+ * at scales s_act/s_wt.  Recenter act tiles->u8 tiles, pack DIRECTLY from tiles (no un-tile), 2-pass
+ * scale, depack -> NATURAL int8 product codes + scale.  out_codes is natural (the accumulator path
+ * consumes natural). */
+static void gdn_merge_i8_tiled(gdn_scr_t *sc, const gdn_vtcm_t *vt, const int8_t *act_tiles, float s_act,
+                               const int8_t *wt_tiles, float s_wt, int8_t *out_codes, float *s_out) {
+#if defined(GDN_BR_PROBE_CYCLES)
+    uint64_t q0; asm volatile("%0 = C15:14" : "=r"(q0));
+#endif
+    gdn_i8_to_u8_tiled(act_tiles, sc->actbuf2);          /* tiled u8 act */
+#if defined(GDN_BR_PROBE_CYCLES)
+    { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_quant += q - q0; }
+#endif
+    int32_t *eff = sc->eff;
+    gdn_hmx_pack_only_tiles(vt, sc->actbuf2, wt_tiles, eff);   /* self-probes eff/actpack/wtpack */
+#if defined(GDN_BR_PROBE_CYCLES)
+    uint64_t es0; asm volatile("%0 = C15:14" : "=r"(es0));
+#endif
+    float maxP;
+#if defined(GDN_MERGE_1PASS)
+    /* lever B: skip pass1 (HMX run + surface maxabs); use the TIGHT analytic bound as max|P|.  ONE HMX
+     * run.  amax*colmax(wt) is ~2.7x the true max (vs ~66x for the loose bound), so only ~1.5 bits
+     * coarser, and always >= true (no saturation). */
+    maxP = (float)gdn_pint_tightbound_tiled(sc->actbuf2, wt_tiles);
+#else
+    int32_t loose = gdn_pint_loosebound(sc->actbuf2, wt_tiles);   /* layout-invariant (flat maxabs) */
+    float g1 = 127.0f / (float)loose;
+    gdn_hmx_run_only(vt, eff, g1 * 512.0f, 128 << 7);
+    int code1 = gdn_surf_maxabs(vt->out, 128);
+    maxP = (float)code1 / g1; if (maxP < 1.0f) maxP = 1.0f;
+#endif
+    float sP = (maxP * s_act * s_wt) / 127.0f; if (sP <= 0.0f) sP = 1e-12f;
+    float g2 = 127.0f / maxP;
+#if defined(GDN_BR_PROBE_CYCLES)
+    { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_pint += q - es0; }
+    uint64_t r0; asm volatile("%0 = C15:14" : "=r"(r0));
+#endif
+    gdn_hmx_run_only(vt, eff, g2 * 512.0f, 128 << 7);
+#if defined(GDN_BR_PROBE_CYCLES)
+    { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_hmxkern += q - r0; }
+    uint64_t d0; asm volatile("%0 = C15:14" : "=r"(d0));
+#endif
+    gdn_depack_out_fast(sc, vt->out, 128, out_codes);
+#if defined(GDN_BR_PROBE_CYCLES)
+    { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_hmxdepack += q - d0; }
+#endif
+    *s_out = sP;
+}
+
+/* TILED-act merge: act is a TILED i8 block (handoff diag T_ii), wt is NATURAL int32 codes (Sacc).
+ * Produces TILED int8 product codes (for the next level) + scale.  Combines tiled-act packing with the
+ * int32-code weight quant (the only natural input). */
+static void gdn_merge_codes_tiledact(gdn_scr_t *sc, const gdn_vtcm_t *vt, const int8_t *act_tiles,
+                                     float s_act, const int32_t *wt_codes, float s_wt,
+                                     int8_t *out_tiles, float *s_out) {
+#if defined(GDN_BR_PROBE_CYCLES)
+    uint64_t q0; asm volatile("%0 = C15:14" : "=r"(q0));
+#endif
+    float sw = gdn_quant_i8_from_codes(sc, wt_codes, s_wt, sc->wtbuf);   /* natural i8 wt */
+#if defined(GDN_BR_PROBE_CYCLES)
+    { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_quant += q - q0; }
+#endif
+    gdn_i8_to_u8_tiled(act_tiles, sc->actbuf2);          /* tiled u8 act */
+    int32_t *eff = sc->eff;
+    /* act packs from tiles, wt packs from natural (gdn_pack_w8_kmajor on sc->wtbuf). */
+#if defined(GDN_BR_PROBE_CYCLES)
+    uint64_t pk0; asm volatile("%0 = C15:14" : "=r"(pk0));
+    uint64_t pe0; asm volatile("%0 = C15:14" : "=r"(pe0));
+#endif
+    gdn_effective(sc->wtbuf, eff);
+#if defined(GDN_BR_PROBE_CYCLES)
+    uint64_t pe1; asm volatile("%0 = C15:14" : "=r"(pe1)); g_c_eff += pe1 - pe0;
+#endif
+    gdn_pack_act_crouton8_tiles(sc->actbuf2, vt->act);
+#if defined(GDN_BR_PROBE_CYCLES)
+    uint64_t pe2; asm volatile("%0 = C15:14" : "=r"(pe2)); g_c_actpack += pe2 - pe1;
+#endif
+    gdn_pack_w8_kmajor(sc->wtbuf, vt->wt);
+#if defined(GDN_BR_PROBE_CYCLES)
+    uint64_t pe3; asm volatile("%0 = C15:14" : "=r"(pe3)); g_c_wtpack += pe3 - pe2;
+    { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_hmxpack += q - pk0; }
+#endif
+    vt->acttab[0] = (int32_t)(uintptr_t)(vt->act + 0);
+    vt->acttab[1] = (int32_t)(uintptr_t)(vt->act + 64 * 32);
+    vt->outtab[0] = (int32_t)(uintptr_t)(vt->out + 0);
+    vt->outtab[1] = (int32_t)(uintptr_t)(vt->out + 64 * 32);
+    float maxP;
+#if defined(GDN_MERGE_1PASS)
+    maxP = (float)gdn_pint_tightbound(sc->actbuf2, sc->wtbuf);   /* natural k-major wt */
+#else
+    int32_t loose = gdn_pint_loosebound(sc->actbuf2, sc->wtbuf);
+    float g1 = 127.0f / (float)loose;
+    gdn_hmx_run_only(vt, eff, g1 * 512.0f, 128 << 7);
+    int code1 = gdn_surf_maxabs(vt->out, 128);
+    maxP = (float)code1 / g1; if (maxP < 1.0f) maxP = 1.0f;
+#endif
+    float sP = (maxP * s_act * sw) / 127.0f; if (sP <= 0.0f) sP = 1e-12f;
+    float g2 = 127.0f / maxP;
+#if defined(GDN_BR_PROBE_CYCLES)
+    uint64_t r0; asm volatile("%0 = C15:14" : "=r"(r0));
+#endif
+    gdn_hmx_run_only(vt, eff, g2 * 512.0f, 128 << 7);
+#if defined(GDN_BR_PROBE_CYCLES)
+    { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_hmxkern += q - r0; }
+    uint64_t d0; asm volatile("%0 = C15:14" : "=r"(d0));
+#endif
+    gdn_depack_out_tiles(sc, vt->out, 128, out_tiles);
+#if defined(GDN_BR_PROBE_CYCLES)
+    { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_hmxdepack += q - d0; }
+#endif
+    *s_out = sP;
+}
+
+/* order-preserving widen of 4096 int8 codes -> 4096 int32 in dst.  vsxt deals bytes; we re-interleave
+ * the 4 int32 streams (byte indices 4j, 4j+1, 4j+2, 4j+3) with two word-granularity vshuffs. */
+static void gdn_widen_i8_to_i32(const int8_t *src, int32_t *dst) {
+    const HVX_Vector *sp = (const HVX_Vector *)src;   /* 128 i8 / vec */
+    HVX_Vector *dp = (HVX_Vector *)dst;               /* 32 i32 / vec */
+    for (int b = 0; b < (BL * BL) / 128; ++b) {
+        HVX_VectorPair w16 = Q6_Wh_vsxt_Vb(sp[b]);              /* lo=byte[2i], hi=byte[2i+1] */
+        HVX_VectorPair wlo = Q6_Ww_vsxt_Vh(Q6_V_lo_W(w16));     /* llo=byte[4j], lhi=byte[4j+2] */
+        HVX_VectorPair whi = Q6_Ww_vsxt_Vh(Q6_V_hi_W(w16));     /* hlo=byte[4j+1], hhi=byte[4j+3] */
+        /* want sequential byte[4j+0..3] = (llo,hlo,lhi,hhi).  interleave (llo,lhi) and (hlo,hhi) at word,
+         * then interleave those at word again to weave the 4 streams. */
+        HVX_VectorPair pA = Q6_W_vshuff_VVR(Q6_V_lo_W(whi), Q6_V_lo_W(wlo), -4); /* (llo,hlo) pairs */
+        HVX_VectorPair pB = Q6_W_vshuff_VVR(Q6_V_hi_W(whi), Q6_V_hi_W(wlo), -4); /* (lhi,hhi) pairs */
+        /* pA lo = llo[0],hlo[0],llo[1],hlo[1]...  pB lo = lhi[0],hhi[0],...  -> need (llo,hlo,lhi,hhi) */
+        HVX_VectorPair s0 = Q6_W_vshuff_VVR(Q6_V_lo_W(pB), Q6_V_lo_W(pA), -8);
+        HVX_VectorPair s1 = Q6_W_vshuff_VVR(Q6_V_hi_W(pB), Q6_V_hi_W(pA), -8);
+        dp[b*4+0] = Q6_V_lo_W(s0); dp[b*4+1] = Q6_V_hi_W(s0);
+        dp[b*4+2] = Q6_V_lo_W(s1); dp[b*4+3] = Q6_V_hi_W(s1);
+    }
+}
+
+/* accumulate int8 term codes (scale s_term) into int32 accumulator g_Sacc (scale s_S):
+ *   Sacc += round(term * s_term / s_S).   first==1 => Sacc = term (and caller sets s_S=s_term).
+ * Vectorized with a fixed-point multiplier g=s_term/s_S. */
+static void gdn_acc_i8_to_codes(gdn_scr_t *sc, const int8_t *term, float s_term, float s_S, int first) {
+    if (first) {
+        gdn_widen_i8_to_i32(term, sc->Sacc);
+        return;
+    }
+    float g = s_term / s_S;
+    int Q = 14;
+    while (Q > 1  && g * (float)(1 << Q) >= 32768.0f) --Q;
+    while (Q < 28 && g * (float)(1 << (Q + 1)) < 16384.0f) ++Q;
+    int32_t Mg = (int32_t)(g * (float)(1 << Q) + 0.5f);
+    const int Mrep = (Mg & 0xFFFF) * 0x10001;
+    const HVX_Vector vrnd = Q6_V_vsplat_R(1 << (Q - 1));
+    /* widen term (order-preserving HVX) into sc->qbuf, then vectorized multiply-add into sc->Sacc. */
+    gdn_widen_i8_to_i32(term, sc->qbuf);
+    const HVX_Vector *tp = (const HVX_Vector *)sc->qbuf;
+    HVX_Vector *sp = (HVX_Vector *)sc->Sacc;
+    for (int b = 0; b < (BL * BL) / 32; ++b) {
+        HVX_Vector prod = Q6_Vw_vmpyi_VwRh(tp[b], Mrep);
+        sp[b] = Q6_Vw_vadd_VwVw(sp[b], Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(prod, vrnd), Q));
+    }
+}
+
+#if defined(GDN_BR_PROBE_CYCLES)
+volatile uint64_t g_c_read = 0, g_c_diagcopy = 0, g_c_requant = 0;
+#endif
+
+/* M6 Op2 per-head: read Op1's int8 tiles (diag T_ii + off-diag A_ij) from the handoff scratch, run the
+ * block-recursive merge chain on HMX (no diagonal solve, no fold, no quant -- Op1 did those on HVX
+ * threads), requant into Th.  Diagonal blocks T_ii are written into Th from the handoff i8 (dequant). */
+static void gdn_merge_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const int8_t *scr_h, const float *scl_h,
+                               const uint16_t *T1h, uint16_t *Th, float sT, int zpT) {
+    /* TILE-RESIDENT path (lever 1+3): handoff blocks stay in scr_h tiled (NO un-tile); computed merge
+     * outputs are stored tiled in sc->blk_tiles; every merge packs its HMX surfaces DIRECTLY from tiles.
+     * blk_src[b] points at the tiled bytes for block b (handoff or computed). */
+    const int8_t *blk_src[GDN_BR_NBLK];
+    for (int b = 0; b < GDN_BR_NBLK; ++b) {
+        blk_src[b] = scr_h + (size_t)b * GDN_HANDOFF_BLK_BYTES;   /* handoff tiles, no copy */
+        sc->blk_scl[b] = scl_h[b];
+    }
+    /* T = Op1's T1 (already block-diagonal: int16 diagonals T_ii + zpT elsewhere).  Copies the diagonal
+     * at FULL int16 precision (better than re-requanting the int8 handoff) AND removes the diag requant +
+     * zero-fill in one C*C uint16 vector copy.  Off-diagonal lower blocks are overwritten below. */
+    if (((uintptr_t)Th & 127) == 0 && ((uintptr_t)T1h & 127) == 0) {
+        HVX_Vector *op = (HVX_Vector *)Th; const HVX_Vector *ip = (const HVX_Vector *)T1h;
+        for (int i = 0; i < (C * C) / 64; ++i) op[i] = ip[i];
+    } else {
+        HVX_UVector *op = (HVX_UVector *)Th; const HVX_UVector *ip = (const HVX_UVector *)T1h;
+        for (int i = 0; i < (C * C) / 64; ++i) op[i] = ip[i];
+    }
+#if defined(GDN_BR_DIAG_ONLY)
+    return;
+#endif
+    /* off-diagonal merges in increasing diagonal-distance (lower-tri). */
+    for (int d = 1; d < NB; ++d) {
+        for (int j = 0; j + d < NB; ++j) {
+            int i = j + d;
+            int bii = gdn_blk_index(i, i);
+            int bij = gdn_blk_index(i, j);
+            float s_S = 0.0f; int first = 1;
+            for (int k = j; k < i; ++k) {
+                int baik = gdn_blk_index(i, k);   /* A_ik handoff tiled (off-diag block) */
+                int bkj  = gdn_blk_index(k, j);   /* T_kj: handoff diag (k==j) or prior tiled merge output */
+                float sterm;
+                /* term = A_ik @ T_kj  (both TILED i8) -> natural int8 codes in sc->termi */
+                gdn_merge_i8_tiled(sc, vt, blk_src[baik], sc->blk_scl[baik],
+                                   blk_src[bkj], sc->blk_scl[bkj], sc->termi, &sterm);
+                if (first) s_S = sterm;
+                gdn_acc_i8_to_codes(sc, sc->termi, sterm, s_S, first);
+                first = 0;
+            }
+            /* T_ij = T_ii @ Sacc : act=T_ii (TILED), wt=Sacc (natural i32 codes) -> TILED out_tiles */
+            float sij;
+            gdn_merge_codes_tiledact(sc, vt, blk_src[bii], sc->blk_scl[bii], sc->Sacc, s_S,
+                                     sc->blk_tiles[bij], &sij);
+            blk_src[bij] = sc->blk_tiles[bij];   /* the computed T_ij is now tile-resident for later levels */
+            sc->blk_scl[bij] = sij;
+#if defined(GDN_BR_PROBE_CYCLES)
+            uint64_t rq0; asm volatile("%0 = C15:14" : "=r"(rq0));
+#endif
+            gdn_requant_tiles_out(sc, sc->blk_tiles[bij], sij, sT, zpT, Th, i * BL, j * BL, C);
+#if defined(GDN_BR_PROBE_CYCLES)
+            { uint64_t rq; asm volatile("%0 = C15:14" : "=r"(rq)); g_c_requant += rq - rq0; }
+#endif
+        }
+    }
+}
+#endif  /* __hexagon__ */
+
+/* ============================ host (x86) reference fallback ============================ */
+/* Mirrors the device math in plain C double so the op is correct off-device too (and so the
+ * standalone harness can compare). Uses GdnSolveOp's solve core for the diagonals. */
+#include "../../solve_op/src/gdn_solve_core.h"
+/* generic nb=NB host fallback (mirrors gdn_blockrec_c256_probe): diagonals int16 fwd-subst, off-diag
+ * float-accumulated u8i8 merges in increasing diagonal-distance. */
+static void gdn_hmerge_u8i8(const float *act, const float *wt, int n, float *out) {
+    float sa = gdn_br_qsym_scale(act, n * n), sw = gdn_br_qsym_scale(wt, n * n);
+    for (int r = 0; r < n; ++r) for (int c = 0; c < n; ++c) {
+        long acc = 0;
+        for (int k = 0; k < n; ++k) {
+            long aq = lroundf(act[r * n + k] / sa); if (aq > 127) aq = 127; if (aq < -127) aq = -127;
+            long bq = lroundf(wt[k * n + c] / sw); if (bq > 127) bq = 127; if (bq < -127) bq = -127;
+            acc += aq * bq;
+        }
+        out[r * n + c] = (float)acc * (sa * sw);
+    }
+}
+static void gdn_br_head_scalar(const uint16_t *Au, int zpA, float sA,
+                               float sT, int zpT, uint16_t *Tu) {
+    static float Tblk[GDN_BR_NBLK][BL * BL];
+    int16_t sub16[BL * BL], Tcode[BL * BL];
+    /* diagonals */
+    for (int i = 0; i < NB; ++i) {
+        for (int r = 0; r < BL; ++r) for (int c = 0; c < BL; ++c)
+            sub16[r * BL + c] = (int16_t)((int)Au[(i * BL + r) * C + (i * BL + c)] - zpA);
+        gdn_solve_head_q<int16_t>(sub16, BL, sA, GDN_BR_TI, 32767.0f, Tcode);
+        int bi = gdn_blk_index(i, i);
+        for (int q = 0; q < BL * BL; ++q) Tblk[bi][q] = (float)Tcode[q] * GDN_BR_TI;
+    }
+    /* off-diagonals */
+    static float Aik[BL * BL], Sf[BL * BL], term[BL * BL];
+    for (int d = 1; d < NB; ++d) for (int j = 0; j + d < NB; ++j) {
+        int i = j + d;
+        for (int q = 0; q < BL * BL; ++q) Sf[q] = 0.0f;
+        for (int k = j; k < i; ++k) {
+            for (int r = 0; r < BL; ++r) for (int c = 0; c < BL; ++c)
+                Aik[r * BL + c] = ((int)Au[(i * BL + r) * C + (k * BL + c)] - zpA) * sA;
+            gdn_hmerge_u8i8(Aik, Tblk[gdn_blk_index(k, j)], BL, term);
+            for (int q = 0; q < BL * BL; ++q) Sf[q] += term[q];
+        }
+        gdn_hmerge_u8i8(Tblk[gdn_blk_index(i, i)], Sf, BL, Tblk[gdn_blk_index(i, j)]);
+    }
+    /* assemble */
+    for (int q = 0; q < C * C; ++q) Tu[q] = (uint16_t)zpT;
+    auto put = [&](int r, int c, float v) {
+        long q = lroundf(v / sT); long lim = 32767;
+        if (q > lim) q = lim; if (q < -lim) q = -lim;
+        Tu[r * C + c] = (uint16_t)((int)q + zpT);
+    };
+    for (int i = 0; i < NB; ++i) for (int jj = 0; jj <= i; ++jj) {
+        int bij = gdn_blk_index(i, jj);
+        for (int r = 0; r < BL; ++r) for (int c = 0; c < BL; ++c)
+            put(i * BL + r, jj * BL + c, Tblk[bij][r * BL + c]);
+    }
+}
+
+#if defined(__hexagon__)
+#if defined(GDN_BR_PROBE_CYCLES)
+uint64_t g_c_diag = 0;
+uint64_t g_c_fold = 0, g_c_acc = 0, g_c_widen = 0, g_c_zero = 0;
+#endif
+/* compute one head's T = (I-A)^-1 (block-recursive) into Th, using per-thread scratch sc and per-thread
+ * VTCM region vt.  zpA/sA->(M,S) fold params; sT/zpT output quant.  Pure HVX + HMX (no shared globals). */
+static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t *Ah, uint16_t *Th,
+                            int zpA, int M, int S, float sT, int zpT) {
+#if defined(GDN_BR_PROBE_CYCLES)
+    uint64_t t0; asm volatile("%0 = C15:14" : "=r"(t0));
+#endif
+    for (int i = 0; i < NB; ++i) {
+        int bi = gdn_blk_index(i, i);
+        gdn_solve_diag64(sc, Ah + (size_t)i * BL * C + i * BL, C, zpA, M, S, sc->Tblk[bi]);
+        sc->Tscl[bi] = GDN_BR_TI;
+    }
+#if defined(GDN_BR_PROBE_CYCLES)
+    uint64_t t1; asm volatile("%0 = C15:14" : "=r"(t1)); g_c_diag += t1 - t0;
+#endif
+#if defined(GDN_BR_PROBE_CYCLES)
+    uint64_t z0; asm volatile("%0 = C15:14" : "=r"(z0));
+#endif
+    { HVX_Vector vzph = Q6_Vh_vsplat_R(zpT);
+      if (((uintptr_t)Th & 127) == 0) { HVX_Vector *op = (HVX_Vector *)Th;
+          for (int i = 0; i < (C * C) / 64; ++i) op[i] = vzph; }
+      else { HVX_UVector *op = (HVX_UVector *)Th;
+          for (int i = 0; i < (C * C) / 64; ++i) op[i] = vzph; } }
+#if defined(GDN_BR_PROBE_CYCLES)
+    { uint64_t z; asm volatile("%0 = C15:14" : "=r"(z)); g_c_zero += z - z0; }
+#endif
+    for (int i = 0; i < NB; ++i) {
+        int bi = gdn_blk_index(i, i);
+#if defined(GDN_BR_PROBE_CYCLES)
+        uint64_t rq0; asm volatile("%0 = C15:14" : "=r"(rq0));
+#endif
+        gdn_requant_block_out(sc->Tblk[bi], sc->Tscl[bi], sT, zpT, Th, i * BL, i * BL, C);
+        for (int r = 0; r < BL; ++r)
+            for (int c = r + 1; c < BL; ++c) Th[(i * BL + r) * C + (i * BL + c)] = (uint16_t)zpT;
+#if defined(GDN_BR_PROBE_CYCLES)
+        { uint64_t rq; asm volatile("%0 = C15:14" : "=r"(rq)); g_c_requant += rq - rq0; }
+#endif
+    }
+#if defined(GDN_BR_DIAG_ONLY)
+    return;
+#endif
+    for (int d = 1; d < NB; ++d) {
+        for (int j = 0; j + d < NB; ++j) {
+            int i = j + d;
+#if defined(GDN_BR_PROBE_CYCLES)
+            uint64_t m0; asm volatile("%0 = C15:14" : "=r"(m0));
+#endif
+            int bii = gdn_blk_index(i, i);
+            int bij = gdn_blk_index(i, j);
+            float s_S = 0.0f; int first = 1;
+            for (int k = j; k < i; ++k) {
+#if defined(GDN_BR_PROBE_CYCLES)
+                uint64_t f0; asm volatile("%0 = C15:14" : "=r"(f0));
+#endif
+                gdn_fold_block_raw(Ah + (size_t)i * BL * C + k * BL, C, sc->Aoff, zpA, M, S);
+#if defined(GDN_BR_PROBE_CYCLES)
+                { uint64_t f; asm volatile("%0 = C15:14" : "=r"(f)); g_c_fold += f - f0; }
+#endif
+                int bkj = gdn_blk_index(k, j);
+                float sterm;
+                gdn_merge_codes(sc, vt, sc->Aoff, (float)(1.0 / (1 << GDN_BR_F)),
+                                sc->Tblk[bkj], sc->Tscl[bkj], sc->termi, &sterm);
+                if (first) s_S = sterm;
+#if defined(GDN_BR_PROBE_CYCLES)
+                uint64_t a0; asm volatile("%0 = C15:14" : "=r"(a0));
+#endif
+                gdn_acc_i8_to_codes(sc, sc->termi, sterm, s_S, first);
+#if defined(GDN_BR_PROBE_CYCLES)
+                { uint64_t a; asm volatile("%0 = C15:14" : "=r"(a)); g_c_acc += a - a0; }
+#endif
+                first = 0;
+            }
+            float sij;
+            gdn_merge_codes(sc, vt, sc->Tblk[bii], GDN_BR_TI, sc->Sacc, s_S, sc->termi, &sij);
+#if defined(GDN_BR_PROBE_CYCLES)
+            uint64_t w0; asm volatile("%0 = C15:14" : "=r"(w0));
+#endif
+            gdn_widen_i8_to_i32(sc->termi, sc->Tblk[bij]);
+#if defined(GDN_BR_PROBE_CYCLES)
+            { uint64_t w; asm volatile("%0 = C15:14" : "=r"(w)); g_c_widen += w - w0; }
+#endif
+            sc->Tscl[bij] = sij;
+#if defined(GDN_BR_PROBE_CYCLES)
+            (void)m0;
+            uint64_t rq0; asm volatile("%0 = C15:14" : "=r"(rq0));
+#endif
+            gdn_requant_block_out(sc->Tblk[bij], sij, sT, zpT, Th, i * BL, j * BL, C);
+#if defined(GDN_BR_PROBE_CYCLES)
+            { uint64_t rq; asm volatile("%0 = C15:14" : "=r"(rq)); g_c_requant += rq - rq0; }
+#endif
+        }
+    }
+}
+
+/* worker-thread dispatch: each of GDN_BR_NT threads processes a strided subset of heads with its own
+ * scratch slot and its own VTCM region (vt_slot).  Heads are independent, so this is embarrassingly
+ * parallel; HMX is driven from every worker (the kernel re-locks per-call). */
+struct gdn_work_t {
+    int slot;
+    uint32_t h0, h1, nheads;
+    const uint16_t *Au; uint16_t *Tu;
+    int zpA, M, S; float sT; int zpT;
+    uint8_t *vtcm_base;
+};
+static void gdn_br_run_slot(gdn_work_t *w) {
+    gdn_scr_t *sc = &g_scr[w->slot];
+    /* each slot uses a distinct 0x60000-spaced VTCM region. */
+    gdn_vtcm_t vt = gdn_vtcm_from(w->vtcm_base + (size_t)w->slot * 0x60000);
+    for (uint32_t h = w->h0 + w->slot; h < w->h1; h += w->nheads)
+        gdn_br_one_head(sc, &vt, w->Au + (size_t)h * C * C, w->Tu + (size_t)h * C * C,
+                        w->zpA, w->M, w->S, w->sT, w->zpT);
+}
+/* spawned-worker wrapper: grabs its own HVX context (the inline/main path already has one). */
+static void gdn_br_worker(void *arg) {
+    gdn_work_t *w = (gdn_work_t *)arg;
+    qurt_hvx_lock(QURT_HVX_MODE_128B);
+    gdn_br_run_slot(w);
+    qurt_hvx_unlock();
+}
+static char __attribute__((aligned(128))) g_wkr_stack[GDN_BR_NT][32768];
+#endif  /* __hexagon__ (gdn_br_one_head / worker) */
+
+/* ----------------------------------- the QHPI callback (M6 Op2) -----------------------------------
+ * inputs[0] T1 : QUInt16 [B,H,C,C]  -- Op1's block-diagonal T (carries the Op1->Op2 ordering edge +
+ *                                       quant params); also the dequant source for diagonals.
+ * inputs[1] S  : QUInt8  handoff scratch (TCM_Only) -- Op1's int8 32x32 tiles + per-block scales.
+ * inputs[2] H  : QUInt8  HMX-surface scratch (TCM_Only) -- Op2's own act/wt/bias/out VTCM region.
+ * output[0] T  : QUInt16 [B,H,C,C]  -- full T=(I-A)^-1.
+ */
+static uint32_t gdn_merge_hmx_kernel(
+        QHPI_RuntimeHandle *handle,
+        uint32_t num_outputs, QHPI_Tensor **outputs,
+        uint32_t num_inputs, const QHPI_Tensor *const *inputs) {
+    (void)num_outputs;
+    if (!outputs || !outputs[0] || !inputs || !inputs[0]) return QHPI_Success;
+    uint16_t *Tu = (uint16_t *)qhpi_tensor_raw_data(outputs[0]);
+    if (!Tu) return QHPI_Success;
+
+    const QHPI_Quant_Parameters qt = qhpi_tensor_quant_parameters(outputs[0]);
+    const float sT = qt.stepsize;
+    const int32_t zpT = qt.zero_offset;
+
+    QHPI_Shape s = qhpi_tensor_shape(inputs[0]);
+    int Cc = (s.rank >= 1) ? (int)s.dims[s.rank - 1] : C;
+    if (Cc != C) return QHPI_Success;
+    uint32_t heads = 1;
+    for (uint32_t d = 0; d + 2 < s.rank; ++d) heads *= s.dims[d];
+    uint32_t h0 = 0, h1 = heads;
+
+#if defined(__hexagon__)
+    uint8_t *handoff_base = (num_inputs >= 2 && inputs[1]) ? (uint8_t *)qhpi_tensor_raw_data(inputs[1]) : nullptr;
+    uint8_t *vtcm_base    = (num_inputs >= 3 && inputs[2]) ? (uint8_t *)qhpi_tensor_raw_data(inputs[2]) : nullptr;
+    if (!handoff_base || !vtcm_base) return QHPI_Success;
+    const uint16_t *T1u = (const uint16_t *)qhpi_tensor_raw_data(inputs[0]);   /* Op1 block-diagonal T1 */
+    gdn_scr_t *sc = &g_scr[0];
+    gdn_vtcm_t vt = gdn_vtcm_from(vtcm_base);
+    for (uint32_t h = h0; h < h1; ++h) {
+        uint16_t *Th = Tu + (size_t)h * C * C;
+        const uint16_t *T1h = T1u + (size_t)h * C * C;
+        const int8_t *scr_h = (const int8_t *)(handoff_base + (size_t)h * GDN_HANDOFF_HEAD_STRIDE);
+        const float  *scl_h = (const float *)(scr_h + GDN_BR_NBLK * GDN_HANDOFF_BLK_BYTES);
+        gdn_merge_one_head(sc, &vt, scr_h, scl_h, T1h, Th, sT, zpT);
+    }
+#if defined(GDN_BR_PROBE_CYCLES)
+    if (h0 < h1) {
+        uint32_t *p = (uint32_t *)(Tu + (size_t)h0 * C * C);
+        p[0] = (uint32_t)g_c_read; p[1] = 1; p[2] = 0; p[3] = (h1 - h0);
+        p[4] = (uint32_t)g_c_hmxpack; p[5] = (uint32_t)g_c_hmxkern; p[6] = (uint32_t)g_c_hmxdepack;
+        p[7] = (uint32_t)g_c_quant; p[8] = (uint32_t)g_c_pint;
+        p[9] = (uint32_t)g_c_eff; p[10] = (uint32_t)g_c_actpack; p[11] = (uint32_t)g_c_wtpack;
+        p[12] = 0; p[13] = (uint32_t)g_c_acc; p[14] = (uint32_t)g_c_widen;
+        p[15] = (uint32_t)g_c_requant; p[16] = 0;
+    }
+#endif
+    (void)handle;
+#else  /* x86 fallback: no handoff data available, leave block-diagonal passthrough */
+    (void)inputs; (void)Tu; (void)zpT;
+#endif
+    return QHPI_Success;
+}
+
+static QHPI_Tensor_Signature_v1 sig_inputs[] = {
+    {QHPI_QUInt16, QHPI_Layout_Flat4, QHPI_Storage_Direct, QHPI_MemLoc_DDR_OR_TCM},  /* T1 (Op1 block-diag) */
+    {QHPI_QUInt8,  QHPI_Layout_Flat4, QHPI_Storage_Direct, QHPI_MemLoc_TCM_Only},    /* Hd handoff tiles (VTCM) */
+    {QHPI_QUInt8,  QHPI_Layout_Flat4, QHPI_Storage_Direct, QHPI_MemLoc_TCM_Only},    /* HMX surface scratch */
+};
+static QHPI_Tensor_Signature_v1 sig_outputs[] = {
+    {QHPI_QUInt16, QHPI_Layout_Flat4, QHPI_Storage_Direct, QHPI_MemLoc_DDR_OR_TCM},
+};
+
+static float gdn_merge_hmx_cost(uint32_t num_inputs, const QHPI_Tensor *const *inputs) {
+    if (!inputs || num_inputs < 1 || !inputs[0]) return 1.0f;
+    QHPI_Shape s = qhpi_tensor_shape(inputs[0]);
+    float n = 1.0f; for (uint32_t d = 0; d < s.rank; ++d) n *= (float)s.dims[d];
+    return n;
+}
+
+static QHPI_Kernel_v1 sg_kernels[] = {
+    {
+        THIS_PKG_NAME_STR "::gdn_merge_hmx_kernel",
+        gdn_merge_hmx_kernel,
+        QHPI_RESOURCE_HMX,        /* HMX op; HVX intrinsics used freely inside */
+        false, false, false, false,   /* multithreaded=false: HMX ops are not self-sliced */
+        3, sig_inputs,
+        1, sig_outputs,
+        gdn_merge_hmx_cost,
+        0,
+        0, nullptr, nullptr,
+        nullptr,
+    },
+};
+
+static QHPI_OpInfo_v1 sg_ops[] = {
+    {
+        THIS_PKG_NAME_STR "::GdnMergeHmx",
+        1, sg_kernels,
+        nullptr, nullptr, nullptr,
+        0, nullptr, nullptr,
+    },
+};
+
+extern "C" void register_gdn_merge_hmx_op(void) {
+    qhpi_register_ops_v1(sizeof(sg_ops) / sizeof(sg_ops[0]), sg_ops, THIS_PKG_NAME_STR);
+}

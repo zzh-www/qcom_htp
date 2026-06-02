@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OpDefCollection
+        PackageName="GdnMergeHmxPackage"
+        Domain="gdn"
+        Version="1.0">
+    <OpDefList>
+        <OpDef>
+            <Name>GdnMergeHmx</Name>
+            <Description>
+                <Content>GDN block-recursive merge (M6 Op2): reads Op1's int8 32x32 tiles (T_ii + A_ij) from the handoff VTCM scratch and runs the off-diagonal HMX u8i8 merge chain, assembling full T=(I-A)^-1. T1 is Op1's block-diagonal output (dependency + quant params); S = handoff scratch; Hs = HMX-surface scratch.</Content>
+            </Description>
+            <Input>
+                <Name>T1</Name>
+                <Mandatory>true</Mandatory>
+                <Datatype>QNN_DATATYPE_FLOAT_32</Datatype>
+                <Datatype>QNN_DATATYPE_UINT_16</Datatype>
+                <Datatype>QNN_DATATYPE_UFIXED_POINT_16</Datatype>
+                <Shape>
+                    <Rank>4D</Rank>
+                    <Layout>NONTRIVIAL</Layout>
+                    <Text>[B, H, C, C]</Text>
+                </Shape>
+            </Input>
+            <Input>
+                <Name>S</Name>
+                <Mandatory>true</Mandatory>
+                <Datatype>QNN_DATATYPE_UINT_8</Datatype>
+                <Datatype>QNN_DATATYPE_UFIXED_POINT_8</Datatype>
+                <Shape>
+                    <Rank>4D</Rank>
+                    <Layout>NONTRIVIAL</Layout>
+                    <Text>[B, H, C, C]</Text>
+                </Shape>
+            </Input>
+            <Input>
+                <Name>Hs</Name>
+                <Mandatory>true</Mandatory>
+                <Datatype>QNN_DATATYPE_UINT_8</Datatype>
+                <Datatype>QNN_DATATYPE_UFIXED_POINT_8</Datatype>
+                <Shape>
+                    <Rank>4D</Rank>
+                    <Layout>NONTRIVIAL</Layout>
+                    <Text>[1, 1, 1, N]</Text>
+                </Shape>
+            </Input>
+            <Output>
+                <Name>T</Name>
+                <Mandatory>true</Mandatory>
+                <Datatype>QNN_DATATYPE_FLOAT_32</Datatype>
+                <Datatype>QNN_DATATYPE_UINT_16</Datatype>
+                <Datatype>QNN_DATATYPE_UFIXED_POINT_16</Datatype>
+                <Shape>
+                    <Rank>4D</Rank>
+                    <Layout>NONTRIVIAL</Layout>
+                    <Text>[B, H, C, C]</Text>
+                </Shape>
+            </Output>
+            <SupportedBackend>HTP</SupportedBackend>
+        </OpDef>
+    </OpDefList>
+</OpDefCollection>
