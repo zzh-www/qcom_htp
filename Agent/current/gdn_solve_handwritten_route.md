@@ -90,8 +90,10 @@ oc ≤ 2.4e-2 (now 0.28%), gate behind a `-D` flag, revert anything that doesn't
   (quant / fold / matmul / acc / requant) cycle share, per-head.
 - Get per-thread `cycles_used` + the H-sweep fit → is the 2.92× cap (a) HVX-unit count, (b) sync/
   spawn-join overhead (fixed 178K), or (c) merge-chain load imbalance across heads?
-- Determine the ACTUAL v75 128B HVX unit count (don't assume 2 from the v68 define — DDR path already hit
-  2.94×, so ≥3 effective). This decides whether Phase 3 (64B mode) is worth it.
+- ✅ ANSWERED (device-confirmed via `qurt_hvx_get_units()`, `-DGDNBM_HWINFO`): this 8 Gen 3 = **4×128B HVX
+  units, 0×64B, 8MB VTCM, ~1.42 GHz**. So the HVX thread ceiling is **4**, and **64B mode gives no extra
+  units → off the table**. We're at 2.94× of 4 = ~73% → the cap is sync / fixed 178K spawn-join overhead /
+  merge-chain load imbalance, NOT unit count. (HVX/HMX/VTCM facts now in the `htp-hardware-scheduling` skill.)
 
 **Phase 2 — CUT HVX work (highest leverage; the bulk is here).**
 - 2a. Operand-reuse cache in the HVX_MERGE path: quant+fold each distinct `A_ik`/`T_kj` ONCE/head (10→6
@@ -101,10 +103,11 @@ oc ≤ 2.4e-2 (now 0.28%), gate behind a `-D` flag, revert anything that doesn't
 - 2c. Fuse passes: quant→matmul→acc→requant make multiple 64×64 sweeps; fuse adjacent ones to cut
   load/store traffic.
 
-**Phase 3 — MORE HVX parallelism (only if Phase 1 says units are free).**
-- If unit-bound at 128B (2–3 units): try 64B mode (4 units) — each row splits into 2 half-vectors; net
-  more instructions but up to ~4× threads. If sync/imbalance-bound instead: fix load balance (interleave
-  heads, or split the sequential merge chain) and cut the 178K fixed overhead.
+**Phase 3 — CLOSE the threading gap to 4× (64B mode is OFF — only 4×128B units exist).**
+- We have 4 HVX units and 4 threads but only 2.94×. The gap is sync / fixed 178K spawn-join-power overhead
+  / merge-chain load imbalance. Fixes: (i) reuse a persistent worker pool / amortize spawn-join across the
+  one dispatch (don't respawn per call); (ii) interleave heads so the per-head sequential merge chain
+  (dist1→2→3) doesn't leave threads idle at head boundaries; (iii) cut the fixed 178K. Target ~3.5–4×.
 
 **Phase 4 — INTEGRATE + END-TO-END (GOAL #3).**
 - Build `solve_br_op` as the QNN op with `-DGDN_BR_HVX_MERGE` (agent confirmed it now runs, no hang),
@@ -690,8 +693,5 @@ oc relerr **0.28%** (bit-exact-ish, np.linalg.inv). At H=8 the scaling was only 
 poor load balance) and VTCM looked *worse* than DDR — both artifacts of the small workload. At the real
 **H=32**, VTCM-resident clearly wins and the 4 threads scale 2.92×. Best so far: **~151K cyc/head 4-thread**.
 
-⚠️ **Metric caveat (unresolved):** 151K is bare-metal WALL (C15:14 around spawn→join). Shipped 70–83K is QNN
-steady DOMAIN cycles — NOT the same metric. Rough same-terms gap ≈ ~2× (not the ~3× claimed from H=8 wall).
-**Remaining levers:** (a) threading 2.92×→4× (64B mode = 4 HVX units vs 128B's 2; or cut the diag's
-sequential sync); (b) FULLY vectorize the inversion + glue (kill remaining scalar: diag coeff load, identity
-add, maxabs extract, per-call float scale math); (c) measure same-metric vs shipped before any "Nx" claim.
+⚠️ (superseded by the CURRENT STATE block at the top — metric is now ALIGNED: parity; and HVX = 4×128B
+units device-confirmed, so the threading lever is load-balance to 4×, NOT 64B mode. See FOLLOW-UP PLAN.)

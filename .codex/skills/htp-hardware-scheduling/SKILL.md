@@ -48,6 +48,20 @@ idioms: `references/asm_building_blocks.md`. Our route's HMX matmul = the existi
 int8 v73deep kernel (`example/gdn_native/solve_br_op/`), enabled via
 `compute_resource_hmx_lock` + HMX power vote — not a new kernel.
 
+## v75 hardware facts (device-CONFIRMED on this 8 Gen 3 — `ssh oneplus`, not just headers)
+
+Confirmed at runtime via `qurt_hvx_get_units()` + `HAP_compute_res_query_VTCM()` (probe: build
+`example/gdn_native/baremetal/` with `-DGDNBM_HWINFO`). ALWAYS confirm on the actual chip — v75 SKUs differ
+(the qurt header lists 2×128B/4×64B, 4×128B, and 6×128B configs).
+- **HVX: 4 units, 128B (1024-bit) mode, 0× 64B units** (`qurt_hvx_get_units() = 0x400`). ⇒ thread ceiling
+  for HVX work = **4**. **64B mode gives NO extra units on this chip** — don't bother switching modes.
+- **HMX: effectively 1 (process-serial).** `compute_resource_hmx_lock` is process-exclusive; multiple
+  threads can't run mxmem concurrently. 32×32 tile. ⇒ never thread HMX (Layer 2).
+- **VTCM: 8 MB** (`query_VTCM total = avail = 8388608`), ~1-cycle HVX access, HMX-mandatory, DMA target.
+- **Clock: ~1.42 GHz at TURBO** (PCYCLE/µs = 1422, see `htp-cycle-metric`).
+- Practical ceiling: 4 HVX threads. If you measure <~4× scaling (e.g. GDN at 2.9×), the gap is
+  sync / fixed spawn-join overhead / load imbalance — NOT unit count. Fix those, not the vector mode.
+
 ## The 4 scheduling layers (design top-down, optimize bottom-up)
 
 1. **ARM↔DSP = dspqueue, not per-call FastRPC.** One FastRPC `start` (pass queue

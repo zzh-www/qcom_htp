@@ -217,6 +217,22 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
     float sA = i2f(sA_bits), sT = i2f(sT_bits);
     int M, S; gdn_fold_MS(sA, &M, &S);
 
+#if defined(GDNBM_HWINFO)
+    {   /* DEVICE-CONFIRM the actual v75 chip HVX/VTCM config (not from headers). */
+        int u = qurt_hvx_get_units();              /* bits15:8 = #128B units, bits7:0 = #64B units */
+        unsigned int vt_total = 0, vt_avail = 0;
+        HAP_compute_res_query_VTCM(0, &vt_total, nullptr, &vt_avail, nullptr);
+        if (statsLen > 0) stats[0] = u;
+        if (statsLen > 1) stats[1] = (u >> 8) & 0xff;   /* #128B units */
+        if (statsLen > 2) stats[2] = u & 0xff;          /* #64B units */
+        if (statsLen > 3) stats[3] = (int)vt_total;
+        if (statsLen > 4) stats[4] = (int)vt_avail;
+        FARF(ALWAYS, "HWINFO: hvx_units=0x%x (128B=%d, 64B=%d) VTCM total=%u avail=%u",
+             u, (u >> 8) & 0xff, u & 0xff, vt_total, vt_avail);
+        return 0;
+    }
+#endif
+
     /* POWER: vote turbo core clock + HMX power-on (the bare HMX acquire doesn't power/clock it -> mxmem hangs). */
     static int g_pwr_client; void *pctx = &g_pwr_client;
     HAP_power_set_core_corner(pctx, HAP_DCVS_VCORNER_TURBO, HAP_DCVS_VCORNER_TURBO, HAP_DCVS_VCORNER_MAX);
