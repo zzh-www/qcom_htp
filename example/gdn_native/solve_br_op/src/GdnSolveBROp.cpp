@@ -124,6 +124,7 @@ struct gdn_scr_t {
      * A_ik act key gdn_blk_index(i,k) (10->6); T_ii act key i (6->3); T_kj wt key gdn_blk_index(k,j) (10->6). */
     float   sAa[GDN_BR_NBLK], sTw[GDN_BR_NBLK], sTa[GDN_BR_NB];
     char    vAa[GDN_BR_NBLK], vTw[GDN_BR_NBLK], vTa[GDN_BR_NB];
+    int32_t mxdiag[GDN_BR_NB];   /* producer-tracked maxabs of each diagonal T block (for quant fusion) */
     int32_t effc[GDN_BR_NBLK][64] __attribute__((aligned(128)));  /* cached effective-bias per T-wt block */
 };
 static gdn_scr_t g_scr[GDN_BR_NT];
@@ -190,9 +191,11 @@ static void gdn_fold_block_hvx(const uint16_t *Au, int row_stride, int32_t *Afx,
 /* fold one 64x64 block A -> RAW int32 codes (scale 2^-F, sign-extended, NOT halfword-replicated).
  * Used for A21 which is a QUANT operand (needs the plain code), unlike the diagonal-solve Afx which is
  * a scalar multiplier (needs both halfwords set). */
-static void gdn_fold_block_raw(const uint16_t *Au, int row_stride, int32_t *Afx, int zpA, int M, int S) {
+static void gdn_fold_block_raw(const uint16_t *Au, int row_stride, int32_t *Afx, int zpA, int M, int S,
+                               int32_t *mx_out = nullptr) {
     const int Mrep = (M & 0xFFFF) * 0x10001;
     const HVX_Vector vzp = Q6_V_vsplat_R(zpA), vrndS = Q6_V_vsplat_R(1 << (S - 1));
+    HVX_Vector vmax = Q6_V_vzero();
     for (int r = 0; r < BL; ++r) {
         const HVX_UVector *Av = (const HVX_UVector *)(Au + r * row_stride);
         HVX_Vector *Afxv = (HVX_Vector *)(Afx + r * BL);
@@ -200,16 +203,30 @@ static void gdn_fold_block_raw(const uint16_t *Au, int row_stride, int32_t *Afx,
         HVX_Vector c0 = Q6_Vw_vsub_VwVw(Q6_V_lo_W(w), vzp), c1 = Q6_Vw_vsub_VwVw(Q6_V_hi_W(w), vzp);
         HVX_Vector i0 = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_Vw_vmpyi_VwRh(c0, Mrep), vrndS), S);
         HVX_Vector i1 = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_Vw_vmpyi_VwRh(c1, Mrep), vrndS), S);
+        if (mx_out) {   /* track maxabs of the produced codes so quant can skip its own maxabs pass */
+            vmax = Q6_Vw_vmax_VwVw(vmax, Q6_Vw_vabs_Vw(i0));
+            vmax = Q6_Vw_vmax_VwVw(vmax, Q6_Vw_vabs_Vw(i1));
+        }
         HVX_VectorPair s = Q6_W_vshuff_VVR(i1, i0, -4);   /* even/odd -> natural col order */
         Afxv[0] = Q6_V_lo_W(s);
         Afxv[1] = Q6_V_hi_W(s);
+    }
+    if (mx_out) {
+        vmax = Q6_Vw_vmax_VwVw(vmax, Q6_V_vror_VR(vmax, 4 * 16));
+        vmax = Q6_Vw_vmax_VwVw(vmax, Q6_V_vror_VR(vmax, 4 * 8));
+        vmax = Q6_Vw_vmax_VwVw(vmax, Q6_V_vror_VR(vmax, 4 * 4));
+        vmax = Q6_Vw_vmax_VwVw(vmax, Q6_V_vror_VR(vmax, 4 * 2));
+        vmax = Q6_Vw_vmax_VwVw(vmax, Q6_V_vror_VR(vmax, 4 * 1));
+        int32_t lanes[32] __attribute__((aligned(128)));
+        *(HVX_Vector *)lanes = vmax;
+        *mx_out = lanes[0];
     }
 }
 
 /* solve one 64x64 diagonal block: T = inv(I - A_block), int16-code forward subst, leave int32 CODES
  * (scale GDN_BR_TI) in Tcout — NO float dequant (the M_op float roundtrip was the diagonal bottleneck). */
 static void gdn_solve_diag64(gdn_scr_t *sc, const uint16_t *Au, int row_stride, int zpA, int M, int S,
-                             int32_t *Tcout) {
+                             int32_t *Tcout, int32_t *mx_out = nullptr) {
     /* int16-PACKED forward subst (ported from GdnSolveOp C>64 path): T held int16 in a tight VTCM-friendly
      * buffer, ONE Q6_Ww_vmpyacc_WwVhRh does all 64 cols/row (2x the int32 vmpyiacc + half the memory
      * traffic), the int32 even/odd acc narrows+re-interleaves in one vasr_VwVwR_rnd_sat.  Output widened to
@@ -228,11 +245,25 @@ static void gdn_solve_diag64(gdn_scr_t *sc, const uint16_t *Au, int row_stride, 
     }
     /* widen the int16 T codes -> int32 codes for the merge path.  vsxt de-interleaves (lo=even halfwords,
      * hi=odd); a word-granularity vshuff re-interleaves to natural [c0,c1,...] order (2 vecs/row). */
+    HVX_Vector vmax = Q6_V_vzero();
     for (int i = 0; i < BL; ++i) {
         HVX_VectorPair w = Q6_Ww_vsxt_Vh(((const HVX_Vector *)(Tc16 + i * BL))[0]);
         HVX_VectorPair nat = Q6_W_vshuff_VVR(Q6_V_hi_W(w), Q6_V_lo_W(w), -4);
-        ((HVX_Vector *)(Tcout + i * BL))[0] = Q6_V_lo_W(nat);
-        ((HVX_Vector *)(Tcout + i * BL))[1] = Q6_V_hi_W(nat);
+        HVX_Vector lo = Q6_V_lo_W(nat), hi = Q6_V_hi_W(nat);
+        ((HVX_Vector *)(Tcout + i * BL))[0] = lo;
+        ((HVX_Vector *)(Tcout + i * BL))[1] = hi;
+        if (mx_out) { vmax = Q6_Vw_vmax_VwVw(vmax, Q6_Vw_vabs_Vw(lo));
+                      vmax = Q6_Vw_vmax_VwVw(vmax, Q6_Vw_vabs_Vw(hi)); }
+    }
+    if (mx_out) {   /* maxabs of the diag T codes so the diag act/wt quant skips its maxabs pass */
+        vmax = Q6_Vw_vmax_VwVw(vmax, Q6_V_vror_VR(vmax, 4 * 16));
+        vmax = Q6_Vw_vmax_VwVw(vmax, Q6_V_vror_VR(vmax, 4 * 8));
+        vmax = Q6_Vw_vmax_VwVw(vmax, Q6_V_vror_VR(vmax, 4 * 4));
+        vmax = Q6_Vw_vmax_VwVw(vmax, Q6_V_vror_VR(vmax, 4 * 2));
+        vmax = Q6_Vw_vmax_VwVw(vmax, Q6_V_vror_VR(vmax, 4 * 1));
+        int32_t lanes[32] __attribute__((aligned(128)));
+        *(HVX_Vector *)lanes = vmax;
+        *mx_out = lanes[0];
     }
 }
 
@@ -256,8 +287,9 @@ static int32_t gdn_maxabs_codes(const int32_t *codes) {
 
 /* quantize 64x64 int32 codes (value = code*scale_in) into int8 weight codes at symmetric scale
  * sQ = maxabs_value/127.  Returns sQ.  Vectorized: multiplier = round(scale_in/sQ * 2^Q) fixed-point. */
-static float gdn_quant_i8_from_codes(gdn_scr_t *sc, const int32_t *codes, float scale_in, int8_t *out) {
-    int32_t mx = gdn_maxabs_codes(codes);
+static float gdn_quant_i8_from_codes(gdn_scr_t *sc, const int32_t *codes, float scale_in, int8_t *out,
+                                    int32_t mx) {
+    if (mx < 0) mx = gdn_maxabs_codes(codes);   /* caller can pass a producer-tracked maxabs (bit-exact) */
     float maxval = (float)mx * scale_in;
     float sQ = (maxval > 0.0f) ? (maxval / 127.0f) : 1e-12f;
     /* code_q = round(code*g), g=scale_in/sQ.  Adaptive Q keeps Mg<2^15 so code(<2^15)*Mg < 2^30. */
@@ -289,8 +321,9 @@ static float gdn_quant_i8_from_codes(gdn_scr_t *sc, const int32_t *codes, float 
 }
 
 /* quantize 64x64 int32 codes into u8 activation (zp128) at symmetric scale sQ.  Returns sQ. */
-static float gdn_quant_u8_from_codes(gdn_scr_t *sc, const int32_t *codes, float scale_in, uint8_t *out) {
-    int32_t mx = gdn_maxabs_codes(codes);
+static float gdn_quant_u8_from_codes(gdn_scr_t *sc, const int32_t *codes, float scale_in, uint8_t *out,
+                                    int32_t mx) {
+    if (mx < 0) mx = gdn_maxabs_codes(codes);   /* caller can pass a producer-tracked maxabs (bit-exact) */
     float maxval = (float)mx * scale_in;
     float sQ = (maxval > 0.0f) ? (maxval / 127.0f) : 1e-12f;
     float g = scale_in / sQ;
@@ -701,12 +734,13 @@ static const uint8_t *gdn_get_act_A(gdn_scr_t *sc, const gdn_vtcm_t *vt, const u
 #if defined(GDN_BR_PROBE_CYCLES)
         uint64_t f0; asm volatile("%0 = C15:14" : "=r"(f0));
 #endif
-        gdn_fold_block_raw(Ah + (size_t)i * BL * C_ + k * BL, C_, sc->Aoff, zpA, M, S);
+        int32_t mxA;
+        gdn_fold_block_raw(Ah + (size_t)i * BL * C_ + k * BL, C_, sc->Aoff, zpA, M, S, &mxA);
 #if defined(GDN_BR_PROBE_CYCLES)
         { uint64_t f; asm volatile("%0 = C15:14" : "=r"(f)); g_c_fold += f - f0; }
         uint64_t q0; asm volatile("%0 = C15:14" : "=r"(q0));
 #endif
-        sc->sAa[key] = gdn_quant_u8_from_codes(sc, sc->Aoff, (float)(1.0 / (1 << GDN_BR_F)), sc->actbuf);
+        sc->sAa[key] = gdn_quant_u8_from_codes(sc, sc->Aoff, (float)(1.0 / (1 << GDN_BR_F)), sc->actbuf, mxA);
 #if defined(GDN_BR_PROBE_CYCLES)
         { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_quant += q - q0; }
         uint64_t p0; asm volatile("%0 = C15:14" : "=r"(p0));
@@ -729,7 +763,7 @@ static const uint8_t *gdn_get_act_Tdiag(gdn_scr_t *sc, const gdn_vtcm_t *vt, int
 #if defined(GDN_BR_PROBE_CYCLES)
         uint64_t q0; asm volatile("%0 = C15:14" : "=r"(q0));
 #endif
-        sc->sTa[i] = gdn_quant_u8_from_codes(sc, sc->Tblk[bii], sc->Tscl[bii], sc->actbuf);
+        sc->sTa[i] = gdn_quant_u8_from_codes(sc, sc->Tblk[bii], sc->Tscl[bii], sc->actbuf, sc->mxdiag[i]);
 #if defined(GDN_BR_PROBE_CYCLES)
         { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_quant += q - q0; }
         uint64_t p0; asm volatile("%0 = C15:14" : "=r"(p0));
@@ -753,7 +787,9 @@ static const int8_t *gdn_get_wt_T(gdn_scr_t *sc, const gdn_vtcm_t *vt, int k, in
 #if defined(GDN_BR_PROBE_CYCLES)
         uint64_t q0; asm volatile("%0 = C15:14" : "=r"(q0));
 #endif
-        sc->sTw[key] = gdn_quant_i8_from_codes(sc, sc->Tblk[key], sc->Tscl[key], sc->wtbuf);
+        /* diag T block (k==j) has a producer-tracked maxabs; off-diag must compute it. */
+        sc->sTw[key] = gdn_quant_i8_from_codes(sc, sc->Tblk[key], sc->Tscl[key], sc->wtbuf,
+                                               (k == j) ? sc->mxdiag[k] : -1);
 #if defined(GDN_BR_PROBE_CYCLES)
         { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_quant += q - q0; }
         uint64_t e0; asm volatile("%0 = C15:14" : "=r"(e0));
@@ -933,7 +969,7 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
     for (int i = 0; i < NB; ++i) sc->vTa[i] = 0;
     for (int i = 0; i < NB; ++i) {
         int bi = gdn_blk_index(i, i);
-        gdn_solve_diag64(sc, Ah + (size_t)i * BL * C + i * BL, C, zpA, M, S, sc->Tblk[bi]);
+        gdn_solve_diag64(sc, Ah + (size_t)i * BL * C + i * BL, C, zpA, M, S, sc->Tblk[bi], &sc->mxdiag[i]);
         sc->Tscl[bi] = GDN_BR_TI;
     }
 #if defined(GDN_BR_PROBE_CYCLES)
@@ -996,7 +1032,7 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
 #if defined(GDN_BR_PROBE_CYCLES)
             uint64_t sq0; asm volatile("%0 = C15:14" : "=r"(sq0));
 #endif
-            sw_S = gdn_quant_i8_from_codes(sc, sc->Sacc, s_S, sc->wtbuf);
+            sw_S = gdn_quant_i8_from_codes(sc, sc->Sacc, s_S, sc->wtbuf, -1);
 #if defined(GDN_BR_PROBE_CYCLES)
             { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_quant += q - sq0; }
             uint64_t se0; asm volatile("%0 = C15:14" : "=r"(se0));
