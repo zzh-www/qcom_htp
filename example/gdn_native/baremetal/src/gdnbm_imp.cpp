@@ -63,10 +63,22 @@ static char __attribute__((aligned(128))) g_solve_stack[GDN_BR_NT][32768];
 static void solve_worker(void *arg) {
     gdn_work_t *w = (gdn_work_t *)arg;
     int hvx = qurt_hvx_lock(QURT_HVX_MODE_128B);
-    compute_res_attr_t a; HAP_compute_res_attr_init(&a); HAP_compute_res_attr_set_hmx_param(&a, 1);
-    unsigned int ctx = HAP_compute_res_acquire(&a, 2000000);
-    gdn_br_run_slot(w);
-    if (ctx) HAP_compute_res_release(ctx);
+    /* each worker acquires its OWN VTCM (0x60000) on THIS thread + its own HMX (separate acquires; the
+     * combined HMX+VTCM acquire fails, and VTCM acquired on another thread may not be usable here). */
+    compute_res_attr_t va; HAP_compute_res_attr_init(&va);
+    HAP_compute_res_attr_set_vtcm_param(&va, 0x60000u, 0);
+    unsigned int vctx = HAP_compute_res_acquire(&va, 2000000);
+    uint8_t *vtcm = (uint8_t *)HAP_compute_res_attr_get_vtcm_ptr(&va);
+    compute_res_attr_t ha; HAP_compute_res_attr_init(&ha); HAP_compute_res_attr_set_hmx_param(&ha, 1);
+    unsigned int hctx = HAP_compute_res_acquire(&ha, 2000000);
+    if (vtcm) {
+        /* gdn_br_run_slot indexes vt = gdn_vtcm_from(vtcm_base + slot*0x60000); give it own_vtcm by
+         * offsetting the base so the slot term lands on this worker's region. */
+        w->vtcm_base = vtcm - (size_t)w->slot * 0x60000;
+        gdn_br_run_slot(w);
+    }
+    if (hctx) HAP_compute_res_release(hctx);
+    if (vctx) HAP_compute_res_release(vctx);
     if (hvx == 0) qurt_hvx_unlock();
 }
 
@@ -86,23 +98,12 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
     HAP_power_set_core_corner(pctx, HAP_DCVS_VCORNER_TURBO, HAP_DCVS_VCORNER_TURBO, HAP_DCVS_VCORNER_MAX);
     { HAP_power_request_t r; memset(&r,0,sizeof(r)); r.type=HAP_power_set_HMX; r.hmx.power_up=TRUE; HAP_power_set(pctx,&r); }
 
-    /* VTCM on the main thread (vtcm-only acquire: combining HMX+VTCM in one acquire FAILS on this device).
-     * HMX is acquired separately per worker thread (hmx-only, like the probe). */
-    compute_res_attr_t va; HAP_compute_res_attr_init(&va);
-    HAP_compute_res_attr_set_vtcm_param(&va, (unsigned)nthreads * 0x60000u, 0);
-    int hvx = qurt_hvx_lock(QURT_HVX_MODE_128B);
-    unsigned int vctx = HAP_compute_res_acquire(&va, 2000000);
-    uint8_t *vtcm = (uint8_t *)HAP_compute_res_attr_get_vtcm_ptr(&va);
-    FARF(ALWAYS, "gdnbm_solve: H=%d nthreads=%d vctx=%u vtcm=%p", H, nthreads, vctx, vtcm);
-    if (!vtcm) { if (vctx) HAP_compute_res_release(vctx); if (hvx==0) qurt_hvx_unlock(); return -2; }
-
-    /* ALWAYS run via spawned workers (each acquires its OWN HMX — proven; the main callback thread may not
-     * be permitted to acquire HMX).  nthreads=1 -> 1 worker. */
+    /* Each worker acquires its OWN VTCM + HMX on its own thread (see solve_worker).  Main just spawns. */
     uint64_t t0 = pcyc();
     {
         gdn_work_t work[GDN_BR_NT]; qurt_thread_t tid[GDN_BR_NT];
         for (int t = 0; t < nthreads; ++t) {
-            work[t] = (gdn_work_t){ t, 0u, (uint32_t)H, (uint32_t)nthreads, Au, Tu, zpA, M, S, sT, zpT, vtcm };
+            work[t] = (gdn_work_t){ t, 0u, (uint32_t)H, (uint32_t)nthreads, Au, Tu, zpA, M, S, sT, zpT, nullptr };
             qurt_thread_attr_t a; qurt_thread_attr_init(&a); qurt_thread_attr_set_name(&a,(char*)"gdnsolve");
             qurt_thread_attr_set_stack_addr(&a,g_solve_stack[t]); qurt_thread_attr_set_stack_size(&a,sizeof(g_solve_stack[t]));
             if (qurt_thread_create(&tid[t],&a,solve_worker,&work[t])!=QURT_EOK) { solve_worker(&work[t]); tid[t]=0; }
@@ -110,8 +111,6 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
         for (int t = 0; t < nthreads; ++t) { int s; if (tid[t]) qurt_thread_join(tid[t], &s); }
     }
     uint64_t t1 = pcyc();
-    if (vctx) HAP_compute_res_release(vctx);
-    if (hvx == 0) qurt_hvx_unlock();
     { HAP_power_request_t off; memset(&off,0,sizeof(off)); off.type=HAP_power_set_HMX; off.hmx.power_up=FALSE; HAP_power_set(pctx,&off); }
 
     if (statsLen > 0) stats[0] = (int)(t1 - t0);
