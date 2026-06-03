@@ -306,13 +306,36 @@ off-diagonal results (‖·‖<1.4) drown in 8-bit accumulation noise across 2�
 solve cannot produce accurate off-diagonals; the shipped int16-HVX `GdnSolve` gets 4.8e-5 precisely because
 it stays int16.
 
-### VERDICT: abandon the BR/HMX solve route
+### CORRECTION (2026-06-03): the 73% was a device 8-bit SCALE bug, NOT an algorithm limit
 
-BR fails on **two independent axes**: (1) can't thread (HMX bound to main thread) → 3× slower than shipped
-on the 4-thread metric; (2) off-diagonal accuracy → 73% oc error. The shipped pure-HVX `GdnSolve` is correct
-AND threadable. The −38% single-thread glue wins (#1–#3) are real and bit-exact but optimize an op that
-should not ship. **Recommendation: keep shipped `GdnSolve`; if larger prefill chunks (C=256) are wanted,
-build the solve in int16 HVX (threadable, accurate), NOT HMX.**
+Host sim `scripts/gdn_br_precision_sim.py` (block-recursive solve, per-block symmetric quant, real chunk →
+oc): **the BR ALGORITHM is accuracy-viable.**
+
+| merge precision | oc relerr |
+|---|---|
+| clean 8-bit (exact-max scale) | **9.5e-3** |
+| clean 8-bit + diagonal-subtraction (user's idea) | 6.0e-3 |
+| **int16** | **3.4e-5** |
+| int16 + diagonal-subtraction | 2.5e-5 |
+
+So clean 8-bit already gives ~1% oc and **int16 gives 3.4e-5** — the device's 73% is a regression vs the
+algorithm's own ceiling. Localized (splice device error band-by-band into exact T → oc): the **dist-1
+sub-diagonal blocks (T₁₀,T₂₁,T₃₂) drive it** — splicing device dist-1 alone → oc 0.875. oc is hypersensitive
+to dist-1, and the device's **2-pass loose-bound HMX scale** gets dist-1 to only 0.19 relerr vs clean
+8-bit's 0.056. ROOT CAUSE = the coarse 2-pass scale estimation on the oc-critical near-diagonal merges
+(the user's "scale" instinct was right). int16 removes the sensitivity entirely.
+
+### VERDICT (revised): the BR ALGORITHM is sound; build it in int16-HVX (NOT HMX)
+
+- **HMX is wrong on BOTH counts:** it can't thread (HMX bound to main thread → 3× slower than shipped) AND
+  8-bit forces the coarse-scale accuracy cliff. Abandon the HMX merge engine, not the algorithm.
+- **int16-HVX block-recursive solve is the path:** merges as int16-HVX matmuls (reuse the diagonal solve's
+  `Q6_Ww_vmpyacc_WwVhRh` MAC) → oc 3.4e-5 (sim-proven) AND pure-HVX → threadable (HVX-on-worker works).
+  MAC count ≈ 16×64³ ≈ 4.2M dense vs the shipped naive forward-subst's ~8.4M serial → plausibly faster too.
+  Remaining unknown = SPEED (build + measure on device); accuracy and threadability are now both cleared.
+- The −38% single-thread glue wins (#1–#3) targeted the HMX-merge glue and don't transfer to an int16-HVX
+  matmul merge (different engine); the diagonal solve, fold, and overall recursion DO carry over.
+- Fallback if int16-HVX isn't fast enough: keep shipped `GdnSolve` (4.8e-5, threadable, 70–83K).
 
 **(superseded) Only remaining path to a competitive BR: HVX-worker + main-thread-HMX marshalling** — N HVX workers do
 the 93% HVX glue (quant/pack/depack/requant/fold/acc/diag) for their heads; main is an HMX server running
