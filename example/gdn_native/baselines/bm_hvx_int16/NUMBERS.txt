@@ -16,7 +16,4 @@ ACCURACY:
   measure exactly:  H=32 CB=256 EXTRA_DEFS="-DGDN_BR_HVX_MERGE" bash solve_br_op/standalone/gdn_br.sh
                     .venv/bin/python scripts/gdn_br_oc_check.py example/gdn_native/solve_br_op/standalone --C 256
 
-trace (regenerate when device free):
-  cd example/gdn_native/baremetal
-  EXTRA_DEFS="-DGDNBM_VTCM_RESIDENT -DGDN_BR_TRACE" bash build.sh   # run 4-thread, fetch T.raw
-  python scripts/gdn_baremetal_trace.py T.raw example/gdn_native/baselines/bm_hvx_int16/chrometrace.json
+trace: chrometrace.json (collected; head/diag/merge spans — mm/quant sub-spans are int8-path-only).
