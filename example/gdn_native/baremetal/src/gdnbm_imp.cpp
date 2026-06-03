@@ -194,6 +194,23 @@ static void solve_worker(void *arg) {
       float s; gdn_merge_hvx(sc, sc->Tc, 1.0f, -1, sc->Sacc, 1.0f, -1, sc->Tblk[0], &s);
       for (int i = 0; i < 64 * 64; ++i) ((int32_t *)w->Tu)[i] = sc->Tblk[0][i];
       ((float *)w->Tu)[64 * 64] = s; }
+#elif defined(GDNBM_MM_I8_TEST)
+    /* int8 vrmpy matmul isolation: deterministic int8 A,B -> compare gdn_matmul_i8_vrmpy against the
+     * trusted gdn_matmul_i16 (fed the SAME int8 values widened to int16).  Writes to Tu:
+     *   [0]=max|diff|  [1]=first mismatch index (-1 if none)  [2..]=C_vrmpy[0..]  for inspection. */
+    { gdn_scr_t *sc = &g_scr[w->slot];
+      for (int k = 0; k < 64; ++k) for (int j = 0; j < 64; ++j) {
+          int b = ((k * 3 + j) % 11) - 5; sc->b8[k * 64 + j] = (int8_t)b; sc->b16[k * 64 + j] = (int16_t)b; }
+      for (int i = 0; i < 64; ++i) for (int k = 0; k < 64; ++k) {
+          int a = ((i + 2 * k) % 7) - 3; sc->a8[i * 64 + k] = (int8_t)a; sc->a16[i * 64 + k] = (int16_t)a; }
+      static int32_t __attribute__((aligned(128))) Cref[64 * 64], Cv[64 * 64];
+      gdn_matmul_i16(sc->a16, sc->b16, Cref);
+      gdn_pack_b_vrmpy(sc->b8, sc->btp);
+      gdn_matmul_i8_vrmpy(sc->a8, sc->btp, Cv);
+      int32_t *o = (int32_t *)w->Tu; int md = 0, fm = -1;
+      for (int t = 0; t < 64 * 64; ++t) { int d = Cv[t] - Cref[t]; if (d < 0) d = -d; if (d > md) md = d;
+          if (d && fm < 0) fm = t; }
+      o[0] = md; o[1] = fm; for (int t = 0; t < 16; ++t) { o[2 + t] = Cv[t]; o[18 + t] = Cref[t]; } }
 #elif defined(GDNBM_Q_TEST)
     /* quant isolation: codes[i]=i-2048 @ scale 1.0 -> out[i] ~ clamp(i-2048, +-2047). Writes int16->int32 to Tu. */
     { gdn_scr_t *sc = &g_scr[w->slot];
