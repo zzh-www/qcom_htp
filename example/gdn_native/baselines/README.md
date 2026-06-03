@@ -50,6 +50,30 @@ python scripts/gdn_baremetal_trace.py T.raw <name>/chrometrace.json
 - `<name>/NUMBERS.txt` — measured wall (µs/ms), per-head cycles, oc/relerr.
 - Input data: `baremetal/A_u16_h32.raw` (bare-metal), `solve_br_op/standalone/A.raw` (QNN op golden).
 
+## Perf tests (read cycles)
+
+**`bench.sh` — regression gate (CI).** Builds + runs each bare-metal baseline, reads C15:14 cycles
+(min over K samples @4-thread), compares to recorded refs → PASS/FAIL. Aligned PCYCLE.
+```bash
+bash bench.sh                  # bare-metal baselines (~60s); PASS if all <= 1.25x ref
+ONLY=bm_hvx_int8 bash bench.sh # just one baseline (fast)
+bash bench.sh --with-qnn       # + shipped QNN baseline (slow QNN build)
+K=12 TOL=1.20 bash bench.sh    # samples / fail threshold
+```
+Robust to DSP flakiness: each sample is its own ssh with a per-run timeout (rapid repeated FastRPC
+sessions occasionally deadlock the DSP; a hung run is reaped + skipped, not blocking the sweep).
+Refs live in bench.sh (REF_*). Last green: bm_hvx_int8 ~2.1ms (1.09x), bm_hvx_int16 ~2.86ms (1.01x).
+
+**`gdn_solve_chain.sh` — chain8-style steady per-op cycles (QNN op).** Chains N GdnSolve nodes
+(A→t0→…→T), runs with optrace, reports per-NODE cycles so cold node0 is separated from steady
+node[1..N-1] — mirrors example/qnn_hmx_matmul_u8i8/.../run_native_chain.sh.
+```bash
+CHAIN=8 C=256 H=32 bash gdn_solve_chain.sh
+# => per-node total_cyc; STEADY per-op = median(node[1..N-1]); cold node0 ratio (~1.11x)
+```
+Last run: steady per-op 14,936,583 cyc (cold node0 16,645,039 = 1.11x); single-op gdn_shape.sh's
+16.5M was inflated ~11% by cold start — the chain gives the clean steady number.
+
 ## Accuracy notes (corrected 2026-06-04)
 - The QNN op `gdn_br.sh` runs WITHOUT `-DGDN_BR_HVX_MERGE` by default → it exercises the **HMX path**
   (`bm_hmx_int8`), not the HVX paths. To validate the HVX paths' oc on the hard golden you MUST pass
