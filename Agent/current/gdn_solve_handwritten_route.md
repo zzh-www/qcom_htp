@@ -285,7 +285,36 @@ NOT auto-thread it, AND manual threading can't put HMX on workers. So **BR is st
 "own-context threading 3–4×" assumption is **REFUTED** — consistent with
 [[project_gdn_hvx_hmx_overlap_impossible_2026-06-03]] (custom ops can't get HMX concurrency).
 
-**Only remaining path to a competitive BR: HVX-worker + main-thread-HMX marshalling** — N HVX workers do
+### TASK 6 (end-to-end oc) — DECISIVE: BR is also an ACCURACY dead-end (2026-06-03)
+
+`scripts/gdn_br_oc_check.py` injects the **device** BR-T into the fp64 GDN chunk forward, isolating the
+solve's contribution to oc (sanity: exact-T injected → 8.6e-9 vs the internal solve; exact-solve oc vs the
+real golden `o` → 2.6e-3, so the forward is faithful). Result on the real p29_L00 C=256 chunk:
+
+**device BR-T → oc relerr 0.73 (73%). UNUSABLE.** Per-block T error explains it:
+
+| | T00 | T10 | T20 | T30 | T11 | T21 | T31 | T22 | T32 | T33 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| ‖exact‖_fro | 8.47 | 1.36 | **0.65** | **0.36** | 8.52 | 1.30 | **0.62** | 8.48 | 1.29 | 8.58 |
+| relerr(BR) | 1e-4 | 0.19 | **1.11** | **0.35** | 1e-4 | 0.21 | **1.01** | 1e-4 | 0.16 | 1e-4 |
+
+Diagonal blocks are excellent (1e-4) but **off-diagonal blocks have relerr 0.16–1.11, compounding with merge
+depth** (1-merge ≈0.2, 2-merge ≈1.0). The whole-T relerr (3.3%) is diagonal-norm-dominated and **HID** this —
+the GOAL's "T relerr ≤2.4e-2" proxy is misleading; **oc is the real metric and it fails catastrophically.**
+Root cause is fundamental: **HMX is 8-bit**, so every merge quantizes its operands to ±127 and the small
+off-diagonal results (‖·‖<1.4) drown in 8-bit accumulation noise across 2–3 merges. An HMX-based triangular
+solve cannot produce accurate off-diagonals; the shipped int16-HVX `GdnSolve` gets 4.8e-5 precisely because
+it stays int16.
+
+### VERDICT: abandon the BR/HMX solve route
+
+BR fails on **two independent axes**: (1) can't thread (HMX bound to main thread) → 3× slower than shipped
+on the 4-thread metric; (2) off-diagonal accuracy → 73% oc error. The shipped pure-HVX `GdnSolve` is correct
+AND threadable. The −38% single-thread glue wins (#1–#3) are real and bit-exact but optimize an op that
+should not ship. **Recommendation: keep shipped `GdnSolve`; if larger prefill chunks (C=256) are wanted,
+build the solve in int16 HVX (threadable, accurate), NOT HMX.**
+
+**(superseded) Only remaining path to a competitive BR: HVX-worker + main-thread-HMX marshalling** — N HVX workers do
 the 93% HVX glue (quant/pack/depack/requant/fold/acc/diag) for their heads; main is an HMX server running
 the 32 kernel calls/head. Rough ceiling: HVX 221K/head ×8 ÷4 workers ≈ 442K wall ≈ **~55K/head 4-thread**
 (beats shipped 70–83K, still MISSES the 30–40K GOAL band; needs the HVX glue cut further too). It is a
