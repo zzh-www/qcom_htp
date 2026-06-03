@@ -310,9 +310,10 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
     {
         int n = g_tr_n; if (n > GDN_TR_MAX) n = GDN_TR_MAX;
         uint32_t *hdr = (uint32_t *)Tu;
-        hdr[0] = 0x47545202u; hdr[1] = (uint32_t)n;
-        ((uint64_t *)(hdr + 2))[0] = t1 - t0;
-        uint8_t *p = (uint8_t *)Tu + 16;
+        hdr[0] = 0x47545203u; hdr[1] = (uint32_t)n;
+        ((uint64_t *)(hdr + 2))[0] = t1 - t0;   /* total wall (cycles) */
+        ((uint64_t *)(hdr + 2))[1] = t0;        /* absolute base PCYCLE (for "Start Cycle") */
+        uint8_t *p = (uint8_t *)Tu + 24;
         for (int e = 0; e < n; ++e) {
             uint32_t *q = (uint32_t *)(p + (size_t)e * 24);
             q[0] = g_tr[e].tid; q[1] = g_tr[e].stage;

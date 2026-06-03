@@ -30,4 +30,4 @@ input_list.txt
 native_io.json
 _config_host.json
 _htp_ext.json
-gdn_baremetal_*.trace.json
+gdn_baremetal_*.json
