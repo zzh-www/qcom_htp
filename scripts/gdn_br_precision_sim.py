@@ -58,25 +58,30 @@ A = ((-torch.matmul(k_beta, kn.transpose(-1, -2)) * decay) * sl).double().numpy(
 H = A.shape[0]
 
 
-def qsym(x, nbits):
+ROUND = np.round   # set to np.floor to mimic the v73deep kernel's FLOOR drain
+
+def qsym(x, nbits, rnd=None):
     """symmetric per-array quant->dequant at exact max scale (best-case for nbits)."""
     lim = (1 << (nbits - 1)) - 1
     m = np.abs(x).max()
     if m == 0:
         return x.copy()
     s = m / lim
-    return np.round(x / s).clip(-lim, lim) * s
+    r = rnd if rnd is not None else np.round
+    return r(x / s).clip(-lim, lim) * s
 
 
-def solve_br(Ah, nbits, sub_diag):
-    """block-recursive (I-Ah)^-1 with nbits merges; sub_diag => pull the identity out of diagonal
-    operands and add its contribution back exactly (the user's hypothesis)."""
+def oq(x, out_rnd):
+    """mimic the device per-merge OUTPUT int8 quant (depack); out_rnd None=keep float (idealized)."""
+    return x if out_rnd is None else qsym(x, 8, rnd=out_rnd)
+
+def solve_br(Ah, nbits, sub_diag, out_rnd=None):
+    """block-recursive (I-Ah)^-1 with nbits merge OPERANDS; out_rnd!=None also quantizes each merge
+    OUTPUT to int8 (round=np.round, floor=np.floor) to mimic the device depack/FLOOR drain."""
     I = np.eye(BL)
     Tblk = {}
-    # diagonal blocks: exact (mirrors the accurate int16 forward-subst, relerr ~1e-4 on device)
     for i in range(NB):
         Tblk[(i, i)] = np.linalg.inv(I - Ah[i*BL:(i+1)*BL, i*BL:(i+1)*BL])
-    # off-diagonal in increasing distance
     for d in range(1, NB):
         for j in range(NB - d):
             i = j + d
@@ -84,17 +89,16 @@ def solve_br(Ah, nbits, sub_diag):
             for k in range(j, i):
                 Aik = Ah[i*BL:(i+1)*BL, k*BL:(k+1)*BL]
                 Tkj = Tblk[(k, j)]
-                # term = Aik @ Tkj, with nbits-quantized operands
-                if sub_diag and k == j:           # Tkj is a diagonal block: Tjj = I + (Tjj - I)
+                if sub_diag and k == j:
                     term = qsym(Aik, nbits) @ qsym(Tkj - I, nbits) + qsym(Aik, nbits) @ I
                 else:
                     term = qsym(Aik, nbits) @ qsym(Tkj, nbits)
-                S += term
+                S += oq(term, out_rnd)            # device: each inner term depacked to int8
             Tii = Tblk[(i, i)]
-            if sub_diag:                          # Tij = Tii @ S = S + (Tii - I) @ S
-                Tblk[(i, j)] = qsym(S, nbits) + qsym(Tii - I, nbits) @ qsym(S, nbits)
+            if sub_diag:
+                Tblk[(i, j)] = oq(qsym(S, nbits) + qsym(Tii - I, nbits) @ qsym(S, nbits), out_rnd)
             else:
-                Tblk[(i, j)] = qsym(Tii, nbits) @ qsym(S, nbits)
+                Tblk[(i, j)] = oq(qsym(Tii, nbits) @ qsym(S, nbits), out_rnd)
     T = np.zeros((C, C))
     for (i, j), b in Tblk.items():
         T[i*BL:(i+1)*BL, j*BL:(j+1)*BL] = b
@@ -107,16 +111,12 @@ def oc_for_T(Tfull, Texact):  # Tfull [H,C,C] -> oc relerr vs exact-solve oc
     return relerr(oc, oc_ex)
 
 
-configs = [(8, False), (8, True), (16, False), (16, True)]
-print(f"{'nbits':>6} {'sub_diag':>9} {'offdiag-T relerr':>17} {'oc relerr':>12}")
+# configs: (operand_bits, sub_diag, per-merge output quant) — the last mimics the device depack
+configs = [(8, False, None), (8, False, np.round), (8, False, np.floor),
+           (16, False, None), (16, False, np.floor), (16, True, np.floor)]
+print(f"{'op-bits':>7} {'sub_diag':>9} {'out-quant':>10} {'oc relerr':>12}")
 Texact = np.stack([np.linalg.inv(np.eye(C) - A[h]) for h in range(H)])
-for nb, sd in configs:
-    Tb = np.stack([solve_br(A[h], nb, sd) for h in range(H)])
-    # off-diagonal block relerr (mean over heads, strict-lower blocks)
-    offs = []
-    for h in range(H):
-        for i in range(NB):
-            for j in range(i):
-                offs.append(relerr(Tb[h, i*BL:(i+1)*BL, j*BL:(j+1)*BL],
-                                   Texact[h, i*BL:(i+1)*BL, j*BL:(j+1)*BL]))
-    print(f"{nb:>6} {str(sd):>9} {np.mean(offs):>17.3e} {oc_for_T(Tb, Texact):>12.3e}")
+for nb, sd, orr in configs:
+    Tb = np.stack([solve_br(A[h], nb, sd, out_rnd=orr) for h in range(H)])
+    tag = {None: "float", np.round: "int8 round", np.floor: "int8 FLOOR"}[orr]
+    print(f"{nb:>7} {str(sd):>9} {tag:>10} {oc_for_T(Tb, Texact):>12.3e}")

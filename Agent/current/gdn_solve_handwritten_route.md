@@ -325,7 +325,22 @@ to dist-1, and the device's **2-pass loose-bound HMX scale** gets dist-1 to only
 8-bit's 0.056. ROOT CAUSE = the coarse 2-pass scale estimation on the oc-critical near-diagonal merges
 (the user's "scale" instinct was right). int16 removes the sensitivity entirely.
 
-### VERDICT (revised): the BR ALGORITHM is sound; build it in int16-HVX (NOT HMX)
+### ACCURACY RESOLVED ON DEVICE (2026-06-03): the bug was the kernel FLOOR drain
+
+The 73% oc was NOT inherent to 8-bit and NOT just the scale. Sim isolated it: per-merge int8 **round** →
+oc 1.0e-2, but int8 **FLOOR** → oc 0.66 (the v73deep drain FLOORs `(P_int+eff)*scale_f16/512`, biasing the
+small off-diag codes toward 0; oc is hypersensitive). **Fix (shipped, device-verified):** inject +0.5 LSB
+into the effective bias on the OUTPUT pass (`rdelta=round(256/scale_f16)`) so the drain rounds-to-nearest,
+plus a scale **refine pass** (the loose bound left pass-1 codes ~1 → 21% dist-1 scale error). Device result:
+**oc 0.73 → 0.67 (refine) → 1.3e-2 (round)**; off-diag block relerr 0.52→0.18; whole-T relerr 2.69e-2→1.36e-2
+(now under the 2.4e-2 gate). **oc 1.3% matches the GDN native-quant baseline (1.35e-2) → Task 6 PASSES at
+8-bit.** Cost: the refine pass adds ~16K/head (H=8 single-thread 236K→252K). The user's "it's the scale /
+the diagonal 1" instinct drove this investigation to the FLOOR root cause.
+
+**GOAL status now:** (2) accuracy ✅ MET (oc 1.3%, relerr 1.36e-2); (3) integration oc ✅ validated
+(`scripts/gdn_br_oc_check.py`); (1) speed ❌ still blocked — HMX op is single-thread-only.
+
+### VERDICT (revised): for SPEED, build it in int16-HVX (NOT HMX); accuracy is no longer the blocker
 
 - **HMX is wrong on BOTH counts:** it can't thread (HMX bound to main thread → 3× slower than shipped) AND
   8-bit forces the coarse-scale accuracy cliff. Abandon the HMX merge engine, not the algorithm.
