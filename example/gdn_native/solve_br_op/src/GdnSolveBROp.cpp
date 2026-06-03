@@ -26,7 +26,11 @@
  *   GDN_BR_DUMP_M      : write the recovered int8 M codes (merge 1 result) into T (inspect merge1).
  *   GDN_BR_PROBE_CYCLES: record per-stage cycles (diag/pack/hmx) into T head 0.
  */
+/* GDN_BR_NO_QHPI: include just the device solve (no QHPI wrapper) — used by the bare-metal FastRPC HAP
+ * (example/gdn_native/baremetal) to reuse this exact validated solve outside the QNN framework. */
+#ifndef GDN_BR_NO_QHPI
 #include "HTP/core/qhpi.h"
+#endif
 #include "gdn_solve_br_core.h"
 
 #define STRINGIZE_DETAIL(X) #X
@@ -1127,6 +1131,7 @@ static void gdn_br_worker(void *arg) {
 static char __attribute__((aligned(128))) g_wkr_stack[GDN_BR_NT][32768];
 #endif  /* __hexagon__ (gdn_br_one_head / worker) */
 
+#ifndef GDN_BR_NO_QHPI    /* QHPI wrapper + registration (excluded for the bare-metal HAP include) */
 /* ----------------------------------- the QHPI callback ----------------------------------- */
 static uint32_t gdn_solve_br_kernel(
         QHPI_RuntimeHandle *handle,
@@ -1291,3 +1296,4 @@ static QHPI_OpInfo_v1 sg_ops[] = {
 extern "C" void register_gdn_solve_br_op(void) {
     qhpi_register_ops_v1(sizeof(sg_ops) / sizeof(sg_ops[0]), sg_ops, THIS_PKG_NAME_STR);
 }
+#endif  /* GDN_BR_NO_QHPI */
