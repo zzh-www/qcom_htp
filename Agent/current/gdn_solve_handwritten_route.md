@@ -411,7 +411,25 @@ threading wall.
   for QNN custom ops. (Bare-metal single-thread 832K/head vs QNN 252K = DDR A/T via FastRPC + clock/counter
   differences; not optimized — threading is the blocker, not single-thread.)
 
-### int16-HVX MERGE — BUILT + THREADS (2026-06-03), but WIP-buggy + needs A-staging
+### int16-HVX MERGE — WORKING (2026-06-03): CORRECT + THREADS. The first viable C=256 solve.
+
+**oc relerr 0.0030 end-to-end (better than the HMX op's 0.013, under the 2.4e-2 gate); whole-T relerr
+9.9e-4; threads 1/4-thread = 714K/271K cyc/head (2.6×).** Pure-HVX (no HMX) → no serialization.
+
+The integration bug (off-diag wrong despite all kernels passing isolation tests) was **int32 OVERFLOW in
+the fixed-point multiplies**: `gdn_quant_i12` / `gdn_requant_block_out` / `gdn_acc_i32_to_codes` assume
+`code < ~2^15`, but int16-HVX matmul results reach 2^22 (Sacc 4.19M).  Localized by device dumps
+(`GDN_BR_DUMP_SACC`): inner merge correct → quant pre-shift fixed the final merge → requant pre-shift fixed
+dist-1 → acc pre-shift fixed dist-2/3.  Fix = pre-shift `code >> psh` (psh brings maxabs<2^15) + compensate
+`g`; no-op for the small-code HMX path.  Component self-tests (`GDNBM_MM/Q/MERGE_TEST`) verified the matmul
+(incl. magnitude 64·2047²), quant, and merge before the overflow was found.
+
+**Remaining = SPEED only.** 271K/head 4-thread is DDR-bound: the diagonal alone is 373K/head bare-metal vs
+QNN's 48K — A is read from the FastRPC user buffer (uncached DDR). NEXT: stage each head's A into VTCM once
+(VTCM-only acquire works for the HVX path; no HMX), then the diag/fold read from TCM.  Plausible after that:
+diag ~48K + merges → ~150–230K single-thread → ~50–80K 4-thread (beats shipped 70–83K; 30–40K still a stretch).
+
+### (superseded) int16-HVX MERGE — BUILT + THREADS but WIP-buggy
 
 Implemented the no-HMX merge in `GdnSolveBROp.cpp` (gated `GDN_BR_HVX_MERGE`): `gdn_quant_i12_from_codes`
 (int32→12-bit int16, ±2047 so 64-term int32 accum can't overflow) + `gdn_matmul_i16` (reuses
