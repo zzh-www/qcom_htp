@@ -368,26 +368,36 @@ static void gdn_requant_block_out(const int32_t *codes, float scale_in, float sT
     }
 }
 
-/* ---- crouton8 activation packer (C transcription of gdn_hmx_matmul_sim.pack_act_crouton8, 64^3) ---- */
+/* ---- crouton8 activation packer (C transcription of gdn_hmx_matmul_sim.pack_act_crouton8, 64^3) ----
+ * Each 32-byte output run is a contiguous 32-col slice (cols [k_base,k_base+32)) of one source row; 4
+ * consecutive runs are 4 consecutive source rows.  PURE HVX: build each 128-byte VTCM output vector from
+ * 4 unaligned source-row loads via ror+mask (NO scalar VTCM stores — the old 256-scalar-uint64-store path
+ * was the dominant glue cost, ~40K cyc/head). */
 static void gdn_pack_act_crouton8(const uint8_t *act_mk, uint8_t *out_buf) {
-    /* For fixed (kt,row8,m32,rsub) the 8 col_words x 4 bytes = 32 OUTPUT bytes are source row `row`,
-     * cols [k_base, k_base+32) in natural order (col_word*4 + b).  So each 32-byte output run is a
-     * contiguous 32-col slice of one source row -> a plain 32-byte copy (no per-elem scatter). */
-    int out = 0;
+    /* m = [0xFF x32, 0 x96]; m1/m2/m3 = same 32-wide window rotated into bytes [32,64)/[64,96)/[96,128). */
+    const HVX_Vector m  = Q6_V_valign_VVR(Q6_V_vzero(), Q6_Vb_vsplat_R(-1), 96);
+    const HVX_Vector m1 = Q6_V_vror_VR(m, 96);
+    const HVX_Vector m2 = Q6_V_vror_VR(m, 64);
+    const HVX_Vector m3 = Q6_V_vror_VR(m, 32);
+    HVX_Vector *dst = (HVX_Vector *)out_buf;
+    int v = 0;
     for (int kt = 0; kt < 2; ++kt) {
         int k_base = kt * 32;
-        for (int row8_group = 0; row8_group < 4; ++row8_group)
-            for (int m32_group = 0; m32_group < 2; ++m32_group)
-                for (int row_sub = 0; row_sub < 8; ++row_sub) {
-                    int row = m32_group * 32 + row8_group * 8 + row_sub;
-                    const uint8_t *src = act_mk + row * 64 + k_base;
-                    uint8_t *dst = out_buf + out;
-                    *(uint64_t *)(dst + 0)  = *(const uint64_t *)(src + 0);
-                    *(uint64_t *)(dst + 8)  = *(const uint64_t *)(src + 8);
-                    *(uint64_t *)(dst + 16) = *(const uint64_t *)(src + 16);
-                    *(uint64_t *)(dst + 24) = *(const uint64_t *)(src + 24);
-                    out += 32;
-                }
+        const uint8_t *b = act_mk + k_base;
+        for (int local = 0; local < 16; ++local) {
+            /* run o0=local*4: row0 = ((o0/8)&1)*32 + (o0/16)*8 + (o0%8); next 3 runs are row0+1..+3. */
+            int o0 = local * 4;
+            int row0 = ((o0 / 8) & 1) * 32 + (o0 / 16) * 8 + (o0 % 8);
+            HVX_Vector v0 = *(const HVX_UVector *)(b + (row0 + 0) * 64);
+            HVX_Vector v1 = *(const HVX_UVector *)(b + (row0 + 1) * 64);
+            HVX_Vector v2 = *(const HVX_UVector *)(b + (row0 + 2) * 64);
+            HVX_Vector v3 = *(const HVX_UVector *)(b + (row0 + 3) * 64);
+            HVX_Vector out = Q6_V_vand_VV(v0, m);
+            out = Q6_V_vor_VV(out, Q6_V_vand_VV(Q6_V_vror_VR(v1, 96), m1));
+            out = Q6_V_vor_VV(out, Q6_V_vand_VV(Q6_V_vror_VR(v2, 64), m2));
+            out = Q6_V_vor_VV(out, Q6_V_vand_VV(Q6_V_vror_VR(v3, 32), m3));
+            dst[v++] = out;
+        }
     }
 }
 
