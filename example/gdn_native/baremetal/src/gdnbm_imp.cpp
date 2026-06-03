@@ -19,10 +19,11 @@
 #define GDN_BR_NT 4
 #endif
 #define THIS_PKG_NAME GdnBm
-/* HVX-MERGE mode: HMX is process-serial (mxmem under compute_resource_hmx_lock can't thread — verified),
- * so replace the HMX merges with int16-HVX matmul merges -> pure HVX + BSS scratch, worker threads
- * parallelize freely.  No HMX / VTCM / mxmem / power-HMX needed. */
+/* HVX-MERGE mode: int16-HVX matmul merges -> pure HVX + BSS scratch, threads freely.  Disabled for the
+ * OVERLAP probe, which uses the int8-HMX merges (real mxmem) to test HVX∥HMX concurrency. */
+#if !defined(GDNBM_OVERLAP_PROBE)
 #define GDN_BR_HVX_MERGE 1
+#endif
 #include "../../solve_br_op/src/GdnSolveBROp.cpp"
 
 int gdnbm_open(const char *uri, remote_handle64 *h) { (void)uri; *h = 1; return 0; }
@@ -78,6 +79,47 @@ int gdnbm_hmx_probe(remote_handle64 _h, int nworkers, int *results, int resultsL
 static char __attribute__((aligned(128))) g_solve_stack[GDN_BR_NT][32768];
 /* HAP worker (HVX-merge mode): own HVX context, run this slot's heads.  No HMX/VTCM — the int16-HVX
  * merges use only HVX + BSS scratch, so workers parallelize with no shared lock. */
+#if defined(GDNBM_OVERLAP_PROBE)
+/* Minimal HVX∥HMX overlap probe: one thread loops the int8-HMX solve (real mxmem), another loops the
+ * HVX diagonal forward-subst. If concurrent wall ≈ max(solo times) and each thread's own cycles don't
+ * inflate, HVX and HMX truly overlap in bare-metal (separate execution units). */
+static char __attribute__((aligned(128))) g_ov_stack[2][65536];
+static volatile uint64_t g_ov_cyc[2];
+struct ov_arg { int role; uint32_t H; const uint16_t *Au; uint16_t *Tu; int zpA, M, S; float sT; int zpT; int iters; };
+static void ov_hmx(void *p) {
+    struct ov_arg *a = (struct ov_arg *)p;
+    int hvx = qurt_hvx_lock(QURT_HVX_MODE_128B);
+    compute_res_attr_t va; HAP_compute_res_attr_init(&va); HAP_compute_res_attr_set_vtcm_param(&va, 0x60000u, 0);
+    unsigned int vctx = HAP_compute_res_acquire(&va, 2000000); uint8_t *vtcm = (uint8_t *)HAP_compute_res_attr_get_vtcm_ptr(&va);
+    compute_res_attr_t ha; HAP_compute_res_attr_init(&ha); HAP_compute_res_attr_set_hmx_param(&ha, 1);
+    unsigned int hctx = HAP_compute_res_acquire(&ha, 2000000); int hl = HAP_compute_res_hmx_lock(hctx);
+    uint64_t t0 = pcyc();
+    if (vtcm) { gdn_work_t w = (gdn_work_t){ 0, 0u, a->H, 1u, a->Au, a->Tu, a->zpA, a->M, a->S, a->sT, a->zpT, vtcm };
+                gdn_br_run_slot(&w); }
+    g_ov_cyc[0] = pcyc() - t0;
+    if (hl == 0) HAP_compute_res_hmx_unlock(hctx); if (hctx) HAP_compute_res_release(hctx); if (vctx) HAP_compute_res_release(vctx);
+    if (hvx == 0) qurt_hvx_unlock();
+}
+static void ov_hvx(void *p) {
+    struct ov_arg *a = (struct ov_arg *)p;
+    int hvx = qurt_hvx_lock(QURT_HVX_MODE_128B);
+    gdn_scr_t *sc = &g_scr[1];
+    uint64_t t0 = pcyc();
+    for (int it = 0; it < a->iters; ++it)        /* the real HVX-role work: 64x64 forward-subst */
+        gdn_solve_diag64(sc, a->Au, GDN_BR_C, a->zpA, a->M, a->S, sc->Tblk[0], nullptr);
+    g_ov_cyc[1] = pcyc() - t0;
+    if (hvx == 0) qurt_hvx_unlock();
+}
+static qurt_thread_t ov_spawn(void (*f)(void *), void *arg, int slot) {
+    qurt_thread_t tid = 0; qurt_thread_attr_t at; qurt_thread_attr_init(&at);
+    qurt_thread_attr_set_name(&at, (char *)"ov"); qurt_thread_attr_set_stack_addr(&at, g_ov_stack[slot]);
+    qurt_thread_attr_set_stack_size(&at, sizeof(g_ov_stack[slot])); qurt_thread_attr_set_priority(&at, 0x80);
+    if (qurt_thread_create(&tid, &at, f, arg) != QURT_EOK) { f(arg); return 0; }
+    return tid;
+}
+static void ov_join(qurt_thread_t tid) { if (tid) { int s; qurt_thread_join(tid, &s); } }
+#endif
+
 static void solve_worker(void *arg) {
     gdn_work_t *w = (gdn_work_t *)arg;
     int hvx = qurt_hvx_lock(QURT_HVX_MODE_128B);
@@ -179,6 +221,29 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
     static int g_pwr_client; void *pctx = &g_pwr_client;
     HAP_power_set_core_corner(pctx, HAP_DCVS_VCORNER_TURBO, HAP_DCVS_VCORNER_TURBO, HAP_DCVS_VCORNER_MAX);
     { HAP_power_request_t r; memset(&r,0,sizeof(r)); r.type=HAP_power_set_HMX; r.hmx.power_up=TRUE; HAP_power_set(pctx,&r); }
+
+#if defined(GDNBM_OVERLAP_PROBE)
+    {   /* 3-phase HVX∥HMX overlap probe. iters tuned so HVX-solo ≈ HMX-solo (H*~16 diag-solves). */
+        struct ov_arg ha = { 0, (uint32_t)H, Au, Tu, zpA, M, S, sT, zpT, 0 };
+        struct ov_arg va = { 1, (uint32_t)H, Au, Tu, zpA, M, S, sT, zpT, H * 16 };
+        ov_join(ov_spawn(ov_hmx, &ha, 0));            uint64_t hmx_solo = g_ov_cyc[0];
+        ov_join(ov_spawn(ov_hvx, &va, 1));            uint64_t hvx_solo = g_ov_cyc[1];
+        uint64_t w0 = pcyc();
+        qurt_thread_t a = ov_spawn(ov_hmx, &ha, 0), b = ov_spawn(ov_hvx, &va, 1);
+        ov_join(a); ov_join(b);
+        uint64_t wall_both = pcyc() - w0;
+        { HAP_power_request_t off; memset(&off,0,sizeof(off)); off.type=HAP_power_set_HMX; off.hmx.power_up=FALSE; HAP_power_set(pctx,&off); }
+        if (statsLen > 0) stats[0] = (int)hmx_solo;
+        if (statsLen > 1) stats[1] = (int)hvx_solo;
+        if (statsLen > 2) stats[2] = (int)g_ov_cyc[0];   /* HMX cycles when concurrent */
+        if (statsLen > 3) stats[3] = (int)g_ov_cyc[1];   /* HVX cycles when concurrent */
+        if (statsLen > 4) stats[4] = (int)wall_both;
+        FARF(ALWAYS, "OVERLAP: hmx_solo=%llu hvx_solo=%llu hmx_both=%llu hvx_both=%llu WALL_both=%llu",
+             (unsigned long long)hmx_solo, (unsigned long long)hvx_solo,
+             (unsigned long long)g_ov_cyc[0], (unsigned long long)g_ov_cyc[1], (unsigned long long)wall_both);
+        return 0;
+    }
+#endif
 
     /* VTCM is acquired ONCE here on the main thread and the base pointer shared with all workers (each
      * takes a 0x60000 slice via w->vtcm_base).  Per-worker acquire serializes the workers — the resource

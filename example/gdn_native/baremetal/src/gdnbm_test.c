@@ -41,6 +41,7 @@ int main(int argc, char **argv) {
     printf("gdnbm_solve rc=0x%x  wall=%d cyc  nthreads=%d  heads=%d\n", rc, stats[0], stats[1], stats[2]);
     if (rc == 0 && stats[2] > 0)
         printf("  >>> %d cyc/head (%d-thread)\n", stats[0] / stats[2], stats[1]);
+    printf("  stats: [0]=%d [1]=%d [2]=%d [3]=%d [4]=%d\n", stats[0], stats[1], stats[2], stats[3], stats[4]);
 
     FILE *ft = fopen(Tpath, "wb"); fwrite(T, 1, abytes, ft); fclose(ft);
     printf("wrote %s (%ld bytes)\n", Tpath, abytes);
