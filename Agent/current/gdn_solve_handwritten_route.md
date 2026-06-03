@@ -393,12 +393,33 @@ threading wall.
    - `qurt_hmx_lock()`: **NOT linkable** in the unsigned-PD skel (dynamic load fails "RX VA outside ELF
      segment") — reverted;
    - `HAP_compute_res_hmx_lock4` critical section (lock3 is NOT_SUPPORTED): **no effect**, mxmem still faults.
-   **Open.** Further diagnosis needs either (a) DSP-exception visibility — QXDM/diag or a PD-dump, NOT in
-   `ssh logcat` (the unsigned PD gives only `0x8000040d` = generic invoke-fail); or (b) RE of exactly how the
-   QNN HTP backend enables HMX in its unsigned PD (it clearly does — QNN runs HMX unsigned). Hypotheses left:
-   the mxmem **config registers** the v73deep kernel assumes QNN set (HMX start/convert state), or the VTCM
-   must be a specific HMX-visible allocation. **Everything else in the bare-metal route works** (FastRPC,
-   VTCM 8MB, power, HVX solve `DIAG_ONLY` clean @373K/head 1-thr, threading, per-worker acquire).
+   **RESOLVED (2026-06-03): mxmem RUNS bare-metal — the enable is `compute_resource_hmx_lock`.** Found via
+   `nm` on `libQnnHtpV75Skel.so` (QNN imports `compute_resource_hmx_lock/unlock`, NOT lock3/lock4). Sequence:
+   power vote + per-thread VTCM-only acquire + HMX-only acquire + **`HAP_compute_res_hmx_lock(hctx)` once
+   around the slot** → the full solve runs, rc=0, **whole-T relerr 1.9e-2** (matches the QNN op, under gate).
+   The bare-metal HAP runs the entire reused device solve CORRECTLY.
+
+### THREADING — DEFINITIVE: HMX serializes across threads EVEN bare-metal → 4-thread GOAL unreachable for HMX
+
+- `compute_resource_hmx_lock` is **NOT re-lockable per-call** (locking per-mxmem faults `0x8000040d`) → must
+  hold it **once around the whole slot**.
+- Held around the slot, it is **process-EXCLUSIVE**: measured 1/2/4-thread = **810/827/832K cyc/head — ZERO
+  parallel speedup** (the 2 HMX units do NOT grant 2 concurrent locks; other workers block at their own
+  `hmx_lock` at slot start, so even their HVX can't overlap).
+- ⇒ **An HMX-based solve cannot be threaded** — same root as
+  [[project_gdn_hvx_hmx_overlap_impossible_2026-06-03]], now proven at the **bare-metal** level too, not just
+  for QNN custom ops. (Bare-metal single-thread 832K/head vs QNN 252K = DDR A/T via FastRPC + clock/counter
+  differences; not optimized — threading is the blocker, not single-thread.)
+
+### FINAL VERDICT (the whole route): the 4-thread speed GOAL is unreachable with HMX; needs a pure-HVX solve
+
+Two device-proven walls for an **HMX** triangular-solve: (1) accuracy — only fixable with the FLOOR→round
+drain (done; oc 1.3%); (2) **threading — HMX is process-serial (no HVX∥HMX, no HMX∥HMX), bare-metal OR QNN.**
+The shipped pure-HVX `GdnSolve` threads freely (QNN auto-slices HVX ops). **The only path to ≤30–40K/head
+4-thread is a triangular solve with NO HMX — int16-HVX block-recursive merges (sim-proven accurate, oc
+3.4e-5) threaded across HVX contexts.** All the reusable pieces (diagonal solve, glue vectorizations,
+FLOOR→round, the bare-metal FastRPC+threading harness) are in place; swap the HMX merge for an int16-HVX
+matmul merge and the route threads.
 2. Port the solve: diagonal int16-HVX forward-subst (carry over) + the merges. Merges can stay HMX (now
    threadable via hmx_lock3) OR go int16-HVX; keep the **FLOOR→round drain fix** (rdelta) either way.
 3. Self-managed VTCM (no QNN scratch tensor), own thread pool (heads partitioned), no per-op QNN tax.
