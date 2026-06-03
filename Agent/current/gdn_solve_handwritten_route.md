@@ -367,6 +367,18 @@ threading wall.
      limit.** In our own HAP, worker HMX works. ⇒ threaded HVX+HMX is viable → the route is GO.
    - (Workers share one process-wide ctx value; whether HMX runs truly concurrently on both units vs shares
      is TBD, but every worker CAN run HMX, and the 93%-HVX glue parallelizes regardless.)
+2. **PORT — DONE (builds+loads), but BLOCKED on HMX execution (2026-06-03).** The HAP now compiles the ENTIRE
+   validated device solve via the `GDN_BR_NO_QHPI` guard on `GdnSolveBROp.cpp` (zero duplication; `gdnbm_solve`
+   method, file I/O host driver). FastRPC + skel load + handle open all work. **BUT the solve hangs/crashes
+   when it runs the v73deep mxmem kernel:** threaded → `0x8000040d` (PD fault), inline single-thread-on-main
+   → timeout (hang). **CRUCIAL CORRECTION to the probe's "GO": HMX *acquire* via
+   `HAP_compute_res_acquire(hmx_param)` succeeds, but that is NOT sufficient to *execute* mxmem** — QNN's
+   backend fully configures the HMX context (power/config/critical-section) which a bare `acquire` does not.
+   **Next debug (focused session):** find the missing HMX-execution setup — candidates: (a) the HMX needs a
+   "critical section" / lock4 mutex around mxmem; (b) HMX power/clock enable (`HAP_power_request` /
+   `HAP_compute_res` power vote); (c) the v73deep descriptor/mxmem config assumes state QNN set; (d) verify a
+   MINIMAL standalone mxmem (one packet) runs under the acquire before the full kernel. Isolate with a tiny
+   HMX op first, then scale to the kernel.
 2. Port the solve: diagonal int16-HVX forward-subst (carry over) + the merges. Merges can stay HMX (now
    threadable via hmx_lock3) OR go int16-HVX; keep the **FLOOR→round drain fix** (rdelta) either way.
 3. Self-managed VTCM (no QNN scratch tensor), own thread pool (heads partitioned), no per-op QNN tax.
