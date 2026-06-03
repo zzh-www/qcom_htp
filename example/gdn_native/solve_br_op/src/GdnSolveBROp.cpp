@@ -119,6 +119,15 @@ struct gdn_scr_t {
     uint8_t surf_sub[GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));/* depack base-subtracted surface */
     int32_t eff[64] __attribute__((aligned(128)));                       /* folded-bias effective[] */
     int16_t Tc16[GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));   /* int16-packed diag T codes */
+    /* ---- per-head operand-reuse caches (Task 2): quantize each distinct operand ONCE per head ----
+     * A_ik act:   key gdn_blk_index(i,k)  (10 uses -> 6 distinct; also caches the fold)
+     * T_ii act:   key i                   (final-merge activation; 6 uses -> 3 distinct)
+     * T_kj wt:    key gdn_blk_index(k,j)  (10 uses -> 6 distinct) */
+    uint8_t qAa[GDN_BR_NBLK][GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));
+    int8_t  qTw[GDN_BR_NBLK][GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));
+    uint8_t qTa[GDN_BR_NB][GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));
+    float   sAa[GDN_BR_NBLK], sTw[GDN_BR_NBLK], sTa[GDN_BR_NB];
+    char    vAa[GDN_BR_NBLK], vTw[GDN_BR_NBLK], vTa[GDN_BR_NB];
 };
 static gdn_scr_t g_scr[GDN_BR_NT];
 
@@ -670,25 +679,76 @@ static void gdn_hmx_run_only(const gdn_vtcm_t *vt, const int32_t *eff, float sca
                        (const hmx_conv_mask_desc_t *)mask_buf, extra_param);
 }
 
-/* INT-ONLY merge: act from int32 codes @ s_act, wt from int32 codes @ s_wt.  Quants directly from
- * codes (HVX-vectorized, no float roundtrip), 2-pass exact-ish scale, returns int8 product codes +
- * scale s_out.  This is the Task-2 (packing-resident) building block — no deq-to-float / quant-from-f. */
-static void gdn_merge_codes(gdn_scr_t *sc, const gdn_vtcm_t *vt, const int32_t *act_codes, float s_act,
-                            const int32_t *wt_codes, float s_wt, int8_t *out_codes, float *s_out) {
+/* ---- operand-reuse cache getters (Task 2): quantize each distinct operand ONCE per head ---- */
+
+/* A_ik activation: fold from input A (uint16) then quant u8; cached by lower-tri index (i,k). */
+static const uint8_t *gdn_get_act_A(gdn_scr_t *sc, const uint16_t *Ah, int i, int k, int C_,
+                                    int zpA, int M, int S, float *sa_out) {
+    int key = gdn_blk_index(i, k);
+    if (!sc->vAa[key]) {
 #if defined(GDN_BR_PROBE_CYCLES)
-    uint64_t q0; asm volatile("%0 = C15:14" : "=r"(q0));
+        uint64_t f0; asm volatile("%0 = C15:14" : "=r"(f0));
 #endif
-    float sa = gdn_quant_u8_from_codes(sc, act_codes, s_act, sc->actbuf);
-    float sw = gdn_quant_i8_from_codes(sc, wt_codes, s_wt, sc->wtbuf);
+        gdn_fold_block_raw(Ah + (size_t)i * BL * C_ + k * BL, C_, sc->Aoff, zpA, M, S);
 #if defined(GDN_BR_PROBE_CYCLES)
-    { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_quant += q - q0; }
+        { uint64_t f; asm volatile("%0 = C15:14" : "=r"(f)); g_c_fold += f - f0; }
+        uint64_t q0; asm volatile("%0 = C15:14" : "=r"(q0));
 #endif
+        sc->sAa[key] = gdn_quant_u8_from_codes(sc, sc->Aoff, (float)(1.0 / (1 << GDN_BR_F)), sc->qAa[key]);
+#if defined(GDN_BR_PROBE_CYCLES)
+        { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_quant += q - q0; }
+#endif
+        sc->vAa[key] = 1;
+    }
+    *sa_out = sc->sAa[key];
+    return sc->qAa[key];
+}
+
+/* T_ii diagonal block as final-merge activation: quant u8; cached by diagonal index i. */
+static const uint8_t *gdn_get_act_Tdiag(gdn_scr_t *sc, int i, float *sa_out) {
+    if (!sc->vTa[i]) {
+        int bii = gdn_blk_index(i, i);
+#if defined(GDN_BR_PROBE_CYCLES)
+        uint64_t q0; asm volatile("%0 = C15:14" : "=r"(q0));
+#endif
+        sc->sTa[i] = gdn_quant_u8_from_codes(sc, sc->Tblk[bii], sc->Tscl[bii], sc->qTa[i]);
+#if defined(GDN_BR_PROBE_CYCLES)
+        { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_quant += q - q0; }
+#endif
+        sc->vTa[i] = 1;
+    }
+    *sa_out = sc->sTa[i];
+    return sc->qTa[i];
+}
+
+/* T_kj block as inner-merge weight: quant i8; cached by lower-tri index (k,j). */
+static const int8_t *gdn_get_wt_T(gdn_scr_t *sc, int k, int j, float *sw_out) {
+    int key = gdn_blk_index(k, j);
+    if (!sc->vTw[key]) {
+#if defined(GDN_BR_PROBE_CYCLES)
+        uint64_t q0; asm volatile("%0 = C15:14" : "=r"(q0));
+#endif
+        sc->sTw[key] = gdn_quant_i8_from_codes(sc, sc->Tblk[key], sc->Tscl[key], sc->qTw[key]);
+#if defined(GDN_BR_PROBE_CYCLES)
+        { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_quant += q - q0; }
+#endif
+        sc->vTw[key] = 1;
+    }
+    *sw_out = sc->sTw[key];
+    return sc->qTw[key];
+}
+
+/* INT-ONLY merge from PRE-QUANTIZED operands: act u8 (zp128) @ sa, wt i8 @ sw, 2-pass exact-ish scale,
+ * returns int8 product codes + scale s_out.  Quant is hoisted out to the operand-reuse cache getters
+ * below so each distinct operand is quantized only once per head (Task 2). */
+static void gdn_merge_packed(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint8_t *act_u8, float sa,
+                             const int8_t *wt_i8, float sw, int8_t *out_codes, float *s_out) {
     int32_t *eff = sc->eff;
     /* pack act/wt/effective ONCE (shared by both HMX passes). */
 #if defined(GDN_BR_PROBE_CYCLES)
     uint64_t pk0; asm volatile("%0 = C15:14" : "=r"(pk0));
 #endif
-    gdn_hmx_pack_only(vt, sc->actbuf, sc->wtbuf, eff);
+    gdn_hmx_pack_only(vt, act_u8, wt_i8, eff);
 #if defined(GDN_BR_PROBE_CYCLES)
     { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_hmxpack += q - pk0; }
     uint64_t es0; asm volatile("%0 = C15:14" : "=r"(es0));
@@ -696,7 +756,7 @@ static void gdn_merge_codes(gdn_scr_t *sc, const gdn_vtcm_t *vt, const int32_t *
     /* NOTE (cut tried 2026-06-03, DUD): a 1-pass variant using `loose` directly as the gain gave
      * relerr 1.76 (off-diag blocks → 0; loose is ~100× the true max|P|) for only ~7% cycle saving —
      * the 2-pass refine is small (~27K/head) AND necessary.  The real cuts are quant/pack operand-reuse. */
-    int32_t loose = gdn_pint_loosebound(sc->actbuf, sc->wtbuf);  /* analytic upper bound on max|P| */
+    int32_t loose = gdn_pint_loosebound(act_u8, wt_i8);  /* analytic upper bound on max|P| */
     /* PASS 1: provisional gain g1 = 127/loose (loose >= max|P|, no saturation), centered u8. */
     float g1 = 127.0f / (float)loose;
     gdn_hmx_run_only(vt, eff, g1 * 512.0f, 128 << 7);
@@ -839,6 +899,9 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
 #if defined(GDN_BR_PROBE_CYCLES)
     uint64_t t0; asm volatile("%0 = C15:14" : "=r"(t0));
 #endif
+    /* reset the per-head operand-reuse caches (Task 2). */
+    for (int b = 0; b < GDN_BR_NBLK; ++b) { sc->vAa[b] = 0; sc->vTw[b] = 0; }
+    for (int i = 0; i < NB; ++i) sc->vTa[i] = 0;
     for (int i = 0; i < NB; ++i) {
         int bi = gdn_blk_index(i, i);
         gdn_solve_diag64(sc, Ah + (size_t)i * BL * C + i * BL, C, zpA, M, S, sc->Tblk[bi]);
@@ -879,21 +942,14 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
 #if defined(GDN_BR_PROBE_CYCLES)
             uint64_t m0; asm volatile("%0 = C15:14" : "=r"(m0));
 #endif
-            int bii = gdn_blk_index(i, i);
             int bij = gdn_blk_index(i, j);
             float s_S = 0.0f; int first = 1;
             for (int k = j; k < i; ++k) {
-#if defined(GDN_BR_PROBE_CYCLES)
-                uint64_t f0; asm volatile("%0 = C15:14" : "=r"(f0));
-#endif
-                gdn_fold_block_raw(Ah + (size_t)i * BL * C + k * BL, C, sc->Aoff, zpA, M, S);
-#if defined(GDN_BR_PROBE_CYCLES)
-                { uint64_t f; asm volatile("%0 = C15:14" : "=r"(f)); g_c_fold += f - f0; }
-#endif
-                int bkj = gdn_blk_index(k, j);
-                float sterm;
-                gdn_merge_codes(sc, vt, sc->Aoff, (float)(1.0 / (1 << GDN_BR_F)),
-                                sc->Tblk[bkj], sc->Tscl[bkj], sc->termi, &sterm);
+                /* cached: A_ik act (fold+quant once per (i,k)), T_kj wt (quant once per (k,j)). */
+                float sa, sw, sterm;
+                const uint8_t *a = gdn_get_act_A(sc, Ah, i, k, C, zpA, M, S, &sa);
+                const int8_t  *w = gdn_get_wt_T(sc, k, j, &sw);
+                gdn_merge_packed(sc, vt, a, sa, w, sw, sc->termi, &sterm);
                 if (first) s_S = sterm;
 #if defined(GDN_BR_PROBE_CYCLES)
                 uint64_t a0; asm volatile("%0 = C15:14" : "=r"(a0));
@@ -904,8 +960,17 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
 #endif
                 first = 0;
             }
-            float sij;
-            gdn_merge_codes(sc, vt, sc->Tblk[bii], GDN_BR_TI, sc->Sacc, s_S, sc->termi, &sij);
+            /* final merge T_ij = T_ii @ S_ij: cached T_ii act; S_ij (Sacc) is transient -> quant fresh. */
+            float sa_ii, sw_S, sij;
+            const uint8_t *a_ii = gdn_get_act_Tdiag(sc, i, &sa_ii);
+#if defined(GDN_BR_PROBE_CYCLES)
+            uint64_t sq0; asm volatile("%0 = C15:14" : "=r"(sq0));
+#endif
+            sw_S = gdn_quant_i8_from_codes(sc, sc->Sacc, s_S, sc->wtbuf);
+#if defined(GDN_BR_PROBE_CYCLES)
+            { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_quant += q - sq0; }
+#endif
+            gdn_merge_packed(sc, vt, a_ii, sa_ii, sc->wtbuf, sw_S, sc->termi, &sij);
 #if defined(GDN_BR_PROBE_CYCLES)
             uint64_t w0; asm volatile("%0 = C15:14" : "=r"(w0));
 #endif
