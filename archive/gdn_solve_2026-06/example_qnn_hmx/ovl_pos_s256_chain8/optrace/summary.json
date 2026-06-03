@@ -1,0 +1,573 @@
+{
+  "totals": {
+    "timeline_span_cycles": 64851,
+    "sum_pid0_event_cycles": 68736,
+    "event_count_pid0": 67
+  },
+  "by_htp_type_cycles": {
+    "q::ForceFormat_Crouton": 24061,
+    "q::ConvLayer_s1.opt": 12312,
+    "q::ConvLayer.opt.bias_to_vtcm": 9844,
+    "q::*InputSlice": 6661,
+    "q::ForceFormat_Flat": 5801,
+    "q::*OutputSlice": 5381,
+    "q::ConvLayer.opt.weights_to_vtcm": 2948,
+    "DmaCheckpointSet": 1357,
+    "SyncOp": 261,
+    "$Const": 90,
+    "$Shape": 10,
+    "q::Reshape": 10
+  },
+  "by_qnn_op_cycles": {
+    "MatMul_0": 32707,
+    "Output": 11208,
+    "Input": 7818,
+    "MatMul_3": 7235,
+    "MatMul_5": 1614,
+    "MatMul_6": 1608,
+    "MatMul_4": 1606,
+    "MatMul_7": 1592,
+    "MatMul_1": 1504,
+    "MatMul_2": 1473,
+    "SystemService_ChunkPreload_1269": 261,
+    "": 110
+  },
+  "events": [
+    {
+      "ts": 0,
+      "dur": 5,
+      "packets": null,
+      "cpp": null,
+      "htp_type": "$Shape",
+      "qnn_op": ""
+    },
+    {
+      "ts": 12,
+      "dur": 5,
+      "packets": null,
+      "cpp": null,
+      "htp_type": "$Shape",
+      "qnn_op": ""
+    },
+    {
+      "ts": 22,
+      "dur": 3267,
+      "packets": 52,
+      "cpp": 62.8269,
+      "htp_type": "q::*InputSlice",
+      "qnn_op": "Input"
+    },
+    {
+      "ts": 3340,
+      "dur": 1157,
+      "packets": 4,
+      "cpp": 289.25,
+      "htp_type": "DmaCheckpointSet",
+      "qnn_op": "Input"
+    },
+    {
+      "ts": 4501,
+      "dur": 5,
+      "packets": null,
+      "cpp": null,
+      "htp_type": "$Const",
+      "qnn_op": ""
+    },
+    {
+      "ts": 4511,
+      "dur": 3225,
+      "packets": 44,
+      "cpp": 73.2955,
+      "htp_type": "q::ConvLayer.opt.bias_to_vtcm",
+      "qnn_op": "MatMul_0"
+    },
+    {
+      "ts": 7747,
+      "dur": 5,
+      "packets": null,
+      "cpp": null,
+      "htp_type": "$Const",
+      "qnn_op": ""
+    },
+    {
+      "ts": 7757,
+      "dur": 1326,
+      "packets": 57,
+      "cpp": 23.2632,
+      "htp_type": "q::ConvLayer.opt.weights_to_vtcm",
+      "qnn_op": "MatMul_0"
+    },
+    {
+      "ts": 9094,
+      "dur": 5,
+      "packets": null,
+      "cpp": null,
+      "htp_type": "$Const",
+      "qnn_op": ""
+    },
+    {
+      "ts": 9104,
+      "dur": 157,
+      "packets": 44,
+      "cpp": 3.56818,
+      "htp_type": "q::ConvLayer.opt.bias_to_vtcm",
+      "qnn_op": "MatMul_1"
+    },
+    {
+      "ts": 9502,
+      "dur": 5,
+      "packets": null,
+      "cpp": null,
+      "htp_type": "$Const",
+      "qnn_op": ""
+    },
+    {
+      "ts": 9512,
+      "dur": 166,
+      "packets": 57,
+      "cpp": 2.91228,
+      "htp_type": "q::ConvLayer.opt.weights_to_vtcm",
+      "qnn_op": "MatMul_1"
+    },
+    {
+      "ts": 9689,
+      "dur": 5,
+      "packets": null,
+      "cpp": null,
+      "htp_type": "$Const",
+      "qnn_op": ""
+    },
+    {
+      "ts": 9699,
+      "dur": 145,
+      "packets": 44,
+      "cpp": 3.29545,
+      "htp_type": "q::ConvLayer.opt.bias_to_vtcm",
+      "qnn_op": "MatMul_2"
+    },
+    {
+      "ts": 9852,
+      "dur": 5,
+      "packets": null,
+      "cpp": null,
+      "htp_type": "$Const",
+      "qnn_op": ""
+    },
+    {
+      "ts": 9862,
+      "dur": 150,
+      "packets": 57,
+      "cpp": 2.63158,
+      "htp_type": "q::ConvLayer.opt.weights_to_vtcm",
+      "qnn_op": "MatMul_2"
+    },
+    {
+      "ts": 10021,
+      "dur": 5,
+      "packets": null,
+      "cpp": null,
+      "htp_type": "$Const",
+      "qnn_op": ""
+    },
+    {
+      "ts": 10031,
+      "dur": 127,
+      "packets": 44,
+      "cpp": 2.88636,
+      "htp_type": "q::ConvLayer.opt.bias_to_vtcm",
+      "qnn_op": "MatMul_3"
+    },
+    {
+      "ts": 10190,
+      "dur": 27,
+      "packets": 4,
+      "cpp": 6.75,
+      "htp_type": "DmaCheckpointSet",
+      "qnn_op": "MatMul_3"
+    },
+    {
+      "ts": 10220,
+      "dur": 5,
+      "packets": null,
+      "cpp": null,
+      "htp_type": "$Const",
+      "qnn_op": ""
+    },
+    {
+      "ts": 10230,
+      "dur": 146,
+      "packets": 57,
+      "cpp": 2.5614,
+      "htp_type": "q::ConvLayer.opt.weights_to_vtcm",
+      "qnn_op": "MatMul_3"
+    },
+    {
+      "ts": 10394,
+      "dur": 40,
+      "packets": 4,
+      "cpp": 10.0,
+      "htp_type": "DmaCheckpointSet",
+      "qnn_op": "MatMul_3"
+    },
+    {
+      "ts": 10437,
+      "dur": 5,
+      "packets": null,
+      "cpp": null,
+      "htp_type": "$Const",
+      "qnn_op": ""
+    },
+    {
+      "ts": 10447,
+      "dur": 148,
+      "packets": 44,
+      "cpp": 3.36364,
+      "htp_type": "q::ConvLayer.opt.bias_to_vtcm",
+      "qnn_op": "MatMul_4"
+    },
+    {
+      "ts": 10837,
+      "dur": 5,
+      "packets": null,
+      "cpp": null,
+      "htp_type": "$Const",
+      "qnn_op": ""
+    },
+    {
+      "ts": 10847,
+      "dur": 152,
+      "packets": 57,
+      "cpp": 2.66667,
+      "htp_type": "q::ConvLayer.opt.weights_to_vtcm",
+      "qnn_op": "MatMul_4"
+    },
+    {
+      "ts": 11018,
+      "dur": 27,
+      "packets": 4,
+      "cpp": 6.75,
+      "htp_type": "DmaCheckpointSet",
+      "qnn_op": "MatMul_4"
+    },
+    {
+      "ts": 11048,
+      "dur": 5,
+      "packets": null,
+      "cpp": null,
+      "htp_type": "$Const",
+      "qnn_op": ""
+    },
+    {
+      "ts": 11058,
+      "dur": 146,
+      "packets": 44,
+      "cpp": 3.31818,
+      "htp_type": "q::ConvLayer.opt.bias_to_vtcm",
+      "qnn_op": "MatMul_5"
+    },
+    {
+      "ts": 11212,
+      "dur": 5,
+      "packets": null,
+      "cpp": null,
+      "htp_type": "$Const",
+      "qnn_op": ""
+    },
+    {
+      "ts": 11222,
+      "dur": 165,
+      "packets": 57,
+      "cpp": 2.89474,
+      "htp_type": "q::ConvLayer.opt.weights_to_vtcm",
+      "qnn_op": "MatMul_5"
+    },
+    {
+      "ts": 11419,
+      "dur": 28,
+      "packets": 4,
+      "cpp": 7.0,
+      "htp_type": "DmaCheckpointSet",
+      "qnn_op": "MatMul_5"
+    },
+    {
+      "ts": 11452,
+      "dur": 5,
+      "packets": null,
+      "cpp": null,
+      "htp_type": "$Const",
+      "qnn_op": ""
+    },
+    {
+      "ts": 11462,
+      "dur": 151,
+      "packets": 44,
+      "cpp": 3.43182,
+      "htp_type": "q::ConvLayer.opt.bias_to_vtcm",
+      "qnn_op": "MatMul_6"
+    },
+    {
+      "ts": 11624,
+      "dur": 5,
+      "packets": null,
+      "cpp": null,
+      "htp_type": "$Const",
+      "qnn_op": ""
+    },
+    {
+      "ts": 11634,
+      "dur": 162,
+      "packets": 57,
+      "cpp": 2.84211,
+      "htp_type": "q::ConvLayer.opt.weights_to_vtcm",
+      "qnn_op": "MatMul_6"
+    },
+    {
+      "ts": 11816,
+      "dur": 25,
+      "packets": 4,
+      "cpp": 6.25,
+      "htp_type": "DmaCheckpointSet",
+      "qnn_op": "MatMul_6"
+    },
+    {
+      "ts": 12107,
+      "dur": 5,
+      "packets": null,
+      "cpp": null,
+      "htp_type": "$Const",
+      "qnn_op": ""
+    },
+    {
+      "ts": 12117,
+      "dur": 141,
+      "packets": 44,
+      "cpp": 3.20455,
+      "htp_type": "q::ConvLayer.opt.bias_to_vtcm",
+      "qnn_op": "MatMul_7"
+    },
+    {
+      "ts": 12267,
+      "dur": 5,
+      "packets": null,
+      "cpp": null,
+      "htp_type": "$Const",
+      "qnn_op": ""
+    },
+    {
+      "ts": 12277,
+      "dur": 164,
+      "packets": 57,
+      "cpp": 2.87719,
+      "htp_type": "q::ConvLayer.opt.weights_to_vtcm",
+      "qnn_op": "MatMul_7"
+    },
+    {
+      "ts": 12459,
+      "dur": 27,
+      "packets": 4,
+      "cpp": 6.75,
+      "htp_type": "DmaCheckpointSet",
+      "qnn_op": "MatMul_7"
+    },
+    {
+      "ts": 12500,
+      "dur": 3394,
+      "packets": 432,
+      "cpp": 7.85648,
+      "htp_type": "q::*InputSlice",
+      "qnn_op": "Input"
+    },
+    {
+      "ts": 15921,
+      "dur": 5604,
+      "packets": 882,
+      "cpp": 6.35374,
+      "htp_type": "q::ConvLayer.opt.bias_to_vtcm",
+      "qnn_op": "MatMul_3"
+    },
+    {
+      "ts": 15945,
+      "dur": 5,
+      "packets": null,
+      "cpp": null,
+      "htp_type": "q::Reshape",
+      "qnn_op": ""
+    },
+    {
+      "ts": 15955,
+      "dur": 24061,
+      "packets": 2291,
+      "cpp": 10.5024,
+      "htp_type": "q::ForceFormat_Crouton",
+      "qnn_op": "MatMul_0"
+    },
+    {
+      "ts": 40035,
+      "dur": 5,
+      "packets": null,
+      "cpp": null,
+      "htp_type": "$Const",
+      "qnn_op": ""
+    },
+    {
+      "ts": 40047,
+      "dur": 5,
+      "packets": null,
+      "cpp": null,
+      "htp_type": "$Const",
+      "qnn_op": ""
+    },
+    {
+      "ts": 40057,
+      "dur": 4095,
+      "packets": 346,
+      "cpp": 11.8353,
+      "htp_type": "q::ConvLayer_s1.opt",
+      "qnn_op": "MatMul_0"
+    },
+    {
+      "ts": 44188,
+      "dur": 1181,
+      "packets": 346,
+      "cpp": 3.41329,
+      "htp_type": "q::ConvLayer_s1.opt",
+      "qnn_op": "MatMul_1"
+    },
+    {
+      "ts": 45387,
+      "dur": 1178,
+      "packets": 346,
+      "cpp": 3.40462,
+      "htp_type": "q::ConvLayer_s1.opt",
+      "qnn_op": "MatMul_2"
+    },
+    {
+      "ts": 46598,
+      "dur": 121,
+      "packets": 22,
+      "cpp": 5.5,
+      "htp_type": "q::ConvLayer.opt.weights_to_vtcm",
+      "qnn_op": "MatMul_3"
+    },
+    {
+      "ts": 46737,
+      "dur": 1170,
+      "packets": 346,
+      "cpp": 3.3815,
+      "htp_type": "q::ConvLayer_s1.opt",
+      "qnn_op": "MatMul_3"
+    },
+    {
+      "ts": 47928,
+      "dur": 107,
+      "packets": 22,
+      "cpp": 4.86364,
+      "htp_type": "q::ConvLayer.opt.weights_to_vtcm",
+      "qnn_op": "MatMul_4"
+    },
+    {
+      "ts": 48055,
+      "dur": 1172,
+      "packets": 346,
+      "cpp": 3.38728,
+      "htp_type": "q::ConvLayer_s1.opt",
+      "qnn_op": "MatMul_4"
+    },
+    {
+      "ts": 49262,
+      "dur": 96,
+      "packets": 22,
+      "cpp": 4.36364,
+      "htp_type": "q::ConvLayer.opt.weights_to_vtcm",
+      "qnn_op": "MatMul_5"
+    },
+    {
+      "ts": 49379,
+      "dur": 1179,
+      "packets": 346,
+      "cpp": 3.40751,
+      "htp_type": "q::ConvLayer_s1.opt",
+      "qnn_op": "MatMul_5"
+    },
+    {
+      "ts": 50576,
+      "dur": 102,
+      "packets": 22,
+      "cpp": 4.63636,
+      "htp_type": "q::ConvLayer.opt.weights_to_vtcm",
+      "qnn_op": "MatMul_6"
+    },
+    {
+      "ts": 50697,
+      "dur": 1168,
+      "packets": 346,
+      "cpp": 3.37572,
+      "htp_type": "q::ConvLayer_s1.opt",
+      "qnn_op": "MatMul_6"
+    },
+    {
+      "ts": 51899,
+      "dur": 91,
+      "packets": 22,
+      "cpp": 4.13636,
+      "htp_type": "q::ConvLayer.opt.weights_to_vtcm",
+      "qnn_op": "MatMul_7"
+    },
+    {
+      "ts": 52009,
+      "dur": 1169,
+      "packets": 346,
+      "cpp": 3.37861,
+      "htp_type": "q::ConvLayer_s1.opt",
+      "qnn_op": "MatMul_7"
+    },
+    {
+      "ts": 53244,
+      "dur": 5801,
+      "packets": null,
+      "cpp": null,
+      "htp_type": "q::ForceFormat_Flat",
+      "qnn_op": "Output"
+    },
+    {
+      "ts": 59092,
+      "dur": 5,
+      "packets": null,
+      "cpp": null,
+      "htp_type": "q::Reshape",
+      "qnn_op": ""
+    },
+    {
+      "ts": 59102,
+      "dur": 3062,
+      "packets": 97,
+      "cpp": 31.567,
+      "htp_type": "q::*OutputSlice",
+      "qnn_op": "Output"
+    },
+    {
+      "ts": 62198,
+      "dur": 26,
+      "packets": 4,
+      "cpp": 6.5,
+      "htp_type": "DmaCheckpointSet",
+      "qnn_op": "Output"
+    },
+    {
+      "ts": 62252,
+      "dur": 2319,
+      "packets": 279,
+      "cpp": 8.31183,
+      "htp_type": "q::*OutputSlice",
+      "qnn_op": "Output"
+    },
+    {
+      "ts": 64590,
+      "dur": 261,
+      "packets": 3,
+      "cpp": 87.0,
+      "htp_type": "SyncOp",
+      "qnn_op": "SystemService_ChunkPreload_1269"
+    }
+  ]
+}

@@ -147,30 +147,8 @@ struct gdn_scr_t {
     char    vAa[GDN_BR_NBLK], vTw[GDN_BR_NBLK], vTa[GDN_BR_NB];
     int32_t mxdiag[GDN_BR_NB];   /* producer-tracked maxabs of each diagonal T block (for quant fusion) */
     int32_t effc[GDN_BR_NBLK][64] __attribute__((aligned(128)));  /* cached effective-bias per T-wt block */
-#if defined(GDN_BR_HVX_CACHE)
-    /* int16-HVX operand-reuse cache (Lever A 2a): quant each distinct operand ONCE/head.
-     *  qTb[blk] = int16 quant of T block `blk` at Tscl[blk] (used as both A and B operand, 10 blocks).
-     *  qAa[blk] = int16 quant of folded A_ik at 2^-F (A operand, keyed gdn_blk_index(i,k), 6 distinct). */
-    int16_t qTb[GDN_BR_NBLK][GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));
-    int16_t qAa[GDN_BR_NBLK][GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));
-    float   sqTb[GDN_BR_NBLK], sqAa[GDN_BR_NBLK];
-    char    vqTb[GDN_BR_NBLK], vqAa[GDN_BR_NBLK];
-#endif
 };
 static gdn_scr_t g_scr[GDN_BR_NT];
-
-#if defined(__hexagon__)
-/* QNN multithreaded self-slice: the central tiler runs several tile-ops concurrently on distinct HVX
- * threads, each seeing slice_number relative to its own instance — so claim a globally-unique free
- * scratch slot per call (atomic CAS), like the shipped GdnSolve.  <= GDN_BR_NT concurrent (4 HVX units). */
-static volatile int g_br_slot_busy[GDN_BR_NT];
-static int gdn_br_claim_slot(void) {
-    for (;;)
-        for (int s = 0; s < GDN_BR_NT; ++s)
-            if (__sync_bool_compare_and_swap(&g_br_slot_busy[s], 0, 1)) return s;
-}
-static inline void gdn_br_free_slot(int s) { __sync_lock_release(&g_br_slot_busy[s]); }
-#endif
 
 /* VTCM scratch carved from the TCM_Only scratch tensor.  Buffers are spaced 0x10000 (64 KB) apart —
  * matching the proven M1 sim harness layout — so any HMX over-write/alignment slack can't clobber a
@@ -1076,39 +1054,6 @@ static int32_t gdn_quant_i8_from_u16(const uint16_t *Au, int row_stride, int zpA
 }
 #endif  /* GDN_BR_MM_I8 */
 
-#if defined(GDN_BR_HVX_CACHE)
-/* operand-reuse cache (Lever A 2a): quant each distinct int16-HVX operand ONCE per head.
- * gdn_q_Tblk: quant T block `blk` (scale Tscl[blk]) -> qTb[blk]; used as A or B operand.
- * gdn_q_Aik:  fold+quant A_ik (scale 2^-F)         -> qAa[blk(i,k)]; A operand. */
-static inline const int16_t *gdn_q_Tblk(gdn_scr_t *sc, int blk, float *s_out) {
-    if (!sc->vqTb[blk]) {
-        sc->sqTb[blk] = gdn_quant_i12_from_codes(sc, sc->Tblk[blk], sc->Tscl[blk], sc->qTb[blk], -1);
-        sc->vqTb[blk] = 1;
-    }
-    *s_out = sc->sqTb[blk]; return sc->qTb[blk];
-}
-static inline const int16_t *gdn_q_Aik(gdn_scr_t *sc, const uint16_t *Ah, int i, int k, int Cc,
-                                       int zpA, int M, int S, float *s_out) {
-    int blk = gdn_blk_index(i, k);
-#if defined(GDN_BR_CACHE_TONLY)
-    /* A-operand reuse is only 10->6; skip caching it (keeps the resident footprint small for the
-     * bandwidth-bound 4-thread path) — recompute fold+quant into the transient a16 each call. */
-    int32_t mxA;
-    gdn_fold_block_raw(Ah + (size_t)i * BL * Cc + k * BL, Cc, sc->Aoff, zpA, M, S, &mxA);
-    *s_out = gdn_quant_i12_from_codes(sc, sc->Aoff, (float)(1.0 / (1 << GDN_BR_F)), sc->a16, mxA);
-    return sc->a16;
-#else
-    if (!sc->vqAa[blk]) {
-        int32_t mxA;
-        gdn_fold_block_raw(Ah + (size_t)i * BL * Cc + k * BL, Cc, sc->Aoff, zpA, M, S, &mxA);
-        sc->sqAa[blk] = gdn_quant_i12_from_codes(sc, sc->Aoff, (float)(1.0 / (1 << GDN_BR_F)),
-                                                 sc->qAa[blk], mxA);
-        sc->vqAa[blk] = 1;
-    }
-    *s_out = sc->sqAa[blk]; return sc->qAa[blk];
-#endif
-}
-#endif
 
 /* int16-HVX merge: C = A @ B (int32 codes in/out, no HMX/pack/depack).  out scale = sAq*sBq. */
 static void gdn_merge_hvx(gdn_scr_t *sc, const int32_t *A_codes, float sA, int32_t mxA,
@@ -1303,9 +1248,6 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
     /* reset the per-head operand-reuse caches (Task 2). */
     for (int b = 0; b < GDN_BR_NBLK; ++b) { sc->vAa[b] = 0; sc->vTw[b] = 0; }
     for (int i = 0; i < NB; ++i) sc->vTa[i] = 0;
-#if defined(GDN_BR_HVX_CACHE)
-    for (int b = 0; b < GDN_BR_NBLK; ++b) { sc->vqTb[b] = 0; sc->vqAa[b] = 0; }
-#endif
     for (int i = 0; i < NB; ++i) {
         int bi = gdn_blk_index(i, i);
         gdn_solve_diag64(sc, Ah + (size_t)i * BL * C + i * BL, C, zpA, M, S, sc->Tblk[bi], &sc->mxdiag[i]);
@@ -1360,24 +1302,7 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
             for (int k = j; k < i; ++k) {
                 int bkj = gdn_blk_index(k, j);
                 float sterm;
-#if defined(GDN_BR_HVX_CACHE)
-                /* operand-reuse cache: fold+quant A_ik and quant T_kj each ONCE per head (Lever A 2a). */
-#if defined(GDN_BR_PROBE_CYCLES)
-                uint64_t f0; asm volatile("%0 = C15:14" : "=r"(f0));
-#endif
-                float sa, sb;
-                const int16_t *a = gdn_q_Aik(sc, Ah, i, k, C, zpA, M, S, &sa);
-                const int16_t *b = gdn_q_Tblk(sc, bkj, &sb);
-#if defined(GDN_BR_PROBE_CYCLES)
-                { uint64_t f; asm volatile("%0 = C15:14" : "=r"(f)); g_c_quant += f - f0; }
-                uint64_t mm0; asm volatile("%0 = C15:14" : "=r"(mm0));
-#endif
-                gdn_matmul_i16(a, b, sc->Tc);
-                sterm = sa * sb;
-#if defined(GDN_BR_PROBE_CYCLES)
-                { uint64_t mm; asm volatile("%0 = C15:14" : "=r"(mm)); g_c_hmxkern += mm - mm0; }
-#endif
-#elif defined(GDN_BR_MM_I8)
+#if defined(GDN_BR_MM_I8)
                 /* int8 direct path: quant A_ik straight from u16 (no int32 fold), quant B, vrmpy. */
 #if defined(GDN_BR_PROBE_CYCLES)
                 uint64_t f0; asm volatile("%0 = C15:14" : "=r"(f0));
@@ -1428,16 +1353,7 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
                 first = 0;
             }
             float sij;
-#if defined(GDN_BR_HVX_CACHE)
-            /* final merge T_ij = T_ii @ S_ij: T_ii from cache (A), S_ij transient (B, quant directly). */
-            { float sa, sb;
-              const int16_t *a = gdn_q_Tblk(sc, bii, &sa);
-              sb = gdn_quant_i12_from_codes(sc, sc->Sacc, s_S, sc->b16, -1);
-              gdn_matmul_i16(a, sc->b16, sc->Tblk[bij]);
-              sij = sa * sb; }
-#else
             gdn_merge_hvx(sc, sc->Tblk[bii], GDN_BR_TI, -1, sc->Sacc, s_S, -1, sc->Tblk[bij], &sij);
-#endif
             sc->Tscl[bij] = sij;
 #if defined(GDN_BR_DUMP_SACC)
             if (i == 1 && j == 0) {   /* dump dist-1 FINAL result (T11@S) + scale to Th, then bail */
@@ -1600,8 +1516,7 @@ static uint32_t gdn_solve_br_kernel(
 #if defined(__hexagon__)
     /* VTCM scratch from the TCM_Only scratch tensor inputs[1]. */
     uint8_t *vtcm_base = (num_inputs >= 2 && inputs[1]) ? (uint8_t *)qhpi_tensor_raw_data(inputs[1]) : nullptr;
-#if !defined(GDN_BR_SKIP_KERNEL) && !defined(GDN_BR_DIAG_ONLY) && !defined(GDN_BR_QNN_TILED)
-    /* HVX-merge tiled mode needs no VTCM (all scratch is BSS) — don't require the scratch input. */
+#if !defined(GDN_BR_SKIP_KERNEL) && !defined(GDN_BR_DIAG_ONLY)
     if (!vtcm_base) return QHPI_Success;
 #endif
     gdn_vtcm_t vt = vtcm_base ? gdn_vtcm_from(vtcm_base) : gdn_vtcm_t{};
@@ -1641,30 +1556,7 @@ static uint32_t gdn_solve_br_kernel(
     int nthreads = (int)((heads < (uint32_t)GDN_BR_NT) ? heads : (uint32_t)GDN_BR_NT);
     if (nthreads < 1) nthreads = 1;
     gdn_work_t work[GDN_BR_NT];
-#if defined(GDN_BR_QNN_TILED)
-    /* QNN-native multithreading: the central tiler splits H into tiles that run concurrently on distinct
-     * HVX threads.  This kernel self-slices its head range and uses an atomically-claimed scratch slot.
-     * HVX-merge mode needs NO HMX and NO VTCM (all scratch is BSS gdn_scr_t), so each tile-op is pure
-     * HVX and threads with no shared lock — exactly the shipped GdnSolve pattern. */
-    {
-        uint32_t ns = qhpi_num_slices(handle), sl = qhpi_slice_number(handle);
-        if (ns == 0) ns = 1;
-        uint32_t th0 = (uint64_t)heads * sl / ns, th1 = (uint64_t)heads * (sl + 1) / ns;
-#if defined(GDN_BR_TILED_S0)
-        /* debug: only slice 0 works (all heads), others no-op -> merge runs on ONE worker thread,
-         * no concurrency.  Isolates merge-on-worker-thread fault from a concurrency/race fault. */
-        if (sl != 0) return QHPI_Success;
-        th0 = 0; th1 = heads;
-#endif
-        int slot = gdn_br_claim_slot();
-        gdn_scr_t *sc = &g_scr[slot];
-        gdn_vtcm_t vt = vtcm_base ? gdn_vtcm_from(vtcm_base + (size_t)slot * 0x60000) : gdn_vtcm_t{};
-        for (uint32_t h = th0; h < th1; ++h)
-            gdn_br_one_head(sc, &vt, Au + (size_t)h * C * C, Tu + (size_t)h * C * C,
-                            zpA, M, S, sT, zpT);
-        gdn_br_free_slot(slot);
-    }
-#elif defined(GDN_BR_USE_THREADS)
+#if defined(GDN_BR_USE_THREADS)
     /* release the backend-granted HMX on this (main) thread so the spawned workers can each claim one of
      * the 2 v75 HMX units; re-lock after join so the backend's teardown sees its lock intact. */
 #if defined(GDN_BR_MAIN_HMX_REL)
@@ -1741,13 +1633,8 @@ static QHPI_Kernel_v1 sg_kernels[] = {
     {
         THIS_PKG_NAME_STR "::gdn_solve_br_kernel",
         gdn_solve_br_kernel,
-#if defined(GDN_BR_QNN_TILED)
-        QHPI_RESOURCE_HVX,        /* HVX-merge mode: pure HVX, no HMX -> QNN can self-slice across HVX threads */
-        false, true,  false, false,   /* multithreaded=true: central tiler splits H across HVX threads */
-#else
         QHPI_RESOURCE_HMX,        /* HMX op; HVX intrinsics used freely inside (cf. HvxHmxOp tutorial) */
         false, false, false, false,   /* multithreaded=false: HMX ops are not self-sliced by prepare */
-#endif
         2, sig_inputs,
         1, sig_outputs,
         gdn_solve_br_cost,

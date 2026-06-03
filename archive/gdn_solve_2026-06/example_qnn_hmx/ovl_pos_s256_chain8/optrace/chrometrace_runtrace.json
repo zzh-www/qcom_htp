@@ -1,0 +1,34 @@
+{
+  "header": {
+    "header_version": {
+      "major": 1,
+      "minor": 0,
+      "patch": 0
+    },
+    "version": {
+      "major": 1,
+      "minor": 1,
+      "patch": 0
+    },
+    "artifact_type": "RUN_TRACE"
+  },
+"traceEvents": [
+{ "name": "QNN DSP Execute", "ph": "X", "tid": 0, "pid": 0, "ts": 0, "dur": 15306, "args": {"graph_name": "model_encoded", "stat_start_ticks": 31091395371990, "stat_end_ticks": 31091395387296, "stat_start_cycles": 7997465468216, "stat_end_cycles": 7997466142406, "summary_htp_frequency_ghz": 0.845711, "summary_inf/s": 1254.41, "summary_time_us": 797.188} },
+{ "name": "VTCM Acquire", "ph": "X", "tid": 0, "pid": 0, "ts": 103, "dur": 964, "args": {"graph_name": "model_encoded", "stat_start_ticks": 31091395372093, "stat_end_ticks": 31091395373057, "stat_start_cycles": 7997465472907, "stat_end_cycles": 7997465513017, "summary_htp_frequency_ghz": 0.798871, "summary_inf/s": 19917, "summary_time_us": 50.2083} },
+{ "name": "Resource Power On", "ph": "X", "tid": 0, "pid": 0, "ts": 1170, "dur": 11947, "args": {"graph_name": "model_encoded", "stat_start_ticks": 31091395373160, "stat_end_ticks": 31091395385107, "stat_start_cycles": 7997465517341, "stat_end_cycles": 7997466050478, "summary_htp_frequency_ghz": 0.856803, "summary_inf/s": 1607.1, "summary_time_us": 622.24} },
+{ "name": "Graph Execute", "ph": "X", "tid": 0, "pid": 0, "ts": 13439, "dur": 1657, "args": {"graph_name": "model_encoded", "stat_start_ticks": 31091395385429, "stat_end_ticks": 31091395387086, "stat_start_cycles": 7997466063997, "stat_end_cycles": 7997466133588, "summary_htp_frequency_ghz": 0.806365, "summary_inf/s": 11587.2, "summary_time_us": 86.3021} },
+{ "cat": "__metadata", "pid": 0, "tid": 0, "ph": "M", "name": "thread_name", "args": {"name": "Core 0 Execs"}},
+{ "cat": "__metadata", "pid": 0, "ph": "M", "name": "process_name", "args": {"name": "model_encoded Runtraces"}},
+{ "name": "QNN DSP Execute", "ph": "X", "tid": 0, "pid": 0, "ts": 196297, "dur": 788, "args": {"graph_name": "model_encoded", "stat_start_ticks": 31091395568287, "stat_end_ticks": 31091395569075, "stat_start_cycles": 7997484493280, "stat_end_cycles": 7997484571254, "summary_htp_frequency_ghz": 1.89987, "summary_inf/s": 24365.5, "summary_time_us": 41.0417} },
+{ "name": "VTCM Acquire", "ph": "X", "tid": 0, "pid": 0, "ts": 196330, "dur": 194, "args": {"graph_name": "model_encoded", "stat_start_ticks": 31091395568320, "stat_end_ticks": 31091395568514, "stat_start_cycles": 7997484496825, "stat_end_cycles": 7997484516192, "summary_htp_frequency_ghz": 1.91673, "summary_inf/s": 98969.1, "summary_time_us": 10.1042} },
+{ "name": "Resource Power On", "ph": "X", "tid": 0, "pid": 0, "ts": 196540, "dur": 33, "args": {"graph_name": "model_encoded", "stat_start_ticks": 31091395568530, "stat_end_ticks": 31091395568563, "stat_start_cycles": 7997484517833, "stat_end_cycles": 7997484521135, "summary_htp_frequency_ghz": 1.92116, "summary_inf/s": 581818, "summary_time_us": 1.71875} },
+{ "name": "Graph Execute", "ph": "X", "tid": 0, "pid": 0, "ts": 196635, "dur": 425, "args": {"graph_name": "model_encoded", "stat_start_ticks": 31091395568625, "stat_end_ticks": 31091395569050, "stat_start_cycles": 7997484527449, "stat_end_cycles": 7997484568801, "summary_htp_frequency_ghz": 1.86814, "summary_inf/s": 45176.5, "summary_time_us": 22.1354} },
+{ "cat": "__metadata", "pid": 0, "tid": 0, "ph": "M", "name": "thread_name", "args": {"name": "Core 0 Execs"}},
+{ "cat": "__metadata", "pid": 0, "ph": "M", "name": "process_name", "args": {"name": "model_encoded Runtraces"}},
+{ "name": "QNN DSP Execute", "ph": "X", "tid": 0, "pid": 0, "ts": 275238, "dur": 440, "args": {"graph_name": "model_encoded", "stat_start_ticks": 31091395647228, "stat_end_ticks": 31091395647668, "stat_start_cycles": 7997492474938, "stat_end_cycles": 7997492518683, "summary_htp_frequency_ghz": 1.90887, "summary_inf/s": 43636.4, "summary_time_us": 22.9167} },
+{ "name": "VTCM Acquire", "ph": "X", "tid": 0, "pid": 0, "ts": 275246, "dur": 76, "args": {"graph_name": "model_encoded", "stat_start_ticks": 31091395647236, "stat_end_ticks": 31091395647312, "stat_start_cycles": 7997492475752, "stat_end_cycles": 7997492483407, "summary_htp_frequency_ghz": 1.93389, "summary_inf/s": 252632, "summary_time_us": 3.95833} },
+{ "name": "Resource Power On", "ph": "X", "tid": 0, "pid": 0, "ts": 275325, "dur": 9, "args": {"graph_name": "model_encoded", "stat_start_ticks": 31091395647315, "stat_end_ticks": 31091395647324, "stat_start_cycles": 7997492483744, "stat_end_cycles": 7997492484685, "summary_htp_frequency_ghz": 2.00747, "summary_inf/s": 2.13333e+06, "summary_time_us": 0.46875} },
+{ "name": "Graph Execute", "ph": "X", "tid": 0, "pid": 0, "ts": 275358, "dur": 300, "args": {"graph_name": "model_encoded", "stat_start_ticks": 31091395647348, "stat_end_ticks": 31091395647648, "stat_start_cycles": 7997492487071, "stat_end_cycles": 7997492516670, "summary_htp_frequency_ghz": 1.89434, "summary_inf/s": 64000, "summary_time_us": 15.625} },
+{ "cat": "__metadata", "pid": 0, "tid": 0, "ph": "M", "name": "thread_name", "args": {"name": "Core 0 Execs"}},
+{ "cat": "__metadata", "pid": 0, "ph": "M", "name": "process_name", "args": {"name": "model_encoded Runtraces"}}
+]}

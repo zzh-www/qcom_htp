@@ -1,0 +1,20 @@
+{
+  "input_name": "A",
+  "output_name": "Y",
+  "native_input": "runtime_inputs_u8/a.raw",
+  "runtime_input_list": "runtime_input_list.txt",
+  "native_input_storage": "uint8",
+  "native_input_bytes": 65536,
+  "expected_native_output_storage": "uint8",
+  "expected_native_output_bytes": 65536,
+  "shape": [
+    1,
+    256,
+    256
+  ],
+  "output_shape": [
+    1,
+    256,
+    256
+  ]
+}

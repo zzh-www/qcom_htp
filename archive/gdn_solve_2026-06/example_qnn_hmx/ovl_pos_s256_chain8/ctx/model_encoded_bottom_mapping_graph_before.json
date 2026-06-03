@@ -1,0 +1,664 @@
+{
+ "header": {
+      "header_version": {
+          "major": 1,
+         "minor": 0,
+          "patch": 0
+      },
+       "version": {
+           "major": 1,
+           "minor": 0,
+           "patch": 0
+       },
+      "artifact_type": "HTP_GRAPH"
+   },
+  "model.cpp": "htp_graph",
+  "graph": {
+    "tensors": {
+      "0x0000000000000002": {
+        "id": 0,
+        "type": 4,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000000000000010": {
+        "id": 1,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000000000000011": {
+        "id": 2,
+        "type": 4,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000000000000012": {
+        "id": 3,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000000000000013": {
+        "id": 4,
+        "type": 4,
+        "data_type": 818,
+        "dims": [
+          1,
+          1,
+          1,
+          256
+        ]
+
+      },
+      "0x0000000000000014": {
+        "id": 5,
+        "type": 4,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          1,
+          1
+        ]
+
+      },
+      "0x0000000000000015": {
+        "id": 6,
+        "type": 4,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000000000000016": {
+        "id": 7,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000000000000019": {
+        "id": 8,
+        "type": 4,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x000000000000001a": {
+        "id": 9,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x000000000000001d": {
+        "id": 10,
+        "type": 4,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x000000000000001e": {
+        "id": 11,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000000000000021": {
+        "id": 12,
+        "type": 4,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000000000000022": {
+        "id": 13,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000000000000025": {
+        "id": 14,
+        "type": 4,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000000000000026": {
+        "id": 15,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000000000000029": {
+        "id": 16,
+        "type": 4,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x000000000000002a": {
+        "id": 17,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x000000000000002d": {
+        "id": 18,
+        "type": 4,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x000000000000002e": {
+        "id": 19,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000000000000031": {
+        "id": 20,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      }
+    },
+    "nodes": {
+      "0x0000000000000010": {
+        "type": "Reshape", 
+        "grouping": "MatMul_0_pre_reshape", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "Reshape"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_0_pre_reshape"
+             },
+            "optimized_out": {
+              "1288": true
+             }
+        },
+        "input_names": [
+          "0x0000000000000002"
+        ],
+        "output_names": ["0x0000000000000010"]
+      },
+      "0x0000000000000012": {
+        "type": "FullyConnected", 
+        "grouping": "MatMul_0", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_0"
+             },
+            "mem_dram_read": {
+              "100": 67584
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 198656
+             },
+            "mem_vtcm_write": {
+              "100": 198656
+             }
+        },
+        "input_names": [
+          "0x0000000000000010",
+          "0x0000000000000011",
+          "0x0000000000000013",
+          "0x0000000000000014"
+        ],
+        "output_names": ["0x0000000000000012"]
+      },
+      "0x0000000000000016": {
+        "type": "FullyConnected", 
+        "grouping": "MatMul_1", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_1"
+             },
+            "mem_dram_read": {
+              "100": 67584
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 133120
+             },
+            "mem_vtcm_write": {
+              "100": 133120
+             }
+        },
+        "input_names": [
+          "0x0000000000000012",
+          "0x0000000000000015",
+          "0x0000000000000013",
+          "0x0000000000000014"
+        ],
+        "output_names": ["0x0000000000000016"]
+      },
+      "0x000000000000001a": {
+        "type": "FullyConnected", 
+        "grouping": "MatMul_2", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_2"
+             },
+            "mem_dram_read": {
+              "100": 67584
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 133120
+             },
+            "mem_vtcm_write": {
+              "100": 133120
+             }
+        },
+        "input_names": [
+          "0x0000000000000016",
+          "0x0000000000000019",
+          "0x0000000000000013",
+          "0x0000000000000014"
+        ],
+        "output_names": ["0x000000000000001a"]
+      },
+      "0x000000000000001e": {
+        "type": "FullyConnected", 
+        "grouping": "MatMul_3", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_3"
+             },
+            "mem_dram_read": {
+              "100": 67584
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 133120
+             },
+            "mem_vtcm_write": {
+              "100": 133120
+             }
+        },
+        "input_names": [
+          "0x000000000000001a",
+          "0x000000000000001d",
+          "0x0000000000000013",
+          "0x0000000000000014"
+        ],
+        "output_names": ["0x000000000000001e"]
+      },
+      "0x0000000000000022": {
+        "type": "FullyConnected", 
+        "grouping": "MatMul_4", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_4"
+             },
+            "mem_dram_read": {
+              "100": 67584
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 133120
+             },
+            "mem_vtcm_write": {
+              "100": 133120
+             }
+        },
+        "input_names": [
+          "0x000000000000001e",
+          "0x0000000000000021",
+          "0x0000000000000013",
+          "0x0000000000000014"
+        ],
+        "output_names": ["0x0000000000000022"]
+      },
+      "0x0000000000000026": {
+        "type": "FullyConnected", 
+        "grouping": "MatMul_5", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_5"
+             },
+            "mem_dram_read": {
+              "100": 67584
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 133120
+             },
+            "mem_vtcm_write": {
+              "100": 133120
+             }
+        },
+        "input_names": [
+          "0x0000000000000022",
+          "0x0000000000000025",
+          "0x0000000000000013",
+          "0x0000000000000014"
+        ],
+        "output_names": ["0x0000000000000026"]
+      },
+      "0x000000000000002a": {
+        "type": "FullyConnected", 
+        "grouping": "MatMul_6", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_6"
+             },
+            "mem_dram_read": {
+              "100": 67584
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 133120
+             },
+            "mem_vtcm_write": {
+              "100": 133120
+             }
+        },
+        "input_names": [
+          "0x0000000000000026",
+          "0x0000000000000029",
+          "0x0000000000000013",
+          "0x0000000000000014"
+        ],
+        "output_names": ["0x000000000000002a"]
+      },
+      "0x000000000000002e": {
+        "type": "FullyConnected", 
+        "grouping": "MatMul_7", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_7"
+             },
+            "mem_dram_read": {
+              "100": 67584
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 133120
+             },
+            "mem_vtcm_write": {
+              "100": 133120
+             }
+        },
+        "input_names": [
+          "0x000000000000002a",
+          "0x000000000000002d",
+          "0x0000000000000013",
+          "0x0000000000000014"
+        ],
+        "output_names": ["0x000000000000002e"]
+      },
+      "0x0000000000000031": {
+        "type": "Reshape", 
+        "grouping": "MatMul_7_post_reshape", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "Reshape"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_7_post_reshape"
+             },
+            "optimized_out": {
+              "1288": true
+             }
+        },
+        "input_names": [
+          "0x000000000000002e"
+        ],
+        "output_names": ["0x0000000000000031"]
+      }
+    }
+  },
+  "op_types": [
+    "FullyConnected",
+    "Reshape"
+  ]
+}

@@ -1,0 +1,18 @@
+qnn_hvx_int16 — shipped GdnSolve QNN custom op (int16 forward-subst, QNN-tiled across 4 HVX threads)
+============================================================================
+device: ssh oneplus (v75), C=256, H=32, aligned PCYCLE (PCYCLE/us=1422 @TURBO)
+code:   example/gdn_native/solve_op/  (separate from solve_br_op)
+run:    H=32 CB=256 bash example/gdn_native/solve_op/standalone/gdn_shape.sh   # (or solve_op/standalone/bench.sh)
+
+This is the PRODUCTION baseline-to-beat. Numbers from the aligned-metric study
+(docs/cycle_metric_alignment.md), per-head then x32/1422:
+  compute-busy/head = 146,963  -> 32-head ~3.31 ms
+  wall/head        = 190,356  -> 32-head ~4.28 ms     <- the wall to beat
+  oc: shipped reference (production-accepted)
+
+Threads via QNN's multithreaded tiler (multithreaded=true, QHPI_RESOURCE_HVX, self-slices H across
+HVX threads; H=32 -> 24 tile instances, ~6-serial per HVX thread). The ~30% gap between compute (3.3ms)
+and wall (4.3ms) is QNN per-tile dispatch overhead.
+
+optrace (regenerate when device free): the gdn_shape.sh / bench.sh run with --profiling_option optrace
+emits out_s/optrace/chrometrace.json (real QNN optrace). Copy it here as chrometrace.json.

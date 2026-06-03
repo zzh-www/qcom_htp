@@ -1,0 +1,22 @@
+bm_hvx_int16 — bare-metal block-recursive solve, int16-HVX matmul (4 accumulator chains, MM4ACC)
+============================================================================
+device: ssh oneplus (v75), C=256, H=32, aligned PCYCLE (PCYCLE/us=1422 @TURBO)
+build:  cd example/gdn_native/baremetal
+        EXTRA_DEFS="-DGDNBM_VTCM_RESIDENT" bash build.sh        # (no -DGDN_BR_MM_I8 => int16 path, MM4ACC default)
+run:    ./gdnbm 4 A_u16_h32.raw T.raw 32 256 32768 32768 2.770166930875267e-05 6.103701895199438e-05
+
+SPEED (32-head workload):
+  1-thread:  ~13.0M cyc  = ~9.14 ms   (per-head ~406K)
+  4-thread:  ~4.03M cyc  = ~2.83 ms   (per-head ~126K, best; device noise higher)
+  vs shipped qnn_hvx_int16 (~4.3ms): ~1.5x faster
+
+ACCURACY:
+  raw-T relerr vs np.linalg.inv on baremetal A_u16_h32 (easy): 9.4e-5 mean / 1.7e-4 max
+  end-to-end GDN oc (hard golden): <= 2.8e-3 (more precise than int8-HVX's 2.816e-3; int12 operands)
+  measure exactly:  H=32 CB=256 EXTRA_DEFS="-DGDN_BR_HVX_MERGE" bash solve_br_op/standalone/gdn_br.sh
+                    .venv/bin/python scripts/gdn_br_oc_check.py example/gdn_native/solve_br_op/standalone --C 256
+
+trace (regenerate when device free):
+  cd example/gdn_native/baremetal
+  EXTRA_DEFS="-DGDNBM_VTCM_RESIDENT -DGDN_BR_TRACE" bash build.sh   # run 4-thread, fetch T.raw
+  python scripts/gdn_baremetal_trace.py T.raw example/gdn_native/baselines/bm_hvx_int16/chrometrace.json
