@@ -1,0 +1,4 @@
+build/
+inc/gdnbm.h
+inc/gdnbm_skel.c
+inc/gdnbm_stub.c

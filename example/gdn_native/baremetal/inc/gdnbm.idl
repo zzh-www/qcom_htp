@@ -1,0 +1,10 @@
+#include "AEEStdDef.idl"
+#include "remote.idl"
+
+/* Bare-metal FastRPC HMX-threading probe: does a spawned qurt worker, in OUR OWN HAP/PD,
+ * acquire HMX via HAP_compute_res_hmx_lock3 (the proper per-thread API) where the raw
+ * qurt_hmx_lock faulted inside QNN's backend-managed PD? */
+interface gdnbm : remote_handle64 {
+   /* results[]: [acquire_ctx, then per-worker {lock_rc, hmx_sentinel}] */
+   long hmx_probe(in long nworkers, rout sequence<long> results);
+};
