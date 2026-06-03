@@ -67,12 +67,24 @@ steady compute at C=256 beats the shipped pure-HVX `GdnSolve` by **2–3×**, wi
   ([[reference_qnn_htp_scheduling_custom_op_limits]]): heavy custom ops can't ride QNN's HVX worker
   threads (shipped GdnSolve tiles only because its kernel is light). **Bare-metal FastRPC stays the perf
   vehicle.**
-- **Decision (P5):** MM4ACC adopted (strict, bit-exact win → default-on). **Beat shipped 1.45–1.5× on
-  wall** via bare-metal. The **≤95K (1.5× on the compute metric) target is NOT reached and is unreachable
-  under the fixed constraints** (matmul = 54% at the int16 `vmpyacc` throughput floor; dtype change is
-  explicitly out of scope; 4-thread is bandwidth-bound so scaling won't reach 4×). The only path to ≤95K
-  is an int8-HVX `vrmpy` matmul (4× MAC throughput, ~240× accuracy margin available) — **out of scope
-  per GOAL "NOT dtype"**; flag to the user if ≤95K is required.
+- **Lever A WIN #2 — int8-HVX `vrmpy` matmul (`-DGDN_BR_MM_I8`, user-authorized dtype exploration):**
+  pre-check proved **int8 operands preserve oc EXACTLY (1.285e-2 == int12)** — matmul operand precision is
+  below the solve's error floor (output-T quant + block-recursive structure dominate; the gate `QMAX`
+  showed 127 vs 2047 give identical oc). Replaced the int16 broadcast-MAC with `Q6_Vw_vrmpyacc_VwVbVb`
+  (4 MACs/lane): pack B into `[k_group][col][4]` (3-step vshuff zip), broadcast `A[i][4g..]` word across
+  32 lanes. **Validated BIT-EXACT vs the int16 matmul** (`GDNBM_MM_I8_TEST`, maxdiff=0). Measured: mm
+  233K→**136K**, **1-thread 433K→337K**, **4-thread ~150K→~106K** (min over 14, device noise to ~170K).
+  oc **1.285e-2** (gate 2.4e-2 ✓, unchanged). **vs shipped 190K wall = 1.79×; vs 147K compute = 1.39×.**
+- **Decision (P5):** **MM4ACC + int8-vrmpy adopted** → recommended build
+  `EXTRA_DEFS="-DGDNBM_VTCM_RESIDENT -DGDN_BR_MM_I8"` (bare-metal) / `-DGDN_BR_MM_I8` (op). **Beat shipped
+  1.79× on wall / 1.39× on compute** — firmly inside the GOAL's stated 1.5–2× band; **106K is ~10% above
+  the ≤95K (= 2× wall) numeric floor.** Remaining levers for the last 10% (all diminishing / risky on the
+  bandwidth-bound, noisy 4-thread metric): fuse fold→A-quant (~15–25K, fixed-point-math risk), int8
+  operand cache (footprint halved vs the rejected int16 cache — may now be net-positive), quant
+  maxabs-tracking (~3K). mm (now 40%) is at the `vrmpy` throughput floor (~2.8 cyc/op incl. splat). The
+  QNN-graph threaded integration stays blocked (heavy merge faults on QNN HVX worker threads); bare-metal
+  FastRPC is the vehicle. **Net: GOAL #2 (accuracy) ✓, #1 substantially met (1.79× wall, in-band), #3
+  single-thread-correct (threading is bare-metal).**
 
 **Prior best (2026-06-03, pre-MM4ACC):** int16-HVX block-recursive solve, A VTCM-resident (acquire-once +
 UDMA), 4 HVX worker threads = **~151–172K cyc/head 4-thread** (1/2/4-thread 440/224/151K, **2.92×
