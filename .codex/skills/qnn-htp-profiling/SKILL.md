@@ -110,6 +110,9 @@ aggregate, not wall. e.g. 12M cycles / 3000 µs = 4 "GHz" ⇒ aggregate over ~4 
 
 ## Aligning QNN optrace cycles with a bare-metal `C15:14` (PCYCLE) measurement
 
+> Canonical/standalone skill for this: **`htp-cycle-metric`** (+ full manual `docs/cycle_metric_alignment.md`).
+> Quick version below.
+
 When you must compare a QNN-op cycle number against a hand-written/bare-metal op that times itself with
 `C15:14` (the Hexagon PCYCLE register, `asm("%0 = C15:14")`), they ARE the same counter — proven on
 v75: read `C15:14` from inside a QNN custom op and it equals that instance's QHAS `cycles` to **0.4%**
