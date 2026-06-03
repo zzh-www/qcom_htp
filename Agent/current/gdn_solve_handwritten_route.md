@@ -357,10 +357,16 @@ threading wall.
 `examples/calculator` (IDL→qaic→stub+skel; manual hexagon-clang skel build mirrors the QNN op build.sh).
 
 **Roadmap:**
-1. **DECISIVE PROBE (build first):** minimal FastRPC HAP `gdnbm` — spawn 2 qurt workers, each does
-   `qurt_hvx_lock` + `HAP_compute_res_hmx_lock3(HMX_SHARED)` + a trivial HMX op + reports rc. If both
-   workers get HMX (rc==0) and the HMX op runs → threaded HMX is viable → GO. (If it faults like QNN →
-   fall back to HVX-workers + 2-HMX-thread split.)
+1. **DECISIVE PROBE — DONE 2026-06-03: GO ✅.** `example/gdn_native/baremetal/` (qaic IDL → hexagon skel +
+   aarch64 host, unsigned PD on cdsp/pineapple; `run.sh`). Spawned qurt workers EACH acquire HMX + run HVX:
+   **2 and 4 workers all succeed** (ctx nonzero, HVX sentinel set). Key findings:
+   - `HAP_compute_res_hmx_lock3` is **NOT_SUPPORTED (0x80000404)** on this device. The working model is
+     **per-thread `HAP_compute_res_acquire(attr with set_hmx_param(1))`** (older HMX-in-acquire path) — call
+     it from each worker; `set_hmx_param` is required or acquire returns 0.
+   - **The QNN "HMX bound to main callback thread" fault was a QNN-PD-management artifact, NOT a hw/qurt
+     limit.** In our own HAP, worker HMX works. ⇒ threaded HVX+HMX is viable → the route is GO.
+   - (Workers share one process-wide ctx value; whether HMX runs truly concurrently on both units vs shares
+     is TBD, but every worker CAN run HMX, and the 93%-HVX glue parallelizes regardless.)
 2. Port the solve: diagonal int16-HVX forward-subst (carry over) + the merges. Merges can stay HMX (now
    threadable via hmx_lock3) OR go int16-HVX; keep the **FLOOR→round drain fix** (rdelta) either way.
 3. Self-managed VTCM (no QNN scratch tensor), own thread pool (heads partitioned), no per-op QNN tax.
