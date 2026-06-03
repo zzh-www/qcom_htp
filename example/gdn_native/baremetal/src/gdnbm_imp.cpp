@@ -291,5 +291,28 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
     if (statsLen > 1) stats[1] = nthreads;
     if (statsLen > 2) stats[2] = H;
     FARF(ALWAYS, "gdnbm_solve: wall=%llu cyc / %d heads / %d threads", (unsigned long long)(t1-t0), H, nthreads);
+#if defined(GDN_BR_PROBE_CYCLES)
+    /* per-stage cycle share (accumulated over all heads on this thread; run nthreads=1 for a clean,
+     * race-free per-stage breakdown of the 1-thread base). HVX-merge path stages:
+     *   diag (fwd-subst) | zero (Th init) | fold (A_ik) | quant (operand quant in merge) |
+     *   mm (int16 matmul) | acc (term accumulate) | requant (codes->u16 out). */
+    {
+        uint64_t tot = g_c_diag + g_c_zero + g_c_fold + g_c_quant + g_c_hmxkern + g_c_acc + g_c_requant;
+        FARF(ALWAYS, "PROBE/head(H=%d,nt=%d): diag=%llu zero=%llu fold=%llu quant=%llu mm=%llu acc=%llu requant=%llu  SUM=%llu wall=%llu",
+             H, nthreads,
+             (unsigned long long)(g_c_diag / H), (unsigned long long)(g_c_zero / H),
+             (unsigned long long)(g_c_fold / H), (unsigned long long)(g_c_quant / H),
+             (unsigned long long)(g_c_hmxkern / H), (unsigned long long)(g_c_acc / H),
+             (unsigned long long)(g_c_requant / H), (unsigned long long)(tot / H),
+             (unsigned long long)((t1 - t0) / H));
+        if (statsLen > 3) stats[3] = (int)(g_c_diag / H);
+        if (statsLen > 4) stats[4] = (int)(g_c_zero / H);
+        if (statsLen > 5) stats[5] = (int)(g_c_fold / H);
+        if (statsLen > 6) stats[6] = (int)(g_c_quant / H);
+        if (statsLen > 7) stats[7] = (int)(g_c_hmxkern / H);
+        if (statsLen > 8) stats[8] = (int)(g_c_acc / H);
+        if (statsLen > 9) stats[9] = (int)(g_c_requant / H);
+    }
+#endif
     return 0;
 }

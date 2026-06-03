@@ -142,6 +142,15 @@ struct gdn_scr_t {
     char    vAa[GDN_BR_NBLK], vTw[GDN_BR_NBLK], vTa[GDN_BR_NB];
     int32_t mxdiag[GDN_BR_NB];   /* producer-tracked maxabs of each diagonal T block (for quant fusion) */
     int32_t effc[GDN_BR_NBLK][64] __attribute__((aligned(128)));  /* cached effective-bias per T-wt block */
+#if defined(GDN_BR_HVX_CACHE)
+    /* int16-HVX operand-reuse cache (Lever A 2a): quant each distinct operand ONCE/head.
+     *  qTb[blk] = int16 quant of T block `blk` at Tscl[blk] (used as both A and B operand, 10 blocks).
+     *  qAa[blk] = int16 quant of folded A_ik at 2^-F (A operand, keyed gdn_blk_index(i,k), 6 distinct). */
+    int16_t qTb[GDN_BR_NBLK][GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));
+    int16_t qAa[GDN_BR_NBLK][GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));
+    float   sqTb[GDN_BR_NBLK], sqAa[GDN_BR_NBLK];
+    char    vqTb[GDN_BR_NBLK], vqAa[GDN_BR_NBLK];
+#endif
 };
 static gdn_scr_t g_scr[GDN_BR_NT];
 
@@ -936,16 +945,69 @@ static float gdn_quant_i12_from_codes(gdn_scr_t *sc, const int32_t *codes, float
 static void gdn_matmul_i16(const int16_t *A, const int16_t *B, int32_t *C) {
     for (int i = 0; i < BL; ++i) {
         const int16_t *Ai = A + i * BL;
+#if !defined(GDN_BR_NO_MM4ACC)
+        /* 4 independent accumulator chains (k mod 4) break the depth-64 RAW dependency that left the
+         * single-acc loop latency-bound.  Measured (real v75, H=32 4-thread): 1-thread mm 233K->211K,
+         * whole-solve 4-thread ~150K->126K.  int32 add is exactly associative and 64*2047^2 ~= 268M fits
+         * int32, so this is BIT-EXACT with the serial version (relerr unchanged 1.03e-4).  Default ON. */
+        HVX_VectorPair a0 = Q6_W_vzero(), a1 = Q6_W_vzero(), a2 = Q6_W_vzero(), a3 = Q6_W_vzero();
+        for (int k = 0; k < BL; k += 4) {
+            a0 = Q6_Ww_vmpyacc_WwVhRh(a0, ((const HVX_Vector *)(B + (k+0) * BL))[0], (Ai[k+0] & 0xFFFF) * 0x10001);
+            a1 = Q6_Ww_vmpyacc_WwVhRh(a1, ((const HVX_Vector *)(B + (k+1) * BL))[0], (Ai[k+1] & 0xFFFF) * 0x10001);
+            a2 = Q6_Ww_vmpyacc_WwVhRh(a2, ((const HVX_Vector *)(B + (k+2) * BL))[0], (Ai[k+2] & 0xFFFF) * 0x10001);
+            a3 = Q6_Ww_vmpyacc_WwVhRh(a3, ((const HVX_Vector *)(B + (k+3) * BL))[0], (Ai[k+3] & 0xFFFF) * 0x10001);
+        }
+        HVX_Vector lo = Q6_Vw_vadd_VwVw(Q6_Vw_vadd_VwVw(Q6_V_lo_W(a0), Q6_V_lo_W(a1)),
+                                        Q6_Vw_vadd_VwVw(Q6_V_lo_W(a2), Q6_V_lo_W(a3)));
+        HVX_Vector hi = Q6_Vw_vadd_VwVw(Q6_Vw_vadd_VwVw(Q6_V_hi_W(a0), Q6_V_hi_W(a1)),
+                                        Q6_Vw_vadd_VwVw(Q6_V_hi_W(a2), Q6_V_hi_W(a3)));
+        HVX_VectorPair nat = Q6_W_vshuff_VVR(hi, lo, -4);
+#else
         HVX_VectorPair acc = Q6_W_vzero();
         for (int k = 0; k < BL; ++k)
             acc = Q6_Ww_vmpyacc_WwVhRh(acc, ((const HVX_Vector *)(B + k * BL))[0], (Ai[k] & 0xFFFF) * 0x10001);
         /* Q6_Ww_vmpyacc produces EVEN/ODD split (lo=even cols, hi=odd cols — matmul self-test confirmed);
          * vshuff at word granularity interleaves them back to natural int32 order. */
         HVX_VectorPair nat = Q6_W_vshuff_VVR(Q6_V_hi_W(acc), Q6_V_lo_W(acc), -4);
+#endif
         ((HVX_Vector *)(C + i * BL))[0] = Q6_V_lo_W(nat);
         ((HVX_Vector *)(C + i * BL))[1] = Q6_V_hi_W(nat);
     }
 }
+
+#if defined(GDN_BR_HVX_CACHE)
+/* operand-reuse cache (Lever A 2a): quant each distinct int16-HVX operand ONCE per head.
+ * gdn_q_Tblk: quant T block `blk` (scale Tscl[blk]) -> qTb[blk]; used as A or B operand.
+ * gdn_q_Aik:  fold+quant A_ik (scale 2^-F)         -> qAa[blk(i,k)]; A operand. */
+static inline const int16_t *gdn_q_Tblk(gdn_scr_t *sc, int blk, float *s_out) {
+    if (!sc->vqTb[blk]) {
+        sc->sqTb[blk] = gdn_quant_i12_from_codes(sc, sc->Tblk[blk], sc->Tscl[blk], sc->qTb[blk], -1);
+        sc->vqTb[blk] = 1;
+    }
+    *s_out = sc->sqTb[blk]; return sc->qTb[blk];
+}
+static inline const int16_t *gdn_q_Aik(gdn_scr_t *sc, const uint16_t *Ah, int i, int k, int Cc,
+                                       int zpA, int M, int S, float *s_out) {
+    int blk = gdn_blk_index(i, k);
+#if defined(GDN_BR_CACHE_TONLY)
+    /* A-operand reuse is only 10->6; skip caching it (keeps the resident footprint small for the
+     * bandwidth-bound 4-thread path) — recompute fold+quant into the transient a16 each call. */
+    int32_t mxA;
+    gdn_fold_block_raw(Ah + (size_t)i * BL * Cc + k * BL, Cc, sc->Aoff, zpA, M, S, &mxA);
+    *s_out = gdn_quant_i12_from_codes(sc, sc->Aoff, (float)(1.0 / (1 << GDN_BR_F)), sc->a16, mxA);
+    return sc->a16;
+#else
+    if (!sc->vqAa[blk]) {
+        int32_t mxA;
+        gdn_fold_block_raw(Ah + (size_t)i * BL * Cc + k * BL, Cc, sc->Aoff, zpA, M, S, &mxA);
+        sc->sqAa[blk] = gdn_quant_i12_from_codes(sc, sc->Aoff, (float)(1.0 / (1 << GDN_BR_F)),
+                                                 sc->qAa[blk], mxA);
+        sc->vqAa[blk] = 1;
+    }
+    *s_out = sc->sqAa[blk]; return sc->qAa[blk];
+#endif
+}
+#endif
 
 /* int16-HVX merge: C = A @ B (int32 codes in/out, no HMX/pack/depack).  out scale = sAq*sBq. */
 static void gdn_merge_hvx(gdn_scr_t *sc, const int32_t *A_codes, float sA, int32_t mxA,
@@ -1103,6 +1165,9 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
     /* reset the per-head operand-reuse caches (Task 2). */
     for (int b = 0; b < GDN_BR_NBLK; ++b) { sc->vAa[b] = 0; sc->vTw[b] = 0; }
     for (int i = 0; i < NB; ++i) sc->vTa[i] = 0;
+#if defined(GDN_BR_HVX_CACHE)
+    for (int b = 0; b < GDN_BR_NBLK; ++b) { sc->vqTb[b] = 0; sc->vqAa[b] = 0; }
+#endif
     for (int i = 0; i < NB; ++i) {
         int bi = gdn_blk_index(i, i);
         gdn_solve_diag64(sc, Ah + (size_t)i * BL * C + i * BL, C, zpA, M, S, sc->Tblk[bi], &sc->mxdiag[i]);
@@ -1149,6 +1214,26 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
             int bii = gdn_blk_index(i, i);
             float s_S = 0.0f; int first = 1;
             for (int k = j; k < i; ++k) {
+                int bkj = gdn_blk_index(k, j);
+                float sterm;
+#if defined(GDN_BR_HVX_CACHE)
+                /* operand-reuse cache: fold+quant A_ik and quant T_kj each ONCE per head (Lever A 2a). */
+#if defined(GDN_BR_PROBE_CYCLES)
+                uint64_t f0; asm volatile("%0 = C15:14" : "=r"(f0));
+#endif
+                float sa, sb;
+                const int16_t *a = gdn_q_Aik(sc, Ah, i, k, C, zpA, M, S, &sa);
+                const int16_t *b = gdn_q_Tblk(sc, bkj, &sb);
+#if defined(GDN_BR_PROBE_CYCLES)
+                { uint64_t f; asm volatile("%0 = C15:14" : "=r"(f)); g_c_quant += f - f0; }
+                uint64_t mm0; asm volatile("%0 = C15:14" : "=r"(mm0));
+#endif
+                gdn_matmul_i16(a, b, sc->Tc);
+                sterm = sa * sb;
+#if defined(GDN_BR_PROBE_CYCLES)
+                { uint64_t mm; asm volatile("%0 = C15:14" : "=r"(mm)); g_c_hmxkern += mm - mm0; }
+#endif
+#else  /* uncached */
 #if defined(GDN_BR_PROBE_CYCLES)
                 uint64_t f0; asm volatile("%0 = C15:14" : "=r"(f0));
 #endif
@@ -1157,10 +1242,9 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
 #if defined(GDN_BR_PROBE_CYCLES)
                 { uint64_t f; asm volatile("%0 = C15:14" : "=r"(f)); g_c_fold += f - f0; }
 #endif
-                int bkj = gdn_blk_index(k, j);
-                float sterm;
                 gdn_merge_hvx(sc, sc->Aoff, (float)(1.0 / (1 << GDN_BR_F)), mxA,
                               sc->Tblk[bkj], sc->Tscl[bkj], -1, sc->Tc, &sterm);
+#endif
                 if (first) s_S = sterm;
 #if defined(GDN_BR_PROBE_CYCLES)
                 uint64_t a0; asm volatile("%0 = C15:14" : "=r"(a0));
@@ -1172,7 +1256,16 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
                 first = 0;
             }
             float sij;
+#if defined(GDN_BR_HVX_CACHE)
+            /* final merge T_ij = T_ii @ S_ij: T_ii from cache (A), S_ij transient (B, quant directly). */
+            { float sa, sb;
+              const int16_t *a = gdn_q_Tblk(sc, bii, &sa);
+              sb = gdn_quant_i12_from_codes(sc, sc->Sacc, s_S, sc->b16, -1);
+              gdn_matmul_i16(a, sc->b16, sc->Tblk[bij]);
+              sij = sa * sb; }
+#else
             gdn_merge_hvx(sc, sc->Tblk[bii], GDN_BR_TI, -1, sc->Sacc, s_S, -1, sc->Tblk[bij], &sij);
+#endif
             sc->Tscl[bij] = sij;
 #if defined(GDN_BR_DUMP_SACC)
             if (i == 1 && j == 0) {   /* dump dist-1 FINAL result (T11@S) + scale to Th, then bail */

@@ -36,12 +36,17 @@ int main(int argc, char **argv) {
     unsigned char *A = (unsigned char *)malloc(abytes), *T = (unsigned char *)calloc(abytes, 1);
     FILE *fa = fopen(Apath, "rb"); fread(A, 1, abytes, fa); fclose(fa);
 
-    int stats[8] = {0};
-    rc = gdnbm_solve(h, A, (int)abytes, H, C, zpA, zpT, sA.i, sT.i, nthreads, T, (int)abytes, stats, 8);
+    int stats[12] = {0};
+    rc = gdnbm_solve(h, A, (int)abytes, H, C, zpA, zpT, sA.i, sT.i, nthreads, T, (int)abytes, stats, 12);
     printf("gdnbm_solve rc=0x%x  wall=%d cyc  nthreads=%d  heads=%d\n", rc, stats[0], stats[1], stats[2]);
     if (rc == 0 && stats[2] > 0)
         printf("  >>> %d cyc/head (%d-thread)\n", stats[0] / stats[2], stats[1]);
     printf("  stats: [0]=%d [1]=%d [2]=%d [3]=%d [4]=%d\n", stats[0], stats[1], stats[2], stats[3], stats[4]);
+    if (stats[3] || stats[5] || stats[7]) {  /* PROBE_CYCLES per-stage (cyc/head) */
+        int sum = stats[3]+stats[4]+stats[5]+stats[6]+stats[7]+stats[8]+stats[9];
+        printf("  PROBE cyc/head: diag=%d zero=%d fold=%d quant=%d mm=%d acc=%d requant=%d  SUM=%d\n",
+               stats[3], stats[4], stats[5], stats[6], stats[7], stats[8], stats[9], sum);
+    }
 
     FILE *ft = fopen(Tpath, "wb"); fwrite(T, 1, abytes, ft); fclose(ft);
     printf("wrote %s (%ld bytes)\n", Tpath, abytes);
