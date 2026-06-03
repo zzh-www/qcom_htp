@@ -8,7 +8,13 @@
 > |---|---|---|---|
 > | **wall / head (4-thread)** | 190,356 | **~99,500** (min; 1-thread 318K, ~3.2× scaling) | **1.91×** |
 > | compute baseline | 146,963 | — | ~1.48× |
-> | **oc** | — | **1.285e-2** (gate ≤ 2.4e-2) | ✓ |
+> | **oc** | — | **2.816e-3** (int8-HVX; gate ≤ 2.4e-2) | ✓ |
+>
+> **oc CORRECTION (2026-06-04):** earlier this file said the int8 path oc = 1.285e-2 — WRONG. The QNN op
+> default omits `-DGDN_BR_HVX_MERGE`, so those oc runs measured the **HMX path** (whose oc IS 1.285e-2).
+> Re-measured on the actual int8-HVX path (`-DGDN_BR_HVX_MERGE -DGDN_BR_MM_I8`): **oc = 2.816e-3** (raw-T
+> relerr 1.011e-3). int16-HVX is even better (≤ that). All comfortably pass. Frozen baselines +
+> per-path oc: `example/gdn_native/baselines/`.
 >
 > - **#1 Speed:** **MET** — ~99.5K/head 4-thread = **1.91× under shipped wall** (firmly in the stated
 >   ≥1.5–2× band; ≈ the ~95K floor within device noise — 4-thread samples cluster 99–105K). mm now at the

@@ -44,6 +44,13 @@ steady compute at C=256 beats the shipped pure-HVX `GdnSolve` by **2–3×**, wi
 
 # ⭐ CURRENT STATE (2026-06-04) — read this first; supersedes the dated verdicts below
 
+> **oc CORRECTION (2026-06-04, supersedes all "1.285e-2" for the int8/int16 paths below):** the QNN op
+> `gdn_br.sh` default omits `-DGDN_BR_HVX_MERGE` → those oc runs measured the **HMX path** (oc 1.285e-2),
+> NOT the HVX paths. Re-measured per path: **int8-HVX oc = 2.816e-3** (raw-T 1.011e-3), **int16-HVX ≤
+> that**, **HMX = 1.285e-2**. All pass ≤2.4e-2. The "int8 preserves oc EXACTLY (==int12)" precheck below
+> was also on the HMX path and is VOID — int8-HVX is actually 2.816e-3 (more accurate than the HMX path).
+> Frozen baselines + per-path numbers/traces: `example/gdn_native/baselines/` (README manifest).
+
 **GOAL-v2 EXECUTION RESULT (2026-06-04, real v75 `ssh oneplus`, H=32 C=256):**
 - **Lever A WIN — MM4ACC (default-on, bit-exact):** `gdn_matmul_i16` used a single depth-64 accumulator
   chain; replaced with **4 independent accumulator chains** (k mod 4). P1 diagnosis: matmul = **54%** of
