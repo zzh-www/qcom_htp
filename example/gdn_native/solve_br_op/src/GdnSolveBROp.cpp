@@ -530,13 +530,18 @@ static uint16_t gdn_f16_bits(float v) {
     return h;
 }
 
-/* per-N32 control word = (baseline_u16<<16) | f16_bits(scale_f16); pack folded bias for 64^3 (2 tiles). */
-static void gdn_pack_bias(const int32_t *effective, float scale_f16, int baseline_u16, int32_t *bias) {
+/* per-N32 control word = (baseline_u16<<16) | f16_bits(scale_f16); pack folded bias for 64^3 (2 tiles).
+ * rdelta is added to every effective (accumulator) entry: the v73deep drain computes
+ * out = FLOOR((P_int+eff)*scale_f16/512), so passing rdelta = round(256/scale_f16) injects +0.5 LSB and
+ * turns the FLOOR into round-to-nearest.  ONLY the output pass should round (the loose-gain measurement
+ * passes have a tiny scale_f16 -> huge 256/scale_f16 -> pass rdelta=0 there). */
+static void gdn_pack_bias(const int32_t *effective, float scale_f16, int baseline_u16, int32_t *bias,
+                          int rdelta) {
     uint32_t ctrl = ((uint32_t)(baseline_u16 & 0xFFFF) << 16) | (uint32_t)gdn_f16_bits(scale_f16);
     int out = 0;
     for (int start = 0; start < 64; start += 32) {
         for (int i = 0; i < 32; ++i) bias[out++] = (int32_t)ctrl;
-        for (int i = 0; i < 32; ++i) bias[out++] = effective[start + i];
+        for (int i = 0; i < 32; ++i) bias[out++] = effective[start + i] + rdelta;
     }
 }
 
@@ -705,8 +710,10 @@ static void gdn_hmx_pack_only(const gdn_vtcm_t *vt, const uint8_t *act_u8, const
 /* run the kernel with a freshly-packed bias (gain+baseline); reads the k-major weight from wt_kmajor
  * and the activation tiles from vt->acttab (set by the caller); leaves the u8 product surface in vt->out. */
 static void gdn_hmx_run_only(const gdn_vtcm_t *vt, const int8_t *wt_kmajor, const int32_t *eff,
-                            float scale_f16, int baseline_u16) {
-    gdn_pack_bias(eff, scale_f16, baseline_u16, vt->bias);
+                            float scale_f16, int baseline_u16, int round_out) {
+    /* round_out: inject +0.5 LSB so the FLOOR drain rounds-to-nearest (output pass only). */
+    int rdelta = round_out ? (int)(256.0f / scale_f16 + 0.5f) : 0;
+    gdn_pack_bias(eff, scale_f16, baseline_u16, vt->bias, rdelta);
     { HVX_Vector z = Q6_V_vzero(); HVX_Vector *op = (HVX_Vector *)vt->out;
       for (int i = 0; i < (BL * BL) / 128; ++i) op[i] = z; }
     uint32_t extra_param[2] __attribute__((aligned(16))) = {1u, 0u};
@@ -828,19 +835,29 @@ static void gdn_merge_packed(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint8_t 
 #endif
     /* PASS 1: provisional gain g1 = 127/loose (loose >= max|P|, no saturation), centered u8. */
     float g1 = 127.0f / (float)GDN_BR_LOOSE_CONST;
-    gdn_hmx_run_only(vt, wt_kmajor, eff, g1 * 512.0f, 128 << 7);
+    gdn_hmx_run_only(vt, wt_kmajor, eff, g1 * 512.0f, 128 << 7, 0);
     int code1 = gdn_surf_maxabs(vt->out, 128);                  /* max|P|*g1 */
     float maxP = (float)code1 / g1; if (maxP < 1.0f) maxP = 1.0f;
+    /* PASS 2 (REFINE): the loose bound is ~100x over max|P|, so pass-1 codes land near 1 and the integer
+     * surf_maxabs carries a ~20% rounding error -> mis-scaled near-diagonal (dist-1) blocks, which oc is
+     * hypersensitive to (device oc 0.73 vs clean-8bit ceiling ~0.01).  Re-measure at a gain that fills the
+     * u8 range (safety 2.0 guarantees no saturation for code1>=1) so the scale is ~1% accurate. */
+    if (code1 > 0) {
+        float gr = 127.0f / (maxP * 2.0f);
+        gdn_hmx_run_only(vt, wt_kmajor, eff, gr * 512.0f, 128 << 7, 0);
+        int coder = gdn_surf_maxabs(vt->out, 128);
+        if (coder > 0) { maxP = (float)coder / gr; if (maxP < 1.0f) maxP = 1.0f; }
+    }
     float sP = (maxP * sa * sw) / 127.0f; if (sP <= 0.0f) sP = 1e-12f;
 #if defined(GDN_BR_PROBE_CYCLES)
     { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_pint += q - es0; }
 #endif
-    /* PASS 2: tight gain g2 = 127/maxP, depack into out_codes. */
+    /* PASS 3 (OUTPUT): tight gain g2 = 127/maxP, depack into out_codes. */
     float g2 = 127.0f / maxP;
 #if defined(GDN_BR_PROBE_CYCLES)
     uint64_t r0; asm volatile("%0 = C15:14" : "=r"(r0));
 #endif
-    gdn_hmx_run_only(vt, wt_kmajor, eff, g2 * 512.0f, 128 << 7);
+    gdn_hmx_run_only(vt, wt_kmajor, eff, g2 * 512.0f, 128 << 7, 1);   /* output pass: round the drain */
 #if defined(GDN_BR_PROBE_CYCLES)
     { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_hmxkern += q - r0; }
     uint64_t d0; asm volatile("%0 = C15:14" : "=r"(d0));
