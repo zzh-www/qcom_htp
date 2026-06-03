@@ -502,3 +502,39 @@ This is the one number M5 never isolated (it only ever measured the glue *inside
 - scheduling limit (why not QNN): `docs/qnn_htp_scheduling_and_custom_op_limits.md`.
 - block-recursive analysis + M1–M5 device results + the merge choreography: `gdn_solve_prefill_128_256.md`.
 - owned HMX kernel (op #6): `example/gdn_native/solve_br_op/` + `project_v73deep_BREAKTHROUGH_2026-04-28`.
+
+---
+
+## FINAL VERDICT — pure-handwritten bare-metal route built & measured (2026-06-03)
+
+Built the full QNN-free path: a bare-metal FastRPC HAP (`example/gdn_native/baremetal/`) that includes the
+EXACT validated device solve (`#define GDN_BR_NO_QHPI`) and self-manages HVX/HMX/VTCM/power. This escapes
+QNN entirely — we control thread spawn, locks, and surfaces directly. Two engines were carried to device:
+
+| route | accuracy (oc) | 1-thread cyc/head | 4-thread cyc/head | verdict |
+|---|---|---|---|---|
+| HMX-merge BR | 1.3e-2 (8-bit cliff) | ~252K | **can't thread** (HMX lock process-serial) | loses |
+| **int16-HVX BR** | **3.0e-3** (overflow-fixed) | 714K (580K A-staged) | **271K** (best) | correct+threads, but slow |
+| shipped pure-HVX `GdnSolve` | 4.8e-5 | ~434K | **70–83K** (QNN auto-threads) | **speed optimum** |
+
+**Conclusions (all device-measured on v75, `ssh oneplus`):**
+1. **HMX cannot thread** — bare-metal too. `compute_resource_hmx_lock` (the only linkable enable in an
+   unsigned PD; `qurt_hmx_lock` unlinkable, `HAP_compute_res_hmx_lock3/4` NOT_SUPPORTED/no-op) is
+   **process-exclusive**: workers serialize on it. So HMX-BR stays at its 252K single-thread number.
+2. **int16-HVX BR is correct and threads** (2.6×, oc 0.30% end-to-end) but its best 271K/head 4-thread is
+   **~3× SLOWER than the shipped GdnSolve (70–83K)**. The BR glue (12-bit quant ×2, 16 matmuls + de-interleave,
+   fold, acc, requant) costs more than the naive forward-subst's MAC savings, even with QNN's tax removed.
+3. **A-staging** (DDR→VTCM copy of A per head, gated `GDNBM_STAGE_A`) cuts single-thread 714K→580K (the diag
+   WAS partly DDR-bound: FastRPC user buffer is uncached DDR) but **4-thread 271K→289K** — 4 workers contend
+   on VTCM/DDR bandwidth and the copy adds work. No 4-thread win; left gated off.
+4. **GOAL #1 (30–40K, =2–3× under shipped) is UNREACHABLE on this platform.** It implicitly assumed free/
+   overlappable HMX; HMX can't thread or overlap (custom-op limit, also confirmed bare-metal), and the only
+   threadable engine (int16-HVX) makes the BR algorithm net-slower than the naive solve it was meant to beat.
+
+**Therefore the shipped pure-HVX `GdnSolve` (70–83K 4-thread, oc 4.8e-5) remains the prefill C=256 optimum.**
+The bare-metal int16-HVX BR is preserved as a correct, fully QNN-free reference implementation (proves the
+algorithm + the escape-QNN mechanics) but is not a speed win. GOAL #3 (graph integration) is moot for BR
+since BR doesn't beat the incumbent; the incumbent is already the integrated op.
+
+**Reproduce:** `cd example/gdn_native/baremetal && bash build.sh && bash run.sh` (deploys to `$HOME/gdnbm_run`
+on `ssh oneplus`; runs 1/2/4-thread, prints cyc/head). oc check: `scripts/gdn_br_oc_check.py`.
