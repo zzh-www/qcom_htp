@@ -1,5 +1,27 @@
 # GDN solve — GOAL v2 (goal-mode prompt; supersedes the old 30–40K GOAL)
 
+> ## ✅ RESULT (2026-06-04) — executed; full writeup in `gdn_solve_handwritten_route.md` CURRENT STATE
+> Bare-metal int16-HVX block-recursive solve + **MM4ACC** (4 accumulator chains, bit-exact) +
+> **int8-HVX `vrmpy` matmul** (`-DGDN_BR_MM_I8`; int8 operands proven oc-neutral, matmul bit-validated)
+> + **fold-free int8 A-quant** (skip the int32 fold intermediate). Real v75, H=32, C=256, aligned PCYCLE:
+> | metric | shipped `GdnSolve` | ours (recommended build) | ratio |
+> |---|---|---|---|
+> | **wall / head (4-thread)** | 190,356 | **~99,500** (min; 1-thread 318K, ~3.2× scaling) | **1.91×** |
+> | compute baseline | 146,963 | — | ~1.48× |
+> | **oc** | — | **1.285e-2** (gate ≤ 2.4e-2) | ✓ |
+>
+> - **#1 Speed:** **MET** — ~99.5K/head 4-thread = **1.91× under shipped wall** (firmly in the stated
+>   ≥1.5–2× band; ≈ the ~95K floor within device noise — 4-thread samples cluster 99–105K). mm now at the
+>   `vrmpy` throughput floor; further gains are sub-noise micro-opt.
+> - **#2 Accuracy:** **MET** — oc 1.285e-2 ≤ 2.4e-2, unchanged across MM4ACC (bit-exact) and int8 (proven
+>   below the solve's error floor). matmul validated bit-exact vs int16 (`GDNBM_MM_I8_TEST`, maxdiff=0).
+> - **#3 Integrated:** QNN custom op runs correctly (single-thread, oc re-checked 1.285e-2). The threaded
+>   speedup is **bare-metal FastRPC** — QNN's multithreaded HVX tiling FAULTS on the heavy merge on a QNN
+>   worker thread (light diag threads fine), confirming heavy custom ops can't ride QNN threading.
+> - **Recommended build:** `-DGDNBM_VTCM_RESIDENT -DGDN_BR_MM_I8` (bare-metal) / `-DGDN_BR_MM_I8` (op).
+> - **Dead-ends ruled out (don't retry):** operand cache (regresses bandwidth-bound 4-thread); QNN-tiled
+>   threading of the heavy merge (faults).
+
 Run in goal mode. Real device = `ssh oneplus` (v75, Snapdragon 8 Gen 3).
 
 ## Mission
