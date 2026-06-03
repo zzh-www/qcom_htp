@@ -71,12 +71,17 @@ static void solve_worker(void *arg) {
     uint8_t *vtcm = (uint8_t *)HAP_compute_res_attr_get_vtcm_ptr(&va);
     compute_res_attr_t ha; HAP_compute_res_attr_init(&ha); HAP_compute_res_attr_set_hmx_param(&ha, 1);
     unsigned int hctx = HAP_compute_res_acquire(&ha, 2000000);
+    /* ENABLE HMX for mxmem via the documented HMX critical section (lock4; lock3 is NOT_SUPPORTED here).
+     * acquire only RESERVES the unit; the v73deep mxmem faults without this enable. */
+    unsigned int *hmx_busy = 0;
+    int l4 = HAP_compute_res_hmx_lock4(hctx, &hmx_busy, 2000000);
     if (vtcm) {
         /* gdn_br_run_slot indexes vt = gdn_vtcm_from(vtcm_base + slot*0x60000); give it own_vtcm by
          * offsetting the base so the slot term lands on this worker's region. */
         w->vtcm_base = vtcm - (size_t)w->slot * 0x60000;
         gdn_br_run_slot(w);
     }
+    if (l4 == 0) HAP_compute_res_hmx_unlock4(hctx, hmx_busy);
     if (hctx) HAP_compute_res_release(hctx);
     if (vctx) HAP_compute_res_release(vctx);
     if (hvx == 0) qurt_hvx_unlock();
