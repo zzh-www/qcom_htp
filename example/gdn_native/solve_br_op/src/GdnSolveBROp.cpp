@@ -1085,11 +1085,26 @@ static void gdn_br_run_slot(gdn_work_t *w) {
         gdn_br_one_head(sc, &vt, w->Au + (size_t)h * C * C, w->Tu + (size_t)h * C * C,
                         w->zpA, w->M, w->S, w->sT, w->zpT);
 }
-/* spawned-worker wrapper: grabs its own HVX context (the inline/main path already has one). */
+/* spawned-worker wrapper: grabs its OWN HVX context AND its OWN HMX unit (v75 has 2 HMX units; main
+ * releases the backend-granted unit before spawning so the workers can claim both).  The earlier "worker
+ * HMX faults" was simply a MISSING qurt_hmx_lock — the kernel needs HMX enabled on the calling thread. */
+static volatile int g_wkr_hmx_rc[GDN_BR_NT];
 static void gdn_br_worker(void *arg) {
     gdn_work_t *w = (gdn_work_t *)arg;
     qurt_hvx_lock(QURT_HVX_MODE_128B);
+#if defined(GDN_BR_HMX_SHARED)
+    int hrc = qurt_hmx_lock2(QURT_HMX_SHARED_LOCK);
+    g_wkr_hmx_rc[w->slot] = hrc;
+#elif !defined(GDN_BR_NO_HMX_LOCK)
+    int hrc = qurt_hmx_lock();
+    g_wkr_hmx_rc[w->slot] = hrc;
+#endif
     gdn_br_run_slot(w);
+#if defined(GDN_BR_HMX_SHARED)
+    if (hrc == QURT_EOK) qurt_hmx_unlock2(QURT_HMX_SHARED_UNLOCK);
+#elif !defined(GDN_BR_NO_HMX_LOCK)
+    if (hrc == QURT_EOK) qurt_hmx_unlock();
+#endif
     qurt_hvx_unlock();
 }
 static char __attribute__((aligned(128))) g_wkr_stack[GDN_BR_NT][32768];
@@ -1163,6 +1178,11 @@ static uint32_t gdn_solve_br_kernel(
     if (nthreads < 1) nthreads = 1;
     gdn_work_t work[GDN_BR_NT];
 #if defined(GDN_BR_USE_THREADS)
+    /* release the backend-granted HMX on this (main) thread so the spawned workers can each claim one of
+     * the 2 v75 HMX units; re-lock after join so the backend's teardown sees its lock intact. */
+#if defined(GDN_BR_MAIN_HMX_REL)
+    qurt_hmx_unlock();
+#endif
     qurt_thread_t tids[GDN_BR_NT];
     for (int t = 0; t < nthreads; ++t) {
         work[t] = gdn_work_t{ t, h0, h1, (uint32_t)nthreads, Au, Tu, zpA, M, S, sT, zpT, vtcm_base };
@@ -1175,6 +1195,9 @@ static uint32_t gdn_solve_br_kernel(
         }
     }
     for (int t = 0; t < nthreads; ++t) { int st; if (tids[t]) qurt_thread_join(tids[t], &st); }
+#if defined(GDN_BR_MAIN_HMX_REL)
+    qurt_hmx_lock();
+#endif
 #else
     /* single calling thread processes ALL heads (HMX stays on the thread the backend gave HMX to). */
     work[0] = gdn_work_t{ 0, h0, h1, 1u, Au, Tu, zpA, M, S, sT, zpT, vtcm_base };
