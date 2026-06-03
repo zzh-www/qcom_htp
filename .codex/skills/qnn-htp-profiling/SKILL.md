@@ -108,6 +108,34 @@ Coarse alone ("baseline computes less") and wall alone ("solveop 5.5× faster") 
 **Sanity tell-tale:** if `cycles / µs` exceeds the core clock (v75 ≈ 1.0–1.4 GHz), the cycle number is
 aggregate, not wall. e.g. 12M cycles / 3000 µs = 4 "GHz" ⇒ aggregate over ~4 threads, real wall ≈ 3 ms.
 
+## Aligning QNN optrace cycles with a bare-metal `C15:14` (PCYCLE) measurement
+
+When you must compare a QNN-op cycle number against a hand-written/bare-metal op that times itself with
+`C15:14` (the Hexagon PCYCLE register, `asm("%0 = C15:14")`), they ARE the same counter — proven on
+v75: read `C15:14` from inside a QNN custom op and it equals that instance's QHAS `cycles` to **0.4%**
+(18,159,963 vs 18,227,561). **So QHAS `cycles` = `C15:14` PCYCLE; no conversion factor.** Rules:
+
+- **QHAS `htp_resources[].start_cycle/end_cycle` are absolute `C15:14` PCYCLE reads.** Graph PCYCLE
+  wall = `max(end_cycle) − min(start_cycle)`. Per-thread `cycles_used` = that thread's busy PCYCLEs.
+- **Do NOT** derive per-head from `mean(op_instance 'cycles') / heads_per_tile` — the central tiler
+  emits MORE tiles than `H / tile_heads` (e.g. 24 tiles for H=32 with `dims:[1,8,…]`), so dividing one
+  tile's cycles by its head-count under-counts ~2× (real bug: the GdnSolve "70–83K cyc/head" baseline
+  was this artifact; the true per-head wall was ~190K, compute-busy ~147K).
+- Per-head, for a QNN-tiled multithread op: **compute/head = max(HVX `cycles_used`)/H** (DOMAIN cycle,
+  kernel efficiency); **wall/head = graph PCYCLE span / H** (latency incl. dispatch bubbles).
+- A bare-metal op that times `(t1−t0)=C15:14` around spawn→join reports **wall/head = (t1−t0)/H** (the
+  /H folds in thread parallelism). Subtract a fixed spawn/join overhead (H-sweep linear fit) for the
+  compute-only figure.
+- **Counter trap:** `chrometrace_runtrace.json` phase counters use a *different/faster* reference
+  (~1.78 GHz) than QHAS PCYCLE (~1.42 GHz TURBO). The repo's "1µs=4209 acc-cyc" is yet another
+  (accelerator) counter. Only mix counters within one family. Sanity: graph PCYCLE span / `QNN
+  accelerator (execute) time` µs ≈ 1.42e3 cyc/µs on v75.
+- To put a QNN op's number into the bare-metal's exact `C15:14` frame, build the SAME op code both ways
+  (cf. `gdnbm_imp.cpp` `#include`s `GdnSolveBROp.cpp`) and add a `C15:14` probe that writes the total
+  into output head 0 (`-DGDN_BR_PROBE_TOTAL`); recover it from the dequantized output
+  (`code = round(f/sT)+zpT`, reassemble u32 pairs). Full worked alignment + reproduce:
+  `docs/cycle_metric_alignment.md`.
+
 ## Flow A — graph wall µs (quick headline)
 
 Net-run with optrace already gives the wall:

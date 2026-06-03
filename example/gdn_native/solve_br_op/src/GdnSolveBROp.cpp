@@ -1319,6 +1319,13 @@ static uint32_t gdn_solve_br_kernel(
 
     uint32_t h0 = 0, h1 = heads;
 
+#if defined(GDN_BR_PROBE_TOTAL) && defined(__hexagon__)
+    /* WALL C15:14 (PCYCLE) around the ENTIRE op work, read with the SAME register the bare-metal harness
+     * uses (gdnbm_imp.cpp pcyc()).  Lets us measure THIS op in the C15:14 metric AND cross-reference it
+     * against QHAS 'cycles' for the same instance -> the exact C15:14<->QHAS-cycle conversion. */
+    uint64_t g_probe_total_t0; asm volatile("%0 = C15:14" : "=r"(g_probe_total_t0));
+#endif
+
 #if defined(__hexagon__)
     /* VTCM scratch from the TCM_Only scratch tensor inputs[1]. */
     uint8_t *vtcm_base = (num_inputs >= 2 && inputs[1]) ? (uint8_t *)qhpi_tensor_raw_data(inputs[1]) : nullptr;
@@ -1388,6 +1395,15 @@ static uint32_t gdn_solve_br_kernel(
     work[0] = gdn_work_t{ 0, h0, h1, 1u, Au, Tu, zpA, M, S, sT, zpT, vtcm_base };
     gdn_br_run_slot(&work[0]);
     (void)nthreads;
+#endif
+#if defined(GDN_BR_PROBE_TOTAL)
+    if (h0 < h1) {
+        uint64_t g_probe_total_t1; asm volatile("%0 = C15:14" : "=r"(g_probe_total_t1));
+        uint64_t tot = g_probe_total_t1 - g_probe_total_t0;
+        uint32_t *p = (uint32_t *)(Tu + (size_t)h0 * C * C);
+        /* [0]=total C15:14 wall (this op, all heads, calling-thread), [1]=heads, [2]=hi32 of total */
+        p[0] = (uint32_t)tot; p[1] = (uint32_t)(h1 - h0); p[2] = (uint32_t)(tot >> 32);
+    }
 #endif
 #if defined(GDN_BR_PROBE_CYCLES)
     if (h0 < h1) {
