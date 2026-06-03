@@ -673,8 +673,11 @@ static void gdn_merge_codes(gdn_scr_t *sc, const gdn_vtcm_t *vt, const int32_t *
     { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_hmxpack += q - pk0; }
     uint64_t es0; asm volatile("%0 = C15:14" : "=r"(es0));
 #endif
+    /* NOTE (cut tried 2026-06-03, DUD): a 1-pass variant using `loose` directly as the gain gave
+     * relerr 1.76 (off-diag blocks → 0; loose is ~100× the true max|P|) for only ~7% cycle saving —
+     * the 2-pass refine is small (~27K/head) AND necessary.  The real cuts are quant/pack operand-reuse. */
+    int32_t loose = gdn_pint_loosebound(sc->actbuf, sc->wtbuf);  /* analytic upper bound on max|P| */
     /* PASS 1: provisional gain g1 = 127/loose (loose >= max|P|, no saturation), centered u8. */
-    int32_t loose = gdn_pint_loosebound(sc->actbuf, sc->wtbuf);
     float g1 = 127.0f / (float)loose;
     gdn_hmx_run_only(vt, eff, g1 * 512.0f, 128 << 7);
     int code1 = gdn_surf_maxabs(vt->out, 128);                  /* max|P|*g1 */
