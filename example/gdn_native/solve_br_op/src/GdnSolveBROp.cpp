@@ -37,6 +37,16 @@
 #define STRINGIZE(X) STRINGIZE_DETAIL(X)
 #define THIS_PKG_NAME_STR STRINGIZE(THIS_PKG_NAME)
 
+/* HMX critical-section hooks around the mxmem kernel.  Default no-op (QNN op: the backend holds HMX).
+ * The bare-metal HAP overrides these (before including this file) to lock/unlock HMX per-thread so the
+ * HVX glue runs OUTSIDE the lock and worker threads parallelize. */
+#ifndef GDN_BR_HMX_ENTER
+#define GDN_BR_HMX_ENTER() ((void)0)
+#endif
+#ifndef GDN_BR_HMX_EXIT
+#define GDN_BR_HMX_EXIT() ((void)0)
+#endif
+
 #define GDN_BR_MAX_SLICES 8
 
 static const int C  = GDN_BR_C;    /* 128 or 256 */
@@ -728,8 +738,12 @@ static void gdn_hmx_run_only(const gdn_vtcm_t *vt, const int8_t *wt_kmajor, cons
         GDN_BR_N_TILES_POW2, GDN_BR_M_TOTAL_MINUS_STEP, GDN_BR_K_TOTAL_BYTES };
     hmx_conv_act_desc_t act_desc __attribute__((aligned(64))) = {
         vt->acttab, GDN_BR_N_ACT_PAIRS, GDN_BR_ACT_Y_STRIDE };
+    /* HMX critical section ONLY around the mxmem kernel (default no-op; the bare-metal HAP defines these to
+     * HAP_compute_res_hmx_lock/unlock so the HVX glue runs unlocked -> threads parallelize, only mxmem serializes). */
+    GDN_BR_HMX_ENTER();
     our_v73deep_kernel(&out_desc, &act_desc, (const uint8_t *)wt_kmajor, (const uint8_t *)vt->bias,
                        (const hmx_conv_mask_desc_t *)mask_buf, extra_param);
+    GDN_BR_HMX_EXIT();
 }
 
 /* ---- operand-reuse cache getters (Task 2): quantize+PACK each distinct operand ONCE per head ----

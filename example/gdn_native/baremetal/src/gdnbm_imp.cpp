@@ -19,6 +19,11 @@
 #define GDN_BR_NT 4
 #endif
 #define THIS_PKG_NAME GdnBm
+/* per-thread HMX context + fine-grained HMX critical section: the device solve calls GDN_BR_HMX_ENTER/EXIT
+ * ONLY around the mxmem kernel, so the HVX glue runs unlocked and worker threads parallelize. */
+/* per-kernel HMX lock FAULTS (compute_resource_hmx_lock is not re-lockable per-call); the working model is
+ * lock-ONCE around the whole slot (in solve_worker) -> mxmem runs, but HMX is then held for the slot so
+ * worker threads serialize (the lock is process-exclusive; 2 HMX units don't give 2 concurrent locks). */
 #include "../../solve_br_op/src/GdnSolveBROp.cpp"
 
 int gdnbm_open(const char *uri, remote_handle64 *h) { (void)uri; *h = 1; return 0; }
@@ -71,17 +76,16 @@ static void solve_worker(void *arg) {
     uint8_t *vtcm = (uint8_t *)HAP_compute_res_attr_get_vtcm_ptr(&va);
     compute_res_attr_t ha; HAP_compute_res_attr_init(&ha); HAP_compute_res_attr_set_hmx_param(&ha, 1);
     unsigned int hctx = HAP_compute_res_acquire(&ha, 2000000);
-    /* ENABLE HMX for mxmem via the documented HMX critical section (lock4; lock3 is NOT_SUPPORTED here).
-     * acquire only RESERVES the unit; the v73deep mxmem faults without this enable. */
-    unsigned int *hmx_busy = 0;
-    int l4 = HAP_compute_res_hmx_lock4(hctx, &hmx_busy, 2000000);
+    /* HMX enable = compute_resource_hmx_lock (what QNN's libQnnHtpV75Skel uses, verified via nm).  Set the
+     * per-thread context; the solve locks ONLY around each mxmem (GDN_BR_HMX_ENTER/EXIT) so HVX parallelizes. */
+    int hl = HAP_compute_res_hmx_lock(hctx);   /* lock ONCE around the slot (per-call lock faults) */
     if (vtcm) {
         /* gdn_br_run_slot indexes vt = gdn_vtcm_from(vtcm_base + slot*0x60000); give it own_vtcm by
          * offsetting the base so the slot term lands on this worker's region. */
         w->vtcm_base = vtcm - (size_t)w->slot * 0x60000;
         gdn_br_run_slot(w);
     }
-    if (l4 == 0) HAP_compute_res_hmx_unlock4(hctx, hmx_busy);
+    if (hl == 0) HAP_compute_res_hmx_unlock(hctx);
     if (hctx) HAP_compute_res_release(hctx);
     if (vctx) HAP_compute_res_release(vctx);
     if (hvx == 0) qurt_hvx_unlock();
