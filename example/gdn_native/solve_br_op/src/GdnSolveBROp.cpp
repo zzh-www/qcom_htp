@@ -1268,11 +1268,35 @@ static void gdn_br_head_scalar(const uint16_t *Au, int zpA, float sA,
     }
 }
 
+#if defined(GDN_BR_TRACE) && defined(__hexagon__)
+/* Per-stage timeline for the bare-metal multi-thread run: each worker appends {tid,stage,t0,t1} spans.
+ * C15:14 PCYCLE is a GLOBAL core cycle counter -> timestamps from the 4 worker threads share one timebase,
+ * so the assembled trace shows real cross-thread overlap/load-balance.  gdnbm_solve sets g_tr_base at
+ * spawn time and serializes g_tr[] into the output for the host to emit a Chrome/Perfetto trace JSON. */
+enum { GDN_TR_HEAD = 0, GDN_TR_DIAG = 1, GDN_TR_MERGE = 2, GDN_TR_MM = 3, GDN_TR_QUANT = 4 };
+struct gdn_tr_ev { uint32_t tid, stage; uint64_t t0, t1; };
+#define GDN_TR_MAX 32768
+gdn_tr_ev g_tr[GDN_TR_MAX];
+volatile int g_tr_n;
+uint64_t g_tr_base;
+static inline uint64_t gdn_tr_pcyc(void) { uint64_t c; asm volatile("%0 = C15:14" : "=r"(c)); return c; }
+static inline void gdn_tr_push(uint32_t tid, uint32_t stage, uint64_t t0, uint64_t t1) {
+    int i = __sync_fetch_and_add(&g_tr_n, 1);
+    if (i < GDN_TR_MAX) { g_tr[i].tid = tid; g_tr[i].stage = stage; g_tr[i].t0 = t0 - g_tr_base; g_tr[i].t1 = t1 - g_tr_base; }
+}
+#define GDN_TR_NOW() gdn_tr_pcyc()
+#else
+#define GDN_TR_NOW() 0
+#endif
+
 #if defined(__hexagon__)
 /* compute one head's T = (I-A)^-1 (block-recursive) into Th, using per-thread scratch sc and per-thread
  * VTCM region vt.  zpA/sA->(M,S) fold params; sT/zpT output quant.  Pure HVX + HMX (no shared globals). */
 static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t *Ah, uint16_t *Th,
                             int zpA, int M, int S, float sT, int zpT) {
+#if defined(GDN_BR_TRACE)
+    uint32_t _tid = (uint32_t)(sc - g_scr); uint64_t _hd0 = GDN_TR_NOW();
+#endif
 #if defined(GDN_BR_PROBE_CYCLES)
     uint64_t t0; asm volatile("%0 = C15:14" : "=r"(t0));
 #endif
@@ -1287,6 +1311,9 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
         gdn_solve_diag64(sc, Ah + (size_t)i * BL * C + i * BL, C, zpA, M, S, sc->Tblk[bi], &sc->mxdiag[i]);
         sc->Tscl[bi] = GDN_BR_TI;
     }
+#if defined(GDN_BR_TRACE)
+    gdn_tr_push(_tid, GDN_TR_DIAG, _hd0, GDN_TR_NOW());
+#endif
 #if defined(GDN_BR_PROBE_CYCLES)
     uint64_t t1; asm volatile("%0 = C15:14" : "=r"(t1)); g_c_diag += t1 - t0;
 #endif
@@ -1319,6 +1346,9 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
     for (int d = 1; d < NB; ++d) {
         for (int j = 0; j + d < NB; ++j) {
             int i = j + d;
+#if defined(GDN_BR_TRACE)
+            uint64_t _mg0 = GDN_TR_NOW();
+#endif
 #if defined(GDN_BR_PROBE_CYCLES)
             uint64_t m0; asm volatile("%0 = C15:14" : "=r"(m0));
 #endif
@@ -1352,6 +1382,9 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
 #if defined(GDN_BR_PROBE_CYCLES)
                 uint64_t f0; asm volatile("%0 = C15:14" : "=r"(f0));
 #endif
+#if defined(GDN_BR_TRACE)
+                uint64_t _q0 = GDN_TR_NOW();
+#endif
                 float sA_eff = (float)M; for (int _t = 0; _t < S + GDN_BR_F; ++_t) sA_eff *= 0.5f;
                 int32_t mxraw = gdn_quant_i8_from_u16(Ah + (size_t)i * BL * C + k * BL, C, zpA, sc->a8);
                 float sAq = (float)mxraw * sA_eff / 127.0f;
@@ -1360,9 +1393,15 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
                 { uint64_t f; asm volatile("%0 = C15:14" : "=r"(f)); g_c_quant += f - f0; }
                 uint64_t mm0; asm volatile("%0 = C15:14" : "=r"(mm0));
 #endif
+#if defined(GDN_BR_TRACE)
+                uint64_t _mm0 = GDN_TR_NOW(); gdn_tr_push(_tid, GDN_TR_QUANT, _q0, _mm0);
+#endif
                 gdn_pack_b_vrmpy(sc->b8, sc->btp);
                 gdn_matmul_i8_vrmpy(sc->a8, sc->btp, sc->Tc);
                 sterm = sAq * sBq;
+#if defined(GDN_BR_TRACE)
+                gdn_tr_push(_tid, GDN_TR_MM, _mm0, GDN_TR_NOW());
+#endif
 #if defined(GDN_BR_PROBE_CYCLES)
                 { uint64_t mm; asm volatile("%0 = C15:14" : "=r"(mm)); g_c_hmxkern += mm - mm0; }
 #endif
@@ -1473,8 +1512,14 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
             { uint64_t rq; asm volatile("%0 = C15:14" : "=r"(rq)); g_c_requant += rq - rq0; }
 #endif
 #endif  /* GDN_BR_HVX_MERGE */
+#if defined(GDN_BR_TRACE)
+            gdn_tr_push(_tid, GDN_TR_MERGE, _mg0, GDN_TR_NOW());
+#endif
         }
     }
+#if defined(GDN_BR_TRACE)
+    gdn_tr_push(_tid, GDN_TR_HEAD, _hd0, GDN_TR_NOW());
+#endif
 }
 
 /* worker-thread dispatch: each of GDN_BR_NT threads processes a strided subset of heads with its own

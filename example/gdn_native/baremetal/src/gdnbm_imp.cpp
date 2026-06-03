@@ -290,6 +290,9 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
       vtcm_base = (uint8_t *)HAP_compute_res_attr_get_vtcm_ptr(&va); }
 #endif
     uint64_t t0 = pcyc();
+#if defined(GDN_BR_TRACE)
+    g_tr_n = 0; g_tr_base = t0;   /* all event timestamps become relative to spawn time */
+#endif
     {
         gdn_work_t work[GDN_BR_NT]; qurt_thread_t tid[GDN_BR_NT];
         for (int t = 0; t < nthreads; ++t) {
@@ -301,6 +304,23 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
         for (int t = 0; t < nthreads; ++t) { int s; if (tid[t]) qurt_thread_join(tid[t], &s); }
     }
     uint64_t t1 = pcyc();
+#if defined(GDN_BR_TRACE)
+    /* serialize the event buffer into the output T (overwrites T — trace runs don't validate T):
+     * [magic u32][n u32][total_wall u64] then n*{tid u32, stage u32, t0 u64, t1 u64} (24B each). */
+    {
+        int n = g_tr_n; if (n > GDN_TR_MAX) n = GDN_TR_MAX;
+        uint32_t *hdr = (uint32_t *)Tu;
+        hdr[0] = 0x47545202u; hdr[1] = (uint32_t)n;
+        ((uint64_t *)(hdr + 2))[0] = t1 - t0;
+        uint8_t *p = (uint8_t *)Tu + 16;
+        for (int e = 0; e < n; ++e) {
+            uint32_t *q = (uint32_t *)(p + (size_t)e * 24);
+            q[0] = g_tr[e].tid; q[1] = g_tr[e].stage;
+            ((uint64_t *)(q + 2))[0] = g_tr[e].t0; ((uint64_t *)(q + 2))[1] = g_tr[e].t1;
+        }
+        FARF(ALWAYS, "TRACE: %d events, wall=%llu", n, (unsigned long long)(t1 - t0));
+    }
+#endif
     if (vctx) HAP_compute_res_release(vctx);
     { HAP_power_request_t off; memset(&off,0,sizeof(off)); off.type=HAP_power_set_HMX; off.hmx.power_up=FALSE; HAP_power_set(pctx,&off); }
 
