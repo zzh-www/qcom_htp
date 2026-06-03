@@ -853,9 +853,9 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
 #if defined(GDN_BR_PROBE_CYCLES)
         uint64_t rq0; asm volatile("%0 = C15:14" : "=r"(rq0));
 #endif
+        /* diag upper-triangle is exactly code 0 from the forward-subst (T_ii is unit-lower-tri), so
+         * requant writes exactly zpT there — no separate scalar upper-tri cleanup needed. */
         gdn_requant_block_out(sc->Tblk[bi], sc->Tscl[bi], sT, zpT, Th, i * BL, i * BL, C);
-        for (int r = 0; r < BL; ++r)
-            for (int c = r + 1; c < BL; ++c) Th[(i * BL + r) * C + (i * BL + c)] = (uint16_t)zpT;
 #if defined(GDN_BR_PROBE_CYCLES)
         { uint64_t rq; asm volatile("%0 = C15:14" : "=r"(rq)); g_c_requant += rq - rq0; }
 #endif
