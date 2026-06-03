@@ -14,7 +14,7 @@ mkdir -p build
 rm -f build/libgdnbm_skel.so build/gdnbm build/*.o
 
 INCS=(-Iinc -I"$SDK/incs" -I"$SDK/incs/stddef" -I"$SDK/ipc/fastrpc/incs")
-HEXFLAGS=(-O2 -fPIC -m$ARCH -mhvx -mhvx-length=128B -mhmx -DUSE_OS_QURT -DPREPARE_DISABLED "${INCS[@]}"
+HEXFLAGS=(-O2 -fPIC -m$ARCH -mhvx -mhvx-length=128B -mhmx -DUSE_OS_QURT -DPREPARE_DISABLED ${EXTRA_DEFS:-} "${INCS[@]}"
     -I"$SDK/rtos/qurt/compute$ARCH/include/qurt" -I"$SDK/rtos/qurt/compute$ARCH/include/posix")
 
 echo "--- DSP skel (gdnbm_skel.c as C) ---"
