@@ -374,11 +374,22 @@ threading wall.
    → timeout (hang). **CRUCIAL CORRECTION to the probe's "GO": HMX *acquire* via
    `HAP_compute_res_acquire(hmx_param)` succeeds, but that is NOT sufficient to *execute* mxmem** — QNN's
    backend fully configures the HMX context (power/config/critical-section) which a bare `acquire` does not.
-   **Next debug (focused session):** find the missing HMX-execution setup — candidates: (a) the HMX needs a
-   "critical section" / lock4 mutex around mxmem; (b) HMX power/clock enable (`HAP_power_request` /
-   `HAP_compute_res` power vote); (c) the v73deep descriptor/mxmem config assumes state QNN set; (d) verify a
-   MINIMAL standalone mxmem (one packet) runs under the acquire before the full kernel. Isolate with a tiny
-   HMX op first, then scale to the kernel.
+   **DEBUG DONE (2026-06-03) — the entire bare-metal stack works EXCEPT the mxmem instruction.** Systematic
+   on-device bisection (`example/gdn_native/baremetal/`) established:
+   - FastRPC call + 1MB A/T marshalling ✅; HMX **power vote** (`HAP_power_set_core_corner` TURBO +
+     `HAP_power_set_HMX{power_up}`) ✅ (fixes the earlier mxmem HANG → unpowered HMX);
+   - **combined HMX+VTCM in one `HAP_compute_res_acquire` FAILS** (returns ctx=0) → must acquire VTCM-only
+     and HMX-only **separately**, **each on the thread that uses it** (per worker): VTCM-only ✅ (8MB avail),
+     HMX-only ✅ (probe);
+   - **`DIAG_ONLY` (HVX diagonal solves + VTCM-zero + requant, NO mxmem) RUNS CLEAN on the worker** → rc=0,
+     373K cyc/head 1-thread/8 heads. So HVX + VTCM + threading + power + acquire ALL work bare-metal.
+   - **The full solve faults `0x8000040d` — PRECISELY the v73deep `mxmem` (HMX) instruction execution.**
+     acquire(hmx)+power succeed but the mxmem itself faults.
+   **THE ONE REMAINING BLOCKER = make mxmem execute bare-metal.** Candidates: (a) HMX **critical section** —
+   wrap mxmem in `HAP_compute_res_hmx_lock4`/mutex (lock3 is NOT_SUPPORTED here, lock4 mask exists); (b) HMX
+   config/state QNN sets that the v73deep kernel assumes; (c) the worker's VTCM must be HMX-accessible (HMX
+   reads/writes mxmem surfaces in VTCM — verify the acquired VTCM is the HMX-visible region). Isolate a SINGLE
+   mxmem packet under acquire+power first, then the kernel.
 2. Port the solve: diagonal int16-HVX forward-subst (carry over) + the merges. Merges can stay HMX (now
    threadable via hmx_lock3) OR go int16-HVX; keep the **FLOOR→round drain fix** (rdelta) either way.
 3. Self-managed VTCM (no QNN scratch tensor), own thread pool (heads partitioned), no per-op QNN tax.
