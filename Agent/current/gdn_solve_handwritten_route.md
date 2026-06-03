@@ -42,11 +42,41 @@ steady compute at C=256 beats the shipped pure-HVX `GdnSolve` by **2–3×**, wi
 
 ---
 
-# ⭐ CURRENT STATE (2026-06-03) — read this first; supersedes the dated verdicts below
+# ⭐ CURRENT STATE (2026-06-04) — read this first; supersedes the dated verdicts below
 
-**Best measured (real v75, `ssh oneplus`, FULL H=32 workload):** int16-HVX block-recursive solve, A
-VTCM-resident (acquire-once + UDMA), 4 HVX worker threads = **~151–172K cyc/head 4-thread** (1/2/4-thread
-440/224/151K, **2.92× scaling**), **oc relerr 0.28%**. Harness: `example/gdn_native/baremetal/`
+**GOAL-v2 EXECUTION RESULT (2026-06-04, real v75 `ssh oneplus`, H=32 C=256):**
+- **Lever A WIN — MM4ACC (default-on, bit-exact):** `gdn_matmul_i16` used a single depth-64 accumulator
+  chain; replaced with **4 independent accumulator chains** (k mod 4). P1 diagnosis: matmul = **54%** of
+  the 433K 1-thread base, quant = 18% (`-DGDN_BR_PROBE_CYCLES`, per-stage in `gdnbm_imp.cpp`). The matmul
+  is **throughput-bound on `vmpyacc` (~3.2 cyc/op), not latency-bound** — 4-acc only cut mm 233K→211K
+  (~10%). Net (interleaved A/B, minimums): **1-thread 433K→406K, 4-thread ~149K→~126–131K (~12%)**. Bit-
+  exact (int32 add associative; 64·2047²<2³¹) → oc unchanged. Disable with `-DGDN_BR_NO_MM4ACC`.
+- **Best measured now: 4-thread ~126–131K cyc/head wall** (1/2/4-thread 406/220/~128K, ~3.1× scaling),
+  end-to-end GDN **oc 1.285e-2** (≤ 2.4e-2 gate ✓; `scripts/gdn_br_oc_check.py … --C 256`). vs shipped
+  **190K wall = 1.45–1.51×**; vs shipped 147K compute = ~1.1×.
+- **Cache REJECTED (`-DGDN_BR_HVX_CACHE`, gated OFF):** operand-reuse cache helps 1-thread (406→370K,
+  quant 76→34K) but **REGRESSES 4-thread (~127→140K)** — the +160KB/slot resident scratch thrashes shared
+  L2. **The 4-thread path is bandwidth/L2-bound** (2-thread 93% eff, 4-thread 75%; efficiency falls with
+  thread count = shared-resource saturation). Adding ANY resident footprint backfires; T-only (80KB) also
+  regressed. Confirmed by clean interleaved A/B (cancels thermal drift). Kept gated for the record.
+- **QNN-graph integration (P4) — single-thread works, threading BLOCKED:** the op runs correctly as a QNN
+  custom op single-threaded (**407K/head**, oc 1.285e-2). QNN-native tiling (`-DGDN_BR_QNN_TILED`:
+  `multithreaded=true`+`QHPI_RESOURCE_HVX`, self-slice heads like shipped GdnSolve) **threads the light
+  diag path fine but FAULTS ("Graph Execution failure") on the heavy block-recursive merge on a QNN HVX
+  worker thread** — even slice-0-only (no concurrency) and with MM4ACC off. Confirms the documented limit
+  ([[reference_qnn_htp_scheduling_custom_op_limits]]): heavy custom ops can't ride QNN's HVX worker
+  threads (shipped GdnSolve tiles only because its kernel is light). **Bare-metal FastRPC stays the perf
+  vehicle.**
+- **Decision (P5):** MM4ACC adopted (strict, bit-exact win → default-on). **Beat shipped 1.45–1.5× on
+  wall** via bare-metal. The **≤95K (1.5× on the compute metric) target is NOT reached and is unreachable
+  under the fixed constraints** (matmul = 54% at the int16 `vmpyacc` throughput floor; dtype change is
+  explicitly out of scope; 4-thread is bandwidth-bound so scaling won't reach 4×). The only path to ≤95K
+  is an int8-HVX `vrmpy` matmul (4× MAC throughput, ~240× accuracy margin available) — **out of scope
+  per GOAL "NOT dtype"**; flag to the user if ≤95K is required.
+
+**Prior best (2026-06-03, pre-MM4ACC):** int16-HVX block-recursive solve, A VTCM-resident (acquire-once +
+UDMA), 4 HVX worker threads = **~151–172K cyc/head 4-thread** (1/2/4-thread 440/224/151K, **2.92×
+scaling**), **oc relerr 0.28%**. Harness: `example/gdn_native/baremetal/`
 (`EXTRA_DEFS="-DGDNBM_VTCM_RESIDENT" bash build.sh`; `./gdnbm 4 A_u16_h32.raw … 32 256 …`).
 
 **✅ METRIC ALIGNED (2026-06-03, proven on device — `docs/cycle_metric_alignment.md`): bare-metal and

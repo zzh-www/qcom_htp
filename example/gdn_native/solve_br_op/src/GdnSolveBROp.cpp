@@ -154,6 +154,19 @@ struct gdn_scr_t {
 };
 static gdn_scr_t g_scr[GDN_BR_NT];
 
+#if defined(__hexagon__)
+/* QNN multithreaded self-slice: the central tiler runs several tile-ops concurrently on distinct HVX
+ * threads, each seeing slice_number relative to its own instance — so claim a globally-unique free
+ * scratch slot per call (atomic CAS), like the shipped GdnSolve.  <= GDN_BR_NT concurrent (4 HVX units). */
+static volatile int g_br_slot_busy[GDN_BR_NT];
+static int gdn_br_claim_slot(void) {
+    for (;;)
+        for (int s = 0; s < GDN_BR_NT; ++s)
+            if (__sync_bool_compare_and_swap(&g_br_slot_busy[s], 0, 1)) return s;
+}
+static inline void gdn_br_free_slot(int s) { __sync_lock_release(&g_br_slot_busy[s]); }
+#endif
+
 /* VTCM scratch carved from the TCM_Only scratch tensor.  Buffers are spaced 0x10000 (64 KB) apart —
  * matching the proven M1 sim harness layout — so any HMX over-write/alignment slack can't clobber a
  * neighbouring buffer.  Total span < 0x60000 (384 KB; graph declares >= that). */
@@ -1422,7 +1435,8 @@ static uint32_t gdn_solve_br_kernel(
 #if defined(__hexagon__)
     /* VTCM scratch from the TCM_Only scratch tensor inputs[1]. */
     uint8_t *vtcm_base = (num_inputs >= 2 && inputs[1]) ? (uint8_t *)qhpi_tensor_raw_data(inputs[1]) : nullptr;
-#if !defined(GDN_BR_SKIP_KERNEL) && !defined(GDN_BR_DIAG_ONLY)
+#if !defined(GDN_BR_SKIP_KERNEL) && !defined(GDN_BR_DIAG_ONLY) && !defined(GDN_BR_QNN_TILED)
+    /* HVX-merge tiled mode needs no VTCM (all scratch is BSS) — don't require the scratch input. */
     if (!vtcm_base) return QHPI_Success;
 #endif
     gdn_vtcm_t vt = vtcm_base ? gdn_vtcm_from(vtcm_base) : gdn_vtcm_t{};
@@ -1462,7 +1476,30 @@ static uint32_t gdn_solve_br_kernel(
     int nthreads = (int)((heads < (uint32_t)GDN_BR_NT) ? heads : (uint32_t)GDN_BR_NT);
     if (nthreads < 1) nthreads = 1;
     gdn_work_t work[GDN_BR_NT];
-#if defined(GDN_BR_USE_THREADS)
+#if defined(GDN_BR_QNN_TILED)
+    /* QNN-native multithreading: the central tiler splits H into tiles that run concurrently on distinct
+     * HVX threads.  This kernel self-slices its head range and uses an atomically-claimed scratch slot.
+     * HVX-merge mode needs NO HMX and NO VTCM (all scratch is BSS gdn_scr_t), so each tile-op is pure
+     * HVX and threads with no shared lock — exactly the shipped GdnSolve pattern. */
+    {
+        uint32_t ns = qhpi_num_slices(handle), sl = qhpi_slice_number(handle);
+        if (ns == 0) ns = 1;
+        uint32_t th0 = (uint64_t)heads * sl / ns, th1 = (uint64_t)heads * (sl + 1) / ns;
+#if defined(GDN_BR_TILED_S0)
+        /* debug: only slice 0 works (all heads), others no-op -> merge runs on ONE worker thread,
+         * no concurrency.  Isolates merge-on-worker-thread fault from a concurrency/race fault. */
+        if (sl != 0) return QHPI_Success;
+        th0 = 0; th1 = heads;
+#endif
+        int slot = gdn_br_claim_slot();
+        gdn_scr_t *sc = &g_scr[slot];
+        gdn_vtcm_t vt = vtcm_base ? gdn_vtcm_from(vtcm_base + (size_t)slot * 0x60000) : gdn_vtcm_t{};
+        for (uint32_t h = th0; h < th1; ++h)
+            gdn_br_one_head(sc, &vt, Au + (size_t)h * C * C, Tu + (size_t)h * C * C,
+                            zpA, M, S, sT, zpT);
+        gdn_br_free_slot(slot);
+    }
+#elif defined(GDN_BR_USE_THREADS)
     /* release the backend-granted HMX on this (main) thread so the spawned workers can each claim one of
      * the 2 v75 HMX units; re-lock after join so the backend's teardown sees its lock intact. */
 #if defined(GDN_BR_MAIN_HMX_REL)
@@ -1539,8 +1576,13 @@ static QHPI_Kernel_v1 sg_kernels[] = {
     {
         THIS_PKG_NAME_STR "::gdn_solve_br_kernel",
         gdn_solve_br_kernel,
+#if defined(GDN_BR_QNN_TILED)
+        QHPI_RESOURCE_HVX,        /* HVX-merge mode: pure HVX, no HMX -> QNN can self-slice across HVX threads */
+        false, true,  false, false,   /* multithreaded=true: central tiler splits H across HVX threads */
+#else
         QHPI_RESOURCE_HMX,        /* HMX op; HVX intrinsics used freely inside (cf. HvxHmxOp tutorial) */
         false, false, false, false,   /* multithreaded=false: HMX ops are not self-sliced by prepare */
+#endif
         2, sig_inputs,
         1, sig_outputs,
         gdn_solve_br_cost,
