@@ -406,8 +406,10 @@ static int32_t gdn_pint_maxabs(gdn_scr_t *sc, const uint8_t *act_u8, const int8_
  * The strict-upper-of-diagonal lanes are written too (they're ~0 from the solve), harmless. */
 static void gdn_requant_block_out(const int32_t *codes, float scale_in, float sT, int zpT,
                                   uint16_t *Th, int roff, int coff, int row_stride) {
-    /* adaptive Q: keep multiplier Mg in [2^13,2^15) so code(<2^15)*Mg stays < 2^30 (no int32 overflow). */
-    float g = scale_in / sT;
+    /* PRE-SHIFT: code*Mg overflows int32 for code>~2^15; the int16-HVX matmul output reaches 2^22.  Shift
+     * codes >> psh and compensate g so the fixed-point stays in range (no-op for the small-code HMX path). */
+    int psh = 0; { int32_t mx = gdn_maxabs_codes(codes); int32_t m = mx; while (m >= (1 << 15)) { m >>= 1; ++psh; } }
+    float g = (scale_in / sT) * (float)(1 << psh);
     int Q = 14;
     while (Q > 1  && g * (float)(1 << Q) >= 32768.0f) --Q;
     while (Q < 28 && g * (float)(1 << (Q + 1)) < 16384.0f) ++Q;
@@ -421,7 +423,8 @@ static void gdn_requant_block_out(const int32_t *codes, float scale_in, float sT
         int32_t q[64] __attribute__((aligned(128)));
         HVX_Vector *qp = (HVX_Vector *)q;
         for (int b = 0; b < 2; ++b) {
-            HVX_Vector prod = Q6_Vw_vmpyi_VwRh(cp[b], Mrep);
+            HVX_Vector c = (psh > 0) ? Q6_Vw_vasr_VwR(cp[b], psh) : cp[b];
+            HVX_Vector prod = Q6_Vw_vmpyi_VwRh(c, Mrep);
             HVX_Vector qq = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(prod, vrnd), Q);
             qq = Q6_Vw_vmin_VwVw(qq, vlim); qq = Q6_Vw_vmax_VwVw(qq, vnlim);
             qp[b] = Q6_Vw_vadd_VwVw(qq, vzpT);
@@ -899,7 +902,16 @@ static float gdn_quant_i12_from_codes(gdn_scr_t *sc, const int32_t *codes, float
     if (mx < 0) mx = gdn_maxabs_codes(codes);
     float maxval = (float)mx * scale_in;
     float sQ = (maxval > 0.0f) ? (maxval / 2047.0f) : 1e-12f;
-    float g = scale_in / sQ;
+    /* PRE-SHIFT: the fixed-point multiply code*Mg overflows int32 for code>~2^15, and matmul-result
+     * operands (Sacc) reach 2^22.  Shift codes (and adjust mx,scale_in) so the shifted code fits <2^15. */
+    const HVX_Vector *p = (const HVX_Vector *)codes;
+    HVX_Vector *qp = (HVX_Vector *)sc->qbuf;
+    int psh = 0; { int32_t m = mx; while (m >= (1 << 15)) { m >>= 1; ++psh; } }
+    if (psh > 0) {
+        for (int b = 0; b < (BL * BL) / 32; ++b) qp[b] = Q6_Vw_vasr_VwR(p[b], psh);
+        p = qp; mx >>= psh; scale_in *= (float)(1 << psh);
+    }
+    float g = scale_in / sQ;   /* g unchanged: scale_in*2^psh / sQ, with shifted codes -> same value */
     int Q = 14;
     while (Q > 1  && g * (float)(1 << Q) >= 32768.0f) --Q;
     while (Q < 28 && g * (float)(1 << (Q + 1)) < 16384.0f) ++Q;
@@ -907,8 +919,6 @@ static float gdn_quant_i12_from_codes(gdn_scr_t *sc, const int32_t *codes, float
     const int Mrep = (Mg & 0xFFFF) * 0x10001;
     const HVX_Vector vrnd = Q6_V_vsplat_R(1 << (Q - 1));
     const HVX_Vector vlim = Q6_V_vsplat_R(2047), vnlim = Q6_V_vsplat_R(-2047);
-    const HVX_Vector *p = (const HVX_Vector *)codes;
-    HVX_Vector *qp = (HVX_Vector *)sc->qbuf;
     for (int b = 0; b < (BL * BL) / 32; ++b) {
         HVX_Vector prod = Q6_Vw_vmpyi_VwRh(p[b], Mrep);
         HVX_Vector q = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(prod, vrnd), Q);
@@ -962,7 +972,9 @@ static void gdn_acc_i32_to_codes(gdn_scr_t *sc, const int32_t *term, float s_ter
     HVX_Vector *sp = (HVX_Vector *)sc->Sacc;
     const HVX_Vector *tp = (const HVX_Vector *)term;
     if (first) { for (int b = 0; b < (BL * BL) / 32; ++b) sp[b] = tp[b]; return; }
-    float g = s_term / s_S;
+    /* PRE-SHIFT: term*Mg overflows int32 for term>~2^15 (matmul results reach 2^22). */
+    int psh = 0; { int32_t mx = gdn_maxabs_codes(term); int32_t m = mx; while (m >= (1 << 15)) { m >>= 1; ++psh; } }
+    float g = (s_term / s_S) * (float)(1 << psh);
     int Q = 14;
     while (Q > 1  && g * (float)(1 << Q) >= 32768.0f) --Q;
     while (Q < 28 && g * (float)(1 << (Q + 1)) < 16384.0f) ++Q;
@@ -970,7 +982,8 @@ static void gdn_acc_i32_to_codes(gdn_scr_t *sc, const int32_t *term, float s_ter
     const int Mrep = (Mg & 0xFFFF) * 0x10001;
     const HVX_Vector vrnd = Q6_V_vsplat_R(1 << (Q - 1));
     for (int b = 0; b < (BL * BL) / 32; ++b) {
-        HVX_Vector prod = Q6_Vw_vmpyi_VwRh(tp[b], Mrep);
+        HVX_Vector t = (psh > 0) ? Q6_Vw_vasr_VwR(tp[b], psh) : tp[b];
+        HVX_Vector prod = Q6_Vw_vmpyi_VwRh(t, Mrep);
         sp[b] = Q6_Vw_vadd_VwVw(sp[b], Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(prod, vrnd), Q));
     }
 }
@@ -1161,6 +1174,14 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
             float sij;
             gdn_merge_hvx(sc, sc->Tblk[bii], GDN_BR_TI, -1, sc->Sacc, s_S, -1, sc->Tblk[bij], &sij);
             sc->Tscl[bij] = sij;
+#if defined(GDN_BR_DUMP_SACC)
+            if (i == 1 && j == 0) {   /* dump dist-1 FINAL result (T11@S) + scale to Th, then bail */
+                int32_t *d = (int32_t *)Th;
+                for (int q = 0; q < BL * BL; ++q) d[q] = sc->Tblk[bij][q];
+                ((float *)Th)[BL * BL] = sij;
+                return;
+            }
+#endif
 #if defined(GDN_BR_PROBE_CYCLES)
             uint64_t rq0; asm volatile("%0 = C15:14" : "=r"(rq0));
 #endif
