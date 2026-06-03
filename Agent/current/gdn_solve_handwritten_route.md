@@ -49,9 +49,18 @@ VTCM-resident (acquire-once + UDMA), 4 HVX worker threads = **~151–172K cyc/he
 440/224/151K, **2.92× scaling**), **oc relerr 0.28%**. Harness: `example/gdn_native/baremetal/`
 (`EXTRA_DEFS="-DGDNBM_VTCM_RESIDENT" bash build.sh`; `./gdnbm 4 A_u16_h32.raw … 32 256 …`).
 
-**⚠️ Do NOT quote a speed ratio vs shipped yet.** 151K is bare-metal WALL (C15:14); shipped 70–83K is QNN
-DOMAIN cycles — different instruments. A dedicated agent is establishing the exact metric alignment
-(`docs/cycle_metric_alignment.md`, in progress). Wait for that before any "Nx" claim.
+**✅ METRIC ALIGNED (2026-06-03, proven on device — `docs/cycle_metric_alignment.md`): bare-metal and
+shipped are at PARITY (~1.0–1.1×), NOT 2–3× behind.** QNN's QHAS per-op `cycles` IS the C15:14 PCYCLE
+counter (measured ratio 0.9963) — same instrument, no conversion. The shipped "70–83K cyc/head" was a
+**tiler artifact** (`mean(tile cyc)/8`, but H=32 tiles into 24 instances run ~6-serial per HVX thread →
+~2× undercount). Real per-head, both in PCYCLE, C=256 H=32 4-thread:
+| per-head | shipped `GdnSolve` (fwd-subst) | bare-metal BR (VTCM-resident) |
+|---|---|---|
+| compute-busy | **146,963** | ~**161,040** |
+| full-graph wall | **190,356** | **156,287** |
+So we're already on par. **The real "beat shipped 2–3×" target is ~50–95K/head** (vs the real ~147–190K
+baseline), not the old 30–40K (which was 2–3× under the ~2×-underestimated artifact). v75 TURBO ≈ 1.42 GHz
+(PCYCLE/µs = 1422).
 
 **The methodology that got here (validated, now a skill — `htp-hardware-scheduling`):**
 - VTCM is acquired ONCE on the main thread and SHARED (per-worker `HAP_compute_res_acquire` serializes
