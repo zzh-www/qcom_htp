@@ -43,8 +43,10 @@ to keep every hardware unit busy at once and hide the moving of bytes.
 HVX pass — L2 prefetch saturates that. Residency still wins because it kills the
 cross-op DDR traffic and feeds HMX; design for the graph, not one vadd.)
 
-Full manual: `docs/htp_hardware_scheduling_flow.md`. ASM building blocks:
-`docs/hexagon-tutorial/hmx-tutorial/ch05-hmx/src/exp5_standalone_asm.c`.
+Full manual: `docs/htp_hardware_scheduling_flow.md`. HMX/UDMA/dspqueue invocation
+idioms: `references/asm_building_blocks.md`. Our route's HMX matmul = the existing
+int8 v73deep kernel (`example/gdn_native/solve_br_op/`), enabled via
+`compute_resource_hmx_lock` + HMX power vote — not a new kernel.
 
 ## The 4 scheduling layers (design top-down, optimize bottom-up)
 
@@ -77,9 +79,8 @@ Full manual: `docs/htp_hardware_scheduling_flow.md`. ASM building blocks:
      (217µs overlap vs 3701µs serial) — this is the single biggest lever.
 
 4. **VTCM residency / persistent tile format (NativeKV).** Keep reused data
-   permanently in HMX tile (WH) layout so HMX consumes it with zero conversion
-   (v75+ only; and on v75 f16 AH==WH, so a matmul's output tile directly feeds the
-   next matmul). VTCM has no malloc — bump-allocate, 128B aligned.
+   permanently in HMX tile layout so HMX consumes it with zero per-use conversion
+   (v75+). VTCM has no malloc — bump-allocate, 128B aligned.
    ⚠️ VTCM is **not** faster than DDR for *sequential* HVX (L2 prefetch hides the
    latency). Use VTCM only because (a) HMX requires it and (b) it is a DMA target.
 
@@ -99,7 +100,8 @@ Rule: **never touch DDR mid-op**; bypass hexkl readback; chain stage outputs in 
 - **Small / narrow** matrices (≤128, or 64×64 blocks) are *fixed-overhead
   dominated* — comms + tile-format conversion + readback drown HMX's throughput
   (MNIST 832×128: HMX only 1.1× HVX). For small blocks, EITHER make the overhead
-  vanish via zero-conversion tile-residency (Layer 4), OR just use **HVX qf32**.
+  vanish via tile-residency (Layer 4: keep operands in HMX tile layout, no
+  per-use pack/depack), OR just use **HVX**.
 - Always ask "is my output narrow?" — narrow output ⇒ readback dominates ⇒ HMX loses.
 
 ## Design checklist for a new fast kernel

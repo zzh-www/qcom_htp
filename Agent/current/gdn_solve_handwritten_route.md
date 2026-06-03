@@ -579,10 +579,12 @@ T writes straight to DDR). oc held 0.30%. Device (H=8 C=256, `ssh oneplus`):
 3. Cost decomposition (1-thread, VTCM): diag 153K + merges(int16-HVX compute) ~342K = 495K. The merges
    are the bulk and are HVX *compute* (not data movement) — the SKILL says move them to HMX (~free).
 
-**Next per SKILL = single-thread HMX streaming:** diag 153K + f16-HMX merges (`src/gdn_f16_hmx.h`, ~free)
-≈ ~160K single-thread — would beat the 240-270K threaded-HVX BR, but still ~2× over shipped 70-83K.
-**The hard wall stands:** HMX-free merges force single-thread (HMX lock serial), threaded diag forbids HMX;
-no config reaches 30-40K. Best realistic BR ≈ ~160K single-thread (HMX merges) or ~240K 4-thread (HVX).
+**Next per SKILL (ACTIVE route, no new kernel):** use the EXISTING int8 v73deep HMX matmul (`gdn_hmx_merge`,
+scalar-free hardware matmul) for the 16 merges — this kills the ~65K scalar coefficient-loads/head that the
+int16-HVX `gdn_matmul_i16` incurs. Diag stays HVX forward-subst (threads across heads). Open question to
+test (the way the VTCM acquire-once bug was): does per-mxmem `compute_resource_hmx_lock` (GDN_BR_HMX_ENTER/
+EXIT around the mxmem only) let the HVX diag/glue thread while just the brief mxmem serializes? If yes →
+threaded diag (~40-50K) + ~free merges could approach 30-40K. (fp16-HMX was a dead-end detour — dropped.)
 
 ### VTCM gotchas measured (2026-06-03, fixing the threading regression)
 - **Acquire VTCM ONCE, share slices.** Per-worker `HAP_compute_res_acquire` serializes workers (resource

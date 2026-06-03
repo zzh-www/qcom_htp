@@ -1,32 +1,18 @@
 # HTP scheduling — concrete building blocks (copy-paste idioms)
 
-Verified on v75 (Snapdragon 8 Gen 3). Source: htp-ops-lib / llama.cpp Hexagon backend, mirrored in
-`docs/hexagon-tutorial/hmx-tutorial/ch04-vtcm-memory` (DMA) and `ch05-hmx/src/exp5_standalone_asm.c` (HMX).
+Verified on v75 (Snapdragon 8 Gen 3). DMA from tutorial ch04-vtcm-memory; dspqueue from ch03-dspqueue.
+These are the dtype-agnostic hardware INVOCATION mechanisms. (HMX matmul itself = our existing int8
+v73deep kernel in `example/gdn_native/solve_br_op/`; this file is about scheduling the hardware, not the
+kernel.)
 
-## HMX f16 — the 5 ASM ops (no hexkl in the hot path)
-```c
-static inline void hmx_clear_acc(void){ asm volatile("mxclracc.hf":::"memory"); }
-static inline void hmx_set_scales(const void*s){ asm volatile("bias = mxmem2(%0)"::"r"(s):"memory"); } // scale=1.0(0x3C00 f16)/bias=0, ONCE after lock — else garbage
-static inline void hmx_load_tiles(const void*act,const void*wt,uint32_t n){ // :deep MACs up to 32 tile pairs in one instr
-  uint32_t lim=n*2048-1;
-  asm volatile("{ activation.hf = mxmem(%0,%1):deep\n  weight.hf = mxmem(%2,%3) }\n"
-               ::"r"(act),"r"(lim),"r"(wt),"r"(lim):"memory"); }
-static inline void hmx_store_acc(_Float16*out){ // acc -> f16 AH tile in VTCM (arg 2 = f16 format)
-  asm volatile("cvt.hf = acc(%0)\n  mxmem(%1,%2) = cvt\n"::"r"(2),"r"(out),"r"(0):"memory"); }
-```
-- Tile = 32×32, 2048 bytes, **2-row interleaved**. On v75 f16 the activation (AH) and weight (WH) tile
-  bytes are IDENTICAL → an `hmx_store_acc` output is directly reusable as the next matmul's input.
-- Per output tile: `mxclracc` → one `:deep` load of K (=k/32) tile pairs → `hmx_store_acc`. WH tiles are
-  stored column-major (tile_idx = ct*K + kt) because `mxmem:deep` wants same-column tiles contiguous.
-
-## Tile <-> row-major (HVX vshuff / vdeal, granularity -2 = halfword)
-```c
-// RM -> AH/WH tile (32 rows): interleave row pairs
-HVX_VectorPair vp = Q6_W_vshuff_VVR(v_row_odd, v_row_even, -2);  out[rr] = Q6_V_lo_W(vp);
-// AH tile -> RM: deinterleave
-HVX_VectorPair d = Q6_W_vdeal_VVR(Q6_V_vzero(), tile[rr], -2);   v_even=Q6_V_lo_W(d); v_odd=Q6_V_hi_W(d);
-```
-Readback rule: use this `hmx_store_acc + vdeal` path (VTCM→VTCM, ~24× faster), NOT hexkl acc_read/ah_to_rm.
+## HMX enable (invocation mechanism — our route's int8 v73deep mxmem)
+HMX requires, in order, on the using thread:
+1. power vote: `HAP_power_set_core_corner(TURBO)` + `HAP_power_set` with `type=HAP_power_set_HMX, hmx.power_up=TRUE` (else mxmem HANGS — unpowered).
+2. VTCM acquire (all HMX in/out + descriptor tables MUST be in VTCM; mxmem faults on DDR addresses).
+3. `compute_resource_hmx_lock(hctx)` — the v1 lock QNN's libQnnHtpV75Skel uses (verified via `nm`).
+   NOT: `qurt_hmx_lock` (unlinkable in unsigned PD), `HAP_compute_res_hmx_lock3` (NOT_SUPPORTED),
+   `lock4` (no-op). ⚠️ Lock is process-EXCLUSIVE; held across a region it serializes other threads.
+Readback: bring mxmem output out of VTCM with HVX `vdeal` (VTCM→VTCM, ~24× faster than hexkl acc_read).
 
 ## UDMA — async DDR→VTCM (overlap data movement with compute)
 ```c

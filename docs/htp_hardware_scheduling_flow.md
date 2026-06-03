@@ -62,10 +62,10 @@ DDR→VTCM    →     反量化/重排    →   mxmem matmul  →   反交织/�
 - VTCM：8MB，1 周期延迟，HMX 强制要求，可作 DMA 目标。无 malloc，用 **bump allocator**（128B 对齐）。
 - ⚠️ 反直觉（ch04 Part 5）：**VTCM 对顺序 HVX 不比 DDR 快**（L2 预取很强）。VTCM 的价值只有两个：
   HMX 别无选择 + 能做 DMA 目标实现重叠。别为了"VTCM 更快"而 VTCM，要为这两个理由而用。
-- **NativeKV / 持久 tile**：把会被反复使用的数据**永久以 HMX tile（WH）格式存在 VTCM/DDR**，HMX 直接消费，
-  零格式转换（ch06：长上下文每步省 512KB 转换）。三个成立条件：(1) v75+ 才支持 NPU 直接消费 WH I/O；
-  (2) element-wise 更新（如 SGD）不关心排列，可直接在 tile 格式上做；(3) **v75 f16 上 AH=WH 是同一格式**
-  → 一个 matmul 的输出能直接当下一个的输入。tile 尺寸按维度选：长维(K)用大 tile 减少搬入，短维用小 tile。
+- **NativeKV / 持久 tile**：把会被反复使用的数据**永久以 HMX tile 格式存在 VTCM/DDR**，HMX 直接消费，
+  零格式转换（ch06：长上下文每步省 512KB 转换）。成立条件：v75+ 才支持 NPU 直接消费 tile-layout I/O；
+  element-wise 更新（如 SGD）不关心排列，可直接在 tile 格式上做。tile 尺寸按维度选：长维(K)用大 tile
+  减少搬入，短维用小 tile。
 
 ## 何时 NPU/HMX 真正值得（清醒线）
 - HMX 只在**大矩阵**赢（≥512）：256×1024×4096 时 NPU 比 CPU 快 166×。
@@ -79,14 +79,13 @@ DDR→VTCM    →     反量化/重排    →   mxmem matmul  →   反交织/�
    按 ~17× 量级藏进计算（head 维度天然是 ping-pong 分块单元）。
 2. **纠结"HMX 多线程"** —— 方向错。HMX 并行来自 Layer 3 流水重叠，不是 Layer 2 线程。
 3. **没用 dspqueue 融合、没持久 tile** —— per-call 开销 + 重复转换。
-> 结论：把搬运藏下去后 diag 有望逼近 48K 量级，整条 solve 才可能进 30–40K。这是从没编排过的流程，
-> 不是换 f16/u8i8 kernel 的问题。详见 [reference_hmx_f16_vtcm_resident_path] 与
-> `Agent/current/gdn_solve_handwritten_route.md`。
+> 结论：把搬运藏下去后 diag 有望逼近 48K 量级，整条 solve 才可能进 30–40K。这是调度问题（流程编排），
+> 不是换 kernel/dtype 的问题。详见 `Agent/current/gdn_solve_handwritten_route.md`。
 
 ## 复现 / 出处
 - ARM↔DSP dspqueue：`docs/hexagon-tutorial/hmx-tutorial/ch03-dspqueue/`（61 vs 364µs）。
 - DMA 双缓冲 + 4 级流水线：`ch04-vtcm-memory/`（17× 重叠；UDMA descriptor；cache flush 陷阱）。
-- f16 HMX ASM 积木（无 hexkl 热路径）：`ch05-hmx/src/exp5_standalone_asm.c`；瓶颈层级 `ch05-hmx/README.md`。
+- HMX 瓶颈层级（DDR I/O ≫ readback ≫ 纯 HMX 计算）：`ch05-hmx/README.md`。HMX 调用机制（power+VTCM+lock）见 skill `references/asm_building_blocks.md`。
 - NativeKV 持久 tile：`ch06-kv-cache/`（零转换、v75+、tile 尺寸选择、对齐 32）。
 - 完整模型编排：`ch07-llama-cpp-run/`（worker-pool 多 HVX 线程；MUL_MAT = HVX 反量化→HMX，VTCM 双缓冲）。
 - 训练全流程叙述：`hmx-tutorial/hmx.md`。
