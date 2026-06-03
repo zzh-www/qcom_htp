@@ -538,3 +538,20 @@ since BR doesn't beat the incumbent; the incumbent is already the integrated op.
 
 **Reproduce:** `cd example/gdn_native/baremetal && bash build.sh && bash run.sh` (deploys to `$HOME/gdnbm_run`
 on `ssh oneplus`; runs 1/2/4-thread, prints cyc/head). oc check: `scripts/gdn_br_oc_check.py`.
+
+### Caveat checked (2026-06-03): the bare-metal 271K is wall, not the GOAL's steady-domain metric — but the GOAL still doesn't clear
+
+The 271K bare-metal number is **wall cycles** (C15:14 counter; includes FastRPC DDR marshalling + thread
+spawn/join), whereas shipped's 70–83K is **steady DOMAIN cycles** (QNN optrace) — not the same metric. The
+fair test is the int16-HVX merge **inside the QNN op** (`solve_br_op` with `-DGDN_BR_HVX_MERGE`), where A/T
+are properly-laid-out QHPI tensors (the bare-metal diag is 373K/head vs ~48K in QNN-layout — an 8× DDR
+penalty). **That build HANGS in the QNN op** (device "Executing Graphs" never returns — reproduces single-
+thread, even with `-DGDN_BR_DIAG_ONLY`; triggered by the `GDN_BR_HVX_MERGE` gate itself, not the merge
+logic — a QNN-op integration bug; bare-metal with the identical code runs fine). So an exact in-framework
+number wasn't obtained. **Reconstruction settles it anyway:** even granting the full QNN-layout diag win
+(diag 373K→48K ⇒ single-thread 714K→~390K) at the measured int16-HVX 2.6× threading ⇒ **~150K 4-thread**;
+even halving the merge DDR too ⇒ **~108K**. Both still LOSE to shipped (70–83K) and sit 3–4× over the
+30–40K GOAL. The metric caveat narrows the gap from ~3× to ~1.3–2× but does NOT flip the verdict.
+**GOAL #1 stands as unreachable; shipped `GdnSolve` stays the optimum.** (To get the exact number, the
+QNN-op `GDN_BR_HVX_MERGE` hang would have to be debugged first — left as a known blocker, not worth it
+since the reconstruction already shows it loses.)
