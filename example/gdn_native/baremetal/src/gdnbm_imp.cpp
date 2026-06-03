@@ -67,7 +67,29 @@ static char __attribute__((aligned(128))) g_solve_stack[GDN_BR_NT][32768];
 static void solve_worker(void *arg) {
     gdn_work_t *w = (gdn_work_t *)arg;
     int hvx = qurt_hvx_lock(QURT_HVX_MODE_128B);
+#ifdef GDNBM_MM_TEST
+    /* matmul isolation: A=100*I, B[k,j]=k*64+j -> C[i,j] must = 100*(i*64+j). Writes C int32 to Tu. */
+    { gdn_scr_t *sc = &g_scr[w->slot];
+      for (int i = 0; i < 64 * 64; ++i) sc->a16[i] = 2047;
+      for (int i = 0; i < 64 * 64; ++i) sc->b16[i] = 2047;
+      gdn_matmul_i16(sc->a16, sc->b16, (int32_t *)w->Tu); }  /* C[i,j] must = 64*2047*2047 = 268304896 */
+#elif defined(GDNBM_MERGE_TEST)
+    /* merge isolation: A=Tc, B=Sacc (small ramps, scale 1.0) -> C*s_out must ~= A@B. Writes C int32 + s_out. */
+    { gdn_scr_t *sc = &g_scr[w->slot];
+      for (int i = 0; i < 64 * 64; ++i) sc->Tc[i] = (i % 11) - 5;
+      for (int i = 0; i < 64 * 64; ++i) sc->Sacc[i] = (i % 7) - 3;
+      float s; gdn_merge_hvx(sc, sc->Tc, 1.0f, -1, sc->Sacc, 1.0f, -1, sc->Tblk[0], &s);
+      for (int i = 0; i < 64 * 64; ++i) ((int32_t *)w->Tu)[i] = sc->Tblk[0][i];
+      ((float *)w->Tu)[64 * 64] = s; }
+#elif defined(GDNBM_Q_TEST)
+    /* quant isolation: codes[i]=i-2048 @ scale 1.0 -> out[i] ~ clamp(i-2048, +-2047). Writes int16->int32 to Tu. */
+    { gdn_scr_t *sc = &g_scr[w->slot];
+      for (int i = 0; i < 64 * 64; ++i) sc->Tc[i] = i - 2048;
+      gdn_quant_i12_from_codes(sc, sc->Tc, 1.0f, sc->a16, -1);
+      for (int i = 0; i < 64 * 64; ++i) ((int32_t *)w->Tu)[i] = sc->a16[i]; }
+#else
     gdn_br_run_slot(w);                 /* vtcm_base unused in HVX-merge mode */
+#endif
     if (hvx == 0) qurt_hvx_unlock();
 }
 

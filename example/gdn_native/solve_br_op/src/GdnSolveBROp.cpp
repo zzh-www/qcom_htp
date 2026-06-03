@@ -929,10 +929,11 @@ static void gdn_matmul_i16(const int16_t *A, const int16_t *B, int32_t *C) {
         HVX_VectorPair acc = Q6_W_vzero();
         for (int k = 0; k < BL; ++k)
             acc = Q6_Ww_vmpyacc_WwVhRh(acc, ((const HVX_Vector *)(B + k * BL))[0], (Ai[k] & 0xFFFF) * 0x10001);
-        /* Q6_Ww_vmpyacc produces CONTIGUOUS halves (lo=cols 0-31, hi=cols 32-63), not even/odd — store
-         * them contiguously (this matches the diagonal solve's vasr_VwVwR(hi,lo) natural ordering). */
-        ((HVX_Vector *)(C + i * BL))[0] = Q6_V_lo_W(acc);
-        ((HVX_Vector *)(C + i * BL))[1] = Q6_V_hi_W(acc);
+        /* Q6_Ww_vmpyacc produces EVEN/ODD split (lo=even cols, hi=odd cols — matmul self-test confirmed);
+         * vshuff at word granularity interleaves them back to natural int32 order. */
+        HVX_VectorPair nat = Q6_W_vshuff_VVR(Q6_V_hi_W(acc), Q6_V_lo_W(acc), -4);
+        ((HVX_Vector *)(C + i * BL))[0] = Q6_V_lo_W(nat);
+        ((HVX_Vector *)(C + i * BL))[1] = Q6_V_hi_W(nat);
     }
 }
 
@@ -1158,7 +1159,7 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
                 first = 0;
             }
             float sij;
-            gdn_merge_hvx(sc, sc->Tblk[bii], GDN_BR_TI, sc->mxdiag[i], sc->Sacc, s_S, -1, sc->Tblk[bij], &sij);
+            gdn_merge_hvx(sc, sc->Tblk[bii], GDN_BR_TI, -1, sc->Sacc, s_S, -1, sc->Tblk[bij], &sij);
             sc->Tscl[bij] = sij;
 #if defined(GDN_BR_PROBE_CYCLES)
             uint64_t rq0; asm volatile("%0 = C15:14" : "=r"(rq0));
