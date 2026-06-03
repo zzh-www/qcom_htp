@@ -84,11 +84,11 @@ static void solve_worker(void *arg) {
 #if defined(GDNBM_VTCM_RESIDENT) && !defined(GDNBM_MM_TEST) && !defined(GDNBM_Q_TEST) && !defined(GDNBM_MERGE_TEST)
     /* SKILL principles: (2) keep A resident in VTCM (not uncached FastRPC DDR -> bare-metal diag was
      * 373K vs QNN 48K), (3) UDMA ping-pong so head h+1's A loads while head h computes. T writes go
-     * straight to DDR (sequential, L2-prefetch friendly).  VTCM-only acquire on this worker thread. */
-    compute_res_attr_t va; HAP_compute_res_attr_init(&va);
-    HAP_compute_res_attr_set_vtcm_param(&va, 0x60000u, 0);   /* 384KB: 2x128KB A ping-pong + scratch */
-    unsigned int vctx = HAP_compute_res_acquire(&va, 2000000);
-    uint8_t *vtcm = (uint8_t *)HAP_compute_res_attr_get_vtcm_ptr(&va);
+     * straight to DDR (sequential, L2-prefetch friendly).
+     * VTCM is acquired ONCE on the main thread (gdnbm_solve) and shared; each worker uses its own
+     * 0x60000 slice via w->vtcm_base (per-worker HAP_compute_res_acquire SERIALIZES the workers — the
+     * resource manager grants VTCM per-context, so concurrent acquires block on each other). */
+    uint8_t *vtcm = w->vtcm_base ? (w->vtcm_base + (size_t)w->slot * 0x60000) : nullptr;
     gdn_scr_t *sc = &g_scr[w->slot];
     gdn_vtcm_t vt; memset(&vt, 0, sizeof(vt));
     const int CC = GDN_BR_C * GDN_BR_C;
@@ -108,7 +108,6 @@ static void solve_worker(void *arg) {
                             w->zpA, w->M, w->S, w->sT, w->zpT);   /* reads A from VTCM */
         }
     }
-    if (vctx) HAP_compute_res_release(vctx);
     if (hvx == 0) qurt_hvx_unlock();
     return;
 #endif
@@ -177,12 +176,22 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
     HAP_power_set_core_corner(pctx, HAP_DCVS_VCORNER_TURBO, HAP_DCVS_VCORNER_TURBO, HAP_DCVS_VCORNER_MAX);
     { HAP_power_request_t r; memset(&r,0,sizeof(r)); r.type=HAP_power_set_HMX; r.hmx.power_up=TRUE; HAP_power_set(pctx,&r); }
 
-    /* Each worker acquires its OWN VTCM + HMX on its own thread (see solve_worker).  Main just spawns. */
+    /* VTCM is acquired ONCE here on the main thread and the base pointer shared with all workers (each
+     * takes a 0x60000 slice via w->vtcm_base).  Per-worker acquire serializes the workers — the resource
+     * manager grants VTCM per-context so concurrent acquires block on each other (canonical pattern:
+     * Hexagon SDK HAP_compute_res + tutorial ch04 demo_vtcm_alloc = acquire once, bump-allocate). */
+    uint8_t *vtcm_base = nullptr; unsigned int vctx = 0;
+#if defined(GDNBM_VTCM_RESIDENT)
+    { compute_res_attr_t va; HAP_compute_res_attr_init(&va);
+      HAP_compute_res_attr_set_vtcm_param(&va, (unsigned)GDN_BR_NT * 0x60000u, 0);
+      vctx = HAP_compute_res_acquire(&va, 2000000);
+      vtcm_base = (uint8_t *)HAP_compute_res_attr_get_vtcm_ptr(&va); }
+#endif
     uint64_t t0 = pcyc();
     {
         gdn_work_t work[GDN_BR_NT]; qurt_thread_t tid[GDN_BR_NT];
         for (int t = 0; t < nthreads; ++t) {
-            work[t] = (gdn_work_t){ t, 0u, (uint32_t)H, (uint32_t)nthreads, Au, Tu, zpA, M, S, sT, zpT, nullptr };
+            work[t] = (gdn_work_t){ t, 0u, (uint32_t)H, (uint32_t)nthreads, Au, Tu, zpA, M, S, sT, zpT, vtcm_base };
             qurt_thread_attr_t a; qurt_thread_attr_init(&a); qurt_thread_attr_set_name(&a,(char*)"gdnsolve");
             qurt_thread_attr_set_stack_addr(&a,g_solve_stack[t]); qurt_thread_attr_set_stack_size(&a,sizeof(g_solve_stack[t]));
             if (qurt_thread_create(&tid[t],&a,solve_worker,&work[t])!=QURT_EOK) { solve_worker(&work[t]); tid[t]=0; }
@@ -190,6 +199,7 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
         for (int t = 0; t < nthreads; ++t) { int s; if (tid[t]) qurt_thread_join(tid[t], &s); }
     }
     uint64_t t1 = pcyc();
+    if (vctx) HAP_compute_res_release(vctx);
     { HAP_power_request_t off; memset(&off,0,sizeof(off)); off.type=HAP_power_set_HMX; off.hmx.power_up=FALSE; HAP_power_set(pctx,&off); }
 
     if (statsLen > 0) stats[0] = (int)(t1 - t0);
