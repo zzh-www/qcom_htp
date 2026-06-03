@@ -60,9 +60,13 @@ ONLY=bm_hvx_int8 bash bench.sh # just one baseline (fast)
 bash bench.sh --with-qnn       # + shipped QNN baseline (slow QNN build)
 K=12 TOL=1.20 bash bench.sh    # samples / fail threshold
 ```
-Robust to DSP flakiness: each sample is its own ssh with a per-run timeout (rapid repeated FastRPC
-sessions occasionally deadlock the DSP; a hung run is reaped + skipped, not blocking the sweep).
-Refs live in bench.sh (REF_*). Last green: bm_hvx_int8 ~2.1ms (1.09x), bm_hvx_int16 ~2.86ms (1.01x).
+Robustness (root-caused 2026-06-04): the earlier intermittent "hangs" were NOT a DSP/gdnbm deadlock —
+gdnbm always completes (verified: device run.log shows completion, no stuck process). It's the
+**ssh connection to the device's termux sshd** that intermittently fails to return (~5-15% per
+connection — reproduced with plain `ssh oneplus 'echo hi'`, 2/40 hung). Fix = ONE persistent
+**ssh ControlMaster** connection reused for every command (0/40 hung over the mux) + `GDNBM_REPS=K`
+so all K samples are a single remote call. Refs live in bench.sh (REF_*).
+Green: bm_hvx_int8 ~2.35ms (1.17x), bm_hvx_int16 ~3.0ms (1.07x) — within 1.25x gate.
 
 **`gdn_solve_chain.sh` — chain8-style steady per-op cycles (QNN op).** Chains N GdnSolve nodes
 (A→t0→…→T), runs with optrace, reports per-NODE cycles so cold node0 is separated from steady

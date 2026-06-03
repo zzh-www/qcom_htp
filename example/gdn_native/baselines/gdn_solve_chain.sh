@@ -16,6 +16,13 @@ export LD_LIBRARY_PATH="$QNN_SDK_ROOT/lib/x86_64-linux-clang${LD_LIBRARY_PATH:+:
 PY="$ROOT/.venv/bin/python"
 WD="$(pwd)/_chain"; mkdir -p "$WD"; cd "$WD"
 
+# ssh ControlMaster: one persistent connection reused (per-connection ssh to the device's termux sshd
+# intermittently hangs ~5-15% — not a DSP bug; this is the fix). See baselines/bench.sh.
+CM="/tmp/gdnchain-cm-$$"
+ssh -o ControlMaster=auto -o ControlPath="$CM" -o ControlPersist=300 -o ServerAliveInterval=5 "$DEVICE" true 2>/dev/null
+SSHD() { ssh -o ControlPath="$CM" "$DEVICE" "$@"; }
+trap 'ssh -o ControlPath="$CM" -O exit "$DEVICE" 2>/dev/null; rm -f "$CM"' EXIT
+
 echo "[1/5] build op + gen chain onnx (N=$CHAIN, C=$C, H=$H)"
 bash "$OPDIR/build.sh" >_b.log 2>&1 || { echo BUILDFAIL; tail -8 _b.log; exit 1; }
 X86="$OPDIR/build/x86_64-linux-clang/lib${PKG}.so"; HTP="$OPDIR/build/hexagon-$ARCH/lib${PKG}_htp.so"
@@ -43,18 +50,18 @@ qnn-context-binary-generator --dlc_path solve_chain.dlc --backend "$QNN_SDK_ROOT
 for s in *schematic.bin ctx_s/*schematic.bin; do [ -f "$s" ] && mv -f "$s" ctx_s/ 2>/dev/null || true; done
 
 echo "[3/5] deploy + run"
-W="$(ssh "$DEVICE" 'echo $HOME/qnn_run')/chain"; ssh "$DEVICE" "mkdir -p $W"
-ssh "$DEVICE" "printf '%s' '{\"backend_extensions\":{\"shared_library_path\":\"../libQnnHtpNetRunExtensions.so\",\"config_file_path\":\"./htp.json\"}}' > $W/cfg.json"
-ssh "$DEVICE" "cat > $W/htp.json" < _htp.json
-ssh "$DEVICE" "cat > $W/chain_ctx.bin" < ctx_s/chain_ctx.bin
-ssh "$DEVICE" "cat > $W/lib${PKG}_htp.so" < "$HTP"; ssh "$DEVICE" "cat > $W/lib${PKG}_cpu.so" < "$CPU"
-ssh "$DEVICE" "cat > $W/A.raw" < A.raw; ssh "$DEVICE" "printf 'A:=A.raw\n' > $W/list.txt"
-ssh "$DEVICE" "cd $W && rm -rf out && LD_LIBRARY_PATH=..:.:/vendor/lib64 ADSP_LIBRARY_PATH='..;.;/vendor/lib/rfsa/adsp;/vendor/dsp/cdsp;/dsp/cdsp' ../qnn-net-run \
+W="$(SSHD 'echo $HOME/qnn_run')/chain"; SSHD "mkdir -p $W"
+SSHD "printf '%s' '{\"backend_extensions\":{\"shared_library_path\":\"../libQnnHtpNetRunExtensions.so\",\"config_file_path\":\"./htp.json\"}}' > $W/cfg.json"
+SSHD "cat > $W/htp.json" < _htp.json
+SSHD "cat > $W/chain_ctx.bin" < ctx_s/chain_ctx.bin
+SSHD "cat > $W/lib${PKG}_htp.so" < "$HTP"; SSHD "cat > $W/lib${PKG}_cpu.so" < "$CPU"
+SSHD "cat > $W/A.raw" < A.raw; SSHD "printf 'A:=A.raw\n' > $W/list.txt"
+SSHD "cd $W && rm -rf out && LD_LIBRARY_PATH=..:.:/vendor/lib64 ADSP_LIBRARY_PATH='..;.;/vendor/lib/rfsa/adsp;/vendor/dsp/cdsp;/dsp/cdsp' ../qnn-net-run \
    --backend ../libQnnHtp.so --retrieve_context chain_ctx.bin --config_file cfg.json \
    --op_packages ./lib${PKG}_cpu.so:$PROV:CPU,./lib${PKG}_htp.so:$PROV:HTP \
    --input_list list.txt --output_dir out --profiling_level detailed --profiling_option optrace --perf_profile burst" >_r.log 2>&1 || true
 grep -q 'Finished Executing Graphs' _r.log || { echo RUNFAIL; tail -10 _r.log; exit 1; }
-rm -rf out_s; mkdir -p out_s; ssh "$DEVICE" "cd $W && tar cf - out" | tar xf - -C out_s --strip-components=1 2>/dev/null
+rm -rf out_s; mkdir -p out_s; SSHD "cd $W && tar cf - out" | tar xf - -C out_s --strip-components=1 2>/dev/null
 wall=$(qnn-profile-viewer --input_log out_s/qnn-profiling-data_0.log 2>/dev/null | grep -i 'QNN accelerator (execute) time' | grep -io '[0-9]* us' | head -1)
 
 echo "[4/5] decode optrace"

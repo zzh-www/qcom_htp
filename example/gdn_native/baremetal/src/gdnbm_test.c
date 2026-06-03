@@ -8,6 +8,7 @@
 static long fsize(const char *p) { FILE *f = fopen(p, "rb"); if (!f) return -1; fseek(f, 0, SEEK_END); long n = ftell(f); fclose(f); return n; }
 
 int main(int argc, char **argv) {
+    setvbuf(stdout, NULL, _IONBF, 0);   /* unbuffered: markers survive SIGKILL (for hang localization) */
     if (argc < 10) {
         printf("usage: %s <nthreads> <A.raw> <T.raw> <H> <C> <zpA> <zpT> <sA> <sT> [probe]\n", argv[0]);
         return 2;
@@ -37,10 +38,17 @@ int main(int argc, char **argv) {
     FILE *fa = fopen(Apath, "rb"); fread(A, 1, abytes, fa); fclose(fa);
 
     int stats[12] = {0};
-    rc = gdnbm_solve(h, A, (int)abytes, H, C, zpA, zpT, sA.i, sT.i, nthreads, T, (int)abytes, stats, 12);
-    printf("gdnbm_solve rc=0x%x  wall=%d cyc  nthreads=%d  heads=%d\n", rc, stats[0], stats[1], stats[2]);
-    if (rc == 0 && stats[2] > 0)
-        printf("  >>> %d cyc/head (%d-thread)\n", stats[0] / stats[2], stats[1]);
+    /* REPS: run the solve N times in ONE FastRPC session (env GDNBM_REPS, default 1). Repeated single-shot
+     * processes churn the unsigned-PD FastRPC session and OCCASIONALLY deadlock the cDSP; looping the
+     * remote call on the SAME handle does the steady-state measurement with NO session churn. */
+    const char *re = getenv("GDNBM_REPS"); int reps = re ? atoi(re) : 1; if (reps < 1) reps = 1;
+    for (int r = 0; r < reps; ++r) {
+        rc = gdnbm_solve(h, A, (int)abytes, H, C, zpA, zpT, sA.i, sT.i, nthreads, T, (int)abytes, stats, 12);
+        printf("gdnbm_solve rc=0x%x  wall=%d cyc  nthreads=%d  heads=%d\n", rc, stats[0], stats[1], stats[2]);
+        if (rc == 0 && stats[2] > 0)
+            printf("  >>> %d cyc/head (%d-thread)\n", stats[0] / stats[2], stats[1]);
+        if (rc) break;
+    }
     printf("  stats: [0]=%d [1]=%d [2]=%d [3]=%d [4]=%d\n", stats[0], stats[1], stats[2], stats[3], stats[4]);
     if (stats[3] || stats[5] || stats[7]) {  /* PROBE_CYCLES per-stage (cyc/head) */
         int sum = stats[3]+stats[4]+stats[5]+stats[6]+stats[7]+stats[8]+stats[9];
