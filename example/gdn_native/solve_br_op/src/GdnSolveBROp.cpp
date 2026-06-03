@@ -510,21 +510,31 @@ static void gdn_depack_out_fast(gdn_scr_t *sc, const uint8_t *surf, int base, in
     const HVX_Vector *sp = (const HVX_Vector *)surf;
     HVX_Vector *dp = (HVX_Vector *)sc->surf_sub;
     for (int i = 0; i < (BL * BL) / 128; ++i) dp[i] = Q6_Vb_vsub_VbVb(sp[i], vb);
-    /* 2) rearrange the subtracted surface into natural [64][64] via contiguous 32-byte runs. */
-    int off = 0;
-    for (int nt = 0; nt < 2; ++nt)
-        for (int r8 = 0; r8 < 4; ++r8)
-            for (int m32 = 0; m32 < 2; ++m32)
-                for (int rsub = 0; rsub < 8; ++rsub) {
-                    int row = m32 * 32 + r8 * 8 + rsub;
-                    const int8_t *src = (const int8_t *)(sc->surf_sub + off);
-                    int8_t *dst = out_codes + row * 64 + nt * 32;
-                    *(uint64_t *)(dst + 0)  = *(const uint64_t *)(src + 0);
-                    *(uint64_t *)(dst + 8)  = *(const uint64_t *)(src + 8);
-                    *(uint64_t *)(dst + 16) = *(const uint64_t *)(src + 16);
-                    *(uint64_t *)(dst + 24) = *(const uint64_t *)(src + 24);
-                    off += 32;
-                }
+    /* 2) PURE-HVX de-crouton (was 256 scalar uint64 copies, the depack twin of the actpack hotspot):
+     * a 128B crouton vector = 4 consecutive rows' 32-col slices; the nt=0/nt=1 vectors for the same 4
+     * rows hold cols [0,32)/[32,64).  Interleave them via ror+mask into two 128B vectors = 4 full natural
+     * rows, stored aligned (row0 always even -> row0*64 is 128-aligned). */
+    const HVX_Vector m  = Q6_V_valign_VVR(Q6_V_vzero(), Q6_Vb_vsplat_R(-1), 96);
+    const HVX_Vector m1 = Q6_V_vror_VR(m, 96), m2 = Q6_V_vror_VR(m, 64), m3 = Q6_V_vror_VR(m, 32);
+    const uint8_t *s0 = sc->surf_sub, *s1 = sc->surf_sub + 2048;   /* nt=0 / nt=1 crouton halves */
+    for (int local = 0; local < 16; ++local) {
+        HVX_Vector v0 = *(const HVX_Vector *)(s0 + local * 128);   /* cols [0,32) of 4 rows */
+        HVX_Vector v1 = *(const HVX_Vector *)(s1 + local * 128);   /* cols [32,64) of 4 rows */
+        int o0 = local * 4;
+        int row0 = ((o0 / 8) & 1) * 32 + (o0 / 16) * 8 + (o0 % 8);
+        /* A = [row0 full | row1 full] = (v0[0:32],v1[0:32],v0[32:64],v1[32:64]) */
+        HVX_Vector A = Q6_V_vand_VV(v0, m);
+        A = Q6_V_vor_VV(A, Q6_V_vand_VV(Q6_V_vror_VR(v1, 96), m1));
+        A = Q6_V_vor_VV(A, Q6_V_vand_VV(Q6_V_vror_VR(v0, 96), m2));
+        A = Q6_V_vor_VV(A, Q6_V_vand_VV(Q6_V_vror_VR(v1, 64), m3));
+        /* B = [row2 full | row3 full] = (v0[64:96],v1[64:96],v0[96:128],v1[96:128]) */
+        HVX_Vector B = Q6_V_vand_VV(Q6_V_vror_VR(v0, 64), m);
+        B = Q6_V_vor_VV(B, Q6_V_vand_VV(Q6_V_vror_VR(v1, 32), m1));
+        B = Q6_V_vor_VV(B, Q6_V_vand_VV(Q6_V_vror_VR(v0, 32), m2));
+        B = Q6_V_vor_VV(B, Q6_V_vand_VV(v1, m3));
+        *(HVX_Vector *)(out_codes + (size_t)row0 * 64)       = A;
+        *(HVX_Vector *)(out_codes + (size_t)(row0 + 2) * 64) = B;
+    }
 }
 
 
