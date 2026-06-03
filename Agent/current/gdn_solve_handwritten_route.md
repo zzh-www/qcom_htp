@@ -411,6 +411,23 @@ threading wall.
   for QNN custom ops. (Bare-metal single-thread 832K/head vs QNN 252K = DDR A/T via FastRPC + clock/counter
   differences; not optimized — threading is the blocker, not single-thread.)
 
+### int16-HVX MERGE — BUILT + THREADS (2026-06-03), but WIP-buggy + needs A-staging
+
+Implemented the no-HMX merge in `GdnSolveBROp.cpp` (gated `GDN_BR_HVX_MERGE`): `gdn_quant_i12_from_codes`
+(int32→12-bit int16, ±2047 so 64-term int32 accum can't overflow) + `gdn_matmul_i16` (reuses
+`Q6_Ww_vmpyacc_WwVhRh`) + `gdn_acc_i32_to_codes`.  Bare-metal HAP runs it threaded:
+- **THREADING WORKS: 1/2/4-thread = 700K / 369K / 243K cyc/head = 2.88× at 4-thread** (pure-HVX parallelizes,
+  unlike HMX which serialized at 810/827/832K). This is the key unblock — the no-HMX route threads.
+- **BUT the matmul off-diag is WRONG** (relerr ~1.0; diagonal correct 1e-4): a value-level HVX bug not yet
+  found (tried Rh-halfword-replicate and lo/hi-contiguous-vs-vshuff; neither fixed it — needs device
+  intermediate-value dumps to isolate quant_i12 vs matmul vs acc).
+- **And it's DDR-bound slow:** the diagonal alone is 373K/head bare-metal vs QNN's 48K — A is read from the
+  FastRPC user buffer (uncached DDR), not staged in TCM. Staging A in VTCM should recover ~the QNN diag cost.
+
+**Plausible ceiling once fixed:** diag ~48K (staged) + int16-HVX merges (~65K matmul + ~90K quant + overhead
+≈ 180K) ≈ 228K single-thread → ~57K at 4-thread. That MISSES the aspirational 30–40K but **would beat the
+shipped GdnSolve (70–83K)** — so the route is worth finishing (fix the matmul, stage A, lean the quant).
+
 ### FINAL VERDICT (the whole route): the 4-thread speed GOAL is unreachable with HMX; needs a pure-HVX solve
 
 Two device-proven walls for an **HMX** triangular-solve: (1) accuracy — only fixable with the FLOOR→round
