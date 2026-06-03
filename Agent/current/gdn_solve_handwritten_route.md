@@ -78,9 +78,44 @@ baseline), not the old 30–40K (which was 2–3× under the ~2×-underestimated
   bare-metal but there's almost nothing HMX-bound to hide. (This is why int16-HVX 151K beats int8-HMX 637K:
   it drops the crouton pack/depack glue entirely.)
 
-**Open levers (HVX side):** (a) use all 4 HVX units — 128B mode exposes only 2 (`QURT_HVX_HW_UNITS_2X128B_4X64B`),
-64B mode exposes 4 → could push 2.92×→~4×; (b) FULLY vectorize the inversion + glue (kill remaining scalar:
-diag coeff load, identity add, maxabs extract, per-call float scale); (c) finish the metric alignment.
+## FOLLOW-UP PLAN (2026-06-03 → next) — beat the REAL shipped (~147–190K/head) toward ~50–95K
+
+Solve is **HVX-bound** at parity with shipped. Lever = **less HVX work + more HVX parallelism** (NOT
+overlap, NOT dtype, NOT HMX). Every step: measure in the aligned metric (skill `htp-cycle-metric`), keep
+oc ≤ 2.4e-2 (now 0.28%), gate behind a `-D` flag, revert anything that doesn't pay. Realistic end state
+~80–95K/head (≈1.5–2× under shipped); the 50K floor is a stretch.
+
+**Phase 1 — DIAGNOSE before optimizing (cheap, decisive).**
+- Get the H=32 per-stage breakdown (`-DGDN_BR_PROBE_CYCLES` / DIAG_ONLY): diag vs each merge stage
+  (quant / fold / matmul / acc / requant) cycle share, per-head.
+- Get per-thread `cycles_used` + the H-sweep fit → is the 2.92× cap (a) HVX-unit count, (b) sync/
+  spawn-join overhead (fixed 178K), or (c) merge-chain load imbalance across heads?
+- Determine the ACTUAL v75 128B HVX unit count (don't assume 2 from the v68 define — DDR path already hit
+  2.94×, so ≥3 effective). This decides whether Phase 3 (64B mode) is worth it.
+
+**Phase 2 — CUT HVX work (highest leverage; the bulk is here).**
+- 2a. Operand-reuse cache in the HVX_MERGE path: quant+fold each distinct `A_ik`/`T_kj` ONCE/head (10→6
+  distinct A, T reused) — the HMX path had this (Task 2), the int16-HVX path may not. ~1.3–1.5× on glue.
+- 2b. FULL vectorization — kill every scalar: diag identity add (vector mask), maxabs horizontal reduce
+  (keep in-vector), per-call float scale→Mg (precompute/vectorize). On HTP scalar is intrinsically slow.
+- 2c. Fuse passes: quant→matmul→acc→requant make multiple 64×64 sweeps; fuse adjacent ones to cut
+  load/store traffic.
+
+**Phase 3 — MORE HVX parallelism (only if Phase 1 says units are free).**
+- If unit-bound at 128B (2–3 units): try 64B mode (4 units) — each row splits into 2 half-vectors; net
+  more instructions but up to ~4× threads. If sync/imbalance-bound instead: fix load balance (interleave
+  heads, or split the sequential merge chain) and cut the 178K fixed overhead.
+
+**Phase 4 — INTEGRATE + END-TO-END (GOAL #3).**
+- Build `solve_br_op` as the QNN op with `-DGDN_BR_HVX_MERGE` (agent confirmed it now runs, no hang),
+  measure via the same optrace flow (aligned metric) vs shipped.
+- `scripts/gdn_insert_solve_op.py`: replace shipped `GdnSolve` in the real GDN graph; re-check end-to-end
+  GDN `oc` unchanged; measure whole-graph wall.
+
+**Phase 5 — DECIDE + document.** Final aligned number vs shipped 147–190K. Beat it → ship; parity → keep
+shipped, document why. Update route doc / skill / memory with the final aligned comparison.
+
+**Open levers (was):** (a) 4 HVX units (Phase 3); (b) full vectorization (Phase 2b); (c) metric alignment ✅ DONE.
 
 > The sections below are the dated journey (some marked "unreachable"/"FINAL VERDICT" were premature — they
 > were reached with the wrong tools (u8×i8 HMX), wrong workload (H=8), or wrong/unaligned metric). Kept as
