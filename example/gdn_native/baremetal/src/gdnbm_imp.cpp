@@ -67,6 +67,29 @@ static char __attribute__((aligned(128))) g_solve_stack[GDN_BR_NT][32768];
 static void solve_worker(void *arg) {
     gdn_work_t *w = (gdn_work_t *)arg;
     int hvx = qurt_hvx_lock(QURT_HVX_MODE_128B);
+#if defined(GDNBM_STAGE_A) && !defined(GDNBM_MM_TEST) && !defined(GDNBM_Q_TEST) && !defined(GDNBM_MERGE_TEST)
+    /* stage each head's A (256x256 u16 = 128KB) DDR->VTCM once, so the diag/fold read from TCM (the
+     * FastRPC user buffer is uncached DDR -> the bare-metal diag is 7.8x QNN's). VTCM-only acquire (HVX path). */
+    compute_res_attr_t va; HAP_compute_res_attr_init(&va);
+    HAP_compute_res_attr_set_vtcm_param(&va, 0x40000u, 0);
+    unsigned int vctx = HAP_compute_res_acquire(&va, 2000000);
+    uint8_t *vtcm = (uint8_t *)HAP_compute_res_attr_get_vtcm_ptr(&va);
+    gdn_scr_t *sc = &g_scr[w->slot];
+    gdn_vtcm_t vt; memset(&vt, 0, sizeof(vt));
+    const int CC = GDN_BR_C * GDN_BR_C;
+    for (uint32_t h = w->h0 + w->slot; h < w->h1; h += w->nheads) {
+        const uint16_t *Ah = w->Au + (size_t)h * CC;
+        if (vtcm) {
+            const HVX_UVector *s = (const HVX_UVector *)Ah; HVX_Vector *d = (HVX_Vector *)vtcm;
+            for (int v = 0; v < CC * 2 / 128; ++v) d[v] = s[v];
+            Ah = (const uint16_t *)vtcm;
+        }
+        gdn_br_one_head(sc, &vt, Ah, w->Tu + (size_t)h * CC, w->zpA, w->M, w->S, w->sT, w->zpT);
+    }
+    if (vctx) HAP_compute_res_release(vctx);
+    if (hvx == 0) qurt_hvx_unlock();
+    return;
+#endif
 #ifdef GDNBM_MM_TEST
     /* matmul isolation: A=100*I, B[k,j]=k*64+j -> C[i,j] must = 100*(i*64+j). Writes C int32 to Tu. */
     { gdn_scr_t *sc = &g_scr[w->slot];
