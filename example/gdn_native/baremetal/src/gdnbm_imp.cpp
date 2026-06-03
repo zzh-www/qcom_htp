@@ -89,6 +89,10 @@ static void solve_worker(void *arg) {
      * 0x60000 slice via w->vtcm_base (per-worker HAP_compute_res_acquire SERIALIZES the workers — the
      * resource manager grants VTCM per-context, so concurrent acquires block on each other). */
     uint8_t *vtcm = w->vtcm_base ? (w->vtcm_base + (size_t)w->slot * 0x60000) : nullptr;
+    /* NOTE: scratch (gdn_scr_t) STAYS in DDR BSS — measured: moving it to VTCM made the solve 7x SLOWER
+     * (471K->3.48M) because the merge/diag scratch is accessed by SCALAR/data-dependent code, and VTCM
+     * scalar access is catastrophically slow.  "all-in-VTCM" applies ONLY to HVX/HMX/DMA-accessed data
+     * (here: A).  T writes go straight to DDR (sequential, L2-prefetch friendly). */
     gdn_scr_t *sc = &g_scr[w->slot];
     gdn_vtcm_t vt; memset(&vt, 0, sizeof(vt));
     const int CC = GDN_BR_C * GDN_BR_C;
@@ -183,7 +187,7 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
     uint8_t *vtcm_base = nullptr; unsigned int vctx = 0;
 #if defined(GDNBM_VTCM_RESIDENT)
     { compute_res_attr_t va; HAP_compute_res_attr_init(&va);
-      HAP_compute_res_attr_set_vtcm_param(&va, (unsigned)GDN_BR_NT * 0x60000u, 0);
+      HAP_compute_res_attr_set_vtcm_param(&va, (unsigned)GDN_BR_NT * 0x60000u, 0);  /* 384KB/worker: A ping-pong */
       vctx = HAP_compute_res_acquire(&va, 2000000);
       vtcm_base = (uint8_t *)HAP_compute_res_attr_get_vtcm_ptr(&va); }
 #endif

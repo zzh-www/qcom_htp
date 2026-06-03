@@ -583,3 +583,14 @@ T writes straight to DDR). oc held 0.30%. Device (H=8 C=256, `ssh oneplus`):
 ≈ ~160K single-thread — would beat the 240-270K threaded-HVX BR, but still ~2× over shipped 70-83K.
 **The hard wall stands:** HMX-free merges force single-thread (HMX lock serial), threaded diag forbids HMX;
 no config reaches 30-40K. Best realistic BR ≈ ~160K single-thread (HMX merges) or ~240K 4-thread (HVX).
+
+### VTCM gotchas measured (2026-06-03, fixing the threading regression)
+- **Acquire VTCM ONCE, share slices.** Per-worker `HAP_compute_res_acquire` serializes workers (resource
+  manager grants VTCM per-context → concurrent acquires block). Fix (acquire NT*0x60000 once on main,
+  worker uses slot*0x60000): 4-thread 270K→**215K** (188-215K across runs), scaling 1.83×→2.19×, beats
+  the DDR path 243K. oc held 0.30%. (SDK `incs/HAP_compute_res.md`, tutorial ch04 `demo_vtcm_alloc`.)
+- **Scalar scratch must NOT go in VTCM.** Putting the merge/diag scratch (gdn_scr_t, hammered by
+  scalar/data-dependent code) in VTCM made the solve **7× SLOWER (471K→3.48M)** — VTCM scalar access is
+  catastrophic; it's for HVX-vector/HMX/DMA only. Reverted; scratch stays DDR BSS (L2 prefetch). So
+  "all-in-VTCM" = HVX/HMX/DMA-accessed data ONLY (here: A). Best int16-HVX VTCM state: 1/2/4-thread
+  471/274/215K, oc 0.30%.

@@ -20,12 +20,23 @@ to keep every hardware unit busy at once and hide the moving of bytes.
    RPC per op. Per-op round trips pay the comms tax (and a DDR round trip) every
    op; one dispatch amortizes it once. (Qwen3-0.6B: 196 ops → 71ms per-op-FastRPC
    vs 12ms one-dispatch-dspqueue.)
-2. **If it fits in VTCM, put ALL of it in VTCM.** Make the entire working set
-   resident — weights, activations, intermediates — not just the hot/reused
-   tensors. The win is eliminating DDR round trips *between* ops/stages and
-   keeping data on-chip across the whole graph (also: HMX mandates it, and it
-   avoids cache eviction / non-deterministic latency). Only fall back to
-   streaming/double-buffer (Layer 3) when the working set genuinely exceeds VTCM.
+2. **If it fits in VTCM, put ALL of it in VTCM** — *for data touched by HVX / HMX
+   / DMA*. Make the working set resident to eliminate DDR round trips between
+   ops/stages and feed HMX (mandatory). Fall back to streaming/double-buffer
+   (Layer 3) only on overflow.
+   ⚠️ **TWO measured gotchas (learned the hard way on the GDN solve):**
+   - **VTCM must be acquired ONCE per process and SHARED** (acquire on the main
+     thread, give each worker a `slot*REGION` slice). A per-worker
+     `HAP_compute_res_acquire` SERIALIZES the workers — the resource manager
+     grants VTCM per-context, so concurrent acquires block on each other.
+     (Fixing this: GDN 4-thread 270K→215K, scaling 1.83×→2.19×.) Canonical:
+     SDK `incs/HAP_compute_res.md` + tutorial ch04 `demo_vtcm_alloc.c`.
+   - **Do NOT put SCALAR / data-dependent scratch in VTCM.** VTCM scalar access
+     is catastrophically slow (it's built for HVX-vector + HMX + DMA, not scalar
+     loads/stores). Moving the GDN merge/forward-subst scratch (hammered by
+     scalar code) into VTCM made the solve **7× SLOWER** (471K→3.48M). Keep
+     scalar-accessed scratch in DDR (L2 prefetch handles it); only put
+     vector/HMX/DMA-accessed buffers in VTCM.
 3. **Hide every unavoidable byte move** under compute (DMA double-buffer, Layer 3).
 
 (Nuance, not an exception: VTCM is not faster than DDR for a *single sequential*
