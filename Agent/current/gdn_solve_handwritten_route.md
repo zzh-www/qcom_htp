@@ -340,7 +340,36 @@ the diagonal 1" instinct drove this investigation to the FLOOR root cause.
 **GOAL status now:** (2) accuracy ✅ MET (oc 1.3%, relerr 1.36e-2); (3) integration oc ✅ validated
 (`scripts/gdn_br_oc_check.py`); (1) speed ❌ still blocked — HMX op is single-thread-only.
 
-### VERDICT (revised): for SPEED, build it in int16-HVX (NOT HMX); accuracy is no longer the blocker
+### PURE-HANDWRITTEN ROUTE (chosen 2026-06-03): escape QNN, self-manage HVX/HMX/threads
+
+User direction for SPEED: drop the QNN custom-op framework and run a **bare-metal FastRPC HAP** that owns
+its threads + HMX + VTCM. This is GOAL.md's original "pure-handwritten" vision and the only way past the
+threading wall.
+
+**Why it can work (the QNN HMX-on-worker fault was an API/PD-management artifact, not a HW limit):**
+- raw `qurt_hmx_lock()` from a spawned worker FAULTED inside QNN's backend-managed unsigned PD.
+- the PROPER API is **`HAP_compute_res_hmx_lock3(ctx, HAP_COMPUTE_RES_HMX_SHARED, &mutex, timeout)`** /
+  `_hmx_unlock3` — "lock/unlock HMX directly from the threads using HMX" (HAP_compute_res.h). v75 has 2 HMX
+  units + a SHARED mode. In our own HAP we acquire HMX per-thread via this API → worker HMX should work.
+
+**Feasibility CONFIRMED (all present):** `qaic` (ipc/fastrpc/qaic/Ubuntu/qaic), host `libcdsprpc.so`
+(android_aarch64), `HAP_compute_res_hmx_lock3`, device = `pineapple`/cdsp. Template = SDK
+`examples/calculator` (IDL→qaic→stub+skel; manual hexagon-clang skel build mirrors the QNN op build.sh).
+
+**Roadmap:**
+1. **DECISIVE PROBE (build first):** minimal FastRPC HAP `gdnbm` — spawn 2 qurt workers, each does
+   `qurt_hvx_lock` + `HAP_compute_res_hmx_lock3(HMX_SHARED)` + a trivial HMX op + reports rc. If both
+   workers get HMX (rc==0) and the HMX op runs → threaded HMX is viable → GO. (If it faults like QNN →
+   fall back to HVX-workers + 2-HMX-thread split.)
+2. Port the solve: diagonal int16-HVX forward-subst (carry over) + the merges. Merges can stay HMX (now
+   threadable via hmx_lock3) OR go int16-HVX; keep the **FLOOR→round drain fix** (rdelta) either way.
+3. Self-managed VTCM (no QNN scratch tensor), own thread pool (heads partitioned), no per-op QNN tax.
+4. Measure on device: oc (reuse `gdn_br_oc_check.py`) + 4-thread steady cycles vs the 30–40K GOAL band.
+
+Carry-overs from the QNN op: the diagonal solve, fold, the −38% glue vectorizations (pack/depack ror+mask),
+operand-reuse caching, and the **FLOOR→round drain fix** (the single most important correctness fix).
+
+### VERDICT (for the QNN-op variant): accuracy SOLVED (oc 1.3%); speed needs the pure-handwritten route above
 
 - **HMX is wrong on BOTH counts:** it can't thread (HMX bound to main thread → 3× slower than shipped) AND
   8-bit forces the coarse-scale accuracy cliff. Abandon the HMX merge engine, not the algorithm.
