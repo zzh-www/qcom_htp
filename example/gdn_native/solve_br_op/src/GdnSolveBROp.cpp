@@ -1031,6 +1031,49 @@ static void gdn_matmul_i8_vrmpy(const int8_t *A, const int8_t *btp, int32_t *C) 
         ((HVX_Vector *)(C + (size_t)i * BL))[1] = acc1;
     }
 }
+
+/* Direct int8 quant of a strided u16 A sub-block -> a8 (row-major, natural cols).  Skips the int32 fold
+ * intermediate: in dynamic-range int8 quant the per-tensor sA cancels, so a8 = round((code-zpA)*127/mxraw)
+ * is pure-integer (independent of M,S).  Returns mxraw; caller forms the dequant scale mxraw*sA_eff/127.
+ * Saves the fold stage (~16K/head 1-thread) AND the int32 Aoff write+read (~32KB/merge DDR traffic) — the
+ * latter helps the bandwidth-bound 4-thread path.  Mirrors gdn_fold_block_raw's even/odd (vzxt+vshuff). */
+static int32_t gdn_quant_i8_from_u16(const uint16_t *Au, int row_stride, int zpA, int8_t *out) {
+    const HVX_Vector vzp = Q6_V_vsplat_R(zpA);
+    HVX_Vector vmax = Q6_V_vzero();
+    for (int r = 0; r < BL; ++r) {
+        HVX_VectorPair w = Q6_Wuw_vzxt_Vuh(((const HVX_UVector *)(Au + (size_t)r * row_stride))[0]);
+        vmax = Q6_Vw_vmax_VwVw(vmax, Q6_Vw_vabs_Vw(Q6_Vw_vsub_VwVw(Q6_V_lo_W(w), vzp)));
+        vmax = Q6_Vw_vmax_VwVw(vmax, Q6_Vw_vabs_Vw(Q6_Vw_vsub_VwVw(Q6_V_hi_W(w), vzp)));
+    }
+    vmax = Q6_Vw_vmax_VwVw(vmax, Q6_V_vror_VR(vmax, 4*16));
+    vmax = Q6_Vw_vmax_VwVw(vmax, Q6_V_vror_VR(vmax, 4*8));
+    vmax = Q6_Vw_vmax_VwVw(vmax, Q6_V_vror_VR(vmax, 4*4));
+    vmax = Q6_Vw_vmax_VwVw(vmax, Q6_V_vror_VR(vmax, 4*2));
+    vmax = Q6_Vw_vmax_VwVw(vmax, Q6_V_vror_VR(vmax, 4*1));
+    int32_t lanes[32] __attribute__((aligned(128))); *(HVX_Vector *)lanes = vmax;
+    int32_t mxraw = lanes[0]; if (mxraw < 1) mxraw = 1;
+    float g = 127.0f / (float)mxraw;
+    int Q = 14; while (Q > 1 && g * (float)(1 << Q) >= 32768.0f) --Q;
+    while (Q < 28 && g * (float)(1 << (Q + 1)) < 16384.0f) ++Q;
+    const int Mrep = ((int)(g * (float)(1 << Q) + 0.5f) & 0xFFFF) * 0x10001;
+    const HVX_Vector vrnd = Q6_V_vsplat_R(1 << (Q - 1)), vlim = Q6_V_vsplat_R(127), vnlim = Q6_V_vsplat_R(-127);
+    for (int r = 0; r < BL; r += 2) {
+        HVX_VectorPair w0 = Q6_Wuw_vzxt_Vuh(((const HVX_UVector *)(Au + (size_t)r * row_stride))[0]);
+        HVX_Vector a0 = Q6_Vw_vsub_VwVw(Q6_V_lo_W(w0), vzp), a1 = Q6_Vw_vsub_VwVw(Q6_V_hi_W(w0), vzp);
+        a0 = Q6_Vw_vmin_VwVw(Q6_Vw_vmax_VwVw(Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_Vw_vmpyi_VwRh(a0, Mrep), vrnd), Q), vnlim), vlim);
+        a1 = Q6_Vw_vmin_VwVw(Q6_Vw_vmax_VwVw(Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_Vw_vmpyi_VwRh(a1, Mrep), vrnd), Q), vnlim), vlim);
+        HVX_VectorPair s0 = Q6_W_vshuff_VVR(a1, a0, -4);
+        HVX_Vector r0h = Q6_Vh_vpack_VwVw_sat(Q6_V_hi_W(s0), Q6_V_lo_W(s0));
+        HVX_VectorPair w1 = Q6_Wuw_vzxt_Vuh(((const HVX_UVector *)(Au + (size_t)(r + 1) * row_stride))[0]);
+        HVX_Vector b0 = Q6_Vw_vsub_VwVw(Q6_V_lo_W(w1), vzp), b1 = Q6_Vw_vsub_VwVw(Q6_V_hi_W(w1), vzp);
+        b0 = Q6_Vw_vmin_VwVw(Q6_Vw_vmax_VwVw(Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_Vw_vmpyi_VwRh(b0, Mrep), vrnd), Q), vnlim), vlim);
+        b1 = Q6_Vw_vmin_VwVw(Q6_Vw_vmax_VwVw(Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_Vw_vmpyi_VwRh(b1, Mrep), vrnd), Q), vnlim), vlim);
+        HVX_VectorPair s1 = Q6_W_vshuff_VVR(b1, b0, -4);
+        HVX_Vector r1h = Q6_Vh_vpack_VwVw_sat(Q6_V_hi_W(s1), Q6_V_lo_W(s1));
+        ((HVX_Vector *)(out + (size_t)r * BL))[0] = Q6_Vb_vpack_VhVh_sat(r1h, r0h);
+    }
+    return mxraw;
+}
 #endif  /* GDN_BR_MM_I8 */
 
 #if defined(GDN_BR_HVX_CACHE)
@@ -1301,6 +1344,25 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
 #endif
                 gdn_matmul_i16(a, b, sc->Tc);
                 sterm = sa * sb;
+#if defined(GDN_BR_PROBE_CYCLES)
+                { uint64_t mm; asm volatile("%0 = C15:14" : "=r"(mm)); g_c_hmxkern += mm - mm0; }
+#endif
+#elif defined(GDN_BR_MM_I8)
+                /* int8 direct path: quant A_ik straight from u16 (no int32 fold), quant B, vrmpy. */
+#if defined(GDN_BR_PROBE_CYCLES)
+                uint64_t f0; asm volatile("%0 = C15:14" : "=r"(f0));
+#endif
+                float sA_eff = (float)M; for (int _t = 0; _t < S + GDN_BR_F; ++_t) sA_eff *= 0.5f;
+                int32_t mxraw = gdn_quant_i8_from_u16(Ah + (size_t)i * BL * C + k * BL, C, zpA, sc->a8);
+                float sAq = (float)mxraw * sA_eff / 127.0f;
+                float sBq = gdn_quant_i8_from_codes(sc, sc->Tblk[bkj], sc->Tscl[bkj], sc->b8, -1);
+#if defined(GDN_BR_PROBE_CYCLES)
+                { uint64_t f; asm volatile("%0 = C15:14" : "=r"(f)); g_c_quant += f - f0; }
+                uint64_t mm0; asm volatile("%0 = C15:14" : "=r"(mm0));
+#endif
+                gdn_pack_b_vrmpy(sc->b8, sc->btp);
+                gdn_matmul_i8_vrmpy(sc->a8, sc->btp, sc->Tc);
+                sterm = sAq * sBq;
 #if defined(GDN_BR_PROBE_CYCLES)
                 { uint64_t mm; asm volatile("%0 = C15:14" : "=r"(mm)); g_c_hmxkern += mm - mm0; }
 #endif
