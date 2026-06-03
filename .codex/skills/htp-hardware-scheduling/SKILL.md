@@ -121,6 +121,18 @@ Rule: **never touch DDR mid-op**; bypass hexkl readback; chain stage outputs in 
 - Chasing **threaded HMX** (wrong layer; HMX can't thread).
 - No dspqueue fusion, no persistent tile → per-call + repeated conversion overhead.
 - Concluding "GOAL unreachable" from a build that never used this pipeline.
+- **Measuring a TOY workload.** GDN at H=8 (8 heads / 4 threads) showed 2.2× scaling
+  and made VTCM look *worse* than DDR — both artifacts of poor load balance. At the
+  real H=32: 2.92× and VTCM clearly wins. Always measure the full/real workload
+  before drawing scaling or residency conclusions.
+- **Betting on HVX∥HMX overlap without profiling the HMX fraction.** Overlap only
+  helps if there's a big HMX-bound chunk to hide. The GDN solve is HVX-BOUND —
+  mxmem is only ~6% (the rest is HVX pack/depack/quant glue) — so overlap saves ~6%
+  at best. Profile mxmem-vs-glue first; if HVX-bound, the lever is *less HVX work +
+  more HVX threads*, not overlap.
+- **Mixing measurement metrics.** bare-metal C15:14 WALL is not QNN optrace DOMAIN
+  cycles. Never quote an "Nx vs QNN" ratio until both are in one metric (see
+  `qnn-htp-profiling` / `docs/cycle_metric_alignment.md`).
 
 ## References
 - `docs/htp_hardware_scheduling_flow.md` — the full manual (4 layers + numbers + GDN post-mortem).

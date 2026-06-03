@@ -73,14 +73,18 @@ DDR→VTCM    →     反量化/重排    →   mxmem matmul  →   反交织/�
   **固定开销淹没 HMX 吞吐**，HMX 仅 ~1.1× 于 HVX，甚至更慢。**小块要靠零转换 tile 常驻把固定开销消掉**，
   否则纯 HVX qf32 更优。模型 ≥4B 时 NPU 在 prefill 才真正值回票价。
 
-## 对本仓 GDN solve 的修正（我之前为什么失败）
-之前裸机 BR solve = 271K、被数据搬运主导（diag 373K vs QNN 48K，8× gap）。三个错误，全是没按这套流程：
-1. **同步读 DDR / 一次性 memcpy 进 VTCM，零 DMA 重叠** —— 应按 Layer 3 用 UDMA 双缓冲，把那 373K 搬运
-   按 ~17× 量级藏进计算（head 维度天然是 ping-pong 分块单元）。
-2. **纠结"HMX 多线程"** —— 方向错。HMX 并行来自 Layer 3 流水重叠，不是 Layer 2 线程。
-3. **没用 dspqueue 融合、没持久 tile** —— per-call 开销 + 重复转换。
-> 结论：把搬运藏下去后 diag 有望逼近 48K 量级，整条 solve 才可能进 30–40K。这是调度问题（流程编排），
-> 不是换 kernel/dtype 的问题。详见 `Agent/current/gdn_solve_handwritten_route.md`。
+## 对本仓 GDN solve 的修正（我之前为什么失败 → 修了之后的真实数字）
+旧裸机 BR solve(H=8) = 271K、被数据搬运主导。错在没按这套流程,改正后:
+1. **VTCM acquire-once 共享**(原来每 worker 各自 acquire → 资源管理器串行化 worker)。
+2. **A 经 UDMA 常驻 VTCM**;标量访问的 scratch 留 DDR(VTCM 标量访问病态 7×,但根因是标量本不该有)。
+3. **测真实 H=32**(H=8 是 8head/4线程负载不均的假象,会得出相反结论)。
+> 改正后(真机 H=32,int16-HVX,VTCM 常驻 A,4 HVX 线程):**~151K cyc/head 4-thread,2.92× 扩展,
+> oc 0.28%**。这是调度问题(流程编排),不是换 kernel/dtype。⚠️ **151K 是裸机 wall,出货版 70–83K 是 QNN
+> domain cycles,口径未对齐前不下倍数结论**(见 `docs/cycle_metric_alignment.md`)。当前状态详见
+> `Agent/current/gdn_solve_handwritten_route.md` 的 CURRENT STATE。
+>
+> 注:HVX∥HMX overlap 对这条 solve 不是杠杆 —— mxmem(真 HMX)只占 ~6%,solve 是 HVX-bound;
+> overlap 只在有大块 HMX 工作可藏时才划算,用前先 profile HMX 占比。
 
 ## 复现 / 出处
 - ARM↔DSP dspqueue：`docs/hexagon-tutorial/hmx-tutorial/ch03-dspqueue/`（61 vs 364µs）。

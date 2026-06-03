@@ -42,6 +42,43 @@ steady compute at C=256 beats the shipped pure-HVX `GdnSolve` by **2–3×**, wi
 
 ---
 
+# ⭐ CURRENT STATE (2026-06-03) — read this first; supersedes the dated verdicts below
+
+**Best measured (real v75, `ssh oneplus`, FULL H=32 workload):** int16-HVX block-recursive solve, A
+VTCM-resident (acquire-once + UDMA), 4 HVX worker threads = **~151–172K cyc/head 4-thread** (1/2/4-thread
+440/224/151K, **2.92× scaling**), **oc relerr 0.28%**. Harness: `example/gdn_native/baremetal/`
+(`EXTRA_DEFS="-DGDNBM_VTCM_RESIDENT" bash build.sh`; `./gdnbm 4 A_u16_h32.raw … 32 256 …`).
+
+**⚠️ Do NOT quote a speed ratio vs shipped yet.** 151K is bare-metal WALL (C15:14); shipped 70–83K is QNN
+DOMAIN cycles — different instruments. A dedicated agent is establishing the exact metric alignment
+(`docs/cycle_metric_alignment.md`, in progress). Wait for that before any "Nx" claim.
+
+**The methodology that got here (validated, now a skill — `htp-hardware-scheduling`):**
+- VTCM is acquired ONCE on the main thread and SHARED (per-worker `HAP_compute_res_acquire` serializes
+  workers). Fixing this was the big unlock at H=32.
+- A is staged into VTCM (UDMA); scalar-accessed scratch STAYS in DDR (VTCM scalar access is pathological —
+  but the deeper rule is to ELIMINATE scalar, see below).
+- Measure the FULL H=32 workload — H=8 gives misleading scaling (poor load balance) and inverted conclusions.
+
+**Dead-ends ruled out (don't retry):**
+- **fp16-HMX matmul** — dropped (distraction; not the point — the point is HW scheduling/vectorization).
+- **Neumann repeated-squaring inverse** — numerically diverges in int8 (‖A⁴‖≈26, ‖A⁸‖≈65 blow up before
+  A³² collapses), AND all-HMX kills overlap (1 HMX unit). Dropped.
+- **HVX∥HMX overlap as the lever** — not for THIS solve: mxmem (true HMX) is only ~6% of the work (M5: 237
+  of ~3713/merge), the rest is HVX glue. The solve is HVX-BOUND. Overlap is architecturally real in
+  bare-metal but there's almost nothing HMX-bound to hide. (This is why int16-HVX 151K beats int8-HMX 637K:
+  it drops the crouton pack/depack glue entirely.)
+
+**Open levers (HVX side):** (a) use all 4 HVX units — 128B mode exposes only 2 (`QURT_HVX_HW_UNITS_2X128B_4X64B`),
+64B mode exposes 4 → could push 2.92×→~4×; (b) FULLY vectorize the inversion + glue (kill remaining scalar:
+diag coeff load, identity add, maxabs extract, per-call float scale); (c) finish the metric alignment.
+
+> The sections below are the dated journey (some marked "unreachable"/"FINAL VERDICT" were premature — they
+> were reached with the wrong tools (u8×i8 HMX), wrong workload (H=8), or wrong/unaligned metric). Kept as
+> provenance; the CURRENT STATE above is authoritative.
+
+---
+
 # GDN triangular inverse — pure-handwritten route (analysis + per-head op decomposition)
 
 The QNN custom-op route for `T=(I−A)⁻¹` at prefill C=256 is at its floor (shipped int16-packed HVX
