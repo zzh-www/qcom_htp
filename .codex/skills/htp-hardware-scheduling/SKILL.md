@@ -1,6 +1,6 @@
 ---
 name: htp-hardware-scheduling
-description: How to hand-write EFFICIENT Hexagon HTP kernels by orchestrating the hardware units (DMA engine, HVX, HMX) and VTCM into an overlapped pipeline. Use this BEFORE designing/optimizing any hand-written DSP op in qcom_htp — bare-metal FastRPC HAPs, dspqueue kernels, custom QNN ops doing their own VTCM/HMX work, or any "make this op faster / why is my op data-movement-bound" task. It pins the methodology (NOT a specific op or dtype): the 4 scheduling layers, the DMA double-buffer that hides data movement (17×), the bottleneck hierarchy (DDR I/O ≫ readback ≫ HMX compute), and the HMX-vs-HVX decision rule. The point is the FLOW, not fp16/int8.
+description: How to hand-write EFFICIENT Hexagon HTP kernels by orchestrating the hardware units (DMA engine, HVX, HMX) and VTCM into an overlapped pipeline. Use this BEFORE designing/optimizing any hand-written DSP op in qcom_htp — bare-metal FastRPC HAPs, dspqueue kernels, custom QNN ops doing their own VTCM/HMX work, or any "make this op faster / why is my op data-movement-bound" task. It pins the methodology (NOT a specific op or dtype): the 3 non-negotiable principles (one RPC = whole graph never per-op; if it fits put ALL data resident in VTCM; hide every byte move under compute), the 4 scheduling layers, the DMA double-buffer that hides data movement (17×), the bottleneck hierarchy (DDR I/O ≫ readback ≫ HMX compute), and the HMX-vs-HVX decision rule. The point is the FLOW, not fp16/int8.
 ---
 
 # HTP Hardware Scheduling
@@ -13,6 +13,24 @@ into an end-to-end tool unless asked.
 **The one rule:** the bottleneck is almost always *data movement*, not compute.
 Pure HMX matmul on VTCM-resident data is ~free (~1µs, ~28k GFLOPS). Your job is
 to keep every hardware unit busy at once and hide the moving of bytes.
+
+**Three non-negotiable principles (apply these first, always):**
+1. **One RPC = the whole graph.** After the single FastRPC `start`, process the
+   ENTIRE graph / composite computation on the DSP before returning — NEVER one
+   RPC per op. Per-op round trips pay the comms tax (and a DDR round trip) every
+   op; one dispatch amortizes it once. (Qwen3-0.6B: 196 ops → 71ms per-op-FastRPC
+   vs 12ms one-dispatch-dspqueue.)
+2. **If it fits in VTCM, put ALL of it in VTCM.** Make the entire working set
+   resident — weights, activations, intermediates — not just the hot/reused
+   tensors. The win is eliminating DDR round trips *between* ops/stages and
+   keeping data on-chip across the whole graph (also: HMX mandates it, and it
+   avoids cache eviction / non-deterministic latency). Only fall back to
+   streaming/double-buffer (Layer 3) when the working set genuinely exceeds VTCM.
+3. **Hide every unavoidable byte move** under compute (DMA double-buffer, Layer 3).
+
+(Nuance, not an exception: VTCM is not faster than DDR for a *single sequential*
+HVX pass — L2 prefetch saturates that. Residency still wins because it kills the
+cross-op DDR traffic and feeds HMX; design for the graph, not one vadd.)
 
 Full manual: `docs/htp_hardware_scheduling_flow.md`. ASM building blocks:
 `docs/hexagon-tutorial/hmx-tutorial/ch05-hmx/src/exp5_standalone_asm.c`.
@@ -75,13 +93,13 @@ Rule: **never touch DDR mid-op**; bypass hexkl readback; chain stage outputs in 
 
 ## Design checklist for a new fast kernel
 
-1. Comms: dspqueue (or fuse into one op), not per-call FastRPC.
-2. Pick the parallel axis (batch/head/row-strip) → that axis is your ping-pong unit.
-3. VTCM bump layout: weight/act tiles, output acc, **two** DMA scratch buffers, scales.
+1. Comms: one FastRPC start, then **process the whole graph in one DSP dispatch** via dspqueue — never per-op RPC.
+2. Working set: **does it fit in VTCM? If yes, put ALL of it resident** (one bump layout for the whole graph) and skip streaming entirely. Only if it overflows → go to steps 3–4.
+3. If overflowing: pick the parallel axis (batch/head/row-strip) → that axis is your ping-pong unit; VTCM layout = weight/act tiles + output acc + **two** DMA scratch buffers + scales.
 4. Stage the pipeline: `dma_start(next)` → HVX prep → HMX compute → HVX readback → `dma_wait`.
-5. Keep intermediates in VTCM tile format; bypass hexkl readback (hmx_store_acc + vdeal).
+5. Keep intermediates in VTCM tile format across ops; bypass hexkl readback (hmx_store_acc + vdeal); never round-trip DDR between ops.
 6. HMX init once: `bias = mxmem2(scales)` (scale=1.0 / bias=0) or HMX returns garbage.
-7. Measure against the hierarchy above: if data-movement-bound, your DMA isn't overlapping.
+7. Measure against the hierarchy above: if data-movement-bound, either your set isn't resident or your DMA isn't overlapping.
 
 ## Common mistakes (seen in this repo's GDN solve)
 

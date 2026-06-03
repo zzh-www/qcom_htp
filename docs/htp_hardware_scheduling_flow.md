@@ -10,6 +10,19 @@
 靠 **DMA 双缓冲**把数据搬运藏进计算时间里，靠 **dspqueue** 把 ARM↔DSP 通信开销摊销掉，靠 **VTCM
 持久 tile 格式**消掉重复的格式转换。瓶颈永远是数据搬运，不是计算。
 
+## 三条不可妥协的首要原则（先套这三条）
+
+1. **一次 RPC = 整张图。** FastRPC 只 `start` 一次，之后**整张图/整条复合计算在 DSP 侧一口气跑完**
+   再返回，**绝不一个 op 一次 RPC**。per-op 往返每个 op 都要付通信税（外加一次 DDR 往返）；一次
+   dispatch 只摊一次。（Qwen3-0.6B 196 ops：per-op FastRPC 71ms vs 一次 dispatch 12ms。）
+2. **数据能放进 VTCM 就全放 VTCM。** 让整个工作集驻留片上——权重、激活、中间结果全放，不只是热/复用
+   的张量。收益是消掉 op/stage **之间**的 DDR 往返、让数据全程留在片上（且 HMX 强制要 VTCM、还避免
+   cache 驱逐与不确定延迟）。**只有当工作集真的超出 VTCM 容量时**，才退化到 Layer 3 的流式/双缓冲。
+3. **不可避免的搬运，全部藏进计算**（DMA 双缓冲，Layer 3）。
+
+> 一个细节（不是例外）：VTCM 对**单次顺序** HVX 不比 DDR 快（L2 预取已饱和带宽）。但"全放 VTCM"
+> 依然赢，因为它消掉的是**跨 op 的 DDR 流量**并喂给 HMX——按整张图设计，不要按单个 vadd 评判。
+
 ## 四层调度（从外到内）
 
 ### Layer 1 — ARM↔DSP 通信：dspqueue（不是 per-call FastRPC）
