@@ -555,3 +555,31 @@ even halving the merge DDR too ⇒ **~108K**. Both still LOSE to shipped (70–8
 **GOAL #1 stands as unreachable; shipped `GdnSolve` stays the optimum.** (To get the exact number, the
 QNN-op `GDN_BR_HVX_MERGE` hang would have to be debugged first — left as a known blocker, not worth it
 since the reconstruction already shows it loses.)
+
+---
+
+## Applying the htp-hardware-scheduling SKILL to the solve (2026-06-03, measured)
+
+Built `GDNBM_VTCM_RESIDENT` (UDMA ping-pong stages each head's A into VTCM; diag/merges read A from VTCM;
+T writes straight to DDR). oc held 0.30%. Device (H=8 C=256, `ssh oneplus`):
+
+| config | 1-thread | 4-thread | scaling | note |
+|---|---|---|---|---|
+| int16-HVX, DDR+L2 (no VTCM) | 714K | **243K** | 2.94× | original |
+| int16-HVX, VTCM+UDMA | **495K** | 270K | 1.83× | this |
+| diag-only, VTCM+UDMA | 153K (was 373K DDR) | 112K | 1.37× | |
+
+**Findings:**
+1. **SKILL principle 2 (all-in-VTCM) validated single-thread:** UDMA-staging A cut the diag 373K→153K
+   (the uncached-FastRPC-DDR read was ~220K of it) and the full solve 714K→495K single-thread.
+2. **But it HURT multi-thread:** 4-thread went 243K→270K, threading 2.94×→1.83×. One UDMA engine +
+   per-worker VTCM ⇒ 4 workers serialize on the DMA engine. This is exactly the SKILL's own nuance
+   ("VTCM ≯ DDR for *sequential* HVX — L2 prefetch saturates it"). ⇒ **multi-thread wants DDR+L2;
+   the VTCM/UDMA path only pays off SINGLE-thread.**
+3. Cost decomposition (1-thread, VTCM): diag 153K + merges(int16-HVX compute) ~342K = 495K. The merges
+   are the bulk and are HVX *compute* (not data movement) — the SKILL says move them to HMX (~free).
+
+**Next per SKILL = single-thread HMX streaming:** diag 153K + f16-HMX merges (`src/gdn_f16_hmx.h`, ~free)
+≈ ~160K single-thread — would beat the 240-270K threaded-HVX BR, but still ~2× over shipped 70-83K.
+**The hard wall stands:** HMX-free merges force single-thread (HMX lock serial), threaded diag forbids HMX;
+no config reaches 30-40K. Best realistic BR ≈ ~160K single-thread (HMX merges) or ~240K 4-thread (HVX).

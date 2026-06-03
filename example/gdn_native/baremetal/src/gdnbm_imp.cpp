@@ -31,6 +31,20 @@ int gdnbm_close(remote_handle64 h) { (void)h; return 0; }
 static inline uint64_t pcyc(void) { uint64_t c; asm volatile("%0 = C15:14" : "=r"(c)); return c; }
 static inline float i2f(int b) { union { int i; float f; } u; u.i = b; return u.f; }
 
+/* ---- UDMA: async DDR->VTCM (skill principle 3: hide the A-load under compute) ---- */
+typedef struct {
+    void *next; unsigned int length:24, desctype:2, dstcomp:1, srccomp:1,
+        dstbypass:1, srcbypass:1, order:1, dstate:1;
+    void *src, *dst;
+} __attribute__((aligned(64))) dma_desc_t;
+static inline void udma_start(dma_desc_t *d, void *dst, const void *src, uint32_t len) {
+    memset(d, 0, sizeof(*d));
+    d->length = len; d->desctype = 0; d->srcbypass = 1; /* DDR src bypasses cache */
+    d->src = (void *)src; d->dst = dst;
+    Q6_dmstart_A((void *)d);
+}
+static inline int udma_wait(void) { return Q6_R_dmwait(); }
+
 /* ---- HMX-on-worker feasibility probe (kept) ---- */
 static volatile int g_prc[GDN_BR_NT], g_psent[GDN_BR_NT];
 static char __attribute__((aligned(128))) g_pstack[GDN_BR_NT][16384];
@@ -67,6 +81,37 @@ static char __attribute__((aligned(128))) g_solve_stack[GDN_BR_NT][32768];
 static void solve_worker(void *arg) {
     gdn_work_t *w = (gdn_work_t *)arg;
     int hvx = qurt_hvx_lock(QURT_HVX_MODE_128B);
+#if defined(GDNBM_VTCM_RESIDENT) && !defined(GDNBM_MM_TEST) && !defined(GDNBM_Q_TEST) && !defined(GDNBM_MERGE_TEST)
+    /* SKILL principles: (2) keep A resident in VTCM (not uncached FastRPC DDR -> bare-metal diag was
+     * 373K vs QNN 48K), (3) UDMA ping-pong so head h+1's A loads while head h computes. T writes go
+     * straight to DDR (sequential, L2-prefetch friendly).  VTCM-only acquire on this worker thread. */
+    compute_res_attr_t va; HAP_compute_res_attr_init(&va);
+    HAP_compute_res_attr_set_vtcm_param(&va, 0x60000u, 0);   /* 384KB: 2x128KB A ping-pong + scratch */
+    unsigned int vctx = HAP_compute_res_acquire(&va, 2000000);
+    uint8_t *vtcm = (uint8_t *)HAP_compute_res_attr_get_vtcm_ptr(&va);
+    gdn_scr_t *sc = &g_scr[w->slot];
+    gdn_vtcm_t vt; memset(&vt, 0, sizeof(vt));
+    const int CC = GDN_BR_C * GDN_BR_C;
+    const uint32_t Abytes = (uint32_t)CC * 2u;              /* u16 A block = 128KB */
+    uint16_t *Avt[2] = { (uint16_t *)vtcm, (uint16_t *)(vtcm + 0x20000) };
+    dma_desc_t dsc;
+    if (vtcm) {
+        /* build this worker's head list, ping-pong over it */
+        uint32_t hs[64]; int n = 0;
+        for (uint32_t h = w->h0 + w->slot; h < w->h1 && n < 64; h += w->nheads) hs[n++] = h;
+        if (n > 0) udma_start(&dsc, Avt[0], w->Au + (size_t)hs[0] * CC, Abytes);
+        for (int i = 0; i < n; ++i) {
+            udma_wait();                                    /* cur A ready */
+            if (i + 1 < n) udma_start(&dsc, Avt[(i + 1) & 1],
+                                      w->Au + (size_t)hs[i + 1] * CC, Abytes);  /* prefetch next */
+            gdn_br_one_head(sc, &vt, Avt[i & 1], w->Tu + (size_t)hs[i] * CC,
+                            w->zpA, w->M, w->S, w->sT, w->zpT);   /* reads A from VTCM */
+        }
+    }
+    if (vctx) HAP_compute_res_release(vctx);
+    if (hvx == 0) qurt_hvx_unlock();
+    return;
+#endif
 #if defined(GDNBM_STAGE_A) && !defined(GDNBM_MM_TEST) && !defined(GDNBM_Q_TEST) && !defined(GDNBM_MERGE_TEST)
     /* stage each head's A (256x256 u16 = 128KB) DDR->VTCM once, so the diag/fold read from TCM (the
      * FastRPC user buffer is uncached DDR -> the bare-metal diag is 7.8x QNN's). VTCM-only acquire (HVX path). */
