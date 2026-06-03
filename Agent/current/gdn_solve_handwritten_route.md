@@ -265,10 +265,32 @@ identity, so bit-exactness is preserved — the metric is purely cycles).
 - The diagonal triangular solve (~48K) is HVX-bound (data-dependent back-substitution) and near floor.
 
 Pushing single-thread toward ~100K would need a deeper algorithmic change to the quant-loop or the solve,
-not more glue cleanup. **The 4-thread product target (30–40K) is GATED on threading (Task 5)** —
-spawned-worker HMX faults (HMX bound to the main callback thread), so HVX-worker + main-thread-HMX
-marshalling is the unsolved make-or-break, and is the highest-leverage next step (a clean 3× on 236K ≈
-79K/head; combined with residual cuts it approaches the band).
+not more glue cleanup.
+
+### THREADING (Task 5) — RESOLVED: simple head-parallel is IMPOSSIBLE for this HMX op (2026-06-03)
+
+Device-verified on real v75 (unsigned PD, `gdn_br.sh` gated builds):
+- **spawn + `qurt_hvx_lock` on a worker WORKS** — `GDN_BR_THREAD_TEST` returns create_rc=0, hvx_ok=1, HVX
+  sentinel correct, join_rc=0; `GDN_BR_USE_THREADS -DGDN_BR_NT=2 -DGDN_BR_DIAG_ONLY -DGDN_BR_NO_HMX_LOCK`
+  runs **bit-exact** (diag relerr 1.077e-4) with 2 workers. ⇒ HVX head-parallelism is fully viable.
+- **`qurt_hmx_lock()` AND `qurt_hmx_lock2(QURT_HMX_SHARED_LOCK)` on a spawned worker FAULT the graph** —
+  and it is the *lock call itself*, not the kernel: `DIAG_ONLY` with the worker HMX-lock but no kernel
+  still faults. v75 has 2 HMX units + a shared-lock mode, but neither is grantable to a dynamically
+  spawned thread in the QNN-managed PD. HMX is bindable ONLY to the main callback thread.
+
+**Implication for the BR route (important):** BR is an HMX-resource op (`multithreaded=false`), so QNN will
+NOT auto-thread it, AND manual threading can't put HMX on workers. So **BR is stuck at single-thread
+~236K/head**, while the shipped pure-HVX `GdnSolve` threads freely via QNN to **70–83K/head (4-thread)**.
+⇒ as-is, **BR single-thread LOSES ~3× to the shipped op on the 4-thread metric.** The GO decision's
+"own-context threading 3–4×" assumption is **REFUTED** — consistent with
+[[project_gdn_hvx_hmx_overlap_impossible_2026-06-03]] (custom ops can't get HMX concurrency).
+
+**Only remaining path to a competitive BR: HVX-worker + main-thread-HMX marshalling** — N HVX workers do
+the 93% HVX glue (quant/pack/depack/requant/fold/acc/diag) for their heads; main is an HMX server running
+the 32 kernel calls/head. Rough ceiling: HVX 221K/head ×8 ÷4 workers ≈ 442K wall ≈ **~55K/head 4-thread**
+(beats shipped 70–83K, still MISSES the 30–40K GOAL band; needs the HVX glue cut further too). It is a
+large producer/consumer subsystem (qurt signals, per-worker VTCM surfaces, HMX-server loop) with real
+sync-overhead risk — a major build with uncertain payoff. **Decision point for the user before investing.**
 
 **Metric/probe note:** per-stage cyc decoded from T head-0 (op writes g_c_* there under
 `-DGDN_BR_PROBE_CYCLES`); read uint16 codes back via `code=round(T_float/sT)+32768`, pair into uint32.
