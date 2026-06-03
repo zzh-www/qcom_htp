@@ -236,6 +236,38 @@ directly in crouton int8, keep all blocks VTCM-resident. Target the ~673–3,476
   focused work, not a one-shot. Baseline to track: 380K/head single-thread, relerr 2.378e-2.
 - **DEAD END confirmed:** 2-pass→1-pass scale (cut #1, relerr 1.76).
 
+### Focused-pass RESULTS (2026-06-03, all device bit-exact, relerr held at 2.378e-2 throughout)
+
+C=256 H=8 single-thread aggregate **3,043,707 → 1,924,321 cyc/8 heads (−37%, 380K → ~240K/head)**. Each
+step validated on real v75 (`gdn_br.sh CB=256`), relerr unchanged (every cut is deterministic / provably
+identity, so bit-exactness is preserved — the metric is purely cycles).
+
+| # | cut | commit | per-stage effect (cyc/head) | aggregate |
+|---|---|---|---|---|
+| #1  | vectorize `gdn_pack_act_crouton8` (256 scalar-VTCM stores → HVX ror+mask) | `2155888`+ | actpack 40,106→15,691 | 3,043,707→2,853,179 |
+| #1b | drop redundant scalar diag upper-tri zeroing (forward-subst already leaves code 0 → requant writes zpT) | | requant 55,500→16,885 | 2,853,179→2,554,594 |
+| #1c | vectorize depack (its scalar-copy twin: combine nt0/nt1 crouton halves → aligned HVX stores) | | hmxdepack 28,804→7,497 | 2,554,594→2,403,004 |
+| #2  | operand-reuse cache: quant+fold each distinct operand once/head (A_ik act 10→6, T_kj wt 10→6, T_ii act 6→3) | | quant 89,526→58,491; fold 15,298→9,231 | 2,403,004→2,094,659 |
+| #2b | cache PACKED HMX surfaces in VTCM (crouton act / k-major wt / eff) + constant loose bound (both operands rail to ±127 ⇒ loose = 64·127·127) | | actpack→9.5K, wtpack→11.9K, eff→6.6K, pint 38K→24K | 2,094,659→**1,924,321** |
+
+**Current per-head single-thread breakdown (probe, ~227K; clean 240K):** quant **58,412** · diag **48,681**
+· pint 24,172 · requant 16,924 · hmxkern 15,587 · acc 12,237 · wtpack 11,903 · actpack 9,526 · fold 9,242 ·
+depack 7,662 · eff 6,618 · widen 3,744 · zero 2,101.
+
+**Remaining single-thread levers (smaller, diminishing):** (a) quant-loop is now the floor — off-diag T
+blocks are widened-from-int8 so their codes are already ±127; the wt quant of those is an *identity* and
+can be skipped (store int8 directly, also skips `gdn_widen`, ~12K); (b) fuse maxabs into the producers
+(fold/solve track max → quant drops its maxabs pass, ~8K). Both ~5% each. The diagonal triangular solve
+(48K) is HVX-bound and near its floor. To reach the ~100K single-thread target needs these PLUS deeper
+quant-loop reduction; the 4-thread product target (30–40K) is **gated on threading (Task 5)** —
+spawned-worker HMX faults (HMX is bound to the main callback thread), so HVX workers + main-thread HMX
+marshalling is the unsolved make-or-break.
+
+**Metric/probe note:** per-stage cyc decoded from T head-0 (op writes g_c_* there under
+`-DGDN_BR_PROBE_CYCLES`); read uint16 codes back via `code=round(T_float/sT)+32768`, pair into uint32.
+The PROBE build was silently failing earlier because the getters referenced `g_c_fold` declared *after*
+them — declarations now hoisted above the getters.
+
 ## (superseded) Go/no-go experiment — kept for reference
 
 Measure the **glue floor** with zero QNN, in hexagon-sim (pcycles), reusing `scripts/gdn_hmx_matmul_sim.py`
