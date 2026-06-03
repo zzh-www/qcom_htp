@@ -250,18 +250,25 @@ identity, so bit-exactness is preserved — the metric is purely cycles).
 | #2  | operand-reuse cache: quant+fold each distinct operand once/head (A_ik act 10→6, T_kj wt 10→6, T_ii act 6→3) | | quant 89,526→58,491; fold 15,298→9,231 | 2,403,004→2,094,659 |
 | #2b | cache PACKED HMX surfaces in VTCM (crouton act / k-major wt / eff) + constant loose bound (both operands rail to ±127 ⇒ loose = 64·127·127) | | actpack→9.5K, wtpack→11.9K, eff→6.6K, pint 38K→24K | 2,094,659→**1,924,321** |
 
-**Current per-head single-thread breakdown (probe, ~227K; clean 240K):** quant **58,412** · diag **48,681**
-· pint 24,172 · requant 16,924 · hmxkern 15,587 · acc 12,237 · wtpack 11,903 · actpack 9,526 · fold 9,242 ·
-depack 7,662 · eff 6,618 · widen 3,744 · zero 2,101.
+| #3 | maxabs-fusion: producers (fold/solve) track the exact maxabs in-register; quant takes it and skips its 128-vec maxabs scan (bit-exact). Covers A_ik act + diag act/wt (12 of 21 quants) | | quant 58.4K→~54K | 1,924,321→**1,889,690** |
 
-**Remaining single-thread levers (smaller, diminishing):** (a) quant-loop is now the floor — off-diag T
-blocks are widened-from-int8 so their codes are already ±127; the wt quant of those is an *identity* and
-can be skipped (store int8 directly, also skips `gdn_widen`, ~12K); (b) fuse maxabs into the producers
-(fold/solve track max → quant drops its maxabs pass, ~8K). Both ~5% each. The diagonal triangular solve
-(48K) is HVX-bound and near its floor. To reach the ~100K single-thread target needs these PLUS deeper
-quant-loop reduction; the 4-thread product target (30–40K) is **gated on threading (Task 5)** —
-spawned-worker HMX faults (HMX is bound to the main callback thread), so HVX workers + main-thread HMX
-marshalling is the unsolved make-or-break.
+**Current per-head single-thread breakdown (clean ~236K):** quant ~54K · diag ~48K · pint 24K · requant 17K
+· hmxkern 15.6K · acc 12K · wtpack 12K · actpack 9.5K · fold 9K · depack 7.6K · eff 6.6K · widen 3.7K.
+
+**SINGLE-THREAD IS NEAR ITS CLEAN FLOOR (380K → 236K = −38%).** Remaining cuts are ≤2% each:
+- **maxabs-fusion gave only ~2%** — the per-element quant-loop (fixed-point mul/round/clamp/narrow over
+  4096 elems), NOT the maxabs scan, is the quant cost; irreducible without changing precision.
+- **The "off-diag T is already int8 → skip its wt quant as an identity" cut is INVALID** (verified by
+  reasoning, not tried): the re-quant deliberately *re-normalizes* a sub-127 block to the full ±127 range
+  (`sQ=maxval/127`), raising precision. Skipping it regresses relerr. Only the maxabs (not the rescale) is
+  fusable, and that is already done.
+- The diagonal triangular solve (~48K) is HVX-bound (data-dependent back-substitution) and near floor.
+
+Pushing single-thread toward ~100K would need a deeper algorithmic change to the quant-loop or the solve,
+not more glue cleanup. **The 4-thread product target (30–40K) is GATED on threading (Task 5)** —
+spawned-worker HMX faults (HMX bound to the main callback thread), so HVX-worker + main-thread-HMX
+marshalling is the unsolved make-or-break, and is the highest-leverage next step (a clean 3× on 236K ≈
+79K/head; combined with residual cuts it approaches the band).
 
 **Metric/probe note:** per-stage cyc decoded from T head-0 (op writes g_c_* there under
 `-DGDN_BR_PROBE_CYCLES`); read uint16 codes back via `code=round(T_float/sT)+32768`, pair into uint32.
