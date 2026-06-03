@@ -596,3 +596,21 @@ threaded diag (~40-50K) + ~free merges could approach 30-40K. (fp16-HMX was a de
   catastrophic; it's for HVX-vector/HMX/DMA only. Reverted; scratch stays DDR BSS (L2 prefetch). So
   "all-in-VTCM" = HVX/HMX/DMA-accessed data ONLY (here: A). Best int16-HVX VTCM state: 1/2/4-thread
   471/274/215K, oc 0.30%.
+
+## FULL H=32 workload (2026-06-03, the real measurement — H=8 was misleading)
+int16-HVX, VTCM-resident A (acquire-once), 4 HVX worker threads, device `ssh oneplus`:
+
+| H=32 | 1-thread | 2-thread | 4-thread | scaling |
+|---|---|---|---|---|
+| DDR int16-HVX | 610K | 338K | 302K | 2.02× |
+| **VTCM-resident** | 440K | 224K | **151–172K** | **2.92×** |
+
+oc relerr **0.28%** (bit-exact-ish, np.linalg.inv). At H=8 the scaling was only ~2.2× (8 heads / 4 threads =
+poor load balance) and VTCM looked *worse* than DDR — both artifacts of the small workload. At the real
+**H=32**, VTCM-resident clearly wins and the 4 threads scale 2.92×. Best so far: **~151K cyc/head 4-thread**.
+
+⚠️ **Metric caveat (unresolved):** 151K is bare-metal WALL (C15:14 around spawn→join). Shipped 70–83K is QNN
+steady DOMAIN cycles — NOT the same metric. Rough same-terms gap ≈ ~2× (not the ~3× claimed from H=8 wall).
+**Remaining levers:** (a) threading 2.92×→4× (64B mode = 4 HVX units vs 128B's 2; or cut the diag's
+sequential sync); (b) FULLY vectorize the inversion + glue (kill remaining scalar: diag coeff load, identity
+add, maxabs extract, per-call float scale math); (c) measure same-metric vs shipped before any "Nx" claim.
