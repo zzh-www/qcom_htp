@@ -78,47 +78,63 @@ baseline), not the old 30–40K (which was 2–3× under the ~2×-underestimated
   bare-metal but there's almost nothing HMX-bound to hide. (This is why int16-HVX 151K beats int8-HMX 637K:
   it drops the crouton pack/depack glue entirely.)
 
-## FOLLOW-UP PLAN (2026-06-03 → next) — beat the REAL shipped (~147–190K/head) toward ~50–95K
+## FOLLOW-UP PLAN (rewritten 2026-06-03, on nailed-down facts)
 
-Solve is **HVX-bound** at parity with shipped. Lever = **less HVX work + more HVX parallelism** (NOT
-overlap, NOT dtype, NOT HMX). Every step: measure in the aligned metric (skill `htp-cycle-metric`), keep
-oc ≤ 2.4e-2 (now 0.28%), gate behind a `-D` flag, revert anything that doesn't pay. Realistic end state
-~80–95K/head (≈1.5–2× under shipped); the 50K floor is a stretch.
+### Fixed facts (don't re-litigate)
+- **Metric ALIGNED** (skill `htp-cycle-metric`): QHAS `cycles` == C15:14 PCYCLE. Compare per-head in PCYCLE.
+- **HW device-confirmed:** 4×128B HVX units (0×64B → 64B mode is OFF), 1 HMX (process-serial), 8MB VTCM,
+  ~1.42 GHz TURBO.
+- **Solve is HVX-BOUND** (mxmem ~6%); HVX∥HMX overlap is NOT a lever; dtype/fp16 are NOT the point.
+- **Baseline (int16-HVX, VTCM-resident A, 4 threads, H=32):** ~156K wall/head (440K 1-thread, **2.94×**),
+  oc 0.28%. Shipped real ~147K compute / 190K wall per head → **we're at PARITY**.
 
-**Phase 1 — DIAGNOSE before optimizing (cheap, decisive).**
-- Get the H=32 per-stage breakdown (`-DGDN_BR_PROBE_CYCLES` / DIAG_ONLY): diag vs each merge stage
-  (quant / fold / matmul / acc / requant) cycle share, per-head.
-- Get per-thread `cycles_used` + the H-sweep fit → is the 2.92× cap (a) HVX-unit count, (b) sync/
-  spawn-join overhead (fixed 178K), or (c) merge-chain load imbalance across heads?
-- ✅ ANSWERED (device-confirmed via `qurt_hvx_get_units()`, `-DGDNBM_HWINFO`): this 8 Gen 3 = **4×128B HVX
-  units, 0×64B, 8MB VTCM, ~1.42 GHz**. So the HVX thread ceiling is **4**, and **64B mode gives no extra
-  units → off the table**. We're at 2.94× of 4 = ~73% → the cap is sync / fixed 178K spawn-join overhead /
-  merge-chain load imbalance, NOT unit count. (HVX/HMX/VTCM facts now in the `htp-hardware-scheduling` skill.)
+### Goal & the two multipliers
+Beat shipped ~2–3× → **~50–95K/head** (aligned metric, oc ≤ 2.4e-2). Two independent multipliers, both needed:
+- **(A) cut per-thread HVX work** — drives the 440K 1-thread base down.
+- **(B) close threading 2.94×→~4×** — we have 4 units for 4 threads; the 26% gap is overhead, not silicon.
+Rough math: A≈1.4× and B≈3.8× ⇒ 440K/1.4/3.8 ≈ **~83K/head** (~2× under shipped). Aggressive A≈1.7×+B≈4×
+⇒ ~65K. Realistic landing ~70–95K; 50K is the stretch floor.
 
-**Phase 2 — CUT HVX work (highest leverage; the bulk is here).**
-- 2a. Operand-reuse cache in the HVX_MERGE path: quant+fold each distinct `A_ik`/`T_kj` ONCE/head (10→6
-  distinct A, T reused) — the HMX path had this (Task 2), the int16-HVX path may not. ~1.3–1.5× on glue.
-- 2b. FULL vectorization — kill every scalar: diag identity add (vector mask), maxabs horizontal reduce
-  (keep in-vector), per-call float scale→Mg (precompute/vectorize). On HTP scalar is intrinsically slow.
-- 2c. Fuse passes: quant→matmul→acc→requant make multiple 64×64 sweeps; fuse adjacent ones to cut
+### Discipline (every step)
+Measure H=32 in the aligned PCYCLE metric (1-thread AND 4-thread); oc gate ≤ 2.4e-2; one `-D`-gated change
+at a time; revert anything that doesn't pay. Get a per-stage + per-thread breakdown FIRST.
+
+### Phase 1 — Diagnose (cheap, decides 2 vs 3 ordering)
+- Per-stage cycle share at H=32 (`-DGDN_BR_PROBE_CYCLES`, and `-DGDN_BR_DIAG_ONLY`): how the 440K 1-thread
+  splits — diag forward-subst vs each merge stage (quant / fold / matmul / acc / requant). Find the top 2.
+- Per-thread `cycles_used` (via the aligned optrace OR per-worker C15:14) + the H-sweep overhead fit → how
+  much of the 26% threading gap is fixed spawn-join (~178K) vs load imbalance. (HW ceiling already known = 4.)
+- Output: ranked target list for Phase 2 + the dominant cause of the threading gap for Phase 3.
+
+### Phase 2 — Lever A: cut per-thread HVX work (the bulk)
+- **2a Operand-reuse cache** in the int16-HVX merge path: quant+fold each distinct `A_ik`/`T_kj` ONCE/head
+  (10→6 distinct A; T_kj reused across merges). The int8-HMX path already has this (Task 2); port it.
+- **2b Full vectorization — eliminate ALL scalar** (HTP scalar is intrinsically slow): diag identity add →
+  vector mask; maxabs → keep the horizontal-reduce result in-vector (no lane extract); per-call float
+  scale→Mg → precompute/vectorize. Audit every `[i]`/scalar op in diag + merge.
+- **2c Fuse passes**: quant→matmul→acc→requant sweep 64×64 several times; fuse adjacent sweeps to cut VTCM
   load/store traffic.
+- (Target the Phase-1 top stages first; re-rank after each change.)
 
-**Phase 3 — CLOSE the threading gap to 4× (64B mode is OFF — only 4×128B units exist).**
-- We have 4 HVX units and 4 threads but only 2.94×. The gap is sync / fixed 178K spawn-join-power overhead
-  / merge-chain load imbalance. Fixes: (i) reuse a persistent worker pool / amortize spawn-join across the
-  one dispatch (don't respawn per call); (ii) interleave heads so the per-head sequential merge chain
-  (dist1→2→3) doesn't leave threads idle at head boundaries; (iii) cut the fixed 178K. Target ~3.5–4×.
+### Phase 3 — Lever B: close threading to ~4× (NOT 64B — only 4×128B units exist)
+- Persistent worker pool: don't respawn 4 qurt threads per `solve` call — spawn once, feed work, amortize
+  the fixed ~178K spawn/join/power across the dispatch.
+- Kill load imbalance: the per-head merge chain is sequential (dist1→2→3); interleave heads / hand out
+  work at sub-head granularity so no thread idles at head boundaries.
+- Verify each worker is pinned to a distinct HVX unit (we have exactly 4).
 
-**Phase 4 — INTEGRATE + END-TO-END (GOAL #3).**
-- Build `solve_br_op` as the QNN op with `-DGDN_BR_HVX_MERGE` (agent confirmed it now runs, no hang),
-  measure via the same optrace flow (aligned metric) vs shipped.
-- `scripts/gdn_insert_solve_op.py`: replace shipped `GdnSolve` in the real GDN graph; re-check end-to-end
-  GDN `oc` unchanged; measure whole-graph wall.
+### Phase 4 — Integrate + end-to-end (GOAL #3)
+- Build `solve_br_op` as the QNN custom op (`-DGDN_BR_HVX_MERGE`, agent confirmed it runs); measure via the
+  same optrace flow (aligned metric) directly against shipped.
+- `scripts/gdn_insert_solve_op.py`: swap shipped `GdnSolve` → ours in the real GDN graph; re-check
+  end-to-end GDN `oc` unchanged; measure whole-graph wall.
 
-**Phase 5 — DECIDE + document.** Final aligned number vs shipped 147–190K. Beat it → ship; parity → keep
-shipped, document why. Update route doc / skill / memory with the final aligned comparison.
+### Phase 5 — Decide + document
+- Final aligned per-head (compute-busy AND wall) vs shipped 147/190K. Beat by ≥1.5× → adopt; parity → keep
+  shipped and document why. Update route doc CURRENT STATE / skills / memory with the final numbers.
 
-**Open levers (was):** (a) 4 HVX units (Phase 3); (b) full vectorization (Phase 2b); (c) metric alignment ✅ DONE.
+**Start: Phase 1** (one build with `-DGDN_BR_PROBE_CYCLES` at H=32) — it ranks Phase-2 targets and tells us
+whether Phase 3 is overhead-bound or imbalance-bound. Cheap, and it stops us optimizing the wrong stage.
 
 > The sections below are the dated journey (some marked "unreachable"/"FINAL VERDICT" were premature — they
 > were reached with the wrong tools (u8×i8 HMX), wrong workload (H=8), or wrong/unaligned metric). Kept as
