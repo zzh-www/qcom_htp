@@ -385,11 +385,20 @@ threading wall.
      373K cyc/head 1-thread/8 heads. So HVX + VTCM + threading + power + acquire ALL work bare-metal.
    - **The full solve faults `0x8000040d` — PRECISELY the v73deep `mxmem` (HMX) instruction execution.**
      acquire(hmx)+power succeed but the mxmem itself faults.
-   **THE ONE REMAINING BLOCKER = make mxmem execute bare-metal.** Candidates: (a) HMX **critical section** —
-   wrap mxmem in `HAP_compute_res_hmx_lock4`/mutex (lock3 is NOT_SUPPORTED here, lock4 mask exists); (b) HMX
-   config/state QNN sets that the v73deep kernel assumes; (c) the worker's VTCM must be HMX-accessible (HMX
-   reads/writes mxmem surfaces in VTCM — verify the acquired VTCM is the HMX-visible region). Isolate a SINGLE
-   mxmem packet under acquire+power first, then the kernel.
+   **THE ONE REMAINING BLOCKER = make mxmem execute bare-metal.** Mechanisms TRIED (all on device, none
+   enable mxmem — still faults `0x8000040d`):
+   - HMX **power vote** (`HAP_power_set_core_corner` TURBO + `HAP_power_set_HMX{power_up}`): fixed the HANG →
+     now faults instead (so power was necessary but not sufficient);
+   - separate VTCM-only + HMX-only `HAP_compute_res_acquire`, **each on the using thread**: VTCM/HMX both OK;
+   - `qurt_hmx_lock()`: **NOT linkable** in the unsigned-PD skel (dynamic load fails "RX VA outside ELF
+     segment") — reverted;
+   - `HAP_compute_res_hmx_lock4` critical section (lock3 is NOT_SUPPORTED): **no effect**, mxmem still faults.
+   **Open.** Further diagnosis needs either (a) DSP-exception visibility — QXDM/diag or a PD-dump, NOT in
+   `ssh logcat` (the unsigned PD gives only `0x8000040d` = generic invoke-fail); or (b) RE of exactly how the
+   QNN HTP backend enables HMX in its unsigned PD (it clearly does — QNN runs HMX unsigned). Hypotheses left:
+   the mxmem **config registers** the v73deep kernel assumes QNN set (HMX start/convert state), or the VTCM
+   must be a specific HMX-visible allocation. **Everything else in the bare-metal route works** (FastRPC,
+   VTCM 8MB, power, HVX solve `DIAG_ONLY` clean @373K/head 1-thr, threading, per-worker acquire).
 2. Port the solve: diagonal int16-HVX forward-subst (carry over) + the merges. Merges can stay HMX (now
    threadable via hmx_lock3) OR go int16-HVX; keep the **FLOOR→round drain fix** (rdelta) either way.
 3. Self-managed VTCM (no QNN scratch tensor), own thread pool (heads partitioned), no per-op QNN tax.
