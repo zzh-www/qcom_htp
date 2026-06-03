@@ -19,11 +19,10 @@
 #define GDN_BR_NT 4
 #endif
 #define THIS_PKG_NAME GdnBm
-/* per-thread HMX context + fine-grained HMX critical section: the device solve calls GDN_BR_HMX_ENTER/EXIT
- * ONLY around the mxmem kernel, so the HVX glue runs unlocked and worker threads parallelize. */
-/* per-kernel HMX lock FAULTS (compute_resource_hmx_lock is not re-lockable per-call); the working model is
- * lock-ONCE around the whole slot (in solve_worker) -> mxmem runs, but HMX is then held for the slot so
- * worker threads serialize (the lock is process-exclusive; 2 HMX units don't give 2 concurrent locks). */
+/* HVX-MERGE mode: HMX is process-serial (mxmem under compute_resource_hmx_lock can't thread — verified),
+ * so replace the HMX merges with int16-HVX matmul merges -> pure HVX + BSS scratch, worker threads
+ * parallelize freely.  No HMX / VTCM / mxmem / power-HMX needed. */
+#define GDN_BR_HVX_MERGE 1
 #include "../../solve_br_op/src/GdnSolveBROp.cpp"
 
 int gdnbm_open(const char *uri, remote_handle64 *h) { (void)uri; *h = 1; return 0; }
@@ -63,31 +62,12 @@ int gdnbm_hmx_probe(remote_handle64 _h, int nworkers, int *results, int resultsL
 
 /* ---- the threaded solve ---- */
 static char __attribute__((aligned(128))) g_solve_stack[GDN_BR_NT][32768];
-/* HAP worker: own HVX context + own HMX (HAP_compute_res acquire, the only model this device supports),
- * then run this slot's heads through the reused gdn_br_run_slot (HVX diagonals + HMX merges). */
+/* HAP worker (HVX-merge mode): own HVX context, run this slot's heads.  No HMX/VTCM — the int16-HVX
+ * merges use only HVX + BSS scratch, so workers parallelize with no shared lock. */
 static void solve_worker(void *arg) {
     gdn_work_t *w = (gdn_work_t *)arg;
     int hvx = qurt_hvx_lock(QURT_HVX_MODE_128B);
-    /* each worker acquires its OWN VTCM (0x60000) on THIS thread + its own HMX (separate acquires; the
-     * combined HMX+VTCM acquire fails, and VTCM acquired on another thread may not be usable here). */
-    compute_res_attr_t va; HAP_compute_res_attr_init(&va);
-    HAP_compute_res_attr_set_vtcm_param(&va, 0x60000u, 0);
-    unsigned int vctx = HAP_compute_res_acquire(&va, 2000000);
-    uint8_t *vtcm = (uint8_t *)HAP_compute_res_attr_get_vtcm_ptr(&va);
-    compute_res_attr_t ha; HAP_compute_res_attr_init(&ha); HAP_compute_res_attr_set_hmx_param(&ha, 1);
-    unsigned int hctx = HAP_compute_res_acquire(&ha, 2000000);
-    /* HMX enable = compute_resource_hmx_lock (what QNN's libQnnHtpV75Skel uses, verified via nm).  Set the
-     * per-thread context; the solve locks ONLY around each mxmem (GDN_BR_HMX_ENTER/EXIT) so HVX parallelizes. */
-    int hl = HAP_compute_res_hmx_lock(hctx);   /* lock ONCE around the slot (per-call lock faults) */
-    if (vtcm) {
-        /* gdn_br_run_slot indexes vt = gdn_vtcm_from(vtcm_base + slot*0x60000); give it own_vtcm by
-         * offsetting the base so the slot term lands on this worker's region. */
-        w->vtcm_base = vtcm - (size_t)w->slot * 0x60000;
-        gdn_br_run_slot(w);
-    }
-    if (hl == 0) HAP_compute_res_hmx_unlock(hctx);
-    if (hctx) HAP_compute_res_release(hctx);
-    if (vctx) HAP_compute_res_release(vctx);
+    gdn_br_run_slot(w);                 /* vtcm_base unused in HVX-merge mode */
     if (hvx == 0) qurt_hvx_unlock();
 }
 

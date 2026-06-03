@@ -133,6 +133,8 @@ struct gdn_scr_t {
     uint8_t surf_sub[GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));/* depack base-subtracted surface */
     int32_t eff[64] __attribute__((aligned(128)));                       /* folded-bias effective[] */
     int16_t Tc16[GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));   /* int16-packed diag T codes */
+    int16_t a16[GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));    /* int16-HVX merge: 12-bit A operand */
+    int16_t b16[GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));    /* int16-HVX merge: 12-bit B operand */
     /* ---- per-head operand-reuse cache metadata (Task 2): quantize+pack each distinct operand ONCE ----
      * the packed surfaces live in VTCM (gdn_vtcm_t acache/wcache); here we keep scales + valid flags.
      * A_ik act key gdn_blk_index(i,k) (10->6); T_ii act key i (6->3); T_kj wt key gdn_blk_index(k,j) (10->6). */
@@ -887,6 +889,91 @@ static void gdn_merge_packed(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint8_t 
     *s_out = sP;
 }
 
+/* ============ int16-HVX merge (NO HMX -> threads freely; HMX is process-serial, can't hit 4-thread) ============
+ * Replaces the HMX matmul with a direct int16 HVX matmul, reusing the diagonal solve's Q6_Ww_vmpyacc_WwVhRh.
+ * Operands quantized to 12-bit (±2047) so the 64-term int32 accumulator can't overflow (64*2047^2 < 2^29). */
+
+/* quantize 64x64 int32 codes (value=code*scale_in) to 12-bit int16 codes (±2047); returns scale sQ. */
+static float gdn_quant_i12_from_codes(gdn_scr_t *sc, const int32_t *codes, float scale_in, int16_t *out,
+                                      int32_t mx) {
+    if (mx < 0) mx = gdn_maxabs_codes(codes);
+    float maxval = (float)mx * scale_in;
+    float sQ = (maxval > 0.0f) ? (maxval / 2047.0f) : 1e-12f;
+    float g = scale_in / sQ;
+    int Q = 14;
+    while (Q > 1  && g * (float)(1 << Q) >= 32768.0f) --Q;
+    while (Q < 28 && g * (float)(1 << (Q + 1)) < 16384.0f) ++Q;
+    int32_t Mg = (int32_t)(g * (float)(1 << Q) + 0.5f);
+    const int Mrep = (Mg & 0xFFFF) * 0x10001;
+    const HVX_Vector vrnd = Q6_V_vsplat_R(1 << (Q - 1));
+    const HVX_Vector vlim = Q6_V_vsplat_R(2047), vnlim = Q6_V_vsplat_R(-2047);
+    const HVX_Vector *p = (const HVX_Vector *)codes;
+    HVX_Vector *qp = (HVX_Vector *)sc->qbuf;
+    for (int b = 0; b < (BL * BL) / 32; ++b) {
+        HVX_Vector prod = Q6_Vw_vmpyi_VwRh(p[b], Mrep);
+        HVX_Vector q = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(prod, vrnd), Q);
+        q = Q6_Vw_vmin_VwVw(q, vlim); q = Q6_Vw_vmax_VwVw(q, vnlim);
+        qp[b] = q;
+    }
+    /* narrow int32 -> int16 (natural order): pack 2 int32 vecs (64 lanes) -> 1 int16 vec. */
+    HVX_Vector *op = (HVX_Vector *)out;
+    for (int v = 0; v < (BL * BL) / 64; ++v) op[v] = Q6_Vh_vpack_VwVw_sat(qp[2 * v + 1], qp[2 * v]);
+    return sQ;
+}
+
+/* C[64][64] int32 = A[64][64] @ B[64][64], int16 operands.  C[i,:] = sum_k A[i,k]*B[k,:].  Reuses the
+ * diagonal MAC: acc(WordPair, even/odd cols) += B_row[k](64 int16) * A[i,k](scalar); vshuff -> natural int32. */
+static void gdn_matmul_i16(const int16_t *A, const int16_t *B, int32_t *C) {
+    for (int i = 0; i < BL; ++i) {
+        const int16_t *Ai = A + i * BL;
+        HVX_VectorPair acc = Q6_W_vzero();
+        for (int k = 0; k < BL; ++k)
+            acc = Q6_Ww_vmpyacc_WwVhRh(acc, ((const HVX_Vector *)(B + k * BL))[0], (Ai[k] & 0xFFFF) * 0x10001);
+        /* Q6_Ww_vmpyacc produces CONTIGUOUS halves (lo=cols 0-31, hi=cols 32-63), not even/odd — store
+         * them contiguously (this matches the diagonal solve's vasr_VwVwR(hi,lo) natural ordering). */
+        ((HVX_Vector *)(C + i * BL))[0] = Q6_V_lo_W(acc);
+        ((HVX_Vector *)(C + i * BL))[1] = Q6_V_hi_W(acc);
+    }
+}
+
+/* int16-HVX merge: C = A @ B (int32 codes in/out, no HMX/pack/depack).  out scale = sAq*sBq. */
+static void gdn_merge_hvx(gdn_scr_t *sc, const int32_t *A_codes, float sA, int32_t mxA,
+                          const int32_t *B_codes, float sB, int32_t mxB, int32_t *C_codes, float *s_out) {
+#if defined(GDN_BR_PROBE_CYCLES)
+    uint64_t q0; asm volatile("%0 = C15:14" : "=r"(q0));
+#endif
+    float sAq = gdn_quant_i12_from_codes(sc, A_codes, sA, sc->a16, mxA);
+    float sBq = gdn_quant_i12_from_codes(sc, B_codes, sB, sc->b16, mxB);
+#if defined(GDN_BR_PROBE_CYCLES)
+    { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_quant += q - q0; }
+    uint64_t m0; asm volatile("%0 = C15:14" : "=r"(m0));
+#endif
+    gdn_matmul_i16(sc->a16, sc->b16, C_codes);
+#if defined(GDN_BR_PROBE_CYCLES)
+    { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_hmxkern += q - m0; }
+#endif
+    *s_out = sAq * sBq;
+}
+
+/* accumulate an int32 term (scale s_term) into sc->Sacc (scale s_S): Sacc += round(term*s_term/s_S).
+ * first==1 => Sacc = term (caller sets s_S=s_term).  No widen (term is already int32). */
+static void gdn_acc_i32_to_codes(gdn_scr_t *sc, const int32_t *term, float s_term, float s_S, int first) {
+    HVX_Vector *sp = (HVX_Vector *)sc->Sacc;
+    const HVX_Vector *tp = (const HVX_Vector *)term;
+    if (first) { for (int b = 0; b < (BL * BL) / 32; ++b) sp[b] = tp[b]; return; }
+    float g = s_term / s_S;
+    int Q = 14;
+    while (Q > 1  && g * (float)(1 << Q) >= 32768.0f) --Q;
+    while (Q < 28 && g * (float)(1 << (Q + 1)) < 16384.0f) ++Q;
+    int32_t Mg = (int32_t)(g * (float)(1 << Q) + 0.5f);
+    const int Mrep = (Mg & 0xFFFF) * 0x10001;
+    const HVX_Vector vrnd = Q6_V_vsplat_R(1 << (Q - 1));
+    for (int b = 0; b < (BL * BL) / 32; ++b) {
+        HVX_Vector prod = Q6_Vw_vmpyi_VwRh(tp[b], Mrep);
+        sp[b] = Q6_Vw_vadd_VwVw(sp[b], Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(prod, vrnd), Q));
+    }
+}
+
 /* order-preserving widen of 4096 int8 codes -> 4096 int32 in dst.  vsxt deals bytes; we re-interleave
  * the 4 int32 streams (byte indices 4j, 4j+1, 4j+2, 4j+3) with two word-granularity vshuffs. */
 static void gdn_widen_i8_to_i32(const int8_t *src, int32_t *dst) {
@@ -1043,6 +1130,45 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
             uint64_t m0; asm volatile("%0 = C15:14" : "=r"(m0));
 #endif
             int bij = gdn_blk_index(i, j);
+#if defined(GDN_BR_HVX_MERGE)
+            /* int16-HVX merges (NO HMX -> threads freely).  Operate directly on int32 codes. */
+            int bii = gdn_blk_index(i, i);
+            float s_S = 0.0f; int first = 1;
+            for (int k = j; k < i; ++k) {
+#if defined(GDN_BR_PROBE_CYCLES)
+                uint64_t f0; asm volatile("%0 = C15:14" : "=r"(f0));
+#endif
+                int32_t mxA;
+                gdn_fold_block_raw(Ah + (size_t)i * BL * C + k * BL, C, sc->Aoff, zpA, M, S, &mxA);
+#if defined(GDN_BR_PROBE_CYCLES)
+                { uint64_t f; asm volatile("%0 = C15:14" : "=r"(f)); g_c_fold += f - f0; }
+#endif
+                int bkj = gdn_blk_index(k, j);
+                float sterm;
+                gdn_merge_hvx(sc, sc->Aoff, (float)(1.0 / (1 << GDN_BR_F)), mxA,
+                              sc->Tblk[bkj], sc->Tscl[bkj], -1, sc->Tc, &sterm);
+                if (first) s_S = sterm;
+#if defined(GDN_BR_PROBE_CYCLES)
+                uint64_t a0; asm volatile("%0 = C15:14" : "=r"(a0));
+#endif
+                gdn_acc_i32_to_codes(sc, sc->Tc, sterm, s_S, first);
+#if defined(GDN_BR_PROBE_CYCLES)
+                { uint64_t a; asm volatile("%0 = C15:14" : "=r"(a)); g_c_acc += a - a0; }
+#endif
+                first = 0;
+            }
+            float sij;
+            gdn_merge_hvx(sc, sc->Tblk[bii], GDN_BR_TI, sc->mxdiag[i], sc->Sacc, s_S, -1, sc->Tblk[bij], &sij);
+            sc->Tscl[bij] = sij;
+#if defined(GDN_BR_PROBE_CYCLES)
+            uint64_t rq0; asm volatile("%0 = C15:14" : "=r"(rq0));
+#endif
+            gdn_requant_block_out(sc->Tblk[bij], sij, sT, zpT, Th, i * BL, j * BL, C);
+#if defined(GDN_BR_PROBE_CYCLES)
+            { uint64_t rq; asm volatile("%0 = C15:14" : "=r"(rq)); g_c_requant += rq - rq0; }
+            (void)m0;
+#endif
+#else  /* HMX merge path */
             float s_S = 0.0f; int first = 1;
             for (int k = j; k < i; ++k) {
                 /* cached: A_ik act (fold+quant+pack once per (i,k)), T_kj wt (quant+pack+eff once per (k,j)). */
@@ -1098,6 +1224,7 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
 #if defined(GDN_BR_PROBE_CYCLES)
             { uint64_t rq; asm volatile("%0 = C15:14" : "=r"(rq)); g_c_requant += rq - rq0; }
 #endif
+#endif  /* GDN_BR_HVX_MERGE */
         }
     }
 }
