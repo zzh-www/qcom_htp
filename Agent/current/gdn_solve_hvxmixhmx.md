@@ -1,5 +1,18 @@
 # GDNSolveHVXMixHMX — HVX-feed + HMX-matmul producer/consumer pipeline (matmul-portion squeeze)
 
+## ⛔ 工作方式（权威，置顶，勿违反）
+
+**只跑微基准（microbench）。不要再跑完整 GDNSolveHVXMixHMX 全 solve。**
+
+- 当前**只有微基准是跑通且可信的**（matmul-portion 4P、HMX_BENCH ceilings、P-sweep）。
+- 完整 solve 路径 `-DGDNBM_HMX_MERGE_PATH` 在 **open 阶段就 SSR**（`gdnbm_open rc=0x80000406`，
+  2026-06-05 复现确认；HVX 基线同设备 rc=0x0 正常 → 是该 build 自身问题，不是 DSP 挂了）。它的
+  "434K/head" 数字**无法在当前代码复现**，已作废，别再引用、别再尝试跑它。
+- **下一步不是修这个全 solve，而是据微基准结论彻底重写整个 solve**（2-head pack / fused depack /
+  2-head eff+bias / #1c / 正确多线程一次性进新实现）。在重写之前，唯一可信的性能依据是微基准。
+- 因此所有"GDNSolveHVXMixHMX vs GDNSolveHVX 全 solve 快/慢"的结论**暂缺**，等重写完成后用同 harness、
+  同线程数才能下；现在不要据残缺/SSR 的全 solve 数字下任何结论。
+
 ## 命名定义（GDN 求逆三种实现）
 
 全仓库统一用这三个名指代 GDN 三角求逆的三种实现，**勿用其他叫法**（如 "HVX-merge"、"HMX-feed"、
@@ -14,10 +27,32 @@
 
 本文档主要讲 **GDNSolveHVXMixHMX**。
 
+## VERIFY 复测结果（2026-06-05，real v75 `ssh oneplus`，本次 session 全部重跑）
+
+微基准全部复现，与文档记录一致或更好；全 solve 路径 SSR（见置顶禁令）。
+
+| 量 | 文档记录 | 本次实测 | 判定 |
+|---|---|---|---|
+| GDNSolveHVX 4-thread | 157K | **128–146K**（127541/128317/131675/140586/146189） | ✅ 复现，实测**更快**，157K 偏保守/过时 |
+| GDNSolveHVX 1-thread | 414K | **406K**（405895） | ✅ 复现，略快 |
+| matmul-portion 4P (cyc/matmul) | ~578/585 | **587/588/603** | ✅ 复现（噪声内） |
+| 4P consumer spin /matmul | ~167 | **166/181** | ✅ 复现 |
+| P-sweep P2/P3/P4 | 1034/721/585 | **1030–1043 / 713–730 / 588–612** | ✅ 复现，缩放曲线吻合 |
+| P-sweep spin (64%→46%→29%) | 667/334/167 | **666–703 / 344–350 / 172–183** | ✅ producer-feed-bound 结论成立 |
+| HMX kernel floor (stats[2]) | 215 | **214** | ✅ 复现 |
+| bit-exact 门 dep_mism / ovr_mism | 0 / 0 | **0 / 0** | ✅ 复现 |
+| consumer ceiling (HMX_BENCH stats[5]) | 388 | **749** | ⚠️ 对不上，但文档自己已声明 388 被 4P 实际 floor ~418/585 取代，属过时次要 ceiling，不影响结论 |
+| producer pack floor OLD/NEW (stats[3]/[4]) | ~3139 | **2561 / 2333** | ℹ️ 比记录低；向量化 eff+bias 省 ~228 cyc（isolated 单 head） |
+| 全 solve nthreads=1 `-DGDNBM_HMX_MERGE_PATH` | 434K | **SSR `rc=0x80000406`（open 即挂，无法复现）** | ❌ 作废，见置顶禁令 |
+
+**结论：微基准侧的性能优化分析（producer-feed-bound、HMX kernel 215、4P≈585、缩放曲线、bit-exact）全部
+站得住；全 solve 的任何数字（含 434K）不可信。**
+
 ## NEXT SESSION — START HERE (集成状态 + 计划, 2026-06-05)
 
-**真实基线（已验证，apples-to-apples 用它）**：GDNSolveHVX baremetal **4-thread = 157K cyc/head**
-（1-thread 414K）。这是当前最优。
+**真实基线（已验证，apples-to-apples 用它）**：GDNSolveHVX baremetal **4-thread = 128–146K cyc/head**
+（本次实测；旧记 157K 偏保守。1-thread 406K）。这是当前最优。
+**禁止跑全 solve（SSR + 即将重写）——只跑微基准，见置顶禁令。**
 
 **GDNSolveHVXMixHMX 在基准代码 (`gdn_merge_packed`) 的集成状态：**
 - ✅ **已集成**：向量化 `gdn_pack_bias`（128 scalar→4 vector，bit-identical，commit `2cc2884`）；

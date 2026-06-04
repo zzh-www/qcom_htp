@@ -19,6 +19,19 @@
 #define GDN_BR_NT 4
 #endif
 #define THIS_PKG_NAME GdnBm
+
+/* ⛔ DISABLED (2026-06-05): the full-solve GDNSolveHVXMixHMX harness SSRs the cDSP at gdnbm_open
+ * (rc=0x80000406) — verified on real v75 (the HVX baseline opens rc=0x0 right after on the same device,
+ * so it's THIS build, not a wedged DSP). Its old "434K/head" number is NOT reproducible and is void.
+ * The plan is NOT to fix this build but to REWRITE the whole solve from the (trusted) microbench findings.
+ * Until then, only the microbenches are valid: -DGDNBM_FEED_PIPE[/_FEED_4P], -DGDNBM_HMX_BENCH,
+ * -DGDNBM_GLUE_BENCH, -DGDNBM_FEED_MULTIPASS, and the GDNSolveHVX baseline (default / -DGDN_BR_MM_I8).
+ * See Agent/current/gdn_solve_hvxmixhmx.md (top "⛔ 工作方式" banner). Escape hatch (debug only):
+ * add -DGDNBM_ALLOW_BROKEN_HMX_MERGE to build it anyway (will SSR; needs a reboot to clear). */
+#if defined(GDNBM_HMX_MERGE_PATH) && !defined(GDNBM_ALLOW_BROKEN_HMX_MERGE)
+#error "GDNBM_HMX_MERGE_PATH is DISABLED: the full GDNSolveHVXMixHMX solve SSRs the cDSP at open (rc=0x80000406, void). Run only the microbenches; the solve will be rewritten from them. Override with -DGDNBM_ALLOW_BROKEN_HMX_MERGE (debug only, will SSR)."
+#endif
+
 /* GDNSolveHVX mode (default): int16-HVX matmul merges -> pure HVX + BSS scratch, threads freely.
  * Disabled for the OVERLAP probe (int8-HMX merges) and for GDNBM_HMX_MERGE_PATH (run the REAL
  * GDNSolveHVXMixHMX gdn_merge_packed on baremetal w/ PROBE_CYCLES, to get its true per-stage breakdown). */
