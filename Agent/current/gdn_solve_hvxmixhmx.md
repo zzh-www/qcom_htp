@@ -196,6 +196,15 @@ operand cache (pack once, reuse) cuts producer VTCM writes → less contention �
 real gain is. Secondary producer levers (fuse eff+bias / depack into the actwt loop) only cut the 97 spin,
 capped by the contention-inflated consumer-busy.
 
+**Producer eff+bias fusion — MEASURED NO-OP (2026-06-05, don't retry).** Built a 3-way fused
+`fp_pack_actwteff2` (crouton + kmajor + eff col-sum, 2 wt rows/iter) to hide eff+bias's ~250/head under
+the actwt loop: 512 → 512, spin ~97 → ~97 (unchanged). Two reasons, both predicted: (1) eff's col-sum is
+`vadd` = ALU, the SAME unit crouton already saturates (lever #A only won because crouton-ALU ∥ kmajor-PERMUTE
+are DIFFERENT units) → no co-issue; (2) the extra wt loads add VTCM traffic = the contended resource. So
+the 97 spin is NOT cheaply removable from the producer side — confirms we're at the contention-bound floor.
+The only remaining traffic lever is operand caching in the solve rewrite (kmajor + eff both read the full
+64×64 wt — sharing that load is a rewrite-time win, not a microbench loop tweak).
+
 ### (superseded) original stop-point at ~585
 Producer-bound at ~585 (vs the 388 HMX floor); consumer spun ~168/585 (~29% idle). The conclusion "this is
 the practical limit of the 4-HVX-unit silicon, can't be cut without more HVX units" was **refuted by lever
