@@ -16,12 +16,9 @@ export LD_LIBRARY_PATH="$QNN_SDK_ROOT/lib/x86_64-linux-clang${LD_LIBRARY_PATH:+:
 PY="$ROOT/.venv/bin/python"
 WD="$(pwd)/_chain"; mkdir -p "$WD"; cd "$WD"
 
-# ssh ControlMaster: one persistent connection reused (per-connection ssh to the device's termux sshd
-# intermittently hangs ~5-15% — not a DSP bug; this is the fix). See baselines/bench.sh.
-CM="/tmp/gdnchain-cm-$$"
-ssh -o ControlMaster=auto -o ControlPath="$CM" -o ControlPersist=300 -o ServerAliveInterval=5 "$DEVICE" true 2>/dev/null
-SSHD() { ssh -o ControlPath="$CM" "$DEVICE" "$@"; }
-trap 'ssh -o ControlPath="$CM" -O exit "$DEVICE" 2>/dev/null; rm -f "$CM"' EXIT
+# robust device ssh: one persistent ControlMaster connection (skill: device-ssh-exec)
+DSSH_HOST="$DEVICE"; source "$ROOT/scripts/dssh.sh"; dssh_open
+SSHD() { dssh "$@"; }
 
 echo "[1/5] build op + gen chain onnx (N=$CHAIN, C=$C, H=$H)"
 bash "$OPDIR/build.sh" >_b.log 2>&1 || { echo BUILDFAIL; tail -8 _b.log; exit 1; }

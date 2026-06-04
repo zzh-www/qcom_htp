@@ -33,13 +33,9 @@ REF_bm_hvx_int8=2844240        # ~2.00 ms
 REF_bm_hvx_int16=4030000       # ~2.83 ms
 REF_qnn_hvx_int16_us=4220      # graph wall us
 
-# ---- ssh ControlMaster: one persistent connection, reused (kills the per-connection hang) ----
-CM="/tmp/gdnbench-cm-$$"
-ssh -o ControlMaster=auto -o ControlPath="$CM" -o ControlPersist=300 -o ServerAliveInterval=5 "$DEVICE" true 2>/dev/null
-D() { ssh -o ControlPath="$CM" "$DEVICE" "$@"; }   # all device commands go through the mux
-cleanup() { ssh -o ControlPath="$CM" -O exit "$DEVICE" 2>/dev/null; rm -f "$CM"; }
-trap cleanup EXIT
-W="$(D 'echo $HOME/gdnbm_run')"
+# ---- robust device ssh: one persistent ControlMaster connection (skill: device-ssh-exec) ----
+DSSH_HOST="$DEVICE"; source "$ROOT/scripts/dssh.sh"; dssh_open   # mux kills the per-connection ssh hang
+W="$(dssh 'echo $HOME/gdnbm_run')"
 pass=1
 printf "%-16s %14s %10s %12s %8s  %s\n" baseline "min_cyc(4thr)" "ms" "ref_cyc" "ratio" verdict
 
@@ -47,11 +43,11 @@ bm_run() {  # $1=name  $2=EXTRA_DEFS  $3=ref_cyc
     local name="$1" defs="$2" ref="$3"
     [ -n "${ONLY:-}" ] && [ "${ONLY}" != "$name" ] && return
     ( cd "$BM" && EXTRA_DEFS="-DGDNBM_VTCM_RESIDENT $defs" bash build.sh ) >/dev/null 2>&1 || { echo "$name BUILDFAIL"; pass=0; return; }
-    D "cat > $W/libgdnbm_skel.so" < "$BM/build/libgdnbm_skel.so"
-    D "cat > $W/gdnbm" < "$BM/build/gdnbm"; D "chmod +x $W/gdnbm"
+    dssh_put "$BM/build/libgdnbm_skel.so" "$W/libgdnbm_skel.so"
+    dssh_put "$BM/build/gdnbm" "$W/gdnbm"; dssh "chmod +x $W/gdnbm"
     # K reps in ONE muxed remote process (one FastRPC session) -> K wall samples -> min
     local mn
-    mn=$(D "cd $W && GDNBM_REPS=$K LD_LIBRARY_PATH=$W:/vendor/lib64:/system/lib64 ADSP_LIBRARY_PATH='$W;/vendor/lib/rfsa/adsp;/vendor/dsp/cdsp;/dsp/cdsp' ./gdnbm 4 A_u16_h32.raw /dev/null 32 256 32768 32768 $SA $ST 2>/dev/null | grep -oE 'wall=[0-9]+' | grep -oE '[0-9]+' | sort -n | head -1")
+    mn=$(dssh "cd $W && GDNBM_REPS=$K LD_LIBRARY_PATH=$W:/vendor/lib64:/system/lib64 ADSP_LIBRARY_PATH='$W;/vendor/lib/rfsa/adsp;/vendor/dsp/cdsp;/dsp/cdsp' ./gdnbm 4 A_u16_h32.raw /dev/null 32 256 32768 32768 $SA $ST 2>/dev/null | grep -oE 'wall=[0-9]+' | grep -oE '[0-9]+' | sort -n | head -1")
     [ -z "$mn" ] && { echo "$name RUNFAIL"; pass=0; return; }
     local ms ratio verdict
     ms=$(awk "BEGIN{printf \"%.3f\", $mn/$PCY_PER_US/1000}")
