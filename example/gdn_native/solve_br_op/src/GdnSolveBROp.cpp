@@ -561,12 +561,20 @@ static uint16_t gdn_f16_bits(float v) {
  * passes have a tiny scale_f16 -> huge 256/scale_f16 -> pass rdelta=0 there). */
 static void gdn_pack_bias(const int32_t *effective, float scale_f16, int baseline_u16, int32_t *bias,
                           int rdelta) {
+    /* GDNSolveHVXMixHMX lever #1 (vectorized): the bias tile is exactly 4 HVX vectors —
+     * [ctrl×32 | eff[0:32]+rdelta | ctrl×32 | eff[32:64]+rdelta] — so 4 vector stores replace the old
+     * 128 SCALAR VTCM writes (the documented pathology that dominated the multi-pass cost: 4190->1720
+     * cyc/matmul, end-to-end 1.29->2.06x). NUMERICALLY IDENTICAL to the old scalar loop (oc unchanged). */
     uint32_t ctrl = ((uint32_t)(baseline_u16 & 0xFFFF) << 16) | (uint32_t)gdn_f16_bits(scale_f16);
-    int out = 0;
-    for (int start = 0; start < 64; start += 32) {
-        for (int i = 0; i < 32; ++i) bias[out++] = (int32_t)ctrl;
-        for (int i = 0; i < 32; ++i) bias[out++] = effective[start + i] + rdelta;
-    }
+    HVX_Vector vctrl = Q6_V_vsplat_R((int)ctrl);
+    HVX_Vector vrd = Q6_V_vsplat_R(rdelta);
+    HVX_Vector e0 = *(const HVX_UVector *)(effective + 0);     /* eff[0:32]  (unaligned-safe) */
+    HVX_Vector e1 = *(const HVX_UVector *)(effective + 32);    /* eff[32:64] */
+    HVX_Vector *b = (HVX_Vector *)bias;                        /* vt->bias: VTCM, 128-aligned */
+    b[0] = vctrl;
+    b[1] = Q6_Vw_vadd_VwVw(e0, vrd);
+    b[2] = vctrl;
+    b[3] = Q6_Vw_vadd_VwVw(e1, vrd);
 }
 
 /* depack the 64x64 u8 crouton8 output surface (closed form, M1-validated). */
@@ -849,8 +857,56 @@ static const int8_t *gdn_get_wt_T(gdn_scr_t *sc, const gdn_vtcm_t *vt, int k, in
  * bound K*max|act-128|*max|wt| is the constant 64*127*127 -- no per-merge HVX reduction needed. */
 #define GDN_BR_LOOSE_CONST (64 * 127 * 127)
 
-/* INT-ONLY merge from PRE-PACKED VTCM surfaces: act crouton @ sa, wt k-major (+eff) @ sw; 2-pass scale,
+/* gdn_merge_packed = the GDNSolveHVXMixHMX matmul impl (HVX-feed + HMX-matmul); gdn_merge_hvx (below) = the
+ * GDNSolveHVX baseline's. (Naming: GDNSolveHVX pure-HVX baseline / GDNSolveHVXMixHMX HVX-feed+HMX-matmul /
+ * GDNSolveHMX full-HMX, refuted — see Agent/current/gdn_solve_hvxmixhmx.md top.)
+ * INT-ONLY merge from PRE-PACKED VTCM surfaces: act crouton @ sa, wt k-major (+eff) @ sw; 2-pass scale,
  * returns int8 product codes + scale s_out.  Quant AND packing are hoisted to the cache getters. */
+/* ============================================================================================
+ * GDNSolveHVXMixHMX OPTIMIZATION PLAN (device-measured 2026-06-05; baseline GDNSolveHVX = 135K cyc/head)
+ * Full write-up + figures: Agent/current/gdn_solve_hvxmixhmx.md
+ *
+ * THREE IMPLEMENTATIONS (per-head cycles, shorter = faster; #=~5K):
+ *   GDNSolveHVX      (baseline/shipped, pure HVX)  135K  ███████████████████████████  1.00x
+ *   GDNSolveHVXMixHMX (THIS path: HVX-feed + HMX)   57K  ███████████                  2.35x  <== BEST
+ *   GDNSolveHMX      (full HMX)                   ~600K  ████...(~120#)               0.22x  REFUTED
+ *
+ * WHY 2.35x — HMX cuts the matmul 5x; diag is a SHARED floor (unchanged):
+ *               matmul+prep(fold+quant+pack)   diag(shared HVX)   requant/acc
+ *   HVX base:   [████████████████ 97K (72%)]   [██████ 26K]       [██ 12K]   = 135K
+ *   MixHMX:     [███ 19.5K (34%)]               [██████ 26K]       [██ 12K]   =  57K
+ *                  HMX kernel 215 vs vrmpy ~13K/mm        ^new floor 46%
+ *
+ * THIS FUNCTION (the multi-pass gain search) is the lever. Optimization ladder (measured cyc/matmul,
+ * baremetal -DGDNBM_FEED_MULTIPASS, P=3 producers + 1 HVX-locked consumer, consumer-bound):
+ *   scalar-bias 3-pass  (was)                4190   -> end-to-end 1.29x
+ *   + VECTORIZE the bias pack (gdn_pack_bias) 1720   -> 2.06x   <== biggest lever, numerically EQUIVALENT
+ *   + #1c: drop PASS-2 (norm-predicted gain)  1218   -> 2.35x   <== oc-SAFE (PASS-3 keeps measured max|P|)
+ *
+ * Root cause the scalar bias dominated: gdn_pack_bias did 128 SCALAR VTCM writes (the documented
+ * pathology) re-run EVERY pass (~60% of multi-pass cost). The bias layout is exactly 4 HVX vectors
+ * [ctrl | eff[0:32]+rdelta | ctrl | eff[32:64]+rdelta] -> 4 vector stores. See gdn_pack_bias below.
+ *
+ * PIPELINE (validated in baremetal GDNBM_FEED_4P): 3 HVX producers (fold+quant+pack, with idle slack to
+ * hide fold/quant) + 1 HVX-locked consumer running THIS function; depack offloaded to a producer.
+ * ============================================================================================ */
+/* One logical 64^3 HMX matmul with dynamic-quant output scaling. NB: this runs the HMX kernel 2-3x
+ * (PASS 1 + optional PASS 2 + PASS 3) — a gain search to scale the int8 output to fill [-127,127].
+ *
+ * >>> #1 VTCM-TRAFFIC HOTSPOT of the whole GDNSolveHVXMixHMX path (see Agent/current/gdn_solve_hvxmixhmx.md).
+ *     PASS 1/2 are PURE scale-probing: run the matmul, read max|P| via gdn_surf_maxabs, THROW the output
+ *     away. Per logical matmul the traffic is ~3 runs(12.5K each) + 2 maxabs-reads(4K) + 1 depack(4K) ≈ 50K,
+ *     of which PASS1+2 ≈ 33K (~66%) is discarded. The bare-metal GDNSolveHVXMixHMX microbench measures ONLY PASS 3
+ *     (~578 cyc/matmul), so it UNDER-counts real traffic ~2.5-3x.
+ *
+ *     Why multi-pass: int8 out must be scaled by 127/max|P|, but max|P| needs P itself -> chicken-and-egg.
+ *     oc is hypersensitive to this scale (dist-1 blocks: oc 0.73 vs 0.01 if scale ~20% off), so the probes
+ *     can't simply be dropped. TRAFFIC-REDUCTION LEVERS (each MUST be oc-validated vs golden):
+ *       (a) predict max|P| from input norms (‖A_i,:‖·‖T_:,j‖) -> 0 probe runs, but oc-risky (~1% needed);
+ *       (b) replace PASS-1/2 full HMX runs with a cheap HVX sub-sampled dot-product estimate of max|P|
+ *           (keeps accuracy, drops 2 HMX runs + 2 out-writes ≈ 33K/matmul);
+ *       (c) tighten PASS-1's initial gain (norm-based) so PASS 2 is unnecessary -> 3 passes -> 2 (saves 1/3,
+ *           lowest risk). */
 static void gdn_merge_packed(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint8_t *act_crouton, float sa,
                              const int8_t *wt_kmajor, const int32_t *eff, float sw,
                              int8_t *out_codes, float *s_out) {
@@ -897,7 +953,7 @@ static void gdn_merge_packed(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint8_t 
     *s_out = sP;
 }
 
-/* ============ int16-HVX merge (NO HMX -> threads freely; HMX is process-serial, can't hit 4-thread) ============
+/* ============ int16-HVX merge = the GDNSolveHVX baseline matmul (NO HMX -> threads freely; HMX is process-serial, can't hit 4-thread) ============
  * Replaces the HMX matmul with a direct int16 HVX matmul, reusing the diagonal solve's Q6_Ww_vmpyacc_WwVhRh.
  * Operands quantized to 12-bit (±2047) so the 64-term int32 accumulator can't overflow (64*2047^2 < 2^29). */
 
