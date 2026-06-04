@@ -236,6 +236,28 @@ producer/consumer topology. Operand caching banks ~1.1× for the rewrite; the de
 not addressable by traffic reduction. (Reproduce: `-DGDNBM_OPCACHE [-DGDNBM_OPCACHE_NODEP]` on the FUSED 4P
 build; off by default, baseline unaffected.)
 
+#### Hexagon-doc cross-check of the SMT-contention root cause (V75 PRM, verified 2026-06-05)
+The "consumer-busy rises with thread count, independent of data traffic" finding is the documented v75
+microarchitecture, NOT a guess. The Hexagon manuals confirm it three ways:
+- **It's SMT with shared per-cluster execution resources.** V75 *HVX* PRM §1.2.2 (p9-10): "Multiple hardware
+  threads execute in parallel, each with a different vector context… number of vector contexts is
+  implementation-defined" (=4 on this SKU). V75 PRM PMU (p128): each cluster has **"cluster (private)
+  execution resources"** — threads on the SAME cluster share the issue slots / register ports; v75 has
+  **2 clusters** (PMU events count "cluster 0"/"cluster 1", p138-139).
+- **The exact conflict counters exist** (V75 PRM ch.9 PMU, p135-140): `SMT_PKT_SLOT_CONFLICT_*` = "In-cluster
+  SMT thread is **not picked due to a slot conflict between the primary thread and SMT thread**";
+  `SMT_CONFLICT_FOR_REG_READ` = blocked on a register-read port; "**inter-thread SMT bank conflicts**" (p135,
+  memory banks); "thread was not picked or there was an **inter-cluster resource conflict**". These are
+  exactly the issue-slot / reg-port / bank contention that inflates the consumer's kernel when producer
+  threads co-run — and they fire regardless of how many BYTES the producers move (matches NODEP==depack).
+- **The hardware meters throughput by concurrent-thread count:** `CYCLES_N_THREAD_RUNNING` and
+  `COMMITTED_PKT_N_THREAD_RUNNING` (N=2..6, p126/139) — i.e. committed-packets/cycle is defined as a function
+  of how many threads are simultaneously running, which is precisely our consumer-busy 214(1 thr)→309(2)→418(5).
+**Implication:** since v75 has 2 clusters and contention is worst *within* a cluster (primary+SMT share
+slots), the only architectural lever would be thread→cluster *placement* (keep the HMX consumer on a cluster
+by itself), which QuRT controls, not us — a deep, separate probe. Confirms: no data-movement optimization
+can break the ~418 consumer-busy.
+
 ### (superseded) original stop-point at ~585
 Producer-bound at ~585 (vs the 388 HMX floor); consumer spun ~168/585 (~29% idle). The conclusion "this is
 the practical limit of the 4-HVX-unit silicon, can't be cut without more HVX units" was **refuted by lever
