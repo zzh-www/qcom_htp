@@ -99,9 +99,10 @@ PROBE stats（HMX_MERGE_PATH/HVX 两路通用）：[3]=diag [4]=mergeRun [5]=mer
 **Result (real v75 `ssh oneplus`, C=256-shaped 64³ matmuls, chain8-style steady, DUMMY data):**
 matmul-portion throughput **1208 → ~507 cyc/matmul = 2.4×**, and **~3.2× vs the shipped-best vrmpy
 4-thread (1601 cyc/matmul throughput)**. Journey: 1208 → ~585 (2-head pack + fused depack + 2-head eff+bias)
-→ **~507 (lever #A: fuse act-crouton ∥ wt-kmajor, 2026-06-05)**. Now ~80% consumer-bound (spin 97/507),
-approaching the pure-HMX consumer floor ~418 — the next lever is consumer-side (descriptor hoist + barrier),
-see "Where it's still bound".
+→ **~507 (lever #A: fuse act-crouton ∥ wt-kmajor, 2026-06-05)**. Now ~80% consumer-bound (spin 97/507).
+Consumer-side levers (descriptor hoist, barrier removal) MEASURED NO-OP — the ~406 consumer-busy is the
+v73deep kernel's intrinsic per-call mxmem re-setup; breaking ~503 needs a kernel-internal change. See
+"Where it's still bound".
 
 ## The pipeline
 
@@ -165,12 +166,21 @@ consumer floor ~418 (kernel 215 + descriptor-build + 2 barriers ~203/iter). **Th
 crouton-pack can't be cut without more HVX units" was WRONG** — it assumed the two packs must run
 serially; fusing them overlaps ALU∥permute and bought 1.16× with ZERO extra HVX units.
 
-**Next lever (now that consumer is the bound):** cut the consumer's ~203 fixed/iter — hoist the `od`/`ad`
-descriptor build out of the hot loop (only `outtab`/`acttab` change per slot; pre-store them in the slot)
-and replace the 2 full `__sync_synchronize` barriers with one-way volatile acquire. Previously "pointless
-(consumer has 167 slack)"; now the consumer has only 97 slack and is the critical path, so this is the
-live lever. Secondary producer levers (fuse eff+bias / depack into the same actwt loop) would cut the
-remaining 97 spin but are capped by the ~418 consumer floor.
+**Consumer-side levers — BOTH MEASURED NO-OP (2026-06-05), don't retry:**
+- *descriptor hoist* (pre-build all FP_K `od`/`ad` once vs per-iter struct build): **no-op** (507→518,
+  within noise). The per-iter 6-field struct build is NOT the cost — the expensive mxmem descriptor setup
+  is INSIDE `our_v73deep_kernel` (re-configured every call), which hoisting my outer struct can't touch.
+- *barrier removal* (drop the 2 `__sync_synchronize`): **no-op on throughput.** Removing the release barrier
+  cut consumer-busy 406→362 but raised spin 97→144 by the same amount (cyc stayed ~503) — the barriers are
+  already fully hidden under producer feed. So they're free; keep them (correctness).
+
+**Why both fail:** the consumer's ~406 busy = `our_v73deep_kernel`'s INTRINSIC per-call cost (mxmem
+descriptor re-setup + HMX pipe fill/drain), NOT the outer struct/barrier. The "215 continuous kernel" floor
+assumed descriptors set ONCE; the pipeline re-sets them every call. **Breaking below ~503 needs a
+kernel-internal change** (amortize the mxmem setup across calls / keep HMX config loaded when only the
+act/out tables change) — a deeper, separate investigation inside the v73deep kernel, not a pipeline lever.
+Secondary producer levers (fuse eff+bias / depack into the actwt loop) would cut the remaining 97 spin but
+are capped by this ~406 consumer-busy floor.
 
 ### (superseded) original stop-point at ~585
 Producer-bound at ~585 (vs the 388 HMX floor); consumer spun ~168/585 (~29% idle). The conclusion "this is
