@@ -12,6 +12,7 @@ cd "$(dirname "$0")"
 ROOT="$(cd ../../../.. && pwd)"; OPDIR="$(cd .. && pwd)"
 PKG="GdnSolveBRPackage"; PROV="${PKG}InterfaceProvider"; ARCH=v75; DEVICE="${DEVICE:-oneplus}"
 source "$ROOT/scripts/env.sh" >/dev/null 2>&1
+DSSH_HOST="$DEVICE"; source "$ROOT/scripts/dssh.sh"; dssh_open   # robust device ssh (skill: device-ssh-exec)
 export PATH="$QNN_SDK_ROOT/bin/x86_64-linux-clang:$PATH"
 export PYTHONPATH="$QNN_SDK_ROOT/lib/python${PYTHONPATH:+:$PYTHONPATH}"
 export LD_LIBRARY_PATH="$QNN_SDK_ROOT/lib/x86_64-linux-clang${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
@@ -44,20 +45,20 @@ qnn-context-binary-generator --dlc_path solve_br.dlc --backend "$QNN_SDK_ROOT/li
    --binary_file solve_br_ctx --output_dir ctx_s >_x.log 2>&1 || { echo CTXFAIL; tail -8 _x.log; exit 1; }
 for s in *schematic.bin ctx_s/*schematic.bin; do [ -f "$s" ] && mv -f "$s" ctx_s/ 2>/dev/null || true; done
 
-W="$(ssh "$DEVICE" 'echo $HOME/qnn_run')/solve_br"
-ssh "$DEVICE" "mkdir -p $W"
-ssh "$DEVICE" "printf '%s' '{\"backend_extensions\":{\"shared_library_path\":\"../libQnnHtpNetRunExtensions.so\",\"config_file_path\":\"./htp.json\"}}' > $W/cfg.json"
-ssh "$DEVICE" "cat > $W/htp.json" < _htp.json
-ssh "$DEVICE" "cat > $W/solve_br_ctx.bin" < ctx_s/solve_br_ctx.bin
-ssh "$DEVICE" "cat > $W/lib${PKG}_htp.so" < "$HTP"; ssh "$DEVICE" "cat > $W/lib${PKG}_cpu.so" < "$CPU"
-ssh "$DEVICE" "cat > $W/A.raw" < A.raw
-ssh "$DEVICE" "printf 'A:=A.raw\n' > $W/list.txt"
-ssh "$DEVICE" "cd $W && rm -rf out && LD_LIBRARY_PATH=..:.:/vendor/lib64 ADSP_LIBRARY_PATH='..;.;/vendor/lib/rfsa/adsp;/vendor/dsp/cdsp;/dsp/cdsp' ../qnn-net-run \
+W="$(dssh 'echo $HOME/qnn_run')/solve_br"
+dssh "mkdir -p $W"
+dssh "printf '%s' '{\"backend_extensions\":{\"shared_library_path\":\"../libQnnHtpNetRunExtensions.so\",\"config_file_path\":\"./htp.json\"}}' > $W/cfg.json"
+dssh "cat > $W/htp.json" < _htp.json
+dssh "cat > $W/solve_br_ctx.bin" < ctx_s/solve_br_ctx.bin
+dssh "cat > $W/lib${PKG}_htp.so" < "$HTP"; dssh "cat > $W/lib${PKG}_cpu.so" < "$CPU"
+dssh "cat > $W/A.raw" < A.raw
+dssh "printf 'A:=A.raw\n' > $W/list.txt"
+dssh "cd $W && rm -rf out && LD_LIBRARY_PATH=..:.:/vendor/lib64 ADSP_LIBRARY_PATH='..;.;/vendor/lib/rfsa/adsp;/vendor/dsp/cdsp;/dsp/cdsp' ../qnn-net-run \
    --backend ../libQnnHtp.so --retrieve_context solve_br_ctx.bin --config_file cfg.json \
    --op_packages ./lib${PKG}_cpu.so:$PROV:CPU,./lib${PKG}_htp.so:$PROV:HTP \
    --input_list list.txt --output_dir out --profiling_level detailed --profiling_option optrace --perf_profile burst" >_r.log 2>&1 || true
 grep -q 'Finished Executing Graphs' _r.log || { echo "RUNFAIL"; tail -12 _r.log; exit 1; }
-rm -rf out_s; mkdir -p out_s; ssh "$DEVICE" "cd $W && tar cf - out" | tar xf - -C out_s --strip-components=1 2>/dev/null
+rm -rf out_s; mkdir -p out_s; dssh "cd $W && tar cf - out" | tar xf - -C out_s --strip-components=1 2>/dev/null
 
 wall=$(qnn-profile-viewer --input_log out_s/qnn-profiling-data_0.log 2>/dev/null | grep -i 'QNN accelerator (execute) time' | grep -io '[0-9]* us' | head -1)
 T=$(ls out_s/Result_0/T.raw 2>/dev/null || ls out_s/*/T.raw 2>/dev/null | head -1)
