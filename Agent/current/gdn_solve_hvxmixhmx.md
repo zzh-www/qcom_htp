@@ -100,9 +100,10 @@ PROBE stats（HMX_MERGE_PATH/HVX 两路通用）：[3]=diag [4]=mergeRun [5]=mer
 matmul-portion throughput **1208 → ~507 cyc/matmul = 2.4×**, and **~3.2× vs the shipped-best vrmpy
 4-thread (1601 cyc/matmul throughput)**. Journey: 1208 → ~585 (2-head pack + fused depack + 2-head eff+bias)
 → **~507 (lever #A: fuse act-crouton ∥ wt-kmajor, 2026-06-05)**. Now ~80% consumer-bound (spin 97/507).
-Consumer-side levers (descriptor hoist, barrier removal) MEASURED NO-OP — the ~406 consumer-busy is the
-v73deep kernel's intrinsic per-call mxmem re-setup; breaking ~503 needs a kernel-internal change. See
-"Where it's still bound".
+Consumer-side levers (descriptor hoist, barrier removal, kernel-setup amortize) ALL MEASURED NO-OP /
+REFUTED — the ~410 consumer-busy is VTCM-bandwidth CONTENTION (rises 315→410 with P=1→4), not kernel setup
+(isolated kernel=214 floor). The only real lever left is reducing VTCM traffic via operand caching in the
+SOLVE rewrite. See "Where it's still bound".
 
 ## The pipeline
 
@@ -174,13 +175,26 @@ serially; fusing them overlaps ALU∥permute and bought 1.16× with ZERO extra H
   cut consumer-busy 406→362 but raised spin 97→144 by the same amount (cyc stayed ~503) — the barriers are
   already fully hidden under producer feed. So they're free; keep them (correctness).
 
-**Why both fail:** the consumer's ~406 busy = `our_v73deep_kernel`'s INTRINSIC per-call cost (mxmem
-descriptor re-setup + HMX pipe fill/drain), NOT the outer struct/barrier. The "215 continuous kernel" floor
-assumed descriptors set ONCE; the pipeline re-sets them every call. **Breaking below ~503 needs a
-kernel-internal change** (amortize the mxmem setup across calls / keep HMX config loaded when only the
-act/out tables change) — a deeper, separate investigation inside the v73deep kernel, not a pipeline lever.
-Secondary producer levers (fuse eff+bias / depack into the actwt loop) would cut the remaining 97 spin but
-are capped by this ~406 consumer-busy floor.
+**Why both fail — DECISIVE measurement (2026-06-05): the consumer-busy is VTCM-BANDWIDTH CONTENTION, NOT
+kernel setup.** Swept P on the FUSED build, consumer-busy (=cyc−spin) rises MONOTONICALLY with producer
+count: **P=1→315, P=2→355, P=3→394, P=4→410** (each added producer slows the consumer's kernel ~30-40 cyc).
+The isolated kernel (HMX_BENCH, NO producer) = **214** = the mxmem config-once hardware floor for a 64³
+matmul. So consumer-busy ≈ 214 (HMX floor) + contention (~100 at P=1 → ~196 at P=4 from producers hammering
+the shared VTCM/L2 bus).
+
+⇒ **Lever "#1 amortize the kernel's mxmem setup" is REFUTED before touching asm:** the kernel is ALREADY at
+its 214 config-once floor in isolation; the pipeline's ~410 is pure shared-bus contention. No v73deep
+kernel-asm change can cut the mxmem hardware floor OR the inter-thread VTCM contention. (My earlier "needs a
+kernel-internal change" was wrong — corrected.) This re-confirms the doc's "average-bandwidth bound" thesis
+and the scheduling skill's "bottleneck is data movement, not compute."
+
+**The ONLY real lever left = reduce VTCM TRAFFIC (less contention), and it lives in the SOLVE, not the
+kernel or pipeline:** the microbench re-packs both operands every matmul (worst case → max producer
+traffic → max contention). The real block-recursive solve REUSES T_kj / A_ik across many i,j, so an
+operand cache (pack once, reuse) cuts producer VTCM writes → less contention → consumer-busy drops toward
+214. So the microbench's 507 is contention-PESSIMISTIC; the rewrite's operand caching is where the next
+real gain is. Secondary producer levers (fuse eff+bias / depack into the actwt loop) only cut the 97 spin,
+capped by the contention-inflated consumer-busy.
 
 ### (superseded) original stop-point at ~585
 Producer-bound at ~585 (vs the 388 HMX floor); consumer spun ~168/585 (~29% idle). The conclusion "this is
