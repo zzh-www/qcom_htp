@@ -205,6 +205,37 @@ the 97 spin is NOT cheaply removable from the producer side — confirms we're a
 The only remaining traffic lever is operand caching in the solve rewrite (kmajor + eff both read the full
 64×64 wt — sharing that load is a rewrite-time win, not a microbench loop tweak).
 
+### Operand-cache ceiling + the REAL floor is SMT thread contention, NOT VTCM traffic (2026-06-05)
+
+Built an OPCACHE measurement mode (`-DGDNBM_OPCACHE`): pack every slot ONCE (operands resident), then the
+steady loop's producers ONLY depack + re-arm — modelling the real solve reusing T_kj/A_ik across i,j.
+Measured (real v75, 4-thread, min-of-4):
+
+| mode | cyc/matmul | spin | consumer-busy (=cyc−spin) |
+|---|---|---|---|
+| FUSED (pack+depack every matmul) | 518 | ~100 | **~418** |
+| OPCACHE (cached operands, depack only) | **469** | ~50 | **~418** |
+| OPCACHE + NODEP (no depack either) | 473 | ~50 | **~420** |
+| OPCACHE + NODEP, **P=1** | 439 | ~131 | **~309** |
+
+**Two decisive reads:**
+1. **Operand caching = real but MODEST ~1.1× (518→469).** The win is ALL in spin (100→50): producers do
+   less work → feed faster → consumer waits less. Worth banking in the rewrite, but not transformative.
+2. **The consumer-busy ~418 floor is HW-THREAD (SMT) CONTENTION, not VTCM data traffic — PROVEN:**
+   - Removing depack (NODEP) did NOTHING (473≈469) → data traffic isn't the bound.
+   - FUSED (producers MAX busy packing) and NODEP (producers idle-spinning) give the SAME consumer-busy
+     ~418 → if it were traffic, max-traffic FUSED would be worse. Equal ⇒ it's thread *presence*, not bytes.
+   - consumer-busy scales with thread COUNT: P=1→309, P=4→418 (the isolated kernel with ZERO producers=214).
+   So the consumer's HMX thread loses issue-slots/memory-ports to the 4 producer HW threads regardless of
+   what they move. **No data-movement lever (operand caching, depack elimination, crouton-out direct
+   transcode) can cut the ~418 consumer-busy** — only fewer contending threads could, which trades against
+   feed (P-sweep already showed P=4 optimal). This is the architectural floor of the 4P pipeline.
+
+**Net:** the microbench is at ~470 (cached) / ~507 (uncached) and that IS the 4-HVX-silicon floor for this
+producer/consumer topology. Operand caching banks ~1.1× for the rewrite; the deeper floor is SMT contention,
+not addressable by traffic reduction. (Reproduce: `-DGDNBM_OPCACHE [-DGDNBM_OPCACHE_NODEP]` on the FUSED 4P
+build; off by default, baseline unaffected.)
+
 ### (superseded) original stop-point at ~585
 Producer-bound at ~585 (vs the 388 HMX floor); consumer spun ~168/585 (~29% idle). The conclusion "this is
 the practical limit of the 4-HVX-unit silicon, can't be cut without more HVX units" was **refuted by lever

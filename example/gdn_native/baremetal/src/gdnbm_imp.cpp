@@ -578,6 +578,7 @@ static void solve_worker(void *arg) {
 #define FP_K 16
 #define FP_J 512
 static volatile int g_fp_ready[FP_K];          /* 0=free (a packer may fill), 1=packed (owner may drain) */
+static volatile int g_fp_done;                 /* OPCACHE: consumer sets after FP_J -> producers stop re-arming */
 static int g_fp_T;                             /* worker count (static striping; CAS-free) */
 static volatile uint64_t g_fp_pwork[GDN_BR_NT], g_fp_pspin[GDN_BR_NT];  /* producer pack-work vs slot-wait */
 static uint8_t *g_fp_base;
@@ -712,6 +713,31 @@ static void feed_producer(void *arg) {
     int32_t eff0[64], eff1[64];
     uint32_t P = (uint32_t)g_fp_T;
     uint64_t pw = 0, ps = 0;
+#if defined(GDNBM_OPCACHE)
+    /* OPERAND-CACHE CEILING: pack each slot ONCE (operands resident), then the steady loop ONLY depacks +
+     * re-arms (no per-matmul pack). Models the real solve reusing T_kj/A_ik across i,j. Measures whether
+     * killing the producer's per-matmul pack-write traffic drops the contention-bound 507 toward the
+     * consumer floor. (dummy data repeats — the CYCLES are real.) */
+    {
+        int8_t *poutc = g_fp_outc[id];
+        for (int k = id; k < FP_K; k += P) {            /* pre-pack & arm my stripe slots ONCE */
+            fp_pack_slot(k, eff0); __sync_synchronize(); g_fp_ready[k] = 1;
+        }
+        while (!g_fp_done) {                              /* steady: depack consumed slots + re-arm (cached) */
+            for (int k = id; k < FP_K; k += (int)P) {
+                if (g_fp_ready[k] == 2) {
+                    __sync_synchronize();
+#if !defined(GDNBM_OPCACHE_NODEP)
+                    fp_depack(fp_slot(k).out, (128 << 7) >> 7, poutc);
+#endif
+                    __sync_synchronize();
+                    g_fp_ready[k] = 1;
+                }
+            }
+        }
+    }
+    (void)eff1; if (hvx == 0) qurt_hvx_unlock(); g_fp_pwork[id]=pw; g_fp_pspin[id]=ps; return;
+#endif
 #if defined(GDNBM_FEED_4P)
     /* 4-PRODUCER 3-stage: consumer is pure-HMX (frees its HVX unit). Slot states 0=free 1=packed 2=hmx-done.
      * This producer also DEPACKS the slot it's about to reuse (the previous occupant the consumer HMX'd). */
@@ -942,6 +968,7 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
 #if defined(GDNBM_FEED_PIPE)
     if (vtcm_base) {
         g_fp_base = vtcm_base;
+        g_fp_done = 0;
         for (int k = 0; k < FP_K; ++k) g_fp_ready[k] = 0;
         for (int i = 0; i < 64*64; ++i) { g_fp_act[i] = (uint8_t)((i % 200) + 28); g_fp_wt[i] = (int8_t)((i % 11) - 5);
                                           g_fp_act2[i] = (uint8_t)((i*3 % 200) + 28); g_fp_wt2[i] = (int8_t)((i*5 % 11) - 5); }
@@ -1018,6 +1045,7 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
             c_spin += s1 - s0;
         }
         uint64_t w1 = pcyc();
+        g_fp_done = 1; __sync_synchronize();                 /* OPCACHE: release producers from their re-arm loop */
         uint32_t per = FP_J / (uint32_t)P;                   /* matmuls packed by producer 0 */
         if (statsLen > 2 && per) stats[2] = (int)(g_fp_pwork[0] / per);  /* producer0: pack-work / matmul */
         if (statsLen > 3 && per) stats[3] = (int)(g_fp_pspin[0] / per);  /* producer0: slot-wait / matmul */
