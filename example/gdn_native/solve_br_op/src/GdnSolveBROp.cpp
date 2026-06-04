@@ -147,6 +147,7 @@ struct gdn_scr_t {
     char    vAa[GDN_BR_NBLK], vTw[GDN_BR_NBLK], vTa[GDN_BR_NB];
     int32_t mxdiag[GDN_BR_NB];   /* producer-tracked maxabs of each diagonal T block (for quant fusion) */
     int32_t effc[GDN_BR_NBLK][64] __attribute__((aligned(128)));  /* cached effective-bias per T-wt block */
+    int     colabsc[GDN_BR_NBLK];                                 /* cached max-col-abs-sum per T-wt block (#1c) */
 };
 static gdn_scr_t g_scr[GDN_BR_NT];
 
@@ -511,22 +512,38 @@ static void gdn_pack_w8_kmajor(const int8_t *w_kn, int8_t *packed) {
  * with a +1 constant vector: Q6_Vw_vrmpyacc_VwVbVb_b? Use vmpa? Simplest reliable HVX: sum int8 rows by
  * widening with vsxt + the proper de-interleave is fiddly; the scalar form is correct and bounded (4096
  * ops/merge, ~small vs pint).  Kept scalar for correctness; not the bottleneck. */
-static void gdn_effective(const int8_t *w_kn, int32_t *effective) {
+static void gdn_effective(const int8_t *w_kn, int32_t *effective, int *colabsmax = nullptr) {
     /* HVX: sign-extend each 64-byte row to int16 (vsxt deals even/odd cols into lo/hi 32 lanes),
      * accumulate even-col sums and odd-col sums separately (64 rows * 127 < 2^15, no overflow), then
-     * vshuff to restore natural col order.  *(-128) at the end. */
+     * vshuff to restore natural col order.  *(-128) at the end.
+     * colabsmax (GDNSolveHVXMixHMX lever #1c): if requested, ALSO accumulate the per-col ABSOLUTE sum
+     * Σ_k|wt[k,c]| and return its max over cols — a Holder bound for max|P| (with max|act code|<=128) that
+     * lets gdn_merge_packed predict the PASS-1 gain and drop PASS-2. ~free (same row sweep). */
     HVX_Vector acc_e = Q6_V_vzero(), acc_o = Q6_V_vzero();   /* int16 partials: even cols / odd cols */
+    HVX_Vector abs_e = Q6_V_vzero(), abs_o = Q6_V_vzero();   /* int16 ABS-sum partials (for colabsmax) */
     for (int k = 0; k < BL; ++k) {
         HVX_Vector row = *(const HVX_UVector *)(w_kn + k * BL);   /* 64 useful bytes in low half */
         HVX_VectorPair w16 = Q6_Wh_vsxt_Vb(row);                  /* lo=even-byte sexts, hi=odd-byte sexts */
-        acc_e = Q6_Vh_vadd_VhVh(acc_e, Q6_V_lo_W(w16));
-        acc_o = Q6_Vh_vadd_VhVh(acc_o, Q6_V_hi_W(w16));
+        HVX_Vector lo = Q6_V_lo_W(w16), hi = Q6_V_hi_W(w16);
+        acc_e = Q6_Vh_vadd_VhVh(acc_e, lo);
+        acc_o = Q6_Vh_vadd_VhVh(acc_o, hi);
+        if (colabsmax) {
+            abs_e = Q6_Vh_vadd_VhVh(abs_e, Q6_Vh_vabs_Vh(lo));
+            abs_o = Q6_Vh_vadd_VhVh(abs_o, Q6_Vh_vabs_Vh(hi));
+        }
     }
     /* interleave even/odd halfwords back to natural [c0,c1,c2,...]; low 64 lanes hold cols 0..63. */
     HVX_VectorPair nat = Q6_W_vshuff_VVR(acc_o, acc_e, -2);
     int16_t cols[64] __attribute__((aligned(128)));
     *(HVX_Vector *)cols = Q6_V_lo_W(nat);
     for (int n = 0; n < 64; ++n) effective[n] = -128 * (int)cols[n];
+    if (colabsmax) {
+        HVX_VectorPair anat = Q6_W_vshuff_VVR(abs_o, abs_e, -2);
+        int16_t acols[64] __attribute__((aligned(128)));
+        *(HVX_Vector *)acols = Q6_V_lo_W(anat);
+        int mx = 0; for (int n = 0; n < 64; ++n) if (acols[n] > mx) mx = acols[n];
+        *colabsmax = mx;
+    }
 }
 
 /* f16 bits of a float (round-to-nearest-even via the hardware fp16 convert is not available on x86;
@@ -823,7 +840,7 @@ static const uint8_t *gdn_get_act_Tdiag(gdn_scr_t *sc, const gdn_vtcm_t *vt, int
 
 /* T_kj block as inner-merge weight: quant i8 + k-major-pack + effective bias; key gdn_blk_index(k,j). */
 static const int8_t *gdn_get_wt_T(gdn_scr_t *sc, const gdn_vtcm_t *vt, int k, int j,
-                                  float *sw_out, const int32_t **eff_out) {
+                                  float *sw_out, const int32_t **eff_out, int *colabs_out) {
     int key = gdn_blk_index(k, j);
     int8_t *km = vt->wcache + (size_t)key * 0x1000;
     if (!sc->vTw[key]) {
@@ -837,7 +854,7 @@ static const int8_t *gdn_get_wt_T(gdn_scr_t *sc, const gdn_vtcm_t *vt, int k, in
         { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_quant += q - q0; }
         uint64_t e0; asm volatile("%0 = C15:14" : "=r"(e0));
 #endif
-        gdn_effective(sc->wtbuf, sc->effc[key]);
+        gdn_effective(sc->wtbuf, sc->effc[key], &sc->colabsc[key]);   /* #1c: cache col-abs-sum max too */
 #if defined(GDN_BR_PROBE_CYCLES)
         { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_eff += q - e0; }
         uint64_t p0; asm volatile("%0 = C15:14" : "=r"(p0));
@@ -850,6 +867,7 @@ static const int8_t *gdn_get_wt_T(gdn_scr_t *sc, const gdn_vtcm_t *vt, int k, in
     }
     *sw_out = sc->sTw[key];
     *eff_out = sc->effc[key];
+    *colabs_out = sc->colabsc[key];
     return km;
 }
 
@@ -909,7 +927,7 @@ static const int8_t *gdn_get_wt_T(gdn_scr_t *sc, const gdn_vtcm_t *vt, int k, in
  *           lowest risk). */
 static void gdn_merge_packed(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint8_t *act_crouton, float sa,
                              const int8_t *wt_kmajor, const int32_t *eff, float sw,
-                             int8_t *out_codes, float *s_out) {
+                             int wt_colabsmax, int8_t *out_codes, float *s_out) {
     vt->acttab[0] = (int32_t)(uintptr_t)(act_crouton + 0);
     vt->acttab[1] = (int32_t)(uintptr_t)(act_crouton + 64 * 32);
     vt->outtab[0] = (int32_t)(uintptr_t)(vt->out + 0);
@@ -917,21 +935,17 @@ static void gdn_merge_packed(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint8_t 
 #if defined(GDN_BR_PROBE_CYCLES)
     uint64_t es0; asm volatile("%0 = C15:14" : "=r"(es0));
 #endif
-    /* PASS 1: provisional gain g1 = 127/loose (loose >= max|P|, no saturation), centered u8. */
-    float g1 = 127.0f / (float)GDN_BR_LOOSE_CONST;
+    /* PASS 1 (#1c): norm-PREDICTED gain g1 = 127/(128*colabsmax) — a Holder upper bound on max|P|
+     * (max|act code| <= 128, max-col-abs-sum(wt) = wt_colabsmax). The old PASS-1 used the LOOSE worst case
+     * (~100x over), so its codes landed near 1 and the integer maxabs was ~20% off -> needed a PASS-2 refine.
+     * The norm-predicted gain fills the u8 range, so PASS-1's maxabs is accurate in ONE shot and PASS-2 is
+     * DROPPED. PASS-3 still uses the MEASURED max|P| (code1/g1), so oc is UNCHANGED. Verified oc-safe in sim
+     * (scripts/gdn_solve_maxp_probe.py); fallback to LOOSE if colabsmax==0. */
+    int maxP_est = 128 * wt_colabsmax;
+    float g1 = (maxP_est > 0) ? (127.0f / (float)maxP_est) : (127.0f / (float)GDN_BR_LOOSE_CONST);
     gdn_hmx_run_only(vt, wt_kmajor, eff, g1 * 512.0f, 128 << 7, 0);
-    int code1 = gdn_surf_maxabs(vt->out, 128);                  /* max|P|*g1 */
+    int code1 = gdn_surf_maxabs(vt->out, 128);                  /* max|P|*g1 — accurate now (PASS-1 fills range) */
     float maxP = (float)code1 / g1; if (maxP < 1.0f) maxP = 1.0f;
-    /* PASS 2 (REFINE): the loose bound is ~100x over max|P|, so pass-1 codes land near 1 and the integer
-     * surf_maxabs carries a ~20% rounding error -> mis-scaled near-diagonal (dist-1) blocks, which oc is
-     * hypersensitive to (device oc 0.73 vs clean-8bit ceiling ~0.01).  Re-measure at a gain that fills the
-     * u8 range (safety 2.0 guarantees no saturation for code1>=1) so the scale is ~1% accurate. */
-    if (code1 > 0) {
-        float gr = 127.0f / (maxP * 2.0f);
-        gdn_hmx_run_only(vt, wt_kmajor, eff, gr * 512.0f, 128 << 7, 0);
-        int coder = gdn_surf_maxabs(vt->out, 128);
-        if (coder > 0) { maxP = (float)coder / gr; if (maxP < 1.0f) maxP = 1.0f; }
-    }
     float sP = (maxP * sa * sw) / 127.0f; if (sP <= 0.0f) sP = 1e-12f;
 #if defined(GDN_BR_PROBE_CYCLES)
     { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_pint += q - es0; }
@@ -1431,10 +1445,10 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
             float s_S = 0.0f; int first = 1;
             for (int k = j; k < i; ++k) {
                 /* cached: A_ik act (fold+quant+pack once per (i,k)), T_kj wt (quant+pack+eff once per (k,j)). */
-                float sa, sw, sterm; const int32_t *eff;
+                float sa, sw, sterm; const int32_t *eff; int wcolabs;
                 const uint8_t *a = gdn_get_act_A(sc, vt, Ah, i, k, C, zpA, M, S, &sa);
-                const int8_t  *w = gdn_get_wt_T(sc, vt, k, j, &sw, &eff);
-                gdn_merge_packed(sc, vt, a, sa, w, eff, sw, sc->termi, &sterm);
+                const int8_t  *w = gdn_get_wt_T(sc, vt, k, j, &sw, &eff, &wcolabs);
+                gdn_merge_packed(sc, vt, a, sa, w, eff, sw, wcolabs, sc->termi, &sterm);
                 if (first) s_S = sterm;
 #if defined(GDN_BR_PROBE_CYCLES)
                 uint64_t a0; asm volatile("%0 = C15:14" : "=r"(a0));
@@ -1447,7 +1461,7 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
             }
             /* final merge T_ij = T_ii @ S_ij: cached T_ii act; S_ij (Sacc) is transient -> quant+pack into
              * the transient vt->wt surface (no cache slot — each S_ij is distinct). */
-            float sa_ii, sw_S, sij;
+            float sa_ii, sw_S, sij; int scolabs;
             const uint8_t *a_ii = gdn_get_act_Tdiag(sc, vt, i, &sa_ii);
 #if defined(GDN_BR_PROBE_CYCLES)
             uint64_t sq0; asm volatile("%0 = C15:14" : "=r"(sq0));
@@ -1457,7 +1471,7 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
             { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_quant += q - sq0; }
             uint64_t se0; asm volatile("%0 = C15:14" : "=r"(se0));
 #endif
-            gdn_effective(sc->wtbuf, sc->eff);
+            gdn_effective(sc->wtbuf, sc->eff, &scolabs);   /* #1c: col-abs-sum max for the S_ij wt */
 #if defined(GDN_BR_PROBE_CYCLES)
             { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_eff += q - se0; }
             uint64_t sp0; asm volatile("%0 = C15:14" : "=r"(sp0));
@@ -1466,7 +1480,7 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
 #if defined(GDN_BR_PROBE_CYCLES)
             { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_wtpack += q - sp0; }
 #endif
-            gdn_merge_packed(sc, vt, a_ii, sa_ii, vt->wt, sc->eff, sw_S, sc->termi, &sij);
+            gdn_merge_packed(sc, vt, a_ii, sa_ii, vt->wt, sc->eff, sw_S, scolabs, sc->termi, &sij);
 #if defined(GDN_BR_PROBE_CYCLES)
             uint64_t w0; asm volatile("%0 = C15:14" : "=r"(w0));
 #endif

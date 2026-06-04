@@ -19,9 +19,10 @@
 #define GDN_BR_NT 4
 #endif
 #define THIS_PKG_NAME GdnBm
-/* HVX-MERGE mode: int16-HVX matmul merges -> pure HVX + BSS scratch, threads freely.  Disabled for the
- * OVERLAP probe, which uses the int8-HMX merges (real mxmem) to test HVX∥HMX concurrency. */
-#if !defined(GDNBM_OVERLAP_PROBE)
+/* GDNSolveHVX mode (default): int16-HVX matmul merges -> pure HVX + BSS scratch, threads freely.
+ * Disabled for the OVERLAP probe (int8-HMX merges) and for GDNBM_HMX_MERGE_PATH (run the REAL
+ * GDNSolveHVXMixHMX gdn_merge_packed on baremetal w/ PROBE_CYCLES, to get its true per-stage breakdown). */
+#if !defined(GDNBM_OVERLAP_PROBE) && !defined(GDNBM_HMX_MERGE_PATH)
 #define GDN_BR_HVX_MERGE 1
 #endif
 #include "../../solve_br_op/src/GdnSolveBROp.cpp"
@@ -236,6 +237,17 @@ static void ov_join(qurt_thread_t tid) { if (tid) { int s; qurt_thread_join(tid,
 static void solve_worker(void *arg) {
     gdn_work_t *w = (gdn_work_t *)arg;
     int hvx = qurt_hvx_lock(QURT_HVX_MODE_128B);
+#if defined(GDNBM_HMX_MERGE_PATH)
+    /* GDNSolveHVXMixHMX: spawned worker w/ qurt_hmx_lock (bare-metal HMX on a spawned thread IS fine —
+     * like gdn_br_worker). 1 HMX unit -> mxmem serializes across workers, but diag/fold/quant/glue run
+     * HVX-parallel across heads (HVX-locked threads <= 4 units). gdn_br_run_slot sets up vt's VTCM ptrs
+     * (the VTCM-ping-pong path below is HVX-merge-only and leaves vt zeroed -> HMX mxmem would hit null). */
+    int chmx = qurt_hmx_lock();
+    gdn_br_run_slot(w);
+    if (chmx == 0) qurt_hmx_unlock();
+    if (hvx == 0) qurt_hvx_unlock();
+    return;
+#endif
 #if defined(GDNBM_VTCM_RESIDENT) && !defined(GDNBM_MM_TEST) && !defined(GDNBM_Q_TEST) && !defined(GDNBM_MERGE_TEST)
     /* SKILL principles: (2) keep A resident in VTCM (not uncached FastRPC DDR -> bare-metal diag was
      * 373K vs QNN 48K), (3) UDMA ping-pong so head h+1's A loads while head h computes. T writes go
@@ -958,21 +970,26 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
      *   diag (fwd-subst) | zero (Th init) | fold (A_ik) | quant (operand quant in merge) |
      *   mm (int16 matmul) | acc (term accumulate) | requant (codes->u16 out). */
     {
-        uint64_t tot = g_c_diag + g_c_zero + g_c_fold + g_c_quant + g_c_hmxkern + g_c_acc + g_c_requant;
-        FARF(ALWAYS, "PROBE/head(H=%d,nt=%d): diag=%llu zero=%llu fold=%llu quant=%llu mm=%llu acc=%llu requant=%llu  SUM=%llu wall=%llu",
+        /* per-stage cyc/head. Buckets work for BOTH paths: GDNSolveHVX (pint/depack/actpack/wtpack/eff=0,
+         * mergeRun=vrmpy mm) AND GDNSolveHVXMixHMX (mergeRun=all HMX runs incl probe passes, mergeGlue=HMX
+         * pack/depack). Lets us see merge vs diag vs prep(fold+quant) share for either implementation. */
+        uint64_t mergeRun  = g_c_hmxkern + g_c_pint;                           /* HMX runs (or vrmpy mm) */
+        uint64_t mergeGlue = g_c_hmxdepack + g_c_actpack + g_c_wtpack + g_c_eff; /* HMX pack/depack (0 for HVX) */
+        uint64_t other     = g_c_requant + g_c_acc + g_c_zero + g_c_widen;
+        uint64_t tot = g_c_diag + mergeRun + mergeGlue + g_c_fold + g_c_quant + other;
+        FARF(ALWAYS, "PROBE/head(H=%d,nt=%d): diag=%llu mergeRun=%llu mergeGlue=%llu fold=%llu quant=%llu other=%llu SUM=%llu wall=%llu",
              H, nthreads,
-             (unsigned long long)(g_c_diag / H), (unsigned long long)(g_c_zero / H),
-             (unsigned long long)(g_c_fold / H), (unsigned long long)(g_c_quant / H),
-             (unsigned long long)(g_c_hmxkern / H), (unsigned long long)(g_c_acc / H),
-             (unsigned long long)(g_c_requant / H), (unsigned long long)(tot / H),
-             (unsigned long long)((t1 - t0) / H));
+             (unsigned long long)(g_c_diag / H), (unsigned long long)(mergeRun / H),
+             (unsigned long long)(mergeGlue / H), (unsigned long long)(g_c_fold / H),
+             (unsigned long long)(g_c_quant / H), (unsigned long long)(other / H),
+             (unsigned long long)(tot / H), (unsigned long long)((t1 - t0) / H));
         if (statsLen > 3) stats[3] = (int)(g_c_diag / H);
-        if (statsLen > 4) stats[4] = (int)(g_c_zero / H);
-        if (statsLen > 5) stats[5] = (int)(g_c_fold / H);
-        if (statsLen > 6) stats[6] = (int)(g_c_quant / H);
-        if (statsLen > 7) stats[7] = (int)(g_c_hmxkern / H);
-        if (statsLen > 8) stats[8] = (int)(g_c_acc / H);
-        if (statsLen > 9) stats[9] = (int)(g_c_requant / H);
+        if (statsLen > 4) stats[4] = (int)(mergeRun / H);
+        if (statsLen > 5) stats[5] = (int)(mergeGlue / H);
+        if (statsLen > 6) stats[6] = (int)(g_c_fold / H);
+        if (statsLen > 7) stats[7] = (int)(g_c_quant / H);
+        if (statsLen > 8) stats[8] = (int)(other / H);
+        if (statsLen > 9) stats[9] = (int)((t1 - t0) / H);   /* wall/head */
     }
 #endif
     return 0;

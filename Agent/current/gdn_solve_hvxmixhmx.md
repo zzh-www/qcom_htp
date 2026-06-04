@@ -8,11 +8,54 @@
 
 | 标准名 | 定义 | 代码路径 | 性能 |
 |---|---|---|---|
-| **GDNSolveHVX** | 纯 HVX 实现（基线，已出货）。64³ 矩阵乘用 HVX int16 vrmpy；对角块求逆（diag forward-subst）用 HVX。 | 定义 `GDN_BR_HVX_MERGE` 时走的 `gdn_merge_hvx` | ~135K cyc/head（4-thread per-head） |
-| **GDNSolveHVXMixHMX** | HVX 喂数 + HMX 算 64³ 矩阵乘；对角块求逆仍用 HVX（与基线共享）。 | 默认（不定义 `GDN_BR_HVX_MERGE`）走的 `gdn_merge_packed`；baremetal 里 `GDNBM_FEED_PIPE`/`GDNBM_FEED_4P` 的生产者-消费者流水线（4 个 HVX 生产者打包喂 1 个 HMX 消费者） | 矩阵乘子环节实测 **578 cyc/matmul = 2.77×** 于基线 vrmpy（1601，单次 HMX run）。端到端**实测**（忠实 multi-pass，`-DGDNBM_FEED_MULTIPASS`）：真实现状（scalar-bias 3-pass）**1.29×**；把 multi-pass 的 bias-pack 向量化后 **2.06×**；再 +#1c（省 PASS2）**2.35×**（均 oc 安全）。优化后 diag 成新 floor。详见文末实测节 |
+| **GDNSolveHVX** | 纯 HVX 实现（基线，已出货）。64³ 矩阵乘用 HVX int16 vrmpy；对角块求逆（diag forward-subst）用 HVX。**正确的多线程方式：4 个 HVX worker 按 head 并行（#HVX-locked ≤ 4 单元）。** | 定义 `GDN_BR_HVX_MERGE` 时走的 `gdn_merge_hvx` | baremetal 实测 **4-thread 157K cyc/head**（1-thread 414K）。这是当前已验证的基准。 |
+| **GDNSolveHVXMixHMX** | HVX 喂数 + HMX 算 64³ 矩阵乘；对角块求逆仍用 HVX。**HMX=1 单元 process-serial，绝不 thread HMX**（skill `htp-hardware-scheduling`）；正确多线程 = HMX consumer 在 main + HVX 并行。 | 默认（不定义 `GDN_BR_HVX_MERGE`）走的 `gdn_merge_packed`；baremetal `GDNBM_FEED_PIPE`/`GDNBM_FEED_4P` 微基准流水线 | **已验证**：matmul 子环节 578 cyc/matmul（2.77× vs vrmpy 微基准）；向量化 bias 已进完整 solve（bit-identical）；multi-pass 真实成本 4190→1218（向量化bias+#1c，oc 安全）。**未做**：把微基准 pack/depack 优化集成进完整 solve + 正确多线程实现。**完整-solve 多线程性能 = 未知，尚无 vs 基线的公平结论**（见文末 "Full-solve status"）。 |
 | **GDNSolveHMX** | 全程 HMX（连三角求逆本身也用 HMX，如 divide-conquer）。 | 已探索并否决 | 多算 28–60× 矩阵乘，实测慢 4–6×，三者中最差 |
 
 本文档主要讲 **GDNSolveHVXMixHMX**。
+
+## NEXT SESSION — START HERE (集成状态 + 计划, 2026-06-05)
+
+**真实基线（已验证，apples-to-apples 用它）**：GDNSolveHVX baremetal **4-thread = 157K cyc/head**
+（1-thread 414K）。这是当前最优。
+
+**GDNSolveHVXMixHMX 在基准代码 (`gdn_merge_packed`) 的集成状态：**
+- ✅ **已集成**：向量化 `gdn_pack_bias`（128 scalar→4 vector，bit-identical，commit `2cc2884`）；
+  **#1c** 省 PASS2（范数预估 gain，`gdn_effective` 顺带算 colabsmax，oc 安全，**工作区未 commit**）。
+- ❌ **未集成**（只在 baremetal 微基准 `gdnbm_imp.cpp`）：2-head pack `fp_pack_act2/wt2`、
+  fused depack `fp_depack`、2-head eff+bias `fp_pack_effbias2`。完整 solve 的
+  `gdn_get_act_A`/`gdn_get_wt_T` 仍用旧 1-head `gdn_pack_act_crouton8`/`gdn_pack_w8_kmajor` +
+  `gdn_depack_out_fast`。
+- ❌ **未做**：diag 优化；GDNSolveHVXMixHMX 正确多线程实现。
+
+**完整 solve 现状（实测，别再用错误估算）**：GDNSolveHVXMixHMX nthreads=1 C=256 = **434K/head**（旧 1-head
+pack）；per-stage diag 132K / fold 122K（虚高，旧 pack）/ merge 61K / quant 53K / other 59K。
+⚠️ 之前文档里的 "65K 三块构成 / 2.06×→2.35× / 输 2.77× / 不能并发" **都是错误估算或不公平比较，已废弃**
+（原因见文末 "Full-solve status — CORRECTED"）。
+
+**计划（按优先级）：**
+1. **集成微基准 pack/depack 优化进 `gdn_merge_packed`/getter**（2-head `fp_pack_act2/wt2` + fused
+   `fp_depack` + `fp_pack_effbias2`）→ 完整 solve 的 fold(122K) 应大降。重测 nthreads=1，`gdn_br.sh` 验 oc 不退化。
+2. **commit #1c**（已在工作区，oc 安全），C=256 重测确认收益。
+3. **正确多线程 GDNSolveHVXMixHMX** —— 按 skill `htp-hardware-scheduling`：**HMX=1 单元 process-serial，
+   绝不 thread HMX**；HMX consumer 在 MAIN，HVX work 多线程（head 并行）。测 4-thread。
+4. **apples-to-apples vs GDNSolveHVX**（同 baremetal harness、同线程数、C=256）才能下"快/慢"结论。
+5. （独立）**diag 优化分析** —— diag 两路线共享，优化它绝对提速两者（相对倍数几乎不变，但 prefill 墙钟有用）。
+
+**禁止重犯**（见 memory `feedback_read_scheduling_skill_before_hmx_hvx`）：读 skill 先；never thread HMX（→SSR
+`rc=0x80000406` 需 reboot）；公平比较（同线程数）前不下结论；`pkill -9 gdnbm` between device runs。
+
+**Reproduce（baremetal，`ssh oneplus` via `scripts/dssh.sh`）：**
+```bash
+cd example/gdn_native/baremetal
+# GDNSolveHVX 基线（4-thread 157K）：
+EXTRA_DEFS="-DGDNBM_VTCM_RESIDENT -DGDN_BR_PROBE_CYCLES" bash build.sh                       # ./gdnbm 4 A_u16_h32.raw /dev/null 32 256 32768 32768 2.77e-05 6.10e-05
+# GDNSolveHVXMixHMX 完整 solve（nthreads=1 SSR-safe；多线程是 TODO，勿乱开多 HMX worker）：
+EXTRA_DEFS="-DGDNBM_VTCM_RESIDENT -DGDNBM_HMX_MERGE_PATH -DGDN_BR_PROBE_CYCLES" bash build.sh # ./gdnbm 1 ...
+# matmul-portion 微基准（578）：
+EXTRA_DEFS="-DGDNBM_VTCM_RESIDENT -DGDNBM_FEED_PIPE -DGDNBM_FEED_4P" bash build.sh            # ./gdnbm 4 ...
+```
+PROBE stats（HMX_MERGE_PATH/HVX 两路通用）：[3]=diag [4]=mergeRun [5]=mergeGlue [6]=fold [7]=quant [8]=other [9]=wall/head。
 
 **Goal:** speed up the GDN triangular-inverse *merge-matmul* portion by running the 64³ matmuls on the
 (idle) HMX unit, fed by HVX producers — instead of the GDNSolveHVX baseline's HVX `vrmpy` matmul. Bare-metal only
@@ -237,79 +280,49 @@ The matmul-portion squeeze the user requested (2026-06-04) is complete; landed i
 below ~585 needs >4 HVX producers (impossible) or cheaper crouton pack. The remaining stretch lever (act/wt
 crouton-pack lane waste, 32/128 masked) is near the floor and not worth it.
 
-## DEFERRED (later sessions, not now)
+## DEFERRED / TODO (the real next steps)
 
-- **Integration into the real solve_br_op + oc-vs-golden:** numbers are DUMMY-data microbench. The new
-  primitives are now bit-verified in isolation (HMX_BENCH: `fp_depack`==`gdn_depack_out_fast`,
-  `fp_pack_effbias2`==2×`fp_pack_effbias`, kernel-overwrite all 0-mismatch), but the END-TO-END 3-stage
-  pipeline (CAS-free slot machine + cross-thread depack) is still only wired in the throughput microbench —
-  it must be integrated into the real block-recursive `solve_br_op` and oc re-checked vs golden.
-- **Whole-GDN-chunk fused kernel with HVX∥HMX cross-head overlap** (~2 ms path) where the solve's HVX
-  hides under the HMX big matmuls — likely the higher-value direction once the squeeze plateaus.
+- **Integrate the matmul-portion microbench wins into the real `gdn_merge_packed` + getters** (2-head
+  `fp_pack_act2/wt2`, fused `fp_depack`, `fp_pack_effbias2`, #1c) — they are validated in isolation but the
+  full-solve path still uses the OLD 1-head pack + `gdn_depack_out_fast`. Re-check oc vs golden after.
+- **Implement GDNSolveHVXMixHMX multithreading per the skill** then measure (see status below).
 
-## End-to-end GDNSolveHVXMixHMX-vs-GDNSolveHVX comparison (2026-06-05) — before committing to #1c
+## Full-solve status (2026-06-05) — CORRECTED (prior "loses 2.77× / can't parallelize" was WRONG)
 
-User asked to compare the two paths end-to-end before investing in #1c. Measured the shipped GDNSolveHVX path
-(baremetal default, `-DGDN_BR_PROBE_CYCLES`, 1-thread, one head, real A_u16_h32):
+⚠️ An earlier version of this doc concluded "GDNSolveHVXMixHMX loses to GDNSolveHVX by 2.77× and can't
+parallelize." **That was wrong — removed.** The errors:
+1. **Unfair comparison** — GDNSolveHVXMixHMX nthreads=1 (434K) vs GDNSolveHVX nthreads=4 (157K). Not apples
+   to apples. GDNSolveHVXMixHMX's 4-thread number was never correctly measured.
+2. **Un-integrated pack** — the full-solve `gdn_merge_packed` still uses the OLD 1-head pack, so its
+   fold/pack is inflated (fold 122K). The 2-head pack / fused-depack microbench wins are NOT yet integrated.
+3. **Skill violation → SSR misread as "can't parallelize"** — I spawned 4 HMX workers, which the skill
+   `htp-hardware-scheduling` explicitly forbids (HMX = 1 unit, process-serial, NEVER thread HMX; put the HMX
+   consumer on MAIN, HVX work multithreaded). That oversubscription SSR'd the cDSP; it is an implementation
+   bug, NOT evidence that GDNSolveHVXMixHMX can't be threaded. (There is 1 HMX unit, not 2.)
 
-  GDNSolveHVX per-head (1-thread): mm=210949 (39%) diag=103369 (19%) fold=100719 (18%) quant=76336 (14%)
-  requant=29236 acc=12300 zero=8193  => TOTAL 545829 cyc/head  (÷4 head-parallel ≈ 136K, matches the 151K
-  4-thread number with bandwidth contention).
+### Confirmed-effective (device-verified, real)
+- **matmul-portion microbench**: HMX matmul + 2-head pack + fused depack + 2-head eff+bias =
+  **578 cyc/matmul** (2.77× vs the vrmpy microbench 1601). commit `2cc2884`.
+- **vectorized `gdn_pack_bias` LANDED in the full solve**: 128 scalar VTCM writes → 4 HVX vector stores,
+  **T relerr BIT-IDENTICAL** (gdn_br.sh C=128: 8.538e-3, same to every digit; HMX path only). commit `2cc2884`.
+- **multi-pass real cost** (MULTIPASS microbench, P=3, consumer-bound): scalar-bias 3-pass **4190** →
+  vectorized-bias 3-pass **1720** (vectorizing the per-pass bias saves ~60% — scalar `gdn_pack_bias` was the
+  pathology) → 2-pass #1c **1218** cyc/matmul.
+- **#1c** (norm-predicted PASS-1 gain via `gdn_effective` colabsmax → drop PASS-2): in `gdn_merge_packed`;
+  sim + gdn_br.sh verified **oc unchanged** (off-diag 21.2%→21.5%, baseline already 21%). Working tree (uncommitted).
 
-Key structure: matmul (mm) is 39%, but **diag forward-subst (103K, shared by BOTH paths) + operand prep
-(fold+quant = 177K) together dwarf it**. GDNSolveHVXMixHMX replaces mm + the prep with HVX-feed + HMX-matmul; it CANNOT
-avoid diag.
+### Full-solve current measurement (reference only — NOT GDNSolveHVXMixHMX's potential)
+GDNSolveHVXMixHMX, nthreads=1, C=256, **OLD 1-head pack**, baremetal `-DGDNBM_HMX_MERGE_PATH`: 434K/head —
+diag 132K / fold 122K (inflated by old pack) / merge 61K / quant 53K / other 59K. Single-thread +
+un-integrated, so this number does NOT represent the path's potential.
 
-Rough per-head (4-HVX-unit budget), GDNSolveHVXMixHMX pipeline at 578 cyc/run (single-run microbench):
-  - matmul+pack only: 512 mm × 578 / 32 head = 9.3K/head (1 pass) -> ×3 multi-pass = 27.7K (×2 w/ #1c = 18.5K)
-  - vs GDNSolveHVX mm+fold+quant ≈ 97K/head (4-thread) -> HMX matmul is ~2-3.5× cheaper IF the microbench were faithful.
+### Baseline reference (GDNSolveHVX, this baremetal harness, C=256)
+nthreads=4 = **157K/head**; nthreads=1 = 414K/head. (Shipped QNN-op numbers + metric alignment:
+[[project_gdn_solve_handwritten_route_2026-06-03]], `docs/cycle_metric_alignment.md`.)
 
-**But the microbench UNDER-models the real GDNSolveHVXMixHMX path in 3 ways, all favoring GDNSolveHVX:**
-  1. **multi-pass (2-3×)** — the 578 is ONE run; real is 2-3 (lever #1c cuts to 2).
-  2. **fold+quant NOT in the pipeline** — producers pack DUMMY pre-quantized data; the real producer must
-     also fold u16->int + quantize (~44K/head of work) before packing.
-  3. **multi-pass breaks the 4P architecture** — PASS-1/2 need maxabs (HVX) + a serial dependency (PASS-3
-     waits on the gain), so the consumer can't stay PURE-HMX; it must take an HVX unit -> back to 3 producers.
-
-**Verdict: GDNSolveHVXMixHMX's win is real in the matmul kernel itself (215 vs vrmpy ~13K/mm) but is heavily diluted by
-the shared diag floor (~26K/head), operand prep, and the multi-pass tax. Optimistic end-to-end ~1.3-2× over
-GDNSolveHVX's 135K; pessimistic ~parity.** The decisive unknown is whether multi-pass + fold/quant can hide in
-the pipeline without serializing the HMX. #1c (norm-predicted PASS-1 -> drop PASS-2) attacks the traffic but
-not the serial/architecture risk.
-
-### FAITHFUL multi-pass MEASURED (2026-06-05, `-DGDNBM_FEED_MULTIPASS`, P=3, real v75)
-
-Built a faithful consumer (3 HMX runs + 2 maxabs + serial gain dep, bias re-packed each pass), depack still
-offloaded to a producer. Consumer LOCKS HVX (maxabs) so P=3 producers (3+1 = 4 HVX units). All consumer-bound
-(spin≈58 — producers idle, so fold/quant CAN hide in their slack). cyc/matmul (min of 2):
-
-| multi-pass config | cyc/matmul | matmul/head (512mm/32h) | end-to-end/head¹ | vs GDNSolveHVX (135K) |
-|---|---|---|---|---|
-| single-run ideal (old microbench) | 578 | 9.3K | — | (didn't model multi-pass) |
-| **scalar-bias 3-pass = real gdn_merge_packed TODAY** | **4190** | 67K | ~105K | **1.29×** |
-| **vectorized-bias 3-pass** | **1720** | 27.5K | ~65K | **2.06×** |
-| **vectorized-bias 2-pass (#1c)** | **1218** | 19.5K | ~57K | **2.35×** |
-
-¹ end-to-end = matmul + diag (26K, shared HVX floor) + requant/acc (12K).
-
-**DECISIVE FINDING: the real gdn_merge_packed TODAY is only 1.29× — and the bottleneck is NOT #1c, it's the
-scalar `gdn_pack_bias` (128 scalar VTCM writes, the documented pathology) re-run every pass = ~60% of the
-multi-pass cost.** Swapping in the vectorized `fp_pack_effbias` (already built+verified for the pipeline)
-alone jumps it to **2.06×**; adding #1c (drop PASS-2) reaches **2.35×**. Both are oc-SAFE (vectorized bias is
-numerically equivalent; #1c keeps the measured max|P| so oc is unchanged).
-
-### LEVER #1 (vectorized bias) LANDED in the real op + verified (2026-06-05)
-
-Replaced the scalar `gdn_pack_bias` (128 scalar VTCM writes) in `GdnSolveBROp.cpp` with 4 HVX vector stores
-(bias tile = [ctrl×32 | eff[0:32]+rdelta | ctrl×32 | eff[32:64]+rdelta]). Verified via `solve_br_op/standalone/gdn_br.sh`
-(C=128, H=16, real device): **T relerr BIT-IDENTICAL** (8.538e-3 mean / 1.646e-2 max, off-diag 6.424e-2 —
-same to all digits as the scalar baseline → numerically equivalent, oc unchanged). aggregate_cyc
-1,060,341 → 980,516 (−7.5%; C=128 is diag-dominated with only 2 matmuls/head — C=256's 16 matmuls/head get
-the full ~2× per the MULTIPASS microbench). Only affects the HMX path (`gdn_pack_bias` is dead in `#if 0` for
-everything else; GDNSolveHVX's `gdn_merge_hvx` untouched). Next: lever #2 (#1c, drop PASS-2).
-
-**So the ranked GDNSolveHVXMixHMX levers are now: (1) vectorize the multi-pass bias-pack (1.29→2.06×, biggest,
-~free, numerically equivalent); (2) #1c drop PASS-2 (2.06→2.35×, oc-safe). After both, diag (26K, ~45% of the
-57K) becomes the new floor — shared with GDNSolveHVX, so the next frontier is the diagonal forward-subst.**
-fold+quant hides in the consumer-bound producers' slack, so it doesn't add. These are device-measured
-throughput on DUMMY data; the real integration into `gdn_merge_packed` + oc-vs-golden is the remaining step.
+### Honest verdict
+**GDNSolveHVXMixHMX's full-solve multithreaded performance vs GDNSolveHVX is UNKNOWN** — it needs (1) the
+microbench pack/depack wins integrated into `gdn_merge_packed`, and (2) correct multithreading per the skill
+(HMX-on-main consumer + parallel HVX, never threaded HMX). Only then is a fair verdict possible. What IS
+proven: the matmul-portion is 2.77× faster on HMX, and the vectorized bias + #1c cut the multi-pass tax
+~3.4× (4190→1218) oc-safely.
