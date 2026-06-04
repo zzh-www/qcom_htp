@@ -97,10 +97,11 @@ PROBE stats（HMX_MERGE_PATH/HVX 两路通用）：[3]=diag [4]=mergeRun [5]=mer
 (QNN custom ops get NO HVX∥HMX overlap).
 
 **Result (real v75 `ssh oneplus`, C=256-shaped 64³ matmuls, chain8-style steady, DUMMY data):**
-matmul-portion throughput **1208 → ~578 cyc/matmul = 2.09×**, and **2.77× vs the shipped-best vrmpy
-4-thread (1601 cyc/matmul throughput)**. (Was ~635; the depack squeeze + single-barrier below took it to ~578.)
-This is the practical optimum on 4 HVX units — feed-bound + average-VTCM-bandwidth-bound (NOT the old 388;
-the 4P pure-HMX consumer floor is ~418, see the scaling-curve section).
+matmul-portion throughput **1208 → ~507 cyc/matmul = 2.4×**, and **~3.2× vs the shipped-best vrmpy
+4-thread (1601 cyc/matmul throughput)**. Journey: 1208 → ~585 (2-head pack + fused depack + 2-head eff+bias)
+→ **~507 (lever #A: fuse act-crouton ∥ wt-kmajor, 2026-06-05)**. Now ~80% consumer-bound (spin 97/507),
+approaching the pure-HMX consumer floor ~418 — the next lever is consumer-side (descriptor hoist + barrier),
+see "Where it's still bound".
 
 ## The pipeline
 
@@ -132,6 +133,7 @@ migrates SW threads. Only total wall + single-thread isolated loops are reliable
 | **+ 2-head interleaved depack** (`fp_depack2`) | ~592 | interleave the pair's two depack streams (ILP, mirrors `fp_pack_act2`); distinct out buffers avoid store aliasing |
 | + drop producer out-zero | ~592 (neutral) | verified `our_v73deep_kernel` fully OVERWRITES the out surface (ovr_mism=0) → pre-zero unnecessary. No wall gain (was overlapped) but removes 32 vec-stores/matmul; kept as verified-safe simplification. |
 | **+ 2-head interleaved eff+bias** (`fp_pack_effbias2`) | **~585 (2.06×)** | interleave the two column-sum chains; consumer spin 184→168/matmul (producer genuinely faster); bit-exact (eff_mism=0) |
+| **+ FUSED act-crouton ∥ wt-kmajor** (`fp_pack_actwt2`, lever #A, 2026-06-05) | **~507 (1.16× over 585; 2.4× overall)** | crouton is ALU(vand/vor/vror), kmajor is permute(vshuff) — SEPARATE HVX resources. Fusing the two packs into ONE 32-iter loop co-issues ALU∥permute in the same VLIW packet. **Isolated: act+wt 2038→1563 = 1.30×, BYTE-IDENTICAL** (o[14]/o[15] mism=0). Pipeline 4P: spin 167→97 (producer feeds faster) → ~573→~507. Build flag `-DGDNBM_FUSED_ACTWT`. |
 
 ## Three findings that unlocked it (all device-verified)
 
@@ -156,11 +158,24 @@ state==1; run kernel; set state 2 (a producer reuses+depacks it later).
 
 ## Where it's still bound + why we stopped
 
-Producer-bound at **~585** (vs the 388 HMX floor); consumer still spins ~168/585 (~29% idle). Reaching 388
-would need ~8 producers (impossible — 4 HVX units) or much cheaper packing. **This is the practical limit
-of the 4-HVX-unit silicon for the matmul portion** — the depack squeeze (fused + 2-head, ~635→~585)
-trimmed the producer's non-pack cost; what remains is the act/wt crouton-pack + cross-thread depack across
-4 producers, which can't be cut further without more HVX units.
+**UPDATE 2026-06-05 (lever #A landed):** the act∥wt fuse cut the producer's exposed pack cost → 4P is now
+**~507** and the bottleneck SHIFTED to the consumer: spin fell 167→**97** (19% idle), consumer-busy
+(=cyc−spin) is ~410 both before/after — i.e. we're now ~80% consumer-bound, approaching the pure-HMX
+consumer floor ~418 (kernel 215 + descriptor-build + 2 barriers ~203/iter). **The earlier "act/wt
+crouton-pack can't be cut without more HVX units" was WRONG** — it assumed the two packs must run
+serially; fusing them overlaps ALU∥permute and bought 1.16× with ZERO extra HVX units.
+
+**Next lever (now that consumer is the bound):** cut the consumer's ~203 fixed/iter — hoist the `od`/`ad`
+descriptor build out of the hot loop (only `outtab`/`acttab` change per slot; pre-store them in the slot)
+and replace the 2 full `__sync_synchronize` barriers with one-way volatile acquire. Previously "pointless
+(consumer has 167 slack)"; now the consumer has only 97 slack and is the critical path, so this is the
+live lever. Secondary producer levers (fuse eff+bias / depack into the same actwt loop) would cut the
+remaining 97 spin but are capped by the ~418 consumer floor.
+
+### (superseded) original stop-point at ~585
+Producer-bound at ~585 (vs the 388 HMX floor); consumer spun ~168/585 (~29% idle). The conclusion "this is
+the practical limit of the 4-HVX-unit silicon, can't be cut without more HVX units" was **refuted by lever
+#A** — same silicon, 585→507 via ALU∥permute co-issue.
 
 **Two levers that did NOT pay off (measured, then reverted/neutral):**
 - *Pack-before-depack reorder* (to hide the cross-thread `.out` read latency under pack compute): no-op,
@@ -318,8 +333,9 @@ crouton-pack lane waste, 32/128 masked) is near the floor and not worth it.
 ## DEFERRED / TODO (the real next steps)
 
 - **Integrate the matmul-portion microbench wins into the real `gdn_merge_packed` + getters** (2-head
-  `fp_pack_act2/wt2`, fused `fp_depack`, `fp_pack_effbias2`, #1c) — they are validated in isolation but the
-  full-solve path still uses the OLD 1-head pack + `gdn_depack_out_fast`. Re-check oc vs golden after.
+  `fp_pack_act2/wt2`, **fused `fp_pack_actwt2` [lever #A, byte-identical, 1.16×]**, fused `fp_depack`,
+  `fp_pack_effbias2`, #1c) — they are validated in isolation but the full-solve path still uses the OLD
+  1-head pack + `gdn_depack_out_fast`. Re-check oc vs golden after.
 - **Implement GDNSolveHVXMixHMX multithreading per the skill** then measure (see status below).
 
 ## Full-solve status (2026-06-05) — CORRECTED (prior "loses 2.77× / can't parallelize" was WRONG)

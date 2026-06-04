@@ -465,6 +465,66 @@ static void solve_worker(void *arg) {
       o[10] = (int32_t)((t1 - t0) / REPS);                                  /* k-major wt-pack 1-head */
       t0 = pcyc(); for (int r = 0; r < REPS; ++r) gdn_depack_out_fast(sc, crA, 0, sc->a8); t1 = pcyc();
       o[11] = (int32_t)((t1 - t0) / REPS);                                  /* HMX-output depack 1-head */
+      /* --- LEVER #A probe: act-crouton (vand/vor/vror = ALU+perm) vs wt-kmajor (vshuff = perm) --- */
+      {   /* o[12] SEQUENTIAL 1-head: crouton(src->crA) then kmajor(b8->crB)         */
+        const uint8_t *as = (const uint8_t *)sc->a8; const int8_t *ws = (const int8_t *)sc->b8;
+        int8_t *kB = (int8_t *)sc->Tc;
+        t0 = pcyc(); for (int r = 0; r < REPS; ++r) { gdn_pack_act_crouton8(as, crA); gdn_pack_w8_kmajor(ws, kB); } t1 = pcyc();
+        o[12] = (int32_t)((t1 - t0) / REPS);                               /* act+wt SEQUENTIAL (sum) */
+        /* o[13] FUSED interleaved: one 32-iter loop emitting one crouton vec + one kmajor vec per iter,
+         * so the ALU(and/or) and the permute(vshuff) streams can co-issue in the same VLIW packet. */
+        const HVX_Vector m  = Q6_V_valign_VVR(Q6_V_vzero(), Q6_Vb_vsplat_R(-1), 96);
+        const HVX_Vector m1 = Q6_V_vror_VR(m, 96), m2 = Q6_V_vror_VR(m, 64), m3 = Q6_V_vror_VR(m, 32);
+        HVX_Vector *dC = (HVX_Vector *)crA;
+        t0 = pcyc();
+        for (int r = 0; r < REPS; ++r) {
+          for (int fi = 0; fi < 32; ++fi) {
+            /* crouton index */
+            int kt = fi >> 4, local = fi & 15; const uint8_t *b = as + kt*32;
+            int o0 = local*4, row0 = ((o0/8)&1)*32 + (o0/16)*8 + (o0%8);
+            HVX_Vector a0 = *(const HVX_UVector *)(b+(row0+0)*64), a1 = *(const HVX_UVector *)(b+(row0+1)*64);
+            HVX_Vector a2 = *(const HVX_UVector *)(b+(row0+2)*64), a3 = *(const HVX_UVector *)(b+(row0+3)*64);
+            /* kmajor index */
+            int kt2 = fi >> 4, rem = fi & 15, nt = rem >> 3, r4 = rem & 7;
+            const int8_t *wb = ws + kt2*32 + nt*32*0;  int nbase = nt*32, kbase = kt2*32;
+            HVX_Vector w0 = *(const HVX_UVector *)(ws+(kbase+4*r4+0)*64+nbase), w1 = *(const HVX_UVector *)(ws+(kbase+4*r4+1)*64+nbase);
+            HVX_Vector w2 = *(const HVX_UVector *)(ws+(kbase+4*r4+2)*64+nbase), w3 = *(const HVX_UVector *)(ws+(kbase+4*r4+3)*64+nbase);
+            (void)wb;
+            /* crouton (ALU+perm) */
+            HVX_Vector oc = Q6_V_vor_VV(Q6_V_vor_VV(Q6_V_vand_VV(a0,m), Q6_V_vand_VV(Q6_V_vror_VR(a1,96),m1)),
+                                        Q6_V_vor_VV(Q6_V_vand_VV(Q6_V_vror_VR(a2,64),m2), Q6_V_vand_VV(Q6_V_vror_VR(a3,32),m3)));
+            /* kmajor (perm) */
+            HVX_Vector p01 = Q6_V_lo_W(Q6_W_vshuff_VVR(w1, w0, -1));
+            HVX_Vector p23 = Q6_V_lo_W(Q6_W_vshuff_VVR(w3, w2, -1));
+            HVX_Vector ow  = Q6_V_lo_W(Q6_W_vshuff_VVR(p23, p01, -2));
+            dC[fi] = oc; *(HVX_UVector *)((int8_t *)crB + fi*128) = ow;
+          }
+        }
+        t1 = pcyc();
+        o[13] = (int32_t)((t1 - t0) / REPS);                              /* act+wt FUSED interleaved */
+        /* o[14]/o[15] CORRECTNESS: the fused 1-head index math (same as fp_pack_actwt2) must produce
+         * byte-identical output to the validated original gdn_pack_act_crouton8 / gdn_pack_w8_kmajor. */
+        static uint8_t refAct[4096], fusAct[4096]; static int8_t refWt[4096], fusWt[4096];
+        gdn_pack_act_crouton8(as, refAct);
+        gdn_pack_w8_kmajor(ws, refWt);
+        { HVX_Vector *dC = (HVX_Vector *)fusAct;
+          for (int fi = 0; fi < 32; ++fi) {
+            int kt = fi >> 4, local = fi & 15; const uint8_t *b = as + kt*32;
+            int o0 = local*4, row0 = ((o0/8)&1)*32 + (o0/16)*8 + (o0%8);
+            HVX_Vector A0 = *(const HVX_UVector *)(b+(row0+0)*64), A1 = *(const HVX_UVector *)(b+(row0+1)*64);
+            HVX_Vector A2 = *(const HVX_UVector *)(b+(row0+2)*64), A3 = *(const HVX_UVector *)(b+(row0+3)*64);
+            int nt = local >> 3, r4 = local & 7, nb = nt*32, kb = kt*32, toff = (kt*2+nt)*1024 + r4*128;
+            HVX_Vector w0 = *(const HVX_UVector *)(ws+(kb+4*r4+0)*64+nb), w1 = *(const HVX_UVector *)(ws+(kb+4*r4+1)*64+nb);
+            HVX_Vector w2 = *(const HVX_UVector *)(ws+(kb+4*r4+2)*64+nb), w3 = *(const HVX_UVector *)(ws+(kb+4*r4+3)*64+nb);
+            dC[fi] = Q6_V_vor_VV(Q6_V_vor_VV(Q6_V_vand_VV(A0,m), Q6_V_vand_VV(Q6_V_vror_VR(A1,96),m1)),
+                                 Q6_V_vor_VV(Q6_V_vand_VV(Q6_V_vror_VR(A2,64),m2), Q6_V_vand_VV(Q6_V_vror_VR(A3,32),m3)));
+            HVX_Vector pa = Q6_V_lo_W(Q6_W_vshuff_VVR(Q6_V_lo_W(Q6_W_vshuff_VVR(w3,w2,-1)), Q6_V_lo_W(Q6_W_vshuff_VVR(w1,w0,-1)), -2));
+            *(HVX_UVector *)((int8_t *)fusWt + toff) = pa;
+          } }
+        int am = 0, wm = 0;
+        for (int i = 0; i < 4096; ++i) { am += (refAct[i] != fusAct[i]); wm += (refWt[i] != fusWt[i]); }
+        o[14] = am; o[15] = wm;                                          /* == 0 expected (byte-identical) */
+      }
     }
 #else
     gdn_br_run_slot(w);                 /* vtcm_base unused in GDNSolveHVX mode */
@@ -584,11 +644,48 @@ static void fp_pack_wt2(const int8_t *wA, const int8_t *wB, int8_t *pA, int8_t *
         }
     }
 }
+/* LEVER #A: FUSED 2-head act-crouton + wt-kmajor in ONE 32-iter loop. crouton is ALU+perm
+ * (vand/vor/vror), kmajor is pure perm (vshuff) -> interleaving the two streams co-issues the ALU and
+ * permute pipelines (isolated probe: act+wt 2036->1570 = 1.30x). Produces the IDENTICAL output of
+ * fp_pack_act2(...)+fp_pack_wt2(...). 4 output streams (actA/actB crouton, wtA/wtB kmajor). */
+static void fp_pack_actwt2(const uint8_t *aA, const uint8_t *aB, const int8_t *wA, const int8_t *wB,
+                           uint8_t *oaA, uint8_t *oaB, int8_t *owA, int8_t *owB) {
+    const HVX_Vector m = Q6_V_valign_VVR(Q6_V_vzero(), Q6_Vb_vsplat_R(-1), 96);
+    const HVX_Vector m1 = Q6_V_vror_VR(m, 96), m2 = Q6_V_vror_VR(m, 64), m3 = Q6_V_vror_VR(m, 32);
+    HVX_Vector *dA = (HVX_Vector *)oaA, *dB = (HVX_Vector *)oaB;
+    for (int fi = 0; fi < 32; ++fi) {
+        int kt = fi >> 4, local = fi & 15;
+        /* --- crouton (act), 2 heads --- */
+        const uint8_t *bA = aA + kt*32, *bB = aB + kt*32;
+        int o0 = local*4, row0 = ((o0/8)&1)*32 + (o0/16)*8 + (o0%8);
+        HVX_Vector A0 = *(const HVX_UVector *)(bA+(row0+0)*64), A1 = *(const HVX_UVector *)(bA+(row0+1)*64);
+        HVX_Vector A2 = *(const HVX_UVector *)(bA+(row0+2)*64), A3 = *(const HVX_UVector *)(bA+(row0+3)*64);
+        HVX_Vector B0 = *(const HVX_UVector *)(bB+(row0+0)*64), B1 = *(const HVX_UVector *)(bB+(row0+1)*64);
+        HVX_Vector B2 = *(const HVX_UVector *)(bB+(row0+2)*64), B3 = *(const HVX_UVector *)(bB+(row0+3)*64);
+        /* --- kmajor (wt), 2 heads.  out index: tile (kt,nt)*1024 + r4*128, nt=local>>3, r4=local&7 --- */
+        int nt = local >> 3, r4 = local & 7, nb = nt*32, kb = kt*32, toff = (kt*2+nt)*1024 + r4*128;
+        HVX_Vector w0 = *(const HVX_UVector *)(wA+(kb+4*r4+0)*64+nb), w1 = *(const HVX_UVector *)(wA+(kb+4*r4+1)*64+nb);
+        HVX_Vector w2 = *(const HVX_UVector *)(wA+(kb+4*r4+2)*64+nb), w3 = *(const HVX_UVector *)(wA+(kb+4*r4+3)*64+nb);
+        HVX_Vector x0 = *(const HVX_UVector *)(wB+(kb+4*r4+0)*64+nb), x1 = *(const HVX_UVector *)(wB+(kb+4*r4+1)*64+nb);
+        HVX_Vector x2 = *(const HVX_UVector *)(wB+(kb+4*r4+2)*64+nb), x3 = *(const HVX_UVector *)(wB+(kb+4*r4+3)*64+nb);
+        dA[fi] = Q6_V_vor_VV(Q6_V_vor_VV(Q6_V_vand_VV(A0,m), Q6_V_vand_VV(Q6_V_vror_VR(A1,96),m1)),
+                             Q6_V_vor_VV(Q6_V_vand_VV(Q6_V_vror_VR(A2,64),m2), Q6_V_vand_VV(Q6_V_vror_VR(A3,32),m3)));
+        dB[fi] = Q6_V_vor_VV(Q6_V_vor_VV(Q6_V_vand_VV(B0,m), Q6_V_vand_VV(Q6_V_vror_VR(B1,96),m1)),
+                             Q6_V_vor_VV(Q6_V_vand_VV(Q6_V_vror_VR(B2,64),m2), Q6_V_vand_VV(Q6_V_vror_VR(B3,32),m3)));
+        HVX_Vector pa = Q6_V_lo_W(Q6_W_vshuff_VVR(Q6_V_lo_W(Q6_W_vshuff_VVR(w3,w2,-1)), Q6_V_lo_W(Q6_W_vshuff_VVR(w1,w0,-1)), -2));
+        HVX_Vector pb = Q6_V_lo_W(Q6_W_vshuff_VVR(Q6_V_lo_W(Q6_W_vshuff_VVR(x3,x2,-1)), Q6_V_lo_W(Q6_W_vshuff_VVR(x1,x0,-1)), -2));
+        *(HVX_UVector *)(owA + toff) = pa; *(HVX_UVector *)(owB + toff) = pb;
+    }
+}
 static void fp_pack_slot2(int k0, int k1, int32_t *eff0, int32_t *eff1) {   /* pack 2 jobs, 2-head interleaved */
     gdn_vtcm_t v0 = fp_slot(k0), v1 = fp_slot(k1);
     (void)eff0; (void)eff1;
+#if defined(GDNBM_FUSED_ACTWT)
+    fp_pack_actwt2(g_fp_act, g_fp_act2, g_fp_wt, g_fp_wt2, v0.act, v1.act, (int8_t *)v0.wt, (int8_t *)v1.wt);
+#else
     fp_pack_act2(g_fp_act, g_fp_act2, v0.act, v1.act);
     fp_pack_wt2(g_fp_wt, g_fp_wt2, (int8_t *)v0.wt, (int8_t *)v1.wt);
+#endif
     uint32_t c = fp_bias_ctrl();
     fp_pack_effbias2(g_fp_wt, g_fp_wt2, c, 0, v0.bias, v1.bias);  /* 2-head interleaved eff+bias (ILP) */
     v0.acttab[0]=(int32_t)(uintptr_t)(v0.act+0); v0.acttab[1]=(int32_t)(uintptr_t)(v0.act+64*32);
