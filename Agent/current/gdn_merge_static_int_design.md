@@ -176,9 +176,16 @@ crouton16   └─ 下一个 matmul 的 WEIGHT     ─▶ 必须重排 k-major :
     **= int16-act × int16-weight 精确,oc=2.6e-4(同 w16a16),但跑在 byte-exact 的 convhbh 上。** 融合累加:每 pass 沿 K 累 int32,
     2 个 fused matmul 后 combine `256*S_hi+S_lo`(每块 1 次 shift+add,小;非 per-term glue)。
   - **f16 drain 可忽略**;**int32 0 溢出**(融合累加安全,不需 int64)。
-  - **✅ 代价**:2-pass convhbh ≈ **2×509 ≈ ~1018 cyc/64³ + 小 combine**,**< vrmpy 2081(4-路)→ ~2× 便宜**。
-    (原"w16a16 native 75433 = 2.5× convhbh" 是 QNN-native 路径的数,baremetal 用 2-pass convhbh ≈ 2×,更省。)
-  - **★GO 成立**:matmul ~2× 便宜 + **融合累加消 51% merge-glue(kernel 无关)** + 46× 精度。**且全在 SOLVED convhbh kernel 上,无 w16a16 RE 风险。**
+  - **★★★ 代价实测纠错(2026-06-06,`scripts/gdn_convhbh_i16_block_sim.py` 决定性):convhbh 是 8-bit/操作数 kernel
+    (`.ub` u8-act × `.b` i8-wt),单次调用只用激活的高字节(实测 out≈floor(P/256))。**
+    → **int16-act 需 2 pass(hi/lo)、int16-wt 需 2 pass → int16×int16 = 4 byte-pass ≈ 4×509 ≈ ~2036 cyc/64³ ≈ vrmpy 2081。**
+    **matmul 的速度优势在所需的 int16 精度上消失**(HVX vrmpy 原生支持 int16;HMX 只 int8,int16 要 4× 字节分解)。
+    原"convhbh 18× 便宜于 vrmpy"是 **int8-HMX vs int16-vrmpy 的不等精度比较**。
+  - **★精度×速度不可兼得**:1-pass int8(509,oc 0.041)/ 2-pass act16×wt8(~1018,oc 0.0138≈出货)/ 4-pass int16²(~2036≈vrmpy,oc 2.6e-4)。
+    **要 matmul 提速(≤2 pass)就精度退化;要精度(4 pass)matmul ≈ vrmpy 无提速。**
+  - **★GO 被削弱/重定向**:HMX-merge 在 int16 精度上 matmul **≈ vrmpy,无提速**。仅剩的杠杆 = **静态全局标度消 per-term rescale glue
+    (51%)——但这不需要 HMX,可直接施于现有 vrmpy int16 merge(在 HVX 上变静态即可)**。→ **实际可行的赢 = 把现 vrmpy merge 改静态,
+    不是换 HMX。** 待办4 的 HMX 集成价值存疑,需用户定夺(见报告)。
 - **全局静态 `s`**:operand 标度是预处理(任意 float,off-device);只有 **drain gain 受 HW 限为 2^k**(power-of-2)。
   每次 drain 静态选 k 填满 int16 量程;power-of-2 snap 的 ≤1-bit 精度损失对 oc 可忽略(2.2e-4 已含)。round-half-up 自动(word2=0)。
 
