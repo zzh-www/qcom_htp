@@ -1,5 +1,35 @@
 # GDNSolveHVXMixHMX — HVX-feed + HMX-matmul producer/consumer pipeline (matmul-portion squeeze)
 
+## 探索 lever A（线程→cluster 放置 / 让 HMX 不与 HVX 抢）— 2026-06-05
+
+**结论先行：v75 上无法 pin cluster；优先级无效；真正的杠杆是把 HMX consumer 做成 descriptor-driven（发射少），
+而非线程放置。** 这条路径 = QNN 的机制（逆向确认）。
+
+**实测 + 文档 + 逆向：**
+1. **无 thread→cluster affinity API**（v75 QuRT `qurt_thread_attr_t` 无 affinity 字段，只有 priority /
+   bus_priority / group_id）。**逆向 QNN 确认**：`libQnnHtpV75Skel.so` 导入 `qurt_thread_set_priority` +
+   `qurt_sysenv_get_hw_threads/max`,但**无 `set_affinity`/hwthread-pin 符号** → QNN 也 pin 不了 cluster。
+2. **`max_hw_threads = 6`**（device 实测 `qurt_sysenv_get_max_hw_threads`）。5 个 SW 线程（4 producer +
+   consumer）≤ 6 → **无 oversubscription**，所有线程并发跑。
+3. **优先级 = no-op**（实测）：consumer prio=64(高)/producer prio=192(低) vs baseline，consumer-busy ~425
+   不变。因为无 oversubscription 时，**Hexagon in-order SMT 的发射仲裁是硬件级 round-robin/公平的**，SW
+   priority 只管"oversubscription 时谁上 HW 线程",管不了 issue-slot 轮次分配。
+4. **PMU 证实争用机理是 round-robin 轮次摊薄，不是发射饱和、不是内存**：P=4 时 aggregate IPC 仅 **0.85**
+   (4-wide 机器,远未饱和)、`SMT_BANK_CONFLICT≈0`、`CYCLES_5T=385/503`。即 5 个线程轮流发射，consumer 的
+   packet 流被摊薄 → wall 拉长（busy 214→418）。
+5. **QNN 怎么解（逆向 + `docs/qnn_htp_scheduling_and_custom_op_limits.md`）**：静态编译期 per-unit runlist；
+   HMX 在独立 thread context（optrace tid 256），HVX 在 512-515；HVX∥HMX 重叠 17-22% **只**靠编译器 supertile
+   fusion，且对 custom/plugin op 被 `is_plugin_op` 排除。QNN 不"pin"——它让 **HMX descriptor-driven（发射少、
+   让出轮次，HMX 单元自治运行）** + 编译器在指令级交织。
+
+**→ 真正的杠杆(待探,深)**：consumer 抢是因为 v73deep kernel 是 **packet-streaming**(持续发射 mxmem+控制包,
+持续占 round-robin 轮次)。把它做成 **descriptor-driven**(一次描述符 kick off 更大的自治 HMX 运行,每 matmul
+发射更少包)→ consumer 让出轮次 → producer 填上 → HMX 执行真正与 HVX 并行。这要改 HMX kernel(N-tile 描述符 /
+更大 per-descriptor 工作量),是 [[reference_hmx_dsp_vs_descriptor]] 的核心。**注意**:v73deep 是 QNN 出货 kernel,
+本身已是 K-MAC 循环;要更 descriptor-driven 需理解 QNN native HMX op 怎么做大块自治(下一步逆向方向)。
+
+**禁止重犯**:别再试 cluster-pin(无 API)或线程优先级(round-robin 公平,no-op)——已实测否决。
+
 ## ⛔ 工作方式（权威，置顶，勿违反）
 
 **只跑微基准（microbench）。不要再跑完整 GDNSolveHVXMixHMX 全 solve。**

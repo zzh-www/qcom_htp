@@ -994,16 +994,25 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
         for (int t = 0; t < P; ++t) {
             qurt_thread_attr_t a; qurt_thread_attr_init(&a); qurt_thread_attr_set_name(&a, (char *)"fpprod");
             qurt_thread_attr_set_stack_addr(&a, g_fp_stack[t]); qurt_thread_attr_set_stack_size(&a, sizeof(g_fp_stack[t]));
+#if defined(GDNBM_PROD_PRIO)
+            qurt_thread_attr_set_priority(&a, GDNBM_PROD_PRIO);  /* lower producer prio -> consumer wins SMT issue slots */
+#endif
             if (qurt_thread_create(&pt[t], &a, feed_producer, (void *)(intptr_t)t) != QURT_EOK) pt[t] = 0;
         }
         uint64_t c_spin = 0, c_zero = 0, c_kern = 0, c_dep = 0;   /* consumer breakdown */
         (void)csc; (void)coutc;
+#if defined(GDNBM_CONS_PRIO)
+        /* SMT issue-arbitration lever: raise the HMX consumer (this main thread) above the HVX producers so
+         * it wins issue slots when co-running. No cluster-pin API on v75; priority biases the SMT arbiter. */
+        qurt_thread_set_priority(qurt_thread_get_self(), GDNBM_CONS_PRIO);
+#endif
+        { qurt_sysenv_max_hthreads_t mh; if (qurt_sysenv_get_max_hw_threads(&mh) == 0 && statsLen > 9) stats[9] = (int)mh.max_hthreads; }
 #if defined(GDNBM_PMU)
         /* DIRECT SMT-contention proof via the v75 PMU (raw event codes, Table 9-1). PMUEVTCFG packs 4
          * 8-bit event selectors for PMUCNT0..3. Deltas over the consumer window (all P producers live):
          *   cnt0 COMMITTED_PKT_ANY (0x03), cnt1 CYCLES_2_THREAD_RUNNING (0x3c),
          *   cnt2 CYCLES_5_THREAD_RUNNING (0x0a), cnt3 SMT_BANK_CONFLICT (0xb9 inter-thread SMT bank conflict). */
-        qurt_pmu_set(QURT_PMUEVTCFG, (0x0au<<24)|(0x3eu<<16)|(0x3du<<8)|0x3cu);  /* CYCLES 2/3/4/5-THREAD */
+        qurt_pmu_set(QURT_PMUEVTCFG, (0xb9u<<24)|(0x0au<<16)|(0x03u<<8)|0x3cu);  /* cnt0 CYC2T, cnt1 COMMITTED_PKT_ANY, cnt2 CYC5T, cnt3 SMT_BANK */
         qurt_pmu_enable(1);
         unsigned int pmu_base[4] = {
             qurt_pmu_get(QURT_PMUCNT0), qurt_pmu_get(QURT_PMUCNT1),
