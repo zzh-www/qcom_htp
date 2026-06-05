@@ -45,7 +45,26 @@
 - → "int8 大不了 int16" 命中。值有界(|A|≤0.94,|T|≤1,随 block-dist 衰减)→ 单一全局 int16 静态标度即可;
   **int32 累加器实际从不溢出(不需要 int64)**。oc 0.00019 = 比出货 int8(~1.2e-2)好 ~60×。
 
-**核心缺件(下一步逆向):int16-输出的 HMX kernel(`cvt.uh:2x2`)** —— 逆向 QNN `convhbh`(16-bit 输出)。
+**核心缺件(已找到,见阶段2):int16-输出的 HMX kernel(`cvt.uh:2x2`)。**
+
+## 阶段2 结论（int16-输出 HMX kernel 逆向）—— 2026-06-05：已存在 + byte-verified
+
+**`convhbh` int16-输出 kernel 早已被逆向并 byte-verify,不需从零做。**
+- 原生切片 = `hmx_v75_convhbh1x1deep_stride1` @ `libQnnHtpV75Skel.so:0x2f5200`,1348 B。反汇编在
+  `Agent/qnn_re/hmx_v75_convhbh1x1deep_stride1.S`;可读 inline-asm 复制品在
+  `example/qnn_hmx_matmul_w8a16/src/v73deep_conv1x1_kernel.inc`(`our_v73deep_kernel`,与 solve 的 u8i8 同 ABI)。
+- **byte-exact 复验通过**(2026-06-05):`verify_hexagon_inline_asm.py --vma 0x2f5200 --size 1348` → OK。
+- **语义**:`activation.ub`(u8)× `weight.b`(i8)→ `cvt.uh = acc(r25):2x2`(u16 输出)+ `mxmem = cvt`(**密 drain**)。
+  **输入路径与现 u8i8 kernel 完全相同**(`activation.ub:deep:cm` × `weight.b:deep`);差异仅在 drain:
+  | | u8i8(现 solve)| convhbh(int16-out)|
+  |---|---|---|
+  | drain | `cvt.ub = acc(r25)` | `cvt.uh = acc(r25):2x2` |
+  | store | `mxmem(r10,r11):cm = cvt` | `mxmem(r10,r11) = cvt`(密) |
+  | 输出 tile/ cvt | 1 | 4(`:2x2` fan-out) |
+- **含义**:静态 int16 merge **保持同一 int8 算子打包,只换输出 drain** 即得 int16 输出 → 杀 multi-pass gain search
+  (int8-输出税)。阶段3 = 在 FEED_4P 微基准把这个 kernel 接上 + 调输出 tile 布局(`:2x2` 4-tile/cvt)。
+  现成驱动参考:`example/qnn_hmx_matmul_w8a16/src/HmxU16I8ToU16MatMulOp.cpp`(u16-act 走 hi/lo 2×u8 pass;
+  GDN 静态版只需 u8 单 pass + int16 输出)。
 
 ## 阶段1 实测结论（对角块求逆 / 前代回代）—— 2026-06-05
 
