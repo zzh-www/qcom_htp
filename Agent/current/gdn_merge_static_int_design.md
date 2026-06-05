@@ -130,21 +130,34 @@ crouton16   └─ 下一个 matmul 的 WEIGHT     ─▶ 必须重排 k-major :
    - 增益 = `2^(exp-16)`,exp = word0 位[14:10],逐档 ×2/÷2 干净(k∈[-5,+2] 实测,见 §2 cvt drain 真相)。
    - 舍入 = **round-half-up**(`word2=0x0000`,21/21),非截断;f16 路径在 raw_acc>~2^12 有 ≤2 LSB 噪声。
    - 脚本 `scripts/gdn_convhbh_control_word_sweep.py`(指数扫描)+ `scripts/gdn_convhbh_drain_round_probe.py`(舍入规则)。
-2. **【设计→验】融合累加**(用 §2 修正模型:round-half-up,关注大累加器 f16 精度):一个非对角块的内层
-   `Σ_k A_ik·T_kj` 拼成大 K matmul,HMX 累 int32 不中间 drain,一次 drain(round>>k)→ int16,对 round-half-up
-   整数参考验 **oc/max_abs ≤ 阈值**(非对截断整数 bit-exact)+ 测 int32 无溢出 + **直接验大 K 求和的 drain 精度**
-   (raw_acc 是否丢低位 → 决定融合累加前提是否成立;选 k 使排空 int16 落 O(千))。
+2. **✅【已验,端到端 oc】融合累加 SOUND**(2026-06-06,真实 golden,`scripts/gdn_solve_fused_drain_probe.py`):
+   - drain f16 化的是 **NET 累加器**(加完 bias 后),非 raw → 零点偏置/大 raw 积不伤(`gdn_convhbh_drain_acc_probe.py`)。
+   - 端到端 oc:**w16a16 = 2.6e-4**(融合累加 + 真实 drain + power-of-2 requant),**int32 0 溢出**,f16 drain 可忽略。
+   - → 见 §6 决策:**操作数必须双 int16(w16a16),int8 任一侧都不够**。
 3. **【设计→验】布局直通**:把 STEP A 的输出(crouton)直接当 STEP B 的 activation,验证零重排正确;
-   weight 端 k-major 预打包常驻。
-4. **接 baremetal**:`gdnbm_imp.cpp` 加 convhbh kernel + `GDNBM_MM_I16_TEST`(nthreads=1 小心,SSR 风险),
-   对 `gdn_matmul_i16` 验 + 测 cyc;再整块 producer-consumer,整 solve wall vs 基线(~122K)。
+   weight 端 k-major 预打包常驻。**(w16a16 输出仍 crouton16_row4,与 convhbh 同 → 直通契约不变。)**
+4. **接 baremetal**:`gdnbm_imp.cpp` 加 **`hm_w16a16_v73_kernel`**(非 convhbh!) + `GDNBM_MM_I16_TEST`(nthreads=1 小心,
+   SSR 风险),对 `gdn_matmul_i16` 验 + **测 w16a16 cyc**(决定是否仍 < vrmpy);再整块 producer-consumer,整 solve wall vs 基线(~122K)。
 
-## 6. 待定的设计决策
+## 6. 设计决策
 
-- **int8-act 单 pass + int16-out(convhbh,我逆向过)vs w8a16/w16a16(int16 操作数)**:静态 probe 说要 int16
-  操作数精度(int8-static oc 0.0545 太松)→ 倾向 int16 操作数;但 convhbh 单 pass int8-act 更便宜。
-  需用真实 GDN 数据在 sim 比 oc + cyc 拍板(`prepare_owned_inputs.py --family w8a16/w16a16` 已 bit-exact,可直接对照)。
-- **全局静态 `s` 的选取**:让 `int32→int16` 移位既不溢出又保精度(probe 已验 int32 不溢出);确认移位是否需 round(加 `1<<(k-1)`)。
+- **✅【已拍板,真实数据】操作数精度 = w16a16(int16×int16),不是 convhbh(w8a16)。**
+  端到端 oc(真实 golden,融合累加 + 真实 drain 模型,`scripts/gdn_solve_fused_drain_probe.py`):
+  | 变体 | oc(mean) | overflow | 结论 |
+  |---|---|---|---|
+  | **w16a16(act16×wt16)** | **2.6e-4** | 0 | ✅ 比出货 int8(1.2e-2)好 ~46× |
+  | w8a16(act16×wt8) | 1.38e-2 | 0 | ❌ 比出货 int8 还**略差**(int8 权重不够) |
+  | w8a16′(act8×wt16) | 3.8e-2 | 0 | ❌ |
+  | int8(act8×wt8) | 4.1e-2 | 0 | ❌ |
+  - **int8 操作数(任一侧)都不够**(单一静态 int8 标度对 block-dist 变化的 T 浪费量程)。**只有双 int16 达标。**
+  - **f16 drain 可忽略**:w16a16 exact 2.2e-4 → f16 2.6e-4(+0.4e-4),其余变体 f16 列与 exact 几乎相同 → **drain 不是误差来源**。
+  - **int32 累加器真实数据 0 溢出**(满量程 int16×int16 over K,maxcode~32767)→ **融合累加 int32 安全,不需 int64**。
+  - **kernel 改用 `hm_w16a16_v73_kernel`**(已 byte-verified,`run_handwritten_artifact_body_sim.py --family w16a16` bit-exact)。
+    输出 drain 仍是 `cvt.uh:2x2`(待办1/2 的 drain 结论照搬)。
+  - **代价待测**:w16a16 比 convhbh 贵(int16 权重 2× 字节 + int16 激活 2-pass)。阶段3 的 509 cyc/64³(3.4×)是 convhbh 测的;
+    **w16a16 需重测 cyc**——只要仍 < vrmpy merge(2081/64³ 4-路)就值;预计 ~1000–1300,仍 ~1.5–2× 便宜 + 46× 精度。
+- **全局静态 `s`**:operand 标度是预处理(任意 float,off-device);只有 **drain gain 受 HW 限为 2^k**(power-of-2)。
+  每次 drain 静态选 k 填满 int16 量程;power-of-2 snap 的 ≤1-bit 精度损失对 oc 可忽略(2.2e-4 已含)。round-half-up 自动(word2=0)。
 
 ## 7. 铁律(沿用)
 
