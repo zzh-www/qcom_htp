@@ -63,13 +63,24 @@ id_rowm|id_grid|random`)+ 隔离 out-slot 发现法。**已实测确立的事实
 4. **P→u16 仿射(增益≈3,zp=0x8000)**:`uni_p<N>` 扫出 P=1→2,2→6,3→8,10→30,50→151,100→302
    (小 P 步进 +2/+4 交替=`6*⌊P/2⌋+2*(P&1)`)。增益由 bias const words `[0x4440,0x8040,0x0008,0x4000]`(`pack_native_a16_bias`)
    决定 → **GDN 静态版可改 const 设增益=1/任意标度**(待解码 const→gain 编码)。
-5. **★当前唯一卡点 = 行别名 4:1**(`id_rowm` 16 distinct 而非 64;`id_coln`/`id_grid` 全 distinct)。
-   = crouton16 **行配对**(相邻 row0,row1 同 lane,u8 hi-pass 下别名 2:1)× m32(2:1)。**列(K 维)完全 OK,只行坏。**
-   下一步:换**不配对行的 u8 surface**(row-major:hi 字节 = 一行的 32 列连续,试 `pack_a16_row32_tile_surface<<8`
-   或自写 u8 deep),配套 act_off。验证法:`id_rowm` 应得 64 distinct + `id_coln`/`id_grid` 不退化 + 整 `random` bit-exact。
-- **gate**:`random` mode depack 后对 numpy ref `P[m,n]=Σ(act_u8-128)*w[k,n]`(按发现的仿射+depack)bit-exact。
-- HMX kernel(mask 0x70b/extra{1,1025,524})已确认非 fault 跑通;identity-weight 探针证明权重打包正确。
-- 度量:当前 462 cyc(MAC 主导,与 drain 无关)→ 全 drain 后 ~500–560 仍 ~15× < vrmpy 8325。
+5. **行别名 4:1 已解决 = `n_tiles_pow2` 太小**(不是 surface 配对)。op `M_t*4`(=8@64³)只迭代 16/64 行;
+   **`M_t*16`(=32@64³)解全 64 行**(`id_rowm`=64,`id_coln`=64,`id_grid`=120 全 distinct,sweep 确认)。
+   ⚠️ **`M_t*4` 是 op 默认且对真实 merge 尺寸(C=256,M_t=8→32)正确**;64³(M_t=2)撞小尺寸缩放边界。
+6. **增益/标度**:effective bias = **-128*sum_w**(u8 zp;-32768 错,cvt 自己处理 <<8 的 ×256)。
+   输出增益由 bias const **word0** 定:`0x4040`→×1、`0x4440`→×2。`out_u16=0x8000+round(P*gain)`,
+   有 per-channel cvt 舍入(×1 时 ~±1 LSB)。**GDN 静态版按需设 word0 选标度。**
+7. **OUTPUT depack(未完,但已定性)**:隔离-2KB-slot 的映射是**假象**(identity-weight 巧合;dense weight 下
+   4 副本互不等)。真实输出 = **连续 out_raw**(op L1265:tile(row4,nt) 在 `(row4*4*N+nt*32)` u16),
+   被 :2x2+crouton **置换**;64³ 下 32×32 storage tile 覆盖 4-行自然区→重叠,需真实尺寸(256)的 tiling
+   或非重叠放置才能 depack。
+
+**★净结论**:**激活布局(最难)+ 矩阵乘正确性已完全攻克并 sim 验证**(identity 探针证明 kernel 算对全 m+n)。
+**剩余 = 真实尺寸下的 output depack + 精确 cvt 舍入**,建议直接在**真实 merge tile 尺寸**(非 64³)上做,绕开小尺寸缩放伪影。
+- **gate(未达)**:`random` dense-weight matmul depack 后对 `P=Σ(act-128)*w` bit-exact —— 卡在 output depack。
+- HMX kernel(mask 0x70b/extra{1,1025,524},eff=-128*sum_w)已 sim 跑通非 fault;identity 探针证明权重+激活打包对。
+- 度量:当前 462 cyc(MAC 主导)→ 仍 ~15× < vrmpy 8325,GO 结论不变。
+- 复现关键 config(`scripts/gdn_hmx_convhbh_sim.py`):act=`crouton16_row4(act_u8<<8)`、act_off 无 m32 偏移、
+  `n_tiles_pow2=M_t*16`、eff=-128*sum_w、out_off 连续 `(row4*4*N+nt*32)*2`。探针:`--mode id_coln|id_rowm|id_grid`。
 
 **第 2 步 —— baremetal 接 kernel + 单线程设备验证:**
 - 把 convhbh kernel 加进 baremetal（`gdnbm_imp.cpp` 已 include `GdnSolveBROp.cpp` → 加第二个 naked 函数含 w8a16 .inc;

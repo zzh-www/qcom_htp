@@ -26,7 +26,32 @@ Modes:
   --mode random  : full random, gated against ref via discovered depack
 Run probe_m + probe_n first, derive the depack closed-form, then gate random.
 
-Reproduce: source scripts/env.sh && python scripts/gdn_hmx_convhbh_sim.py --mode probe_m
+Reproduce: source scripts/env.sh && python scripts/gdn_hmx_convhbh_sim.py --mode id_coln
+
+================================ FINDINGS (2026-06-06) =========================
+CRACKED (all sim, zero SSR):
+* ACTIVATION (the hard part, fully solved): pack u8 act into the Crouton16 row4
+  surface HIGH byte -> pack_a16_crouton16_row4_surface(act_u8.astype(u16) << 8).
+  The convhbh single-u8 pass reads the HI byte (QNN u16 path = lo+hi 2 passes).
+  - act_off uses the PHYSICAL contract: act_tbl[row4*K_t+kt] = block_base, where
+    block_base = ((row4&7)*K_t + kt)*512.  NO (row4>>3)*256 m32 offset (kernel adds
+    it internally via m_total_minus_step).
+  - n_tiles_pow2 must be large enough to iterate all M rows: M_t*4 (=8 at 64^3)
+    only resolves 16 of 64 rows; M_t*16 (=32) resolves all 64.  NOTE: M_t*4 is the
+    op default and is CORRECT for the real merge size (C=256, M_t=8 -> 32); the
+    64^3 probe (M_t=2) hits a small-size scaling edge.
+  - VERIFIED full m+n resolution: id_coln=64, id_rowm=64, id_grid=120 distinct.
+* GAIN/SCALE: effective bias = -128*sum_w (u8 zp; -32768 is WRONG, cvt handles the
+  <<8 scaling).  Output gain set by bias const word0: 0x4040 -> ~x1, 0x4440 -> ~x2.
+  out_u16 = 0x8000 + round(P * gain) with per-channel cvt rounding (~+-1 LSB at x1).
+* OUTPUT depack: the isolated-2KB-slot map was a RED HERRING (identity-weight
+  coincidence; replicas disagree for dense weight).  Real output = contiguous
+  out_raw (op L1265: tile(row4,nt) at (row4*4*N+nt*32) u16), permuted by :2x2 +
+  crouton; at 64^3 the 32x32 storage tiles overlap the 4-row natural regions ->
+  needs the real-size (256) tiling or a non-overlapping placement to depack.
+REMAINING: real-size output depack + exact cvt rounding -> full bit-exact gate.
+The KERNEL ITSELF computes the int16-out matmul correctly (identity probes).
+==============================================================================
 """
 from __future__ import annotations
 import argparse
@@ -126,8 +151,10 @@ def descriptor():
     OUT_SLOT = 2048
     n_out_entries = 64
     out_off = [i * OUT_SLOT for i in range(n_out_entries)]
+    # n_tiles_pow2: the op uses M_t*4 (=8) which only resolves 16 of 64 rows in the
+    # standalone 64^3 call; sweep shows M_t*16 (=32) resolves all 64 rows (id_rowm=64).
     out_desc = dict(out_table_stride_dwords=n_tiles, out_y_stride_words=n_tiles,
-                    n_tiles_pow2=m_tiles * 4, m_total_minus_step=8, k_total_bytes=n_tiles * 32)
+                    n_tiles_pow2=m_tiles * 16, m_total_minus_step=8, k_total_bytes=n_tiles * 32)
     return dict(act_off=act_off, out_off=out_off, out_desc=out_desc, act_desc=act_desc,
                 act_surface_bytes=8192, out_buf_bytes=n_out_entries * OUT_SLOT, out_slot=OUT_SLOT)
 
