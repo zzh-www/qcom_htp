@@ -93,6 +93,23 @@ FEED_4P 微基准(`ssh oneplus`,DUMMY 数据,cyc/matmul = stats[0]),apples-to-ap
   - mask arg1 `0x70b`(非 0x700);extra_param `{1,1025,524}`(非 {1,0})。
   - **需新写**:Crouton_16 激活 packer(32 项 row4 表,替现 crouton8)+ u16 row4-dense 输出 depack。
 
+### ★ 阶段3 MAKE-OR-BREAK 最终结论(hexagon-sim 实测,无设备/无 SSR)—— 2026-06-05
+**int16-输出 HMX kernel(convhbh)在 sim 里跑通(PASS),64³ matmul cyc ≈ int8,远低于 vrmpy → GO。**
+脚本 `scripts/gdn_hmx_convhbh_sim.py`(复用 `pack_a16_crouton16_row4_surface`+`pack_w8_kmajor`+`pack_native_a16_bias`
++ 解码描述符)。apples-to-apples 同 sim 64³:
+
+| kernel | cyc/64³ | 备注 |
+|---|---|---|
+| **convhbh int16-out（`cvt.uh:2x2`）** | **462**(PASS) | MAC 主循环跑满(>u8i8 417);输出当前 drain ~1/4(`:2x2` 成对签名 `o[2k]==o[2k+1]`,row4-dense 布局,描述符需调)|
+| u8i8 int8-out | 417（bit-exact 4096/4096）| 同 sim 基准 |
+| HVX vrmpy | 8325 | 现 merge |
+
+- **结论:int16-输出 matmul ≈ int8(462 vs 417,+11% 重 drain),~18× 便宜于 vrmpy。** cyc 由 MAC 主循环主导(与输出表无关)
+  → partial-drain 不影响该结论(完整 ≈ 462 + 少量 drain ≈ 500–560,仍 ~15× < vrmpy)。**静态 int16 HMX-merge 的 matmul
+  杠杆成立,值得做。**
+- **剩余(纯 sim 可迭代,无 SSR)**:调描述符使 drain 写全 64×64 + nail `cvt.uh:2x2` row4-dense u16 depack → 对 numpy ref 验 bit-exact
+  → 再上设备测 cyc → FEED_4P 集成 → 整 solve producer-consumer 重构。
+
 ### 阶段3 集成 BLUEPRINT(下一会话执行,分步 device 验证)—— 2026-06-05
 **Make-or-break(已确认值得做)**:HMX-fed matmul 整片吞吐 **509 cyc/64³**(FEED_4P,4 HVX producer+1 HMX consumer)
 vs vrmpy 4 路并行 ~**2081 cyc/64³**(8325/4)→ **~4× 更便宜**;merge 占 solve 83% → 量级 2–3× 主杠杆
