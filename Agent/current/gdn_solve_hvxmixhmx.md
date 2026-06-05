@@ -1,5 +1,37 @@
 # GDNSolveHVXMixHMX — HVX-feed + HMX-matmul producer/consumer pipeline (matmul-portion squeeze)
 
+## 全局 roofline：32-head solve 的真实瓶颈分解（CLEAN WALL，2026-06-05）
+
+**先纠正一个度量陷阱**：`GDN_BR_PROBE_CYCLES` 的 per-stage `C15:14` 计数器**不可靠**(per-hardware-thread,
+QuRT 迁移线程 → 垃圾值)。它报 `zero=52%`,但**消阶段测 wall 的 ablation 证明 zero 只 ~5-7%**。**唯一可信
+= wall-delta(`-D<flag>` 消掉一个阶段,测 cyc/head 变化)。** 别再信 PROBE 的 per-stage 数。
+
+**真实分解(干净 wall,int8 vrmpy 路径 `-DGDN_BR_MM_I8`,4-thread min-of-3,baremetal):**
+
+| 部分 | cyc/head | 占比 | ablation 测法 |
+|---|---|---|---|
+| **merge GLUE(quant + acc + requant,off-diag 块)** | **~49,700** | **51%** | `SKIP_MM` − `DIAG_ONLY` |
+| diag(fwd-subst + 对角 requant + zero) | ~28,500 | 29% | `DIAG_ONLY` |
+| **matmul compute(vrmpy)** | **~20,000** | **20%** | full − `SKIP_MM` = 98157−78173 |
+| —— 其中 zero-fill | ~6,600 | 7% | full − `NO_OUTPUT_ZERO` |
+| **full int8 solve** | **98,157** | | (int16 默认路径 = 129,073) |
+
+测量 flag(都在 `GdnSolveBROp.cpp`,默认关,不影响 QNN op):`GDN_BR_NO_OUTPUT_ZERO`(消 zero-fill)、
+`GDN_BR_SKIP_MM`(消 vrmpy)、`GDN_BR_DIAG_ONLY`(只 diag)。
+
+**全局结论(权威,覆盖之前所有错误的局部判断):**
+1. **matmul compute 只占 20%。** 即使 HMX 把它打到免费(20%→~3%),全局也只 ~1.2×,且 HMX-feed 还引入 pack +
+   SMT 争用(前几轮的发现)。**所以纯抠 HMX matmul 不是全局最优。**
+2. **zero-fill 只占 7%(不是 PROBE 骗我的 52%)。** "DMA 后台化输出写"只值 ~7%,优先级低。
+3. **真正的王是 merge GLUE(51%)= 每个 off-diag 项的 quant(A_ik u16→i8 + T_kj codes→i8)+ acc(K 个 int32
+   项带 per-term rescale 累加)+ requant(写结果块)。** 这才是全局最优该攻的地方。
+4. **用户的"稀疏下三角省略"洞察应作用在这 51% 上**:off-diag 块 T_ij = −A_ii⁻¹·Σ_k A_ik·T_kj,其中 **T_kj 本身
+   是下三角(对角块求逆结果)→ 一半 MAC/quant/acc 在结构性零上 → 可省**。这是降 51% glue 的真杠杆,远胜抠 matmul。
+
+**下一步(全局最优方向)**:(a) 量化 merge-glue 内部 quant vs acc vs requant 各占多少(ablation);(b) 利用
+T_kj 三角性跳过零块的 quant/matmul/acc;(c) operand caching(已验 ~1.1×)减少重复 quant/pack。matmul 的 HMX
+化排在这些之后,且只有当 glue 砍到让 matmul 变成 bound 时才值得。
+
 ## 验证用户假设"攒指令一次发射" + QNN native HMX 逆向（2026-06-05）
 
 **用户假设**：让 HMX 不抢 HVX 的关键 = 把要做的指令攒起来、一次 burst 发射(descriptor-driven 自治),

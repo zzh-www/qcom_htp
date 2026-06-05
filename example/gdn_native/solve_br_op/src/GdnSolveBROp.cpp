@@ -1332,11 +1332,17 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
 #if defined(GDN_BR_PROBE_CYCLES)
     uint64_t z0; asm volatile("%0 = C15:14" : "=r"(z0));
 #endif
+#if !defined(GDN_BR_NO_OUTPUT_ZERO)
+    /* Fill the dense output with zpT (upper-tri is structurally zero; lower-tri gets overwritten by results).
+     * THIS IS ~52% OF THE SOLVE — synchronous HVX stores to UNCACHED FastRPC DDR don't pipeline (~206 cyc/
+     * 128B). The win: pre-zero ONCE on the host (or background-DMA) + only write the lower-tri result blocks.
+     * -DGDN_BR_NO_OUTPUT_ZERO removes it (caller MUST pre-zero the output buffer to zpT). */
     { HVX_Vector vzph = Q6_Vh_vsplat_R(zpT);
       if (((uintptr_t)Th & 127) == 0) { HVX_Vector *op = (HVX_Vector *)Th;
           for (int i = 0; i < (C * C) / 64; ++i) op[i] = vzph; }
       else { HVX_UVector *op = (HVX_UVector *)Th;
           for (int i = 0; i < (C * C) / 64; ++i) op[i] = vzph; } }
+#endif
 #if defined(GDN_BR_PROBE_CYCLES)
     { uint64_t z; asm volatile("%0 = C15:14" : "=r"(z)); g_c_zero += z - z0; }
 #endif
@@ -1391,8 +1397,10 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
 #if defined(GDN_BR_TRACE)
                 uint64_t _mm0 = GDN_TR_NOW(); gdn_tr_push(_tid, GDN_TR_QUANT, _q0, _mm0);
 #endif
+#if !defined(GDN_BR_SKIP_MM)
                 gdn_pack_b_vrmpy(sc->b8, sc->btp);
                 gdn_matmul_i8_vrmpy(sc->a8, sc->btp, sc->Tc);
+#endif
                 sterm = sAq * sBq;
 #if defined(GDN_BR_TRACE)
                 gdn_tr_push(_tid, GDN_TR_MM, _mm0, GDN_TR_NOW());
