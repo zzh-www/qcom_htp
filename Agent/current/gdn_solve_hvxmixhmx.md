@@ -98,6 +98,31 @@ FEED_4P 微基准(`ssh oneplus`,DUMMY 数据,cyc/matmul = stats[0]),apples-to-ap
 `EXTRA_DEFS="-DGDNBM_VTCM_RESIDENT -DGDNBM_FEED_PIPE -DGDNBM_FEED_4P -DGDNBM_FUSED_ACTWT" bash build.sh; ./gdnbm 4 ...`(单pass 509)
 `EXTRA_DEFS="-DGDNBM_VTCM_RESIDENT -DGDNBM_FEED_PIPE -DGDNBM_FEED_4P -DGDNBM_FEED_MULTIPASS" bash build.sh; ./gdnbm 3 ...`(multipass 1731)
 
+## 多-HVX(4 线程)roofline + 扩展性上限 —— 2026-06-05
+
+**问题:4 HVX 单元下 solve 到理论极限了吗?还有多少头空间?** 实测(baremetal GDNSolveHVX 基线,
+H=32 C=256,`GDNBM_REPS=5` 稳态):
+
+| 线程 P | cyc/head | 加速比 | 效率 |
+|---|---|---|---|
+| 1 | 414K | 1.0× | — |
+| 2 | 214K | 1.93× | 97% |
+| 3 | 157K | 2.63× | 88% |
+| 4 | ~140K | 2.95× | **74%** |
+
+- **没到 4× 理想极限**:HVX-bound,4 单元的理想下限 ≈ 414/4 = **103.5K**,实测 **~140K → 差 ~36K(26%)**。
+- **扩展性损失定位**(DIAG_ONLY 消融):**DIAG 部分只扩展 2.29×(57%)**,merge 扩展 3.15×(79%)。
+  DIAG 的差扩展 = **DDR-写带宽争用**(zero-fill 128KB/head + requant 写 T,4 线程抢同一 DDR 写带宽,不随单元扩展)。
+  - zero-fill 消融(`-DGDN_BR_SKIP_ZERO`):P=1 −13K(3%)、P=4 −~8K。仅上三角需 zpT(下三角被 requant 覆盖)→
+    **只 zero 上三角可省 ~一半 zero-fill 写**(harmless,~3% 头空间)。
+- **两类优化上限:**
+  1. **扩展性/饱和(~26%,~36K)**:难——SMT issue-slot 争用(PMU 实证的底,[[reference_htp_smt_pmu_hardware]])
+     + 共享 DDR 写带宽 + spawn/sync。可摘的低果 = zero-fill 只写上三角(~3%)。**这不是大头。**
+  2. **★减少 HVX 绝对工作量(大头)**:solve 是 HVX-bound,4 单元已近饱和 → 想更快只能**减少 HVX 工作**,不是加单元。
+     单线程 414K 中 merge 占 342K(83%);其中 merge-glue ~51% + matmul ~20%([[reference_gdn_solve_global_roofline]])。
+     **静态 int16 + HMX 把 matmul 搬离 HVX 单元 + 去 multipass/per-term-rescale glue**——这才是 2–3× 的所在
+     (阶段3 已实测 matmul-portion 3.4×)。**真正的优化上限在 merge 重写,不在前代回代/扩展性微调。**
+
 ## 阶段1 实测结论（对角块求逆 / 前代回代）—— 2026-06-05
 
 **前提被实测推翻:对角块的前代回代不是瓶颈,已在 HVX 下限,无需优化。** 决策依据 = 真实全 solve

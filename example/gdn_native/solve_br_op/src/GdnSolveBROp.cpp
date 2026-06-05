@@ -1360,11 +1360,13 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
 #if defined(GDN_BR_PROBE_CYCLES)
     uint64_t z0; asm volatile("%0 = C15:14" : "=r"(z0));
 #endif
+#if !defined(GDN_BR_SKIP_ZERO)   /* timing-only ablation: skip the 128KB/head Th zero-fill */
     { HVX_Vector vzph = Q6_Vh_vsplat_R(zpT);
       if (((uintptr_t)Th & 127) == 0) { HVX_Vector *op = (HVX_Vector *)Th;
           for (int i = 0; i < (C * C) / 64; ++i) op[i] = vzph; }
       else { HVX_UVector *op = (HVX_UVector *)Th;
           for (int i = 0; i < (C * C) / 64; ++i) op[i] = vzph; } }
+#endif
 #if defined(GDN_BR_PROBE_CYCLES)
     { uint64_t z; asm volatile("%0 = C15:14" : "=r"(z)); g_c_zero += z - z0; }
 #endif
