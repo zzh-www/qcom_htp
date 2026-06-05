@@ -138,6 +138,10 @@ struct gdn_scr_t {
 #if defined(GDN_BR_MM_I8)
     int8_t  a8 [GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));    /* int8 vrmpy: A operand (row-major) */
     int8_t  b8 [GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));    /* int8 vrmpy: B operand (row-major k) */
+#if defined(GDN_BR_PREQUANT_A)
+    int8_t  a8c[GDN_BR_NBLK][GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));  /* A_ik int8, pre-quant once/head */
+    int32_t a8c_mx[GDN_BR_NBLK];                                                    /* per-block maxraw for the scale */
+#endif
     int8_t  btp[GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));    /* int8 vrmpy: B transposed/packed [g][col][4] */
 #endif
     /* ---- per-head operand-reuse cache metadata (Task 2): quantize+pack each distinct operand ONCE ----
@@ -1361,6 +1365,14 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
 #if defined(GDN_BR_DIAG_ONLY)
     return;
 #endif
+#if defined(GDN_BR_PREQUANT_A) && defined(GDN_BR_MM_I8) && defined(GDN_BR_HVX_MERGE)
+    /* FOLD the per-term A_ik quant: the input A is fixed -> quant each lower-tri block to int8 ONCE per head
+     * (was re-quantized every time the (i,k) block appeared in a merge sum). Pure operand reuse, no oc change. */
+    for (int ii = 0; ii < NB; ++ii) for (int kk = 0; kk <= ii; ++kk) {
+        int key = gdn_blk_index(ii, kk);
+        sc->a8c_mx[key] = gdn_quant_i8_from_u16(Ah + (size_t)ii * BL * C + kk * BL, C, zpA, sc->a8c[key]);
+    }
+#endif
     for (int d = 1; d < NB; ++d) {
         for (int j = 0; j + d < NB; ++j) {
             int i = j + d;
@@ -1387,9 +1399,18 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
                 uint64_t _q0 = GDN_TR_NOW();
 #endif
                 float sA_eff = (float)M; for (int _t = 0; _t < S + GDN_BR_F; ++_t) sA_eff *= 0.5f;
-                int32_t mxraw = gdn_quant_i8_from_u16(Ah + (size_t)i * BL * C + k * BL, C, zpA, sc->a8);
-                float sAq = (float)mxraw * sA_eff / 127.0f;
+                const int8_t *a8p = sc->a8;
+#if defined(GDN_BR_SKIP_QUANT)   /* perf-ceiling: skip per-term re-quant (stale a8/b8 -> wrong result, real cycles) */
+                int32_t mxraw = 127; float sBq = sc->Tscl[bkj];
+#elif defined(GDN_BR_PREQUANT_A) && defined(GDN_BR_HVX_MERGE)
+                int _kik = gdn_blk_index(i, k);              /* A pre-quantized once/head -> read the cache */
+                int32_t mxraw = sc->a8c_mx[_kik]; a8p = sc->a8c[_kik];
                 float sBq = gdn_quant_i8_from_codes(sc, sc->Tblk[bkj], sc->Tscl[bkj], sc->b8, -1);
+#else
+                int32_t mxraw = gdn_quant_i8_from_u16(Ah + (size_t)i * BL * C + k * BL, C, zpA, sc->a8);
+                float sBq = gdn_quant_i8_from_codes(sc, sc->Tblk[bkj], sc->Tscl[bkj], sc->b8, -1);
+#endif
+                float sAq = (float)mxraw * sA_eff / 127.0f;
 #if defined(GDN_BR_PROBE_CYCLES)
                 { uint64_t f; asm volatile("%0 = C15:14" : "=r"(f)); g_c_quant += f - f0; }
                 uint64_t mm0; asm volatile("%0 = C15:14" : "=r"(mm0));
@@ -1399,7 +1420,7 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
 #endif
 #if !defined(GDN_BR_SKIP_MM)
                 gdn_pack_b_vrmpy(sc->b8, sc->btp);
-                gdn_matmul_i8_vrmpy(sc->a8, sc->btp, sc->Tc);
+                gdn_matmul_i8_vrmpy(a8p, sc->btp, sc->Tc);
 #endif
                 sterm = sAq * sBq;
 #if defined(GDN_BR_TRACE)

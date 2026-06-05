@@ -28,9 +28,20 @@ QuRT 迁移线程 → 垃圾值)。它报 `zero=52%`,但**消阶段测 wall 的 
 4. **用户的"稀疏下三角省略"洞察应作用在这 51% 上**:off-diag 块 T_ij = −A_ii⁻¹·Σ_k A_ik·T_kj,其中 **T_kj 本身
    是下三角(对角块求逆结果)→ 一半 MAC/quant/acc 在结构性零上 → 可省**。这是降 51% glue 的真杠杆,远胜抠 matmul。
 
-**下一步(全局最优方向)**:(a) 量化 merge-glue 内部 quant vs acc vs requant 各占多少(ablation);(b) 利用
-T_kj 三角性跳过零块的 quant/matmul/acc;(c) operand caching(已验 ~1.1×)减少重复 quant/pack。matmul 的 HMX
-化排在这些之后,且只有当 glue 砍到让 matmul 变成 bound 时才值得。
+**merge-glue ceiling 分解(干净 wall,ablation flag):**
+- per-term quant(A+T)= ~13K(14%)= full − `SKIP_QUANT`(97004→83757)
+- **acc + off-diag requant + B-pack = ~34.7K(36%)← merge-glue 最大子项**
+- matmul = ~20.6K(21%)
+
+**折叠 quant — 实测 FAILED(负结果,2026-06-05)**:加 `GDN_BR_PREQUANT_A`(把输入 A 每块预量化一次/head,
+存 `sc->a8c[NBLK]` 缓存,merge 读缓存)→ **98312 → 112227,反而 +14K**。原因:量化太便宜,而 `a8c` 落在
+**DDR scratch(40KB,冷)**,matmul 每 term 读冷 DDR 块 比 从**热的输入 A** 重量化还贵。**教训:operand caching
+只在缓存于热存储(VTCM/L1)才赢;缓存到冷 DDR scratch 时 recompute 更快**(这也是为何 HVX 路径原本不缓存 A、
+HMX 路径缓存到 VTCM）。**quant 不是值得折叠的瓶颈。** flag `GDN_BR_PREQUANT_A` 留作负结果(默认关)。
+
+**下一步(全局最优,修正后)**:真正的大头是 **acc(36% 里的主项)= 每个 term 的 fixed-point rescale 累加**(因每
+term 标度不同)。杠杆:**统一标度让 acc 退化成纯 int32 加**(无 per-term rescale 乘),或**利用 T_kj 三角性跳过
+零块的 matmul/acc**。这两个直接打 36%,且不踩"冷缓存比重算贵"的坑。matmul 的 HMX 化排最后。
 
 ## 验证用户假设"攒指令一次发射" + QNN native HMX 逆向（2026-06-05）
 
