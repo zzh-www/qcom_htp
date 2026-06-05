@@ -47,18 +47,29 @@ REPS-loop 对带 DDR 写的阶段是**假象**（冷 DDR 写放大 ~18×）。�
 入口脚本:`scripts/gdn_hmx_convhbh_sim.py`（我已写好,在 hexagon-sim 跑 convhbh 64³,有 cyc/PASS）。
 参考 u8i8 版:`scripts/gdn_hmx_matmul_sim.py`（bit-exact 4096/4096,可对照学正确的 pack/descriptor/depack）。
 
-**第 1 步（当前卡点,纯 sim,先做这个）—— 让 convhbh 64³ bit-exact:**
-- 现状:`gdn_hmx_convhbh_sim.py` 跑通但输出只 drain 1/4、且 depack 没对齐（输出成对 `o[2k]==o[2k+1]` = `:2x2` 签名）。
-- **根因（已定位）**:convhbh 读 **plain `.ub`(u8 单 pass)**,我却用了 u16 的 `pack_a16_crouton16_row4_surface`。
-  → 改用 **u8 act 的 plain 32×32 tile 布局**（试 `pack_a16_row32_tile_surface` 喂 u8,或对照 u8i8 的 crouton8 但去 :cm）。
-- **还要敲定**:act 表是 2 项(同 u8i8)还是 32 项(w8a16 row4);`cvt.uh:2x2` row4-dense u16 输出的 depack→natural。
-- 已解码的描述符(64³,M_t=N_t=K_t=2):mask `conv1x1_words(0x70b,0,0,0,0x20)`、extra `{1,1025,524}`、
-  out_desc{table_stride=2,y_stride=2,n_tiles_pow2=8,m_total_minus_step=8,k_total_bytes=64}、act_desc{n_pairs=2,y_stride=2}。
-  **注意**:w8a16 op `HmxU16I8ToU16MatMulOp.cpp` L1190-1320 是这些值的来源,但可能要按 u8 单 pass 调。
-- packers 在 `example/handwritten_hmx_matmul/prepare_owned_inputs.py`:`pack_w8_kmajor`(权重)、
-  `pack_native_a16_bias(8,w)`(bias=mxmem2 格式)、`pack_a16_*`(act 各布局)。
-- **gate**:sim 输出 depack 后对 numpy ref `P[m,n]=Σ(act_u8-128)*w[k,n]` bit-exact（像 u8i8 版 max_abs_diff=0）。
-- 迭代时 cyc 也会变准（当前 462 是 partial-drain;全输出后才是最终 int16 matmul cyc,预计 ~500–560）。
+**第 1 步（进行中 2026-06-06,纯 sim）—— 让 convhbh 64³ bit-exact:**
+入口 `scripts/gdn_hmx_convhbh_sim.py` 已大改写,带探针模式(`--mode uni_coln|uni_p<N>|id_coln|
+id_rowm|id_grid|random`)+ 隔离 out-slot 发现法。**已实测确立的事实(全部 sim,零 SSR):**
+
+1. **输出 = 4 个 32×32 tile(m32×nt),不是 32 个 row4-tile。** 之前"只 drain 1/4"是 **out_off 重叠假象**
+   (32 个 4×32 tile 放 64B 间距互相覆盖)。给每个 out-table 项**隔离 2KB slot**(`out_off=[i*2048]`)→ 全 4096
+   u16 写满。kernel 实际只消耗 out_table[0..3]。slot 配对:n 变(uni_coln)slot0==slot2、slot1==slot3 → **slot = nt + 2*m32**。
+2. **激活读 Crouton16 surface 的 HIGH BYTE**(★关键突破)。QNN u16 路径跑 lo+hi 两 pass;**静态 u8 单 pass = hi pass**。
+   `pack_a16_crouton16_row4_surface(act_u8.astype(u16) << 8)` → `id_coln` 从 uniform(垃圾)变 **64 distinct 全列** ✓。
+   (低字节填 → 输出与激活无关的常数 -258;高字节填 → 正确跟列变化。)
+3. **act-table 物理契约(op L1254-1264 `crouton_row4_physical_ptr`)**:`act_tbl[row4*K_t+kt]=block_table[(row4&7)*K_t+kt]`
+   **无 `(row4>>3)*256` m32 偏移**——kernel 用 `m_total_minus_step` 内部加 m32 半偏移;row4 与 row4+8 共享同一物理指针。
+   (我曾错加 256 偏移,已去掉。)block_base=(phase*K_t+kt)*512,crouton16 sub-block(phase,kt,m32)=256B。
+4. **P→u16 仿射(增益≈3,zp=0x8000)**:`uni_p<N>` 扫出 P=1→2,2→6,3→8,10→30,50→151,100→302
+   (小 P 步进 +2/+4 交替=`6*⌊P/2⌋+2*(P&1)`)。增益由 bias const words `[0x4440,0x8040,0x0008,0x4000]`(`pack_native_a16_bias`)
+   决定 → **GDN 静态版可改 const 设增益=1/任意标度**(待解码 const→gain 编码)。
+5. **★当前唯一卡点 = 行别名 4:1**(`id_rowm` 16 distinct 而非 64;`id_coln`/`id_grid` 全 distinct)。
+   = crouton16 **行配对**(相邻 row0,row1 同 lane,u8 hi-pass 下别名 2:1)× m32(2:1)。**列(K 维)完全 OK,只行坏。**
+   下一步:换**不配对行的 u8 surface**(row-major:hi 字节 = 一行的 32 列连续,试 `pack_a16_row32_tile_surface<<8`
+   或自写 u8 deep),配套 act_off。验证法:`id_rowm` 应得 64 distinct + `id_coln`/`id_grid` 不退化 + 整 `random` bit-exact。
+- **gate**:`random` mode depack 后对 numpy ref `P[m,n]=Σ(act_u8-128)*w[k,n]`(按发现的仿射+depack)bit-exact。
+- HMX kernel(mask 0x70b/extra{1,1025,524})已确认非 fault 跑通;identity-weight 探针证明权重打包正确。
+- 度量:当前 462 cyc(MAC 主导,与 drain 无关)→ 全 drain 后 ~500–560 仍 ~15× < vrmpy 8325。
 
 **第 2 步 —— baremetal 接 kernel + 单线程设备验证:**
 - 把 convhbh kernel 加进 baremetal（`gdnbm_imp.cpp` 已 include `GdnSolveBROp.cpp` → 加第二个 naked 函数含 w8a16 .inc;
