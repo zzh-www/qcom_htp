@@ -92,7 +92,24 @@ FEED_4P 微基准(`ssh oneplus`,DUMMY 数据,cyc/matmul = stats[0]),apples-to-ap
     n_tiles_pow2=M_t*4=8, m_total_minus_step=8, k_total_bytes=N_t*32=64};out tile ptr = `out_raw+row4*4*64+nt*32`(密 row4)。
   - mask arg1 `0x70b`(非 0x700);extra_param `{1,1025,524}`(非 {1,0})。
   - **需新写**:Crouton_16 激活 packer(32 项 row4 表,替现 crouton8)+ u16 row4-dense 输出 depack。
-  - perf 收益已量化(509 vs 1731),kernel 已 byte-verified,描述符已解码 → 是机械集成,不含未知 RE。
+
+### 阶段3 集成 BLUEPRINT(下一会话执行,分步 device 验证)—— 2026-06-05
+**Make-or-break(已确认值得做)**:HMX-fed matmul 整片吞吐 **509 cyc/64³**(FEED_4P,4 HVX producer+1 HMX consumer)
+vs vrmpy 4 路并行 ~**2081 cyc/64³**(8325/4)→ **~4× 更便宜**;merge 占 solve 83% → 量级 2–3× 主杠杆
+(与 [[project_gdn_solve_nhead_hmx_feed_2026-06-04]] 一致)。
+**性质**:这是多步、有 **SSR 风险**(HMX 描述符错→cDSP fault 需 reboot)的 RE+编码,**仓库无可复用 Crouton_16 packer**
+(sim 只有 crouton8;Crouton_16 只活在 QNN `HmxU16I8ToU16MatMulOp` 消费 QNN-provided 块)。
+**已 de-risk**:kernel byte-verified(0x2f5200,1348B);描述符全解码(见上 + mask 0x70b / extra {1,1025,524});
+convhbh prologue 已读(`Agent/qnn_re/hmx_v75_convhbh1x1deep_stride1.S`:r0=out/r1=act/r4=mask/r5=extra desc,
+act y-stride ×4B,bias=mxmem2 链 r3+=0x101)。
+**分步计划**:
+1. (安全,无设备)RE Crouton_16 act tile 字节布局(convhbh 读 plain `.ub`,act 表项=`block[(row4&7)*K_t+kt]+(row4>>3)*256`)
+   + cvt.uh:2x2 输出 row4-dense 布局(out 项=`out_raw+row4*4*64+nt*32`)。产出 packer/depack 规格。
+2. baremetal 加 convhbh kernel(`our_v73deep_kernel_u16`,含 w8a16 `.inc`,标签 `L_hmx_w8a16_*` 不冲突)。
+3. 写 `GDNBM_MM_I16_TEST`:确定性 int8 act/wt → Crouton_16 pack → convhbh → u16 depack,对 `gdn_matmul_i16` 验 bit-exact + 测 cyc。**先单线程小心跑(SSR 风险),描述符确认对再上多线程。**
+4. 接进 FEED_4P:静态 int8 算子 + 静态 int16 输出 + 纯 int32 加 + 去 multipass,测 matmul-portion apples-to-apples。
+5. 重构整 solve 为 producer-consumer(4 HVX pack+diag / 1 main HMX),整 solve wall vs 基线 GDNSolveHVX。
+- perf 收益已量化(509 vs 1731 / vs vrmpy 2081),kernel 已 byte-verified,描述符已解码;余下 = Crouton_16 布局 RE + packer/depack 编码 + 谨慎 device 迭代。
 
 复现:`cd example/gdn_native/baremetal;`
 `EXTRA_DEFS="-DGDNBM_VTCM_RESIDENT -DGDNBM_FEED_PIPE -DGDNBM_FEED_4P -DGDNBM_FUSED_ACTWT" bash build.sh; ./gdnbm 4 ...`(单pass 509)
