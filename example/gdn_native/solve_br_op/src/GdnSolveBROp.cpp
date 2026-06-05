@@ -138,9 +138,6 @@ struct gdn_scr_t {
 #if defined(GDN_BR_MM_I8)
     int8_t  a8 [GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));    /* int8 vrmpy: A operand (row-major) */
     int8_t  b8 [GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));    /* int8 vrmpy: B operand (row-major k) */
-#if defined(GDN_BR_PREQUANT_A)
-    int32_t a8c_mx[GDN_BR_NBLK];   /* per-block maxraw (scalar, small -> DDR ok); the int8 blocks live in VTCM (vt->acache) */
-#endif
     int8_t  btp[GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));    /* int8 vrmpy: B transposed/packed [g][col][4] */
 #endif
     /* ---- per-head operand-reuse cache metadata (Task 2): quantize+pack each distinct operand ONCE ----
@@ -1048,14 +1045,6 @@ static void gdn_matmul_i16(const int16_t *A, const int16_t *B, int32_t *C) {
     }
 }
 
-/* NOTE (2026-06-05): a vector-read int16 matmul (vmem A + vdelta halfword-broadcast + Q6_Ww_vmpyacc_WwVhVh)
- * was tried and dropped — it was incorrect (broadcast/even-odd not yet right) and showed no benefit. KEY
- * difference from int8: int8 vrmpy needed vector-read because Q6_V_vsplat_R(memw) stalls; int16's
- * Q6_Ww_vmpyacc_WwVhRh reads A[i][k] as a register-broadcast halfword (Rh) — a cheap scalar that does NOT
- * stall — so the vector-read win is int8/vrmpy-specific. The new-version int16 matmul keeps the scalar-Rh
- * path; A is small (4KB/block) so L2-cached DDR is fine (scalar-read fast) — int16 operands do NOT need
- * VTCM residency. (The VTCM-vector-read principle applies to HMX-fed crouton tiles + int8 vrmpy, not int16.) */
-
 #if defined(GDN_BR_MM_I8)
 /* Pack B (int8, row-major [k][j]) into the vrmpy layout btp[g][col][m] = B[4g+m][col], so that one
  * vrmpy over a broadcast A-word reduces 4 consecutive k at once.  Per k-group g (rows 4g..4g+3): zip
@@ -1085,38 +1074,6 @@ static void gdn_matmul_i8_vrmpy(const int8_t *A, const int8_t *btp, int32_t *C) 
             const HVX_Vector *bt = (const HVX_Vector *)(btp + (size_t)g * 256);
             acc0 = Q6_Vw_vrmpyacc_VwVbVb(acc0, vA, bt[0]);
             acc1 = Q6_Vw_vrmpyacc_VwVbVb(acc1, vA, bt[1]);
-        }
-        ((HVX_Vector *)(C + (size_t)i * BL))[0] = acc0;
-        ((HVX_Vector *)(C + (size_t)i * BL))[1] = acc1;
-    }
-}
-
-/* VECTOR-READ A (QNN matmul_qu8xqi8 idiom): instead of Q6_V_vsplat_R(scalar memw of A) — which forces A
- * into hot L1 and bars VTCM residency — load A as a VMEM vector and broadcast each 4-byte group with
- * vrdelta (the byte-replicate control is QNN's, from libQnnHtpV75Skel.so @0x798880), advancing with valign.
- * A is now VECTOR-accessed -> can live in VTCM (cached, no re-quant). Numerically identical to the scalar ver. */
-static const uint8_t gdn_vrd_bcast[128] __attribute__((aligned(128))) = {
-    /* broadcast word 0 (bytes 0..3) to all 32 words: control[i] = i & 0x7C (route away the high index bits) */
-    0,0,0,0,4,4,4,4,8,8,8,8,12,12,12,12,
-    16,16,16,16,20,20,20,20,24,24,24,24,28,28,28,28,
-    32,32,32,32,36,36,36,36,40,40,40,40,44,44,44,44,
-    48,48,48,48,52,52,52,52,56,56,56,56,60,60,60,60,
-    64,64,64,64,68,68,68,68,72,72,72,72,76,76,76,76,
-    80,80,80,80,84,84,84,84,88,88,88,88,92,92,92,92,
-    96,96,96,96,100,100,100,100,104,104,104,104,108,108,108,108,
-    112,112,112,112,116,116,116,116,120,120,120,120,124,124,124,124,
-};
-static void gdn_matmul_i8_vrmpy_vec(const int8_t *A, const int8_t *btp, int32_t *C) {
-    const HVX_Vector ctrl = *(const HVX_Vector *)gdn_vrd_bcast;
-    for (int i = 0; i < BL; ++i) {
-        HVX_Vector vA = *(const HVX_UVector *)(A + (size_t)i * BL);   /* VMEM load A row (vector, VTCM-ok) */
-        HVX_Vector acc0 = Q6_V_vzero(), acc1 = Q6_V_vzero();
-        for (int g = 0; g < BL / 4; ++g) {
-            HVX_Vector vAb = Q6_V_vdelta_VV(vA, ctrl);               /* broadcast group-g 4 bytes -> all 32 words (vdelta, verified) */
-            const HVX_Vector *bt = (const HVX_Vector *)(btp + (size_t)g * 256);
-            acc0 = Q6_Vw_vrmpyacc_VwVbVb(acc0, vAb, bt[0]);
-            acc1 = Q6_Vw_vrmpyacc_VwVbVb(acc1, vAb, bt[1]);
-            vA = Q6_V_valign_VVR(vA, vA, 4);                         /* advance to next 4-byte group */
         }
         ((HVX_Vector *)(C + (size_t)i * BL))[0] = acc0;
         ((HVX_Vector *)(C + (size_t)i * BL))[1] = acc1;
@@ -1375,17 +1332,11 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
 #if defined(GDN_BR_PROBE_CYCLES)
     uint64_t z0; asm volatile("%0 = C15:14" : "=r"(z0));
 #endif
-#if !defined(GDN_BR_NO_OUTPUT_ZERO)
-    /* Fill the dense output with zpT (upper-tri is structurally zero; lower-tri gets overwritten by results).
-     * THIS IS ~52% OF THE SOLVE — synchronous HVX stores to UNCACHED FastRPC DDR don't pipeline (~206 cyc/
-     * 128B). The win: pre-zero ONCE on the host (or background-DMA) + only write the lower-tri result blocks.
-     * -DGDN_BR_NO_OUTPUT_ZERO removes it (caller MUST pre-zero the output buffer to zpT). */
     { HVX_Vector vzph = Q6_Vh_vsplat_R(zpT);
       if (((uintptr_t)Th & 127) == 0) { HVX_Vector *op = (HVX_Vector *)Th;
           for (int i = 0; i < (C * C) / 64; ++i) op[i] = vzph; }
       else { HVX_UVector *op = (HVX_UVector *)Th;
           for (int i = 0; i < (C * C) / 64; ++i) op[i] = vzph; } }
-#endif
 #if defined(GDN_BR_PROBE_CYCLES)
     { uint64_t z; asm volatile("%0 = C15:14" : "=r"(z)); g_c_zero += z - z0; }
 #endif
@@ -1403,15 +1354,6 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
     }
 #if defined(GDN_BR_DIAG_ONLY)
     return;
-#endif
-#if defined(GDN_BR_PREQUANT_A) && defined(GDN_BR_MM_I8) && defined(GDN_BR_HVX_MERGE)
-    /* FOLD the per-term A_ik quant: the input A is fixed -> quant each lower-tri block to int8 ONCE per head
-     * (was re-quantized every time the (i,k) block appeared in a merge sum). Pure operand reuse, no oc change. */
-    for (int ii = 0; ii < NB; ++ii) for (int kk = 0; kk <= ii; ++kk) {   /* off-diag (ii>kk) only — diag A unused in merge */
-        int key = gdn_blk_index(ii, kk); if (ii == kk) continue;
-        int8_t *dst = (int8_t *)(vt->acache + (size_t)key * 0x1000);      /* VTCM-resident (HOT), 4KB/block */
-        sc->a8c_mx[key] = gdn_quant_i8_from_u16(Ah + (size_t)ii * BL * C + kk * BL, C, zpA, dst);
-    }
 #endif
     for (int d = 1; d < NB; ++d) {
         for (int j = 0; j + d < NB; ++j) {
@@ -1439,18 +1381,9 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
                 uint64_t _q0 = GDN_TR_NOW();
 #endif
                 float sA_eff = (float)M; for (int _t = 0; _t < S + GDN_BR_F; ++_t) sA_eff *= 0.5f;
-                const int8_t *a8p = sc->a8;
-#if defined(GDN_BR_SKIP_QUANT)   /* perf-ceiling: skip per-term re-quant (stale a8/b8 -> wrong result, real cycles) */
-                int32_t mxraw = 127; float sBq = sc->Tscl[bkj];
-#elif defined(GDN_BR_PREQUANT_A) && defined(GDN_BR_HVX_MERGE)
-                int _kik = gdn_blk_index(i, k);              /* A pre-quantized once/head -> read the VTCM cache */
-                int32_t mxraw = sc->a8c_mx[_kik]; a8p = (const int8_t *)(vt->acache + (size_t)_kik * 0x1000);
-                float sBq = gdn_quant_i8_from_codes(sc, sc->Tblk[bkj], sc->Tscl[bkj], sc->b8, -1);
-#else
                 int32_t mxraw = gdn_quant_i8_from_u16(Ah + (size_t)i * BL * C + k * BL, C, zpA, sc->a8);
-                float sBq = gdn_quant_i8_from_codes(sc, sc->Tblk[bkj], sc->Tscl[bkj], sc->b8, -1);
-#endif
                 float sAq = (float)mxraw * sA_eff / 127.0f;
+                float sBq = gdn_quant_i8_from_codes(sc, sc->Tblk[bkj], sc->Tscl[bkj], sc->b8, -1);
 #if defined(GDN_BR_PROBE_CYCLES)
                 { uint64_t f; asm volatile("%0 = C15:14" : "=r"(f)); g_c_quant += f - f0; }
                 uint64_t mm0; asm volatile("%0 = C15:14" : "=r"(mm0));
@@ -1458,14 +1391,8 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
 #if defined(GDN_BR_TRACE)
                 uint64_t _mm0 = GDN_TR_NOW(); gdn_tr_push(_tid, GDN_TR_QUANT, _q0, _mm0);
 #endif
-#if !defined(GDN_BR_SKIP_MM)
                 gdn_pack_b_vrmpy(sc->b8, sc->btp);
-#if defined(GDN_BR_VEC_MM)
-                gdn_matmul_i8_vrmpy_vec(a8p, sc->btp, sc->Tc);   /* vector-read A (vmem+vdelta), 4x, bit-exact */
-#else
-                gdn_matmul_i8_vrmpy(a8p, sc->btp, sc->Tc);
-#endif
-#endif
+                gdn_matmul_i8_vrmpy(sc->a8, sc->btp, sc->Tc);
                 sterm = sAq * sBq;
 #if defined(GDN_BR_TRACE)
                 gdn_tr_push(_tid, GDN_TR_MM, _mm0, GDN_TR_NOW());

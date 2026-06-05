@@ -278,7 +278,6 @@ static void solve_worker(void *arg) {
      * (here: A).  T writes go straight to DDR (sequential, L2-prefetch friendly). */
     gdn_scr_t *sc = &g_scr[w->slot];
     gdn_vtcm_t vt; memset(&vt, 0, sizeof(vt));
-    if (vtcm) vt.acache = vtcm + 0x40000;   /* free VTCM region (A ping-pong is 0x0..0x40000) for the PREQUANT_A op cache */
     const int CC = GDN_BR_C * GDN_BR_C;
     const uint32_t Abytes = (uint32_t)CC * 2u;              /* u16 A block = 128KB */
     uint16_t *Avt[2] = { (uint16_t *)vtcm, (uint16_t *)(vtcm + 0x20000) };
@@ -377,10 +376,7 @@ static void solve_worker(void *arg) {
       t0 = pcyc(); for (int r = 0; r < REPS; ++r) gdn_pack_b_vrmpy(sc->b8, sc->btp); t1 = pcyc();
       o[2] = (int32_t)((t1 - t0) / REPS);                                   /* vrmpy B-pack */
       t0 = pcyc(); for (int r = 0; r < REPS; ++r) gdn_matmul_i8_vrmpy(sc->a8, sc->btp, sc->Tblk[0]); t1 = pcyc();
-      o[3] = (int32_t)((t1 - t0) / REPS);                                   /* vrmpy 64^3 matmul (scalar-splat A) */
-      /* VECTOR-READ A matmul (vmem A + vdelta word-broadcast): 4.1x vs scalar-splat, BIT-EXACT (verified). */
-      t0 = pcyc(); for (int r = 0; r < REPS; ++r) gdn_matmul_i8_vrmpy_vec(sc->a8, sc->btp, sc->Tc); t1 = pcyc();
-      o[5] = (int32_t)((t1 - t0) / REPS);                                   /* vector-read matmul cyc (vs o[3] scalar) */
+      o[3] = (int32_t)((t1 - t0) / REPS);                                   /* vrmpy 64^3 matmul */
       t0 = pcyc(); for (int r = 0; r < REPS; ++r) gdn_solve_diag64(sc, (const uint16_t *)sc->Tc, 64, 0, w->M, w->S, sc->Tblk[0]); t1 = pcyc();
       o[4] = (int32_t)((t1 - t0) / REPS);                                   /* 64 forward-subst diag */
       /* --- N-HEAD-BATCHED variants: 2 heads interleaved (cross-head ILP fills VLIW slots / hides latency) --- */
