@@ -157,8 +157,11 @@ crouton16   └─ 下一个 matmul 的 WEIGHT     ─▶ 必须重排 k-major :
   - **int32 累加器真实数据 0 溢出**(满量程 int16×int16 over K,maxcode~32767)→ **融合累加 int32 安全,不需 int64**。
   - **kernel 改用 `hm_w16a16_v73_kernel`**(已 byte-verified,`run_handwritten_artifact_body_sim.py --family w16a16` bit-exact)。
     输出 drain 仍是 `cvt.uh:2x2`(待办1/2 的 drain 结论照搬)。
-  - **代价待测**:w16a16 比 convhbh 贵(int16 权重 2× 字节 + int16 激活 2-pass)。阶段3 的 509 cyc/64³(3.4×)是 convhbh 测的;
-    **w16a16 需重测 cyc**——只要仍 < vrmpy merge(2081/64³ 4-路)就值;预计 ~1000–1300,仍 ~1.5–2× 便宜 + 46× 精度。
+  - **✅ 代价已定(仓库已有数据,`Agent/current/qnn_native_artifact_standard.md` + body-sim native_perf)**:256³ native kernel cyc
+    = w8a16(convhbh)**30182** vs w16a16 **75433**(="8836+8836" packets = int16 权重拆 2 个 int8 pass)→ **w16a16 ≈ 2.5× convhbh**。
+    映射 64³:convhbh 509 → **w16a16 ≈ ~1270 cyc/64³,仍 < vrmpy 2081(4-路 per-matmul)→ ~1.6× 便宜**(convhbh 是 4×)。
+  - **★GO 仍成立**:matmul 本身的便宜从 4× 缩到 ~1.6×,**但更大的赢 = 融合累加消掉 51% merge-glue,是 kernel 无关的**
+    (per-term rescale 在任何 int16-out kernel 上都被静态全局标度清零)→ 净收益 = matmul ~1.6× + glue 51% 消除 + 46× 精度。
 - **全局静态 `s`**:operand 标度是预处理(任意 float,off-device);只有 **drain gain 受 HW 限为 2^k**(power-of-2)。
   每次 drain 静态选 k 填满 int16 量程;power-of-2 snap 的 ≤1-bit 精度损失对 oc 可忽略(2.2e-4 已含)。round-half-up 自动(word2=0)。
 
