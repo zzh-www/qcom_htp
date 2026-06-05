@@ -44,6 +44,15 @@ for d in range(NB):
 def quant(x, scale, qmax):
     return np.clip(np.round(x / scale), -qmax, qmax) * scale   # fake-quant (dequant back to float)
 
+def qcode(x, scale, qmax):
+    return np.clip(np.round(x / scale), -qmax, qmax).astype(np.int64)   # raw int codes
+
+def imatmul_i32(cA, cT):
+    """REAL int matmul with a 32-bit accumulator that WRAPS on overflow (models 'int16 no int32-widen')."""
+    P64 = cA @ cT                                  # exact int64
+    P32 = ((P64 + 2**31) % 2**32 - 2**31)          # wrap into int32 [-2^31, 2^31)
+    return P32, int(np.sum(np.abs(P64) > 2**31 - 1))   # wrapped result + #entries that overflowed
+
 def solve(h, scale_mode, bits):
     qmax = 127 if bits == 8 else 32767
     Ah = A[h]
@@ -74,6 +83,30 @@ def solve(h, scale_mode, bits):
             T[i*BL:(i+1)*BL, j*BL:(j+1)*BL] = quant(Tii, sTi, qmax) @ quant(S, sS, qmax)
     return T
 
+def solve_i16_i32wrap(h):
+    """int16 STATIC quant + REAL int32-wrap accumulator (no int64 widen). Returns (T, total_overflow_entries)."""
+    qmax = 32767; ov = 0
+    Ah = A[h]; sA = amax/qmax; sT = tmax/qmax
+    T = np.zeros((C, C))
+    for i in range(NB):
+        T[i*BL:(i+1)*BL, i*BL:(i+1)*BL] = np.linalg.inv(np.eye(BL) - Ah[i*BL:(i+1)*BL, i*BL:(i+1)*BL])
+    for d in range(1, NB):
+        for j in range(NB-d):
+            i = j + d
+            Scode = np.zeros((BL, BL), dtype=np.int64)
+            for k in range(j, i):
+                cA = qcode(Ah[i*BL:(i+1)*BL, k*BL:(k+1)*BL], sA, qmax)
+                cT = qcode(T[k*BL:(k+1)*BL, j*BL:(j+1)*BL], sT, qmax)
+                P32, o = imatmul_i32(cA, cT); ov += o
+                Scode = ((Scode + P32 + 2**31) % 2**32 - 2**31)   # int32-wrap accumulate
+            Sact = Scode.astype(np.float64) * sA * sT
+            cTii = qcode(T[i*BL:(i+1)*BL, i*BL:(i+1)*BL], sT, qmax)
+            cS = qcode(Sact, max(np.abs(Sact).max(),1e-30)/qmax, qmax)   # requant S to int16
+            sS = max(np.abs(Sact).max(),1e-30)/qmax
+            P32, o = imatmul_i32(cTii, cS); ov += o
+            T[i*BL:(i+1)*BL, j*BL:(j+1)*BL] = P32.astype(np.float64) * sT * sS
+    return T, ov
+
 def oc(Tq, h):                                 # off-diagonal relerr
     Te = Texact[h]; m = np.tril(np.ones((C, C)), -1).astype(bool)
     return float(np.linalg.norm((Tq - Te)[m]) / (np.linalg.norm(Te[m]) + 1e-12))
@@ -82,4 +115,12 @@ print("\n=== end-to-end off-diag oc (mean over heads), MERGE quant only ===")
 for bits in (8, 16):
     for mode in ("dyn", "static"):
         ocs = [oc(solve(h, mode, bits), h) for h in range(H)]
-        print(f"  int{bits:<2}  {mode:6s}  oc = {np.mean(ocs):.5f}  (max over heads {np.max(ocs):.5f})")
+        print(f"  int{bits:<2}  {mode:6s} (float acc)  oc = {np.mean(ocs):.5f}  (max {np.max(ocs):.5f})")
+
+print("\n=== int16 STATIC with REAL int32-WRAP accumulator (no int64) — does overflow hurt oc? ===")
+res = [solve_i16_i32wrap(h) for h in range(H)]
+ocs = [oc(T, h) for h, (T, _) in enumerate(res)]
+ovs = [o for _, o in res]
+tot_entries = H * sum(NB-d for d in range(1, NB)) * (NB) * BL * BL   # rough scale
+print(f"  int16 static + int32-wrap acc  oc = {np.mean(ocs):.5f}  (max {np.max(ocs):.5f})")
+print(f"  overflow entries: mean/head {np.mean(ovs):.1f}, max/head {np.max(ovs)}  (0 => int32 never overflowed)")

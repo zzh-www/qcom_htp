@@ -16,8 +16,10 @@ quant(14%)+ acc-rescale(36% 主项)。
 
 **结论:int8-static 太松,int16-static 完美**(用户"int8 大不了 int16"精确命中)。值有界(|A|≤0.94,|T|≤1,随
 block-distance 衰减 dist0=1.0→dist3=0.20)→ 单一全局 int16 静态标度就够;分层标度(按 block-dist)可更紧但非必需。
-**实现注意**:int16×int16×64-deep 最坏 2³⁶ 溢出 int32 → 用 int64 acc 或下移(多数块码值小不溢出,仅 max 块需处理);
-或 w8a16(int8 算子 + 16-bit 累加)折中。
+**累加器:int32 就够,不需要 int64(sim 实测确认)。** 直觉"int16×int16×64=2³⁶ 溢出"是**最坏情况假设(所有
+entry 同时取 max)**,真实数据不会:块乘结果有界(不全相长)。sim 用**真实 int32-wrap 累加器**跑端到端:
+**oc=0.00019,溢出条目 = 0/head(int32 从未溢出)**。所以静态 int16 + int32 acc 即可,无需 int64/下移/w8a16。
+acc 退化成纯 int32 加(同标度);每个输出块只剩 1 次 int32→int16 requant(非 per-term,小)。
 **这定调了 solve 重写**:静态 int16 量化 + 全预处理 + vmem 向量读([[向量读 matmul]] 已通)+ pure-add acc。
 
 ## ✅ 向量读 matmul 解锁 VTCM operand caching（2026-06-05，用户路线验证成功）
