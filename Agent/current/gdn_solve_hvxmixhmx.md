@@ -1,5 +1,25 @@
 # GDNSolveHVXMixHMX — HVX-feed + HMX-matmul producer/consumer pipeline (matmul-portion squeeze)
 
+## 🎯 目标架构（权威，solve 重写照此）：静态量化 int16（2026-06-05，sim 验证可行）
+
+**决定:最终走静态量化(固定/分层可预测标度,非运行时 maxabs),精度 int16。** 这是效率最优:一切可提前预处理、
+运行时只剩纯向量整数 matmul + 纯 int 加(无量化、无 rescale、无动态扫描、无标量)。一举消掉 merge-glue 的
+quant(14%)+ acc-rescale(36% 主项)。
+
+**sim 验证(`scripts/gdn_solve_static_quant_probe.py`,真实 golden p29_L00,端到端 off-diag oc):**
+| | oc mean | oc max-head |
+|---|---|---|
+| int8 dynamic(现状) | 0.0287 | 0.060 |
+| int8 **static** | 0.0545 | 0.160 ← 太松(~4× 差于出货) |
+| int16 dynamic | 0.00012 | 0.00024 |
+| **int16 static** | **0.00024** | **0.00066 ← 比出货 ~1.2e-2 好 50×** |
+
+**结论:int8-static 太松,int16-static 完美**(用户"int8 大不了 int16"精确命中)。值有界(|A|≤0.94,|T|≤1,随
+block-distance 衰减 dist0=1.0→dist3=0.20)→ 单一全局 int16 静态标度就够;分层标度(按 block-dist)可更紧但非必需。
+**实现注意**:int16×int16×64-deep 最坏 2³⁶ 溢出 int32 → 用 int64 acc 或下移(多数块码值小不溢出,仅 max 块需处理);
+或 w8a16(int8 算子 + 16-bit 累加)折中。
+**这定调了 solve 重写**:静态 int16 量化 + 全预处理 + vmem 向量读([[向量读 matmul]] 已通)+ pure-add acc。
+
 ## ✅ 向量读 matmul 解锁 VTCM operand caching（2026-06-05，用户路线验证成功）
 
 **之前的"vrmpy quant 不可折叠 / 全塞 VTCM 有标量例外"是因为 matmul 用标量读 A —— 正向解决 = 把标量改成向量读。**
