@@ -1,5 +1,23 @@
 # GDNSolveHVXMixHMX — HVX-feed + HMX-matmul producer/consumer pipeline (matmul-portion squeeze)
 
+## ✅ 向量读 matmul 解锁 VTCM operand caching（2026-06-05，用户路线验证成功）
+
+**之前的"vrmpy quant 不可折叠 / 全塞 VTCM 有标量例外"是因为 matmul 用标量读 A —— 正向解决 = 把标量改成向量读。**
+方法:看 QNN `matmul_qu8xqi8_32.S`(vmem A + vdelta 广播 + valign,零标量)+ 查 Hexagon HVX 手册 p202 确认
+vdelta 语义。
+- **`gdn_matmul_i8_vrmpy_vec`**:`vmem` 载 A 整行 + `Q6_V_vdelta_VV(vA, ctrl)` 把 word-g 4 字节广播到全 32 lane
+  (ctrl[i]=i&0x7C,手册 p202:vdelta=大步长优先 butterfly,设 stride 4/8/16/32/64 位即跨字复制)+ `valign(·,4)`
+  推进。**隔离实测 4.10×(8322→2031),BIT-EXACT**(`first_mismatch=-1`)。坑:vrdelta 广播的是 byte0 不是 word0
+  (手册 p202 反向网络)→ 必须用 **vdelta**。
+- **解锁 VTCM operand caching**:A 现在向量读 → `GDN_BR_PREQUANT_A` 把 A 块缓存进 VTCM(`vt->acache`)从之前的
+  **+112K 灾难** 变成 **−3K 收益**(vmem 读 VTCM 快)。
+- **全 solve 实测(4-thread,int8,min)**:scalar-splat **97030** → VEC_MM **93084(−4%)** → +PREQUANT_A
+  **89880(共 −7.4% / 1.08×)**,全 bit-exact。
+
+**教训修正**:① "全塞 VTCM 有标量硬例外" 仍真,但**正确做法是消灭标量访问(向量读),而非接受例外**;② operand caching
+对 vrmpy 也能赢了(前提:向量读 + VTCM)。flag:`GDN_BR_VEC_MM`、`GDN_BR_PREQUANT_A`(默认关)。
+**下一步**:T_kj 算子也向量读+VTCM 缓存(同法);把 acc/requant 的中间量也留 VTCM 向量格式(VTCM-first 全链路)。
+
 ## 全局 roofline：32-head solve 的真实瓶颈分解（CLEAN WALL，2026-06-05）
 
 **先纠正一个度量陷阱**：`GDN_BR_PROBE_CYCLES` 的 per-stage `C15:14` 计数器**不可靠**(per-hardware-thread,

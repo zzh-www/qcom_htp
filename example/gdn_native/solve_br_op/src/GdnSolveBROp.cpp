@@ -1083,6 +1083,38 @@ static void gdn_matmul_i8_vrmpy(const int8_t *A, const int8_t *btp, int32_t *C) 
     }
 }
 
+/* VECTOR-READ A (QNN matmul_qu8xqi8 idiom): instead of Q6_V_vsplat_R(scalar memw of A) — which forces A
+ * into hot L1 and bars VTCM residency — load A as a VMEM vector and broadcast each 4-byte group with
+ * vrdelta (the byte-replicate control is QNN's, from libQnnHtpV75Skel.so @0x798880), advancing with valign.
+ * A is now VECTOR-accessed -> can live in VTCM (cached, no re-quant). Numerically identical to the scalar ver. */
+static const uint8_t gdn_vrd_bcast[128] __attribute__((aligned(128))) = {
+    /* broadcast word 0 (bytes 0..3) to all 32 words: control[i] = i & 0x7C (route away the high index bits) */
+    0,0,0,0,4,4,4,4,8,8,8,8,12,12,12,12,
+    16,16,16,16,20,20,20,20,24,24,24,24,28,28,28,28,
+    32,32,32,32,36,36,36,36,40,40,40,40,44,44,44,44,
+    48,48,48,48,52,52,52,52,56,56,56,56,60,60,60,60,
+    64,64,64,64,68,68,68,68,72,72,72,72,76,76,76,76,
+    80,80,80,80,84,84,84,84,88,88,88,88,92,92,92,92,
+    96,96,96,96,100,100,100,100,104,104,104,104,108,108,108,108,
+    112,112,112,112,116,116,116,116,120,120,120,120,124,124,124,124,
+};
+static void gdn_matmul_i8_vrmpy_vec(const int8_t *A, const int8_t *btp, int32_t *C) {
+    const HVX_Vector ctrl = *(const HVX_Vector *)gdn_vrd_bcast;
+    for (int i = 0; i < BL; ++i) {
+        HVX_Vector vA = *(const HVX_UVector *)(A + (size_t)i * BL);   /* VMEM load A row (vector, VTCM-ok) */
+        HVX_Vector acc0 = Q6_V_vzero(), acc1 = Q6_V_vzero();
+        for (int g = 0; g < BL / 4; ++g) {
+            HVX_Vector vAb = Q6_V_vdelta_VV(vA, ctrl);               /* broadcast group-g 4 bytes -> all 32 words (vdelta, verified) */
+            const HVX_Vector *bt = (const HVX_Vector *)(btp + (size_t)g * 256);
+            acc0 = Q6_Vw_vrmpyacc_VwVbVb(acc0, vAb, bt[0]);
+            acc1 = Q6_Vw_vrmpyacc_VwVbVb(acc1, vAb, bt[1]);
+            vA = Q6_V_valign_VVR(vA, vA, 4);                         /* advance to next 4-byte group */
+        }
+        ((HVX_Vector *)(C + (size_t)i * BL))[0] = acc0;
+        ((HVX_Vector *)(C + (size_t)i * BL))[1] = acc1;
+    }
+}
+
 /* Direct int8 quant of a strided u16 A sub-block -> a8 (row-major, natural cols).  Skips the int32 fold
  * intermediate: in dynamic-range int8 quant the per-tensor sA cancels, so a8 = round((code-zpA)*127/mxraw)
  * is pure-integer (independent of M,S).  Returns mxraw; caller forms the dequant scale mxraw*sA_eff/127.
@@ -1420,7 +1452,11 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
 #endif
 #if !defined(GDN_BR_SKIP_MM)
                 gdn_pack_b_vrmpy(sc->b8, sc->btp);
+#if defined(GDN_BR_VEC_MM)
+                gdn_matmul_i8_vrmpy_vec(a8p, sc->btp, sc->Tc);   /* vector-read A (vmem+vdelta), 4x, bit-exact */
+#else
                 gdn_matmul_i8_vrmpy(a8p, sc->btp, sc->Tc);
+#endif
 #endif
                 sterm = sAq * sBq;
 #if defined(GDN_BR_TRACE)
