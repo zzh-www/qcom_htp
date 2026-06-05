@@ -47,7 +47,28 @@ REPS-loop 对带 DDR 写的阶段是**假象**（冷 DDR 写放大 ~18×）。�
 入口脚本:`scripts/gdn_hmx_convhbh_sim.py`（我已写好,在 hexagon-sim 跑 convhbh 64³,有 cyc/PASS）。
 参考 u8i8 版:`scripts/gdn_hmx_matmul_sim.py`（bit-exact 4096/4096,可对照学正确的 pack/descriptor/depack）。
 
-**第 1 步（进行中 2026-06-06,纯 sim）—— 让 convhbh 64³ bit-exact:**
+**第 1 步 ✅ 已解决(2026-06-06)—— convhbh int16 matmul BIT-EXACT(max_abs_diff=0):**
+
+**★关键:仓库早有手写 w8a16 实现(=convhbh),别从零逆向。** 复现(出货级证据):
+```
+python example/handwritten_hmx_matmul/prepare_owned_inputs.py --family w8a16 --out-dir /tmp/w8a16_owned
+python scripts/run_handwritten_artifact_body_sim.py --family w8a16 --artifact /tmp/w8a16_owned --json-out /tmp/r.json
+# -> pass:True, exactness_status:byte_exact_checksum, output_diff max_abs=0, value_stats exact=65536/65536
+```
+256³ 跑 convhbh kernel vs QNN native ref **逐字节 bit-exact**。**正确 recipe(我从零逆向时搞错的)**:
+- **act/out crouton16 tile = 2048 B**(32×32 u16),table offset 序列 `[0,2048,4096,...]`(我曾用错的 512B sub-block)。
+  contract = `crouton16_row4_physical_offsets`,512 entries(256³)。offset 逻辑见 `prepare_owned_inputs.py`。
+- **n_tiles_pow2 = M_t*4**(256³=32)**是对的**;我之前的"欠写/需 M_t*16"是 **table offset 用错**导致,非 ntp。
+- **输出 depack = `deblock_a16_crouton16_row4`**(`run_handwritten_artifact_body_sim.py` L1708)= `pack_a16_crouton16_row4_surface` 的逆
+  (输出与输入同 crouton16_row4 布局,u16,2048B tile)。
+- mask=`set_hmx_params_conv1x1(0x70b,0,0,0,0x20)`、extra=`[1,1025,524]`、act_desc{n_pairs=K_t,y=8}、
+  out_desc{ots=N_t,oys=8,ntp=M_t*4,mtm=8,ktb=N_t*32}。增益由 bias const 定(我的 exact-const 发现与此一致)。
+- ⚠️ 此 oracle 是 **int16 激活(a16,2-pass)**;GDN 静态版要 **int8 激活单 pass + int16 输出**——复用同 descriptor/
+  de-crouton,激活打包改单 pass(见我 sim 的 `act<<8` high-byte 发现)。下一步(第2步)= 把这 recipe 接进 baremetal merge。
+
+—— 以下为我从零逆向的过程记录(已被上面的"用现成实现"取代,保留作背景)——
+
+**(旧)进行中过程(纯 sim)—— 让 convhbh 64³ bit-exact:**
 入口 `scripts/gdn_hmx_convhbh_sim.py` 已大改写,带探针模式(`--mode uni_coln|uni_p<N>|id_coln|
 id_rowm|id_grid|random`)+ 隔离 out-slot 发现法。**已实测确立的事实(全部 sim,零 SSR):**
 
