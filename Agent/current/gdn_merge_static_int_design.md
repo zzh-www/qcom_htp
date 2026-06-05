@@ -134,8 +134,10 @@ crouton16   └─ 下一个 matmul 的 WEIGHT     ─▶ 必须重排 k-major :
    - drain f16 化的是 **NET 累加器**(加完 bias 后),非 raw → 零点偏置/大 raw 积不伤(`gdn_convhbh_drain_acc_probe.py`)。
    - 端到端 oc:**w16a16 = 2.6e-4**(融合累加 + 真实 drain + power-of-2 requant),**int32 0 溢出**,f16 drain 可忽略。
    - → 见 §6 决策:**操作数必须双 int16(w16a16),int8 任一侧都不够**。
-3. **【设计→验】布局直通**:把 STEP A 的输出(crouton)直接当 STEP B 的 activation,验证零重排正确;
-   weight 端 k-major 预打包常驻。**(w16a16 输出仍 crouton16_row4,与 convhbh 同 → 直通契约不变。)**
+3. **✅【已验】布局直通**(2026-06-06,`scripts/gdn_merge_layout_directpipe_probe.py`,纯索引证明):
+   C-harness `deblock_a16_crouton16_row4`(已 byte-verified 解 KERNEL 输出)== `pack_a16_crouton16_row4_surface`
+   (激活打包)的**精确逆**——64³/256³/64×128/128×64/64×192 全 True。→ **kernel 的 int16 输出 surface 与激活 surface
+   逐字节同格式 → STEP A 输出当 STEP B 激活零重排**(w16a16 是 int16→int16,2-pass lo/hi 自然读),只 weight 端需 k-major。
 4. **接 baremetal**:`gdnbm_imp.cpp` 加 **`hm_w16a16_v73_kernel`**(非 convhbh!) + `GDNBM_MM_I16_TEST`(nthreads=1 小心,
    SSR 风险),对 `gdn_matmul_i16` 验 + **测 w16a16 cyc**(决定是否仍 < vrmpy);再整块 producer-consumer,整 solve wall vs 基线(~122K)。
 
