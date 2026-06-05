@@ -84,9 +84,15 @@ FEED_4P 微基准(`ssh oneplus`,DUMMY 数据,cyc/matmul = stats[0]),apples-to-ap
 - **为什么能 P=4**:单 pass 的 consumer 是纯 HMX(不锁 HVX 做 maxabs)→ 释放 1 个 HVX 单元给第4 producer。
   multipass consumer 必须锁 HVX 做 gain-search maxabs → 只能 P=3(P=4 会 5 个 HVX 锁 >4 单元 → 卡死,已验)。
 - **convhbh int16-out kernel(阶段2,byte-verified)= 单 pass 正确输出的载体**(`cvt.uh:2x2` u16 输出)。
-- **剩余生产集成(下一步)**:把 convhbh 的 `cvt.uh:2x2` + u16 dense 输出 + u16 depack 接进单 pass FEED_4P,
-  对 `gdn_matmul_i16` 验 bit-exact。perf 收益已量化(509 vs 1731);kernel 已 byte-verified;集成 delta =
-  mask arg1 `0x70b`(非 0x700)、extra_param `{1,1025,524}`(非 {1,0})、输出 4 tile/cvt(`:2x2`)的 desc/ depack。
+- **剩余生产集成(下一步,已完全刻画)**:把 convhbh 接进单 pass FEED_4P 并对 `gdn_matmul_i16` 验 bit-exact。
+  **不是 drop-in**——经读 `HmxU16I8ToU16MatMulOp.cpp` desc 构造(L1190-1320)确认,int16 路径用 **Crouton_16
+  row4-grouped 布局**,与现 u8i8 的 crouton8(2 项表)不同。64³(M_t=N_t=K_t=2)的 convhbh 描述符:
+  - `row4_groups = M_t*8 = 16`;act/out 表各 `(16-1)*stride + tiles = 32` 项(stride=K_t/N_t=2)。
+  - `act_desc`={tbl(32), n_pairs=K_t=2, y_stride=K_t=2};`out_desc`={tbl(32), table_stride=N_t=2, y_stride=N_t=2,
+    n_tiles_pow2=M_t*4=8, m_total_minus_step=8, k_total_bytes=N_t*32=64};out tile ptr = `out_raw+row4*4*64+nt*32`(密 row4)。
+  - mask arg1 `0x70b`(非 0x700);extra_param `{1,1025,524}`(非 {1,0})。
+  - **需新写**:Crouton_16 激活 packer(32 项 row4 表,替现 crouton8)+ u16 row4-dense 输出 depack。
+  - perf 收益已量化(509 vs 1731),kernel 已 byte-verified,描述符已解码 → 是机械集成,不含未知 RE。
 
 复现:`cd example/gdn_native/baremetal;`
 `EXTRA_DEFS="-DGDNBM_VTCM_RESIDENT -DGDNBM_FEED_PIPE -DGDNBM_FEED_4P -DGDNBM_FUSED_ACTWT" bash build.sh; ./gdnbm 4 ...`(单pass 509)
