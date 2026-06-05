@@ -47,6 +47,31 @@
 
 **核心缺件(下一步逆向):int16-输出的 HMX kernel(`cvt.uh:2x2`)** —— 逆向 QNN `convhbh`(16-bit 输出)。
 
+## 阶段1 实测结论（对角块求逆 / 前代回代）—— 2026-06-05
+
+**前提被实测推翻:对角块的前代回代不是瓶颈,已在 HVX 下限,无需优化。** 决策依据 = 真实全 solve
+ablation(`ssh oneplus`,baremetal 默认 GDNSolveHVX 基线,A_u16_h32.raw,H=32 C=256,nthreads=1):
+
+| 度量 | cyc/head | 占比 |
+|---|---|---|
+| 全 solve | 405,912 | 100% |
+| DIAG_ONLY(`-DGDN_BR_DIAG_ONLY`,跳 merge = diag+zero-fill+requant) | 70,671 | **17%** |
+| → merge(= full − diag_only) | 335,241 | **83%** |
+
+- **`gdn_solve_diag64` 三段拆解(都已是固定标度对称 int16,zp=0):** A 折叠到 `2^-15`,T 输出固定 `GDN_BR_TI=2/32767`
+  —— **对角块"静态对称 int16"形态已具备,不必改。**
+- **前代回代主循环(2016 条 `Q6_Ww_vmpyacc_WwVhRh`)已流水到底**;行间串行依赖**不是**瓶颈(goal 前提错)。
+  连 DIAG_ONLY 的 70K 里,大头也是 zero-fill(128KB/head vsplat)+ requant,不是前代回代。
+- **bit-exact 门通过**:offdiag-oc=1.35e-3、whole-oc=9.5e-5(对 `T_ref_h32.raw` fp64 逆),与现状一致。
+- ⚠️ **方法论坑(已记)**:`GDNBM_GLUE_BENCH` 隔离 REPS 微基准报 diag64=11.7K、widen=91%——**全是假象**
+  (隔离循环对 `Tblk[0]` 的冷 DDR 写 + pcyc 开销)。改 widen 后真实 solve 130K→131K **零变化**。
+  **只信整 solve wall / ablation,微基准 REPS-loop 对带 DDR 写的阶段不可信。**
+- **静态 int16 真正的杠杆在 merge(83%),不在 diag。** widen(int16→int32)只为喂 int32 merge 而存在;
+  T 全程保持 int16 → 消除 widen + 喂 merge 直接吃 int16,是**阶段3** 的收益,不在 diag 隔离。
+
+复现:`cd example/gdn_native/baremetal; EXTRA_DEFS="-DGDNBM_VTCM_RESIDENT[ -DGDN_BR_DIAG_ONLY]" bash build.sh;`
+`./gdnbm 1 A_u16_h32.raw T_out.raw 32 256 32768 32768 2.770166930875267e-05 6.103701895199438e-05`。
+
 ## 当前微基准状态（matmul-portion,已优化到 ~507 cyc/matmul）
 
 **流水线**：4 个 HVX producer 把每个 64³ matmul 的算子(crouton act + k-major wt + bias)pack 进 VTCM ring,
