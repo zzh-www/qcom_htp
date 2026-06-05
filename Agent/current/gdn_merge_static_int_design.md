@@ -58,11 +58,12 @@ STEP A  内层 Σ = 一个【大 K HMX matmul】(融合累加)         K=(i−j)
         └──────────────────────────────────────────┘
               │  drain 一次 (HMX cvt)
               ▼
-        S(int16) = saturate( acc_int32 >> k )   ← 纯算术右移, 无浮点
-                                  ▲ k = 静态标度指数 (control word 指数位 = 移几位)
+        S(int16) = saturate_u16( zp + round_half_up( acc_int32 * 2^k ) )
+                                  ▲ k = 静态标度指数 (control word word0 指数位[14:10])
+                                  ▲ round_half_up: 下移 s 位 = (acc + 2^(s-1)) >> s
 
 STEP B  外层  T_ij = T_ii · S = 再一个 HMX matmul
-        T_ii(i16) · S(i16) → acc(i32) → drain(>>k) → T_ij(int16)
+        T_ii(i16) · S(i16) → acc(i32) → drain(round>>k) → T_ij(int16)
 
 每块共 2 次 drain (内层 Σ 后 1 次, 外层后 1 次). 全程 int, 每次缩窄 = 一个移位.
 ```
@@ -71,9 +72,16 @@ STEP B  外层  T_ij = T_ii · S = 再一个 HMX matmul
 `[A_ij|…|A_i,i-1] @ [T_jj;…;T_i-1,j]`(K=(i−j)·64)一个大 K matmul,HMX 的 K-loop 天生沿 K 累加 = 求和。
 动态 per-block 标度则每 term 要 fixed-point rescale → 就是 51% glue;静态把它清零。
 
-**requant 真相(纠正早期 f16 叙事)**:循环内**没有浮点**。`int32→int16` = `saturate(acc >> k)`,
-纯算术右移。HMX cvt 的 control word 里**指数位 = 移位量 k**(实测 `0x4040→0x4440` 增益×2 = 指数+1;
-`word2=0x0000` 出 max_abs_diff=0 = 纯移位零舍入)。f16 只是硬件写"移几位"的格式,不是乘浮点。
+**★cvt drain 真相(待办1 sim 实测,纠正早期"纯移位零舍入"叙事)**:
+- **增益 = `2^(exp-16)`**,`exp` = word0 位[14:10](`word0 = 0x0040 | (exp<<10)`,mantissa 位固定 0x040)。
+  实测 k∈[-5,+2] 增益逐档 ×2/÷2 干净(`0x4040`=×1、`0x4440`=×2、`0x3c40`=×½…)。**可任意设 k(含下移)。**
+- **舍入 = round-half-up(四舍五入,非截断!)**:`word2=0x0000` 下 `int32→int16 = (acc + 2^(s-1)) >> s`,
+  小幅度 sim 实测 **21/21 命中 round-half-up**(早期"word2=0 零舍入/纯移位"结论 **错**)。`word2=0x0008` 额外加偏置,别用。
+- **⚠️ f16 路径精度坑**:drain 前的**原始累加器若 > ~2^11–2^12,f16 化会丢低位**(实测 raw_acc≈137000 → 排空 30000
+  偏 **+2 LSB**;小累加器 0 偏差)。**对融合累加是硬约束**:大 K 求和后的 int32 必须在 drain 时仍精确,需待办2直接验
+  (选 k 使排空后的 int16 落在 O(千) 而非 O(3万),误差可压到 ≤1 LSB 且在 oc 预算内)。
+- 含义:merge drain 非"位精确纯移位",而是 **round-half-up + 大累加器 ≤2 LSB f16 噪声**。待办2 的门是
+  **oc/max_abs ≤ 阈值**(参考用 round-half-up 整数模型),不是对截断整数参考 bit-exact。
 
 ---
 
@@ -115,10 +123,14 @@ crouton16   └─ 下一个 matmul 的 WEIGHT     ─▶ 必须重排 k-major :
 
 ## 5. Step 2 待办(每步 sim bit-exact → 再上 device,不跳步)
 
-1. **【设计→验】钉 control word 的"指数位=移位量 k"**:在 sim 扫死 convhbh 4-word const
-   (`[0x4040,0x8040,0x0008,0x4000]`)各字段语义,确认 `int16=saturate(acc>>k)` 的 k 可精确设、零舍入。
-2. **【设计→验】融合累加**:一个非对角块的内层 `Σ_k A_ik·T_kj` 拼成大 K matmul,HMX 累 int32 不中间 drain,
-   一次 drain(>>k)→ int16,对 `gdn_matmul_i16` 参考 bit-exact + 测 int32 无溢出。
+1. **✅【已验】钉 control word 的"指数位=移位量 k"**(2026-06-06,sim,uniform-P 探针 零 depack):
+   - 增益 = `2^(exp-16)`,exp = word0 位[14:10],逐档 ×2/÷2 干净(k∈[-5,+2] 实测,见 §2 cvt drain 真相)。
+   - 舍入 = **round-half-up**(`word2=0x0000`,21/21),非截断;f16 路径在 raw_acc>~2^12 有 ≤2 LSB 噪声。
+   - 脚本 `scripts/gdn_convhbh_control_word_sweep.py`(指数扫描)+ `scripts/gdn_convhbh_drain_round_probe.py`(舍入规则)。
+2. **【设计→验】融合累加**(用 §2 修正模型:round-half-up,关注大累加器 f16 精度):一个非对角块的内层
+   `Σ_k A_ik·T_kj` 拼成大 K matmul,HMX 累 int32 不中间 drain,一次 drain(round>>k)→ int16,对 round-half-up
+   整数参考验 **oc/max_abs ≤ 阈值**(非对截断整数 bit-exact)+ 测 int32 无溢出 + **直接验大 K 求和的 drain 精度**
+   (raw_acc 是否丢低位 → 决定融合累加前提是否成立;选 k 使排空 int16 落 O(千))。
 3. **【设计→验】布局直通**:把 STEP A 的输出(crouton)直接当 STEP B 的 activation,验证零重排正确;
    weight 端 k-major 预打包常驻。
 4. **接 baremetal**:`gdnbm_imp.cpp` 加 convhbh kernel + `GDNBM_MM_I16_TEST`(nthreads=1 小心,SSR 风险),
