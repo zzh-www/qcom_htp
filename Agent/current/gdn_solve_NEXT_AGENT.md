@@ -66,21 +66,26 @@ id_rowm|id_grid|random`)+ 隔离 out-slot 发现法。**已实测确立的事实
 5. **行别名 4:1 已解决 = `n_tiles_pow2` 太小**(不是 surface 配对)。op `M_t*4`(=8@64³)只迭代 16/64 行;
    **`M_t*16`(=32@64³)解全 64 行**(`id_rowm`=64,`id_coln`=64,`id_grid`=120 全 distinct,sweep 确认)。
    ⚠️ **`M_t*4` 是 op 默认且对真实 merge 尺寸(C=256,M_t=8→32)正确**;64³(M_t=2)撞小尺寸缩放边界。
-6. **增益/标度**:effective bias = **-128*sum_w**(u8 zp;-32768 错,cvt 自己处理 <<8 的 ×256)。
-   输出增益由 bias const **word0** 定:`0x4040`→×1、`0x4440`→×2。`out_u16=0x8000+round(P*gain)`,
-   有 per-channel cvt 舍入(×1 时 ~±1 LSB)。**GDN 静态版按需设 word0 选标度。**
-7. **OUTPUT depack(未完,但已定性)**:隔离-2KB-slot 的映射是**假象**(identity-weight 巧合;dense weight 下
-   4 副本互不等)。真实输出 = **连续 out_raw**(op L1265:tile(row4,nt) 在 `(row4*4*N+nt*32)` u16),
-   被 :2x2+crouton **置换**;64³ 下 32×32 storage tile 覆盖 4-行自然区→重叠,需真实尺寸(256)的 tiling
-   或非重叠放置才能 depack。
+6. **★增益精确 bit-exact 已破**:bias const = **`[0x4040,0x8040,0x0000,0x4000]`**(word0=0x4040→×1、
+   **word2=0x0000→无 cvt 舍入**)+ effective = **-128*sum_w**(u8 zp;-32768 错,cvt 自处理 <<8)。
+   → `out_u16 = 0x8000 + P` **精确**(id_grid identity-weight 实测 **max_abs_diff=0,4096/4096**)。
+   word2=0x0008(默认)加 ±1 舍入;word0=0x4440 出 2P。**GDN 静态版按需设这两字。** 见 `build_exact_bias()`。
+7. **★OUTPUT depack = 当前真卡点(小尺寸退化)**:**compute 已 bit-exact,但输出寻址退化**。解全 64 行需
+   `n_tiles_pow2=M_t*16`(=32),这让 kernel 跑 ~4× **冗余 M-pass 写部分和**;隔离-slot 里**完整-P 只在
+   ~28/4096 个 (m,n)** 的副本中出现,连续 out_raw 则**破坏性重叠**。`M_t*4`(op 默认)**欠写**(64³ 16/64 行、
+   128³ 2048/16384)。→ standalone 描述符的 M-pass tiling 在**小于 op 设计尺寸**时退化;identity-weight 隔离-slot
+   标定对 dense weight **无效**(部分和巧合)。
 
-**★净结论**:**激活布局(最难)+ 矩阵乘正确性已完全攻克并 sim 验证**(identity 探针证明 kernel 算对全 m+n)。
-**剩余 = 真实尺寸下的 output depack + 精确 cvt 舍入**,建议直接在**真实 merge tile 尺寸**(非 64³)上做,绕开小尺寸缩放伪影。
-- **gate(未达)**:`random` dense-weight matmul depack 后对 `P=Σ(act-128)*w` bit-exact —— 卡在 output depack。
-- HMX kernel(mask 0x70b/extra{1,1025,524},eff=-128*sum_w)已 sim 跑通非 fault;identity 探针证明权重+激活打包对。
-- 度量:当前 462 cyc(MAC 主导)→ 仍 ~15× < vrmpy 8325,GO 结论不变。
+**★净结论**:**激活布局(最难)+ 矩阵乘 compute + 精确增益已全部 sim 验证 bit-exact**(identity/id_grid 探针)。
+**唯一剩余 = dense-weight 的 output depack**(小尺寸 M-pass 退化)。下一步二选一:
+  (a) 读 disasm 输出环寄存器数学(r10/r11/m0 + m_total_minus_step:输出地址如何跨 M-pass 推进)找单干净-pass 描述符;
+  (b) 在**非退化尺寸**验证后,按其 tiling 喂真实 merge。
+- **gate(未达,仅差 output depack)**:`random` dense matmul depack 后对 `P=Σ(act-128)*w` bit-exact。
+- HMX kernel(mask 0x70b/extra{1,1025,524})sim 跑通非 fault;**identity 探针 + id_grid 精确门证明 compute+gain 全对**。
+- cyc:exact const + ntp=32 = 642(含冗余 pass);单干净 pass ~462–560,仍 ~15× < vrmpy 8325,GO 不变。
 - 复现关键 config(`scripts/gdn_hmx_convhbh_sim.py`):act=`crouton16_row4(act_u8<<8)`、act_off 无 m32 偏移、
-  `n_tiles_pow2=M_t*16`、eff=-128*sum_w、out_off 连续 `(row4*4*N+nt*32)*2`。探针:`--mode id_coln|id_rowm|id_grid`。
+  `n_tiles_pow2=M_t*16`、`build_exact_bias`(const 0x4040/0x0000 + eff=-128*sum_w)、out 隔离-slot。
+  探针:`--mode id_coln|id_rowm|id_grid|uni_p<N>`。另:`scripts/gdn_hmx_convhbh_sim_csize.py` 参数化 C。
 
 **第 2 步 —— baremetal 接 kernel + 单线程设备验证:**
 - 把 convhbh kernel 加进 baremetal（`gdnbm_imp.cpp` 已 include `GdnSolveBROp.cpp` → 加第二个 naked 函数含 w8a16 .inc;

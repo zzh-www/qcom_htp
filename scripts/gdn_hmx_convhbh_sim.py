@@ -41,16 +41,24 @@ CRACKED (all sim, zero SSR):
     op default and is CORRECT for the real merge size (C=256, M_t=8 -> 32); the
     64^3 probe (M_t=2) hits a small-size scaling edge.
   - VERIFIED full m+n resolution: id_coln=64, id_rowm=64, id_grid=120 distinct.
-* GAIN/SCALE: effective bias = -128*sum_w (u8 zp; -32768 is WRONG, cvt handles the
-  <<8 scaling).  Output gain set by bias const word0: 0x4040 -> ~x1, 0x4440 -> ~x2.
-  out_u16 = 0x8000 + round(P * gain) with per-channel cvt rounding (~+-1 LSB at x1).
-* OUTPUT depack: the isolated-2KB-slot map was a RED HERRING (identity-weight
-  coincidence; replicas disagree for dense weight).  Real output = contiguous
-  out_raw (op L1265: tile(row4,nt) at (row4*4*N+nt*32) u16), permuted by :2x2 +
-  crouton; at 64^3 the 32x32 storage tiles overlap the 4-row natural regions ->
-  needs the real-size (256) tiling or a non-overlapping placement to depack.
-REMAINING: real-size output depack + exact cvt rounding -> full bit-exact gate.
-The KERNEL ITSELF computes the int16-out matmul correctly (identity probes).
+* GAIN/SCALE — ★EXACT bit-exact found: bias const = [0x4040,0x8040,0x0000,0x4000]
+  (word0=0x4040 -> gain x1; word2=0x0000 -> NO cvt rounding) + effective bias
+  = -128*sum_w (u8 zp; -32768 is WRONG, cvt handles the <<8).  Then
+  out_u16 = 0x8000 + P  EXACTLY (verified max_abs_diff=0 vs P=(act-128)@w on
+  id_grid, identity weight, 4096/4096).  word2=0x0008 (default) adds +-1 rounding;
+  word0=0x4440 doubles gain (out=2P).  GDN static version sets these for its scale.
+* OUTPUT depack — BLOCKED at small C (64^3, 128^3): the COMPUTE is bit-exact, but
+  resolving all 64 rows needs n_tiles_pow2=M_t*16 (=32@64^3), which makes the
+  kernel run ~4x redundant M-passes writing PARTIAL sums; the complete-P value is
+  present for only ~28/4096 (m,n) among isolated-slot replicas, and contiguous
+  out_raw overlaps destructively.  M_t*4 (op default) UNDER-writes (16/64 rows @64^3,
+  2048/16384 @128^3).  So the standalone descriptor's M-pass tiling is degenerate
+  below the size the op was designed for; isolated-slot identity-weight calibration
+  is invalid for dense weight (partial-pass coincidence).
+REMAINING: trace the output-loop register math in the disasm (r10/r11/m0 +
+  m_total_minus_step: how output addresses advance across M-passes) to find the
+  single clean-pass descriptor, OR validate at a non-degenerate size and tile the
+  real merge accordingly.  The KERNEL COMPUTE + GAIN are proven bit-exact.
 ==============================================================================
 """
 from __future__ import annotations
@@ -75,6 +83,26 @@ M = K = N = 64
 # convhbh-specific control (decoded @0x2f5200; differs from u8i8's 0x700/{1,0})
 CONVHBH_MASK = list(conv1x1_words(0x70b, 0, 0, 0, 0x20))
 CONVHBH_EXTRA = [1, 1025, 524]
+# Bit-exact gain: word0=0x4040 (x1), word2=0x0000 (no cvt rounding). out=0x8000+P.
+EXACT_GAIN_CONST = [0x4040, 0x8040, 0x0000, 0x4000]
+
+
+def build_exact_bias(w_i8):
+    """w8a16 bias surface with the EXACT-gain const + effective=-128*sum_w."""
+    k, n = w_i8.shape
+    eff = (-128 * w_i8.astype(np.int32).sum(axis=0)).astype(np.int32)
+    pk = np.zeros((n // 32, 512), np.uint8)
+    const = np.array(EXACT_GAIN_CONST, np.uint16).view(np.uint8)
+    for nt in range(n // 32):
+        for par in (0, 1):
+            hb = par * 256
+            for lane, c in enumerate(range(par, 32, 2)):
+                col = nt * 32 + c
+                lb = hb + 8 * lane
+                pk[nt, lb:lb + 8] = const
+                pk[nt, hb + 128 + 8 * lane:hb + 132 + 8 * lane] = (
+                    np.array([int(eff[col])], np.int32).view(np.uint8))
+    return pk.reshape(-1)
 
 HARNESS = r"""
 #include <stdint.h>
@@ -241,8 +269,7 @@ def build_src(act_u8, w_i8, mode):
         surf16 = pack_a16_crouton16_row4_surface(act_u8.astype(np.uint16) << 8)
         act_packed = surf16.astype("<u2").tobytes()   # 8192 bytes, value in high byte
     w_packed = pack_w8_kmajor(w_i8).tobytes()
-    bias_packed, _eff = pack_native_a16_bias(8, w_i8)
-    bias_bytes = bias_packed.tobytes()
+    bias_bytes = build_exact_bias(w_i8).tobytes()
     arrays = "\n".join([
         base.c_u8_array("k_activation", act_packed),
         base.c_u8_array("k_packed_weight", w_packed),
