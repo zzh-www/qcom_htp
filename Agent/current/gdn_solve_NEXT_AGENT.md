@@ -76,6 +76,12 @@ id_rowm|id_grid|random`)+ 隔离 out-slot 发现法。**已实测确立的事实
    128³ 2048/16384)。→ standalone 描述符的 M-pass tiling 在**小于 op 设计尺寸**时退化;identity-weight 隔离-slot
    标定对 dense weight **无效**(部分和巧合)。
 
+7b. **disasm 输出环结构(已解,2026-06-06)**:`M-tiles = ((ntp+3)>>2) * (mtm/8)`,每 loop1 iter 写 2 个 nt-tile。
+   loop 嵌套:外 N-loop(r13=k_total_bytes>>5)⊃ M-while(r17=mtm,-8/iter)⊃ loop1(r20=(ntp+3)>>2,m32 子块)⊃
+   loop0(r28=n_act_pairs>>1,K)。**`ntp=32,mtm=16` → 32 stores 无冗余**(contiguous overwrite 下 replica-disagree=0)。
+   **但 32×32 storage tile = 其 4-行×32-列逻辑区的 8×**(:2x2+crouton 展开)→ contiguous 重叠(只剩 3072/4096)、
+   isolated 又散成冗余。**精确剩余未知 = 此 config 下 tile 内 :2x2 storage→logical 映射**(8× 展开里哪 128 个是真输出)。
+
 **★净结论**:**激活布局(最难)+ 矩阵乘 compute + 精确增益已全部 sim 验证 bit-exact**(identity/id_grid 探针)。
 **唯一剩余 = dense-weight 的 output depack**(小尺寸 M-pass 退化)。下一步二选一:
   (a) 读 disasm 输出环寄存器数学(r10/r11/m0 + m_total_minus_step:输出地址如何跨 M-pass 推进)找单干净-pass 描述符;
