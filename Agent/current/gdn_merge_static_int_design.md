@@ -138,22 +138,20 @@ crouton16   └─ 下一个 matmul 的 WEIGHT     ─▶ 必须重排 k-major :
    C-harness `deblock_a16_crouton16_row4`(已 byte-verified 解 KERNEL 输出)== `pack_a16_crouton16_row4_surface`
    (激活打包)的**精确逆**——64³/256³/64×128/128×64/64×192 全 True。→ **kernel 的 int16 输出 surface 与激活 surface
    逐字节同格式 → STEP A 输出当 STEP B 激活零重排**(w16a16 是 int16→int16,2-pass lo/hi 自然读),只 weight 端需 k-major。
-4. **接 baremetal**(唯一剩余,device + SSR 风险;**融合累加正确性已被 256³ body-sim 预验**——w16a16 K=256 单 drain bit-exact,
-   merge 的 K≤192 是其子集):
-   - **w16a16 kernel 结构(从 body-sim 学到)**:N **拆 2 半**(split_n=N/2),kernel 跑**两次**(out_desc0=weight、out_desc1=
-     weight+weight_split_bytes),每次出半-N 输出,再 merge。weight sidecar `2×65536`=int16 全精度权重按 N 拆 2 块(非 hi/lo)。
-     描述符(`prepare_owned_inputs` L600-650):`n_tiles_pow2=256, m_total_minus_step=1, k_total_bytes=128`;输出 row4-dense。
-     header `include/handwritten_hmx_w16a16_kernel.h`,.inc `kernels/w16a16/v73deep_conv1x1_kernel.inc`。
-   - **步骤**:① `gdnbm_imp.cpp` 加 `hm_w16a16_v73_kernel`(含 w16a16 .inc,标签不与 u8i8 冲突)。
-     ② 写 `GDNBM_MM_I16_TEST`(仿现有 `GDNBM_MM_TEST` @ L354):确定性 int16 act/wt → crouton16 pack(`pack_a16_crouton16_row4_surface`)
-     + k-major weight(N 拆 2)→ 双 pass kernel → `deblock_a16_crouton16_row4` depack → 对 `gdn_matmul_i16` 验 + 测 cyc。
-     **nthreads=1 小心(SSR 风险),描述符确认对再上多线程。**
+4. **接 baremetal**(唯一剩余,device + SSR 风险):
+   - **★kernel = 2-pass convhbh(SOLVED),不是 w16a16(UNSOLVED)** —— 见 §6 修正。convhbh(w8a16)hand-written
+     byte-exact;w16a16 hand-written 描述符未解(body-sim 18803/65536)。**用 convhbh 跑 2 遍(权重 hi/lo int8 拆)= int16 权重。**
+     融合累加正确性已被 256³ convhbh body-sim 预验(K=256 单 drain bit-exact,merge K≤192 是子集)。
+   - **步骤**:① `gdnbm_imp.cpp` 已有 `our_v73deep_kernel`(=convhbh,byte-verified)——直接复用,无需新 kernel。
+     ② 写 `GDNBM_MM_I16_TEST`(仿 `GDNBM_MM_TEST` @ L354):确定性 int16 act/wt → 权重拆 hi/lo int8(`hi=(w+128)>>8, lo=w-hi*256`,
+     qmax=127*256=32512)→ crouton16 act pack + k-major hi/lo 两套 weight → convhbh 跑 2 遍累 int32(`P=256*P_hi+P_lo`)
+     → `deblock_a16_crouton16_row4` depack → 对 `gdn_matmul_i16`(int16×int16)验 bit-exact + 测 cyc。**nthreads=1 小心 SSR。**
      ③ 据微基准把整 solve 重构为 producer-consumer(4 HVX pack/diag + 1 main HMX),整 solve wall vs 基线 ~122K。
-   - **度量**:只信整 solve wall(stats[0])/ ablation;w16a16 实测 cyc 对照预估 ~1270/64³ < vrmpy 2081。
+   - **度量**:只信整 solve wall(stats[0])/ ablation;2-pass convhbh 估 ~2×509=~1018 cyc/64³ < vrmpy 2081(~2× 便宜)+ glue 51% 消除。
 
 ## 6. 设计决策
 
-- **✅【已拍板,真实数据】操作数精度 = w16a16(int16×int16),不是 convhbh(w8a16)。**
+- **✅【已拍板,真实数据】精度需 int16×int16(2.6e-4);实现 = 2-pass convhbh(SOLVED kernel),非 w16a16(UNSOLVED kernel)。**
   端到端 oc(真实 golden,融合累加 + 真实 drain 模型,`scripts/gdn_solve_fused_drain_probe.py`):
   | 变体 | oc(mean) | overflow | 结论 |
   |---|---|---|---|
@@ -167,13 +165,20 @@ crouton16   └─ 下一个 matmul 的 WEIGHT     ─▶ 必须重排 k-major :
     强制 per-term rescale(=要消的 51% glue)→ **分层与融合不兼容**。全局 int16 既达标又可融合 = 唯一解。
   - **f16 drain 可忽略**:w16a16 exact 2.2e-4 → f16 2.6e-4(+0.4e-4),其余变体 f16 列与 exact 几乎相同 → **drain 不是误差来源**。
   - **int32 累加器真实数据 0 溢出**(满量程 int16×int16 over K,maxcode~32767)→ **融合累加 int32 安全,不需 int64**。
-  - **kernel 改用 `hm_w16a16_v73_kernel`**(已 byte-verified,`run_handwritten_artifact_body_sim.py --family w16a16` bit-exact)。
-    输出 drain 仍是 `cvt.uh:2x2`(待办1/2 的 drain 结论照搬)。
-  - **✅ 代价已定(仓库已有数据,`Agent/current/qnn_native_artifact_standard.md` + body-sim native_perf)**:256³ native kernel cyc
-    = w8a16(convhbh)**30182** vs w16a16 **75433**(="8836+8836" packets = int16 权重拆 2 个 int8 pass)→ **w16a16 ≈ 2.5× convhbh**。
-    映射 64³:convhbh 509 → **w16a16 ≈ ~1270 cyc/64³,仍 < vrmpy 2081(4-路 per-matmul)→ ~1.6× 便宜**(convhbh 是 4×)。
-  - **★GO 仍成立**:matmul 本身的便宜从 4× 缩到 ~1.6×,**但更大的赢 = 融合累加消掉 51% merge-glue,是 kernel 无关的**
-    (per-term rescale 在任何 int16-out kernel 上都被静态全局标度清零)→ 净收益 = matmul ~1.6× + glue 51% 消除 + 46× 精度。
+  - **★★ kernel 修正(2026-06-06,实测纠错):w16a16 hand-written kernel UNSOLVED,不能用。**
+    `run_handwritten_artifact_body_sim.py --family w16a16` 实测 **checksum_mismatch,18803/65536 exact**(非 bit-exact);
+    `Agent/handoffs/w16a16_native_alignment_plan.md` 记录大量失败尝试 —— **w16a16 的 standalone 描述符契约未解**
+    (kernel 字节对 native disasm byte-verified,但驱动它的描述符未解;只有 QNN QHPI "accepted" 路径对,baremetal 用不了)。
+    对比:**convhbh(w8a16)= `byte_exact_checksum,65536/65536` ✅ SOLVED**。我之前 commit 误称 w16a16 bit-exact(没实跑就引用)。
+  - **★解法 = 2-pass convhbh 模拟 int16 权重(用 SOLVED kernel)**:int16 权重码 `cT = hi*256 + lo`,`hi=(cT+128)>>8`、
+    `lo=cT-hi*256`,二者 int8(权重量化 qmax=`127*256=32512`,保 hi≤127;0.8% 量程缩,可忽略)。convhbh 跑 2 遍
+    (int16-act × int8-hi-weight、× int8-lo-weight)→ `P=256*P_hi+P_lo`(int32 精确重构,实测 `256*hi+lo==cT` True)。
+    **= int16-act × int16-weight 精确,oc=2.6e-4(同 w16a16),但跑在 byte-exact 的 convhbh 上。** 融合累加:每 pass 沿 K 累 int32,
+    2 个 fused matmul 后 combine `256*S_hi+S_lo`(每块 1 次 shift+add,小;非 per-term glue)。
+  - **f16 drain 可忽略**;**int32 0 溢出**(融合累加安全,不需 int64)。
+  - **✅ 代价**:2-pass convhbh ≈ **2×509 ≈ ~1018 cyc/64³ + 小 combine**,**< vrmpy 2081(4-路)→ ~2× 便宜**。
+    (原"w16a16 native 75433 = 2.5× convhbh" 是 QNN-native 路径的数,baremetal 用 2-pass convhbh ≈ 2×,更省。)
+  - **★GO 成立**:matmul ~2× 便宜 + **融合累加消 51% merge-glue(kernel 无关)** + 46× 精度。**且全在 SOLVED convhbh kernel 上,无 w16a16 RE 风险。**
 - **全局静态 `s`**:operand 标度是预处理(任意 float,off-device);只有 **drain gain 受 HW 限为 2^k**(power-of-2)。
   每次 drain 静态选 k 填满 int16 量程;power-of-2 snap 的 ≤1-bit 精度损失对 oc 可忽略(2.2e-4 已含)。round-half-up 自动(word2=0)。
 
