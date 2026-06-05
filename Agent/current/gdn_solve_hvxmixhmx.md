@@ -66,6 +66,32 @@
   现成驱动参考:`example/qnn_hmx_matmul_w8a16/src/HmxU16I8ToU16MatMulOp.cpp`(u16-act 走 hi/lo 2×u8 pass;
   GDN 静态版只需 u8 单 pass + int16 输出)。
 
+## 阶段3 实测结论（静态 int16 的 matmul-portion 收益）—— 2026-06-05
+
+**核心:静态 int16 输出 → 单 HMX pass(去 multi-pass gain search)→ matmul-portion 降 2.8–3.4×,device 实测。**
+
+FEED_4P 微基准(`ssh oneplus`,DUMMY 数据,cyc/matmul = stats[0]),apples-to-apples 同线程数:
+
+| 配置 | nthreads | cyc/matmul | 说明 |
+|---|---|---|---|
+| **MULTIPASS**(忠实 HVXMixHMX 现状,3 HMX pass)| 3 | **1731** | PASS1/2 扫 maxabs(gain search,输出丢弃)+ PASS3 真输出 |
+| **单 pass**(静态 int16 输出形态)| 3 | **615** | 去 multi-pass → **2.82× 更便宜** |
+| **单 pass + 纯-HMX consumer**| 4 | **509** | 静态版 consumer 不需 HVX maxabs → 释放第4 producer;**总 3.4×** |
+| (对照)基线 GDNSolveHVX vrmpy 64³ matmul(GLUE_BENCH o[3],单线程隔离)| 1 | 8325 | fed-HMX 静态 int16 每 matmul 远低于 vrmpy |
+
+- **为什么静态 int16 能单 pass**:输出标度固定(`sim oc 0.00019`,[[目标架构]]),无需运行时扫 maxabs 定 int8 输出增益。
+  multipass 的 PASS1/2 纯粹是 int8-输出税;int16 静态输出一次到位。
+- **为什么能 P=4**:单 pass 的 consumer 是纯 HMX(不锁 HVX 做 maxabs)→ 释放 1 个 HVX 单元给第4 producer。
+  multipass consumer 必须锁 HVX 做 gain-search maxabs → 只能 P=3(P=4 会 5 个 HVX 锁 >4 单元 → 卡死,已验)。
+- **convhbh int16-out kernel(阶段2,byte-verified)= 单 pass 正确输出的载体**(`cvt.uh:2x2` u16 输出)。
+- **剩余生产集成(下一步)**:把 convhbh 的 `cvt.uh:2x2` + u16 dense 输出 + u16 depack 接进单 pass FEED_4P,
+  对 `gdn_matmul_i16` 验 bit-exact。perf 收益已量化(509 vs 1731);kernel 已 byte-verified;集成 delta =
+  mask arg1 `0x70b`(非 0x700)、extra_param `{1,1025,524}`(非 {1,0})、输出 4 tile/cvt(`:2x2`)的 desc/ depack。
+
+复现:`cd example/gdn_native/baremetal;`
+`EXTRA_DEFS="-DGDNBM_VTCM_RESIDENT -DGDNBM_FEED_PIPE -DGDNBM_FEED_4P -DGDNBM_FUSED_ACTWT" bash build.sh; ./gdnbm 4 ...`(单pass 509)
+`EXTRA_DEFS="-DGDNBM_VTCM_RESIDENT -DGDNBM_FEED_PIPE -DGDNBM_FEED_4P -DGDNBM_FEED_MULTIPASS" bash build.sh; ./gdnbm 3 ...`(multipass 1731)
+
 ## 阶段1 实测结论（对角块求逆 / 前代回代）—— 2026-06-05
 
 **前提被实测推翻:对角块的前代回代不是瓶颈,已在 HVX 下限,无需优化。** 决策依据 = 真实全 solve
