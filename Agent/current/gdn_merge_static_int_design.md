@@ -149,7 +149,10 @@ crouton16   └─ 下一个 matmul 的 WEIGHT     ─▶ 必须重排 k-major :
   | w8a16(act16×wt8) | 1.38e-2 | 0 | ❌ 比出货 int8 还**略差**(int8 权重不够) |
   | w8a16′(act8×wt16) | 3.8e-2 | 0 | ❌ |
   | int8(act8×wt8) | 4.1e-2 | 0 | ❌ |
-  - **int8 操作数(任一侧)都不够**(单一静态 int8 标度对 block-dist 变化的 T 浪费量程)。**只有双 int16 达标。**
+  - **int8 操作数(任一侧)都不够**,且 **per-block-distance 分层静态标度也救不了**(w8a16 0.0138→0.0125、int8 0.041→0.040)
+    —— 限制是**操作数位宽**(int8 127 级装不下 T 块内动态范围),非标度策略。**只有双 int16 达标。**
+  - **★融合累加 ⟹ 必须全局标度**:一个内层 Σ_k 的 T_kj 跨不同 block-dist(0…d-1),分层标度会使各 term 积不可直接相加 →
+    强制 per-term rescale(=要消的 51% glue)→ **分层与融合不兼容**。全局 int16 既达标又可融合 = 唯一解。
   - **f16 drain 可忽略**:w16a16 exact 2.2e-4 → f16 2.6e-4(+0.4e-4),其余变体 f16 列与 exact 几乎相同 → **drain 不是误差来源**。
   - **int32 累加器真实数据 0 溢出**(满量程 int16×int16 over K,maxcode~32767)→ **融合累加 int32 安全,不需 int64**。
   - **kernel 改用 `hm_w16a16_v73_kernel`**(已 byte-verified,`run_handwritten_artifact_body_sim.py --family w16a16` bit-exact)。

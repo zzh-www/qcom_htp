@@ -72,12 +72,27 @@ def imatmul_wrap(cA, cT):
     return P32, ov
 
 
-def solve_fused(h, qm, drain_model="f16"):
+# per-block-distance |T| max (STATIC, precomputable from calibration) -> layered scale.
+# Still static (compile-time const per block position), just one scale per distance d.
+_Tdist = None
+def tdist_max(d):
+    global _Tdist
+    if _Tdist is None:
+        _Tdist = {}
+        for dd in range(NB):
+            vals = [np.abs(Texact[h, (j+dd)*BL:(j+dd+1)*BL, j*BL:(j+1)*BL]).max()
+                    for h in range(H) for j in range(NB-dd)]
+            _Tdist[dd] = max(max(vals), 1e-30)
+    return _Tdist[d]
+
+
+def solve_fused(h, qm, drain_model="f16", layered=False):
     qmA, qmT = qm
     Ah = A[h]
     sA = amax / qmA
-    sT = tmax / qmT
+    sT_global = tmax / qmT
     T = np.zeros((C, C))
+    Tdist = np.zeros((NB, NB), dtype=int)   # block-distance of each T block (for layered scale)
     ov = 0
     maxcode = 0
     for i in range(NB):
@@ -88,18 +103,26 @@ def solve_fused(h, qm, drain_model="f16"):
             # inner fused accumulation (one int32 acc over k, no intermediate drain)
             Scode = np.zeros((BL, BL), dtype=np.int64)
             for k in range(j, i):
+                sTk = (tdist_max(k - j) / qmT) if layered else sT_global   # T_kj distance = k-j
                 cA = qcode_sym(Ah[i*BL:(i+1)*BL, k*BL:(k+1)*BL], sA, qmA)
-                cT = qcode_sym(T[k*BL:(k+1)*BL, j*BL:(j+1)*BL], sT, qmT)
+                cT = qcode_sym(T[k*BL:(k+1)*BL, j*BL:(j+1)*BL], sTk, qmT)
+                # NOTE: layered changes per-term operand scale -> products NOT directly
+                # additive in fixed point.  Renormalize each term to a common scale before
+                # the int32 acc (still a static shift, precomputable).  Model exactly:
                 P32, o = imatmul_wrap(cA, cT); ov += o
+                if layered:
+                    # rescale this term's value to the global product scale sA*sT_global
+                    term_scale = sA * sTk
+                    P32 = np.round(P32.astype(np.float64) * (term_scale / (sA * sT_global))).astype(np.int64)
                 Scode = ((Scode + P32 + 2**31) % 2**32 - 2**31)
             cS, kS, gS = hw_drain(Scode, drain_model)         # int16 S codes
-            sS = sA * sT / gS                                  # value(S) = cS * sS
+            sS = sA * sT_global / gS                                  # value(S) = cS * sS
             maxcode = max(maxcode, int(np.abs(cS).max()))
             # outer Tii @ S
-            cTii = qcode_sym(T[i*BL:(i+1)*BL, i*BL:(i+1)*BL], sT, qmT)
+            cTii = qcode_sym(T[i*BL:(i+1)*BL, i*BL:(i+1)*BL], sT_global, qmT)
             Tcode, o = imatmul_wrap(cTii, cS); ov += o
             cTij, kT, gT = hw_drain(Tcode, drain_model)
-            sTij = sT * sS / gT                                # value(T) = cTij * sTij
+            sTij = sT_global * sS / gT                                # value(T) = cTij * sTij
             maxcode = max(maxcode, int(np.abs(cTij).max()))
             T[i*BL:(i+1)*BL, j*BL:(j+1)*BL] = cTij.astype(np.float64) * sTij
     return T, ov, maxcode
@@ -115,16 +138,19 @@ def main():
         ("w8a16' (act8  x wt16)", (127, 32767)),
         ("int8   (act8  x wt8) ", (127, 127)),
     ]
-    print(f"\n{'variant':>24} {'drain':>6}  {'oc(mean)':>9} {'oc(max)':>9} {'overflow':>9} {'maxcode':>8}")
+    print(f"\n{'variant':>24} {'layered':>7} {'drain':>6}  {'oc(mean)':>9} {'oc(max)':>9} {'ovf':>5} {'maxcode':>8}")
     for name, qm in variants:
-        for dm in ("exact", "f16"):
-            res = [solve_fused(h, qm, dm) for h in range(H)]
+        for layered in (False, True):
+            dm = "f16"
+            res = [solve_fused(h, qm, dm, layered) for h in range(H)]
             ocs = [Q.oc(T, h) for h, (T, _, _) in enumerate(res)]
             ov = max(o for _, o, _ in res)
             mc = max(c for _, _, c in res)
-            print(f"{name:>24} {dm:>6}  {np.mean(ocs):9.5f} {np.max(ocs):9.5f} {ov:9d} {mc:8d}")
-    print("\nexact vs f16 => isolates the cvt f16-drain loss.  overflow>0 => int32 acc insufficient.")
-    print("Goal: cheapest operand precision whose f16-drain oc stays within budget (shipped int8 ~1.2e-2).")
+            tag = "per-d" if layered else "global"
+            print(f"{name:>24} {tag:>7} {dm:>6}  {np.mean(ocs):9.5f} {np.max(ocs):9.5f} {ov:5d} {mc:8d}")
+    print("\nglobal = single static scale (fusion-compatible).  per-d = per-block-distance static scale")
+    print("(BREAKS fusion: forces per-term rescale = the 51% glue we eliminate).  Shows the precision")
+    print("ceiling if we gave up fusion.  Goal: cheapest FUSION-COMPATIBLE (global) variant <~1.2e-2.")
     return 0
 
 
