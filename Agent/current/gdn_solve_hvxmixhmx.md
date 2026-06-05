@@ -113,12 +113,13 @@ H=32 C=256,`GDNBM_REPS=5` 稳态):
 - **没到 4× 理想极限**:HVX-bound,4 单元的理想下限 ≈ 414/4 = **103.5K**,实测 **~140K → 差 ~36K(26%)**。
 - **扩展性损失定位**(DIAG_ONLY 消融):**DIAG 部分只扩展 2.29×(57%)**,merge 扩展 3.15×(79%)。
   DIAG 的差扩展 = **DDR-写带宽争用**(zero-fill 128KB/head + requant 写 T,4 线程抢同一 DDR 写带宽,不随单元扩展)。
-  - **✅ 已修(`-DGDN_BR_T_VTCM_DMA`,opt-in):T 算进 VTCM 双缓冲区,再 DMA VTCM→DDR(dstbypass),把字节搬运
-    从 HVX store 路径挪到 DMA 引擎 → 4 线程 P=4 ~140K(抖 132–147)→ ~122K(稳),bit-exact,扩展性 2.95×→3.39×(85%)。**
-    ⚠️ UDMA 坑:两个并发 `Q6_dmstart_A` 会互相 clobber(device 实证损坏 heads)→ T 写回必须在 A 预取 wait 之后发,不并发;
-    完整 T-overlap(~119K)需 UDMA 链/多流,卡在 dmwait 链语义,暂不冒险。默认路径不变(基线只测不改)。
-  - zero-fill 消融(`-DGDN_BR_SKIP_ZERO`):P=1 −13K、P=4 −~8K。仅上三角需 zpT(下三角被 requant 覆盖)→
-    只 zero 上三角可再省 ~一半 zero-fill 写(harmless,~3% 头空间,未做)。
+  - **✅ 已修并设为默认:T 算进 VTCM,再 DMA VTCM→DDR(dstbypass),把字节搬运从 HVX store 路径挪到 DMA 引擎
+    → 4 线程 P=4 ~140K(抖 132–147)→ ~122K(稳),bit-exact,扩展性 2.95×→3.39×(85%)。** 旧 per-head DDR-直写
+    escape = `-DGDN_BR_T_DDR_DIRECT`。⚠️ UDMA 坑:两个并发 `Q6_dmstart_A` 会互相 clobber(device 实证损坏 heads)
+    → T 写回必须在 A 预取 wait 之后发,不并发;完整 T-overlap(~119K)需 UDMA 链/多流,卡在 dmwait 链语义,暂不冒险。
+  - **✅ zero-fill 只写上三角块(已做,bit-exact):T 块下三角,对角+下三角块都被 requant 全覆盖,只上三角 off-diag
+    块需 zpT → NB²→NB(NB-1)/2 块(256:16→6)。** 在 VTCM-DMA 之上性能中性(省的 HVX store 在噪声内)但减浪费,保留。
+    QNN op(gdn_br.sh,C=128 H=16)oc 门通过(bit-exact 改动,relerr 不变)。
 - **两类优化上限:**
   1. **扩展性/饱和(~26%,~36K)**:难——SMT issue-slot 争用(PMU 实证的底,[[reference_htp_smt_pmu_hardware]])
      + 共享 DDR 写带宽 + spawn/sync。可摘的低果 = zero-fill 只写上三角(~3%)。**这不是大头。**
