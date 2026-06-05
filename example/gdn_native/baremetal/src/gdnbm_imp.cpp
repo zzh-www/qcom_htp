@@ -379,6 +379,26 @@ static void solve_worker(void *arg) {
       o[3] = (int32_t)((t1 - t0) / REPS);                                   /* vrmpy 64^3 matmul */
       t0 = pcyc(); for (int r = 0; r < REPS; ++r) gdn_solve_diag64(sc, (const uint16_t *)sc->Tc, 64, 0, w->M, w->S, sc->Tblk[0]); t1 = pcyc();
       o[4] = (int32_t)((t1 - t0) / REPS);                                   /* 64 forward-subst diag */
+#if defined(GDN_BR_DIAG_SPLIT)
+      /* PHASE-1: CSE-PROOF forward-subst-only cyc/block. The const-input fwdsubst is otherwise hoisted
+       * by -O2 across the REPS loop (gave a bogus ~300 < the 2016-vmpyacc floor). A rep-carried data
+       * dependency (Tc16 last elem -> Afx[0] scalar -> next rep) forces every rep to execute. */
+      { const int16_t ei16 = (int16_t)(int)(1.0f / GDN_BR_TI + 0.5f);
+        gdn_fold_block_hvx((const uint16_t *)sc->Tc, 64, sc->Afx, 0, w->M, w->S);
+        gdn_diag_fwdsubst(sc->Afx, sc->Tc16, ei16);                         /* warm */
+        int32_t base0 = sc->Afx[0]; int16_t b16 = (int16_t)(base0 & 0xFFFF);
+        volatile int32_t fb = 0;
+        t0 = pcyc();
+        for (int r = 0; r < REPS; ++r) {
+            int16_t c = (int16_t)(b16 + (int16_t)(fb & 1));                 /* perturb -> defeat CSE */
+            sc->Afx[0] = ((int32_t)(uint16_t)c) * 0x10001;                  /* keep both halfwords = scalar */
+            gdn_diag_fwdsubst(sc->Afx, sc->Tc16, ei16);
+            fb = sc->Tc16[63 * 64 + 63];                                    /* rep dependency */
+        }
+        t1 = pcyc();
+        o[5] = (int32_t)((t1 - t0) / REPS);                                 /* CSE-proof fwdsubst cyc/block (floor 2016) */
+        *(volatile int32_t *)sc->qbuf = fb; }
+#endif
       /* --- N-HEAD-BATCHED variants: 2 heads interleaved (cross-head ILP fills VLIW slots / hides latency) --- */
       gdn_pack_b_vrmpy(sc->b8, sc->btp);                                    /* reuse same B for both "heads" (timing only) */
       const int8_t *A0 = sc->a8, *A1 = sc->a8, *bt0 = sc->btp, *bt1 = sc->btp;

@@ -245,6 +245,35 @@ static void gdn_fold_block_raw(const uint16_t *Au, int row_stride, int32_t *Afx,
     }
 }
 
+/* HVX int16 forward-substitution main loop, isolated for measurement (phase-1 极致优化 study).
+ * T_i = e_i + sum_{k<i} A_ik * T_k, all int16 codes (scale GDN_BR_TI).  Each term is ONE
+ * Q6_Ww_vmpyacc_WwVhRh (64 int16 halfwords x scalar Afx -> 64 int32 word pair, accumulate).
+ *
+ * FLOOR vs MEASURED (device, CSE-proof bench -DGDN_BR_DIAG_SPLIT o[5], 2026-06-05):
+ *   - pure-multiply floor: a halfword x halfword multiply is a DOUBLE-vector instruction (consumes BOTH
+ *     multiply resources, HVX V75 ref 4.1.1) -> 1/cycle max.  sum_{i<64} i = 2016 vmpyacc -> ~2016 cyc.
+ *   - measured ~6402 cyc/block = 3.2x the floor.  Binding constraint = the per-term SCALAR Afx load:
+ *     2016 distinct A_ik, each used once, scheduled only 1 packet before the vmpyacc that consumes it as
+ *     Rt, so the ~3-cyc scalar-load latency is NOT hidden.  (Tc16 row vectors are reused/hot -> off the
+ *     critical path; the vasr narrow is on the shift resource -> overlaps the multiplies.)
+ *   - idioms TRIED, all device-measured, NONE beat 6402 (so kept the simple single-acc form): 4
+ *     independent accumulators 6404 (rules OUT an acc->acc latency chain); bulk scalar preload into a
+ *     local array 8387 (worse); const-scalar reference 289 (compiler-folded, not a real floor).  2x2
+ *     block recursion / byte-split only INCREASE the multiply count (3040 / 2x) -> cannot beat 2016.
+ *   - reaching ~2016 needs hand inline-asm with SW-pipelined scalar prefetch (load A_ik ~3 packets
+ *     ahead).  Deferred: forward-subst is ~2% of the full solve (merge is 83%, see 阶段1 节) -> not the
+ *     lever; this stays the clean portable form. */
+static void gdn_diag_fwdsubst(const int32_t *__restrict Afx, int16_t *__restrict Tc16, int16_t ei16) {
+    for (int i = 0; i < BL; ++i) {
+        HVX_VectorPair acc = Q6_W_vzero();
+        for (int k = 0; k < i; ++k)
+            acc = Q6_Ww_vmpyacc_WwVhRh(acc, ((const HVX_Vector *)(Tc16 + k * BL))[0], Afx[i * BL + k]);
+        ((HVX_Vector *)(Tc16 + i * BL))[0] =
+            Q6_Vh_vasr_VwVwR_rnd_sat(Q6_V_hi_W(acc), Q6_V_lo_W(acc), GDN_BR_F);  /* even/odd -> natural int16 */
+        Tc16[i * BL + i] += ei16;
+    }
+}
+
 /* solve one 64x64 diagonal block: T = inv(I - A_block), int16-code forward subst, leave int32 CODES
  * (scale GDN_BR_TI) in Tcout — NO float dequant (the M_op float roundtrip was the diagonal bottleneck). */
 static void gdn_solve_diag64(gdn_scr_t *sc, const uint16_t *Au, int row_stride, int zpA, int M, int S,
@@ -257,14 +286,7 @@ static void gdn_solve_diag64(gdn_scr_t *sc, const uint16_t *Au, int row_stride, 
     gdn_fold_block_hvx(Au, row_stride, Afx, zpA, M, S);   /* Afx[i*BL+k] = code, low 16b is the int16 mul scalar */
     int16_t *Tc16 = sc->Tc16;
     const int16_t ei16 = (int16_t)(int)(1.0f / GDN_BR_TI + 0.5f);
-    for (int i = 0; i < BL; ++i) {
-        HVX_VectorPair acc = Q6_W_vzero();
-        for (int k = 0; k < i; ++k)
-            acc = Q6_Ww_vmpyacc_WwVhRh(acc, ((const HVX_Vector *)(Tc16 + k * BL))[0], Afx[i * BL + k]);
-        ((HVX_Vector *)(Tc16 + i * BL))[0] =
-            Q6_Vh_vasr_VwVwR_rnd_sat(Q6_V_hi_W(acc), Q6_V_lo_W(acc), GDN_BR_F);  /* even/odd -> natural int16 */
-        Tc16[i * BL + i] += ei16;
-    }
+    gdn_diag_fwdsubst(Afx, Tc16, ei16);
     /* widen the int16 T codes -> int32 codes for the merge path.  vsxt de-interleaves (lo=even halfwords,
      * hi=odd); a word-granularity vshuff re-interleaves to natural [c0,c1,...] order (2 vecs/row). */
     HVX_Vector vmax = Q6_V_vzero();

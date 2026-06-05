@@ -111,9 +111,18 @@ ablation(`ssh oneplus`,baremetal 默认 GDNSolveHVX 基线,A_u16_h32.raw,H=32 C=
 
 - **`gdn_solve_diag64` 三段拆解(都已是固定标度对称 int16,zp=0):** A 折叠到 `2^-15`,T 输出固定 `GDN_BR_TI=2/32767`
   —— **对角块"静态对称 int16"形态已具备,不必改。**
-- **前代回代主循环(2016 条 `Q6_Ww_vmpyacc_WwVhRh`)已流水到底**;行间串行依赖**不是**瓶颈(goal 前提错)。
-  连 DIAG_ONLY 的 70K 里,大头也是 zero-fill(128KB/head vsplat)+ requant,不是前代回代。
-- **bit-exact 门通过**:offdiag-oc=1.35e-3、whole-oc=9.5e-5(对 `T_ref_h32.raw` fp64 逆),与现状一致。
+- **前代回代主循环 floor-vs-measured(深读 HVX 手册 + CSE-proof device 实测,2026-06-05):**
+  - **理论下限 ≈ 2016 cyc**:halfword×halfword 乘法是 **double-vector 指令**(占两个 multiply 资源,手册 4.1.1)
+    → 1/cyc;Σ_{i<64} i = 2016 条 vmpyacc。vasr narrow(shift 资源)、Tc16 行向量(复用/热)都不在关键路径。
+  - **实测 ≈ 6402 cyc/块 = 下限的 3.2×**(`-DGDN_BR_DIAG_SPLIT` o[5];**注意:必须 CSE-proof**——const-input
+    fwdsubst 被 -O2 hoist,旧测 ~300 < 2016 物理下限 = 假象;用 rep 间数据依赖才得真值)。
+  - **瓶颈 = per-term scalar Afx load**:2016 个不同 A_ik 各用一次、编译器只把它调度到 vmpyacc 前 1 个 packet
+    → ~3cyc scalar-load 延迟未隐藏。**行间串行依赖不是瓶颈(goal 前提错)。**
+  - **idiom 全试过、device 实测、均不 beat 6402**(故保留 single-acc):4 独立累加器 6404(排除 acc→acc 延迟链)、
+    scalar 预载本地数组 8387(更差)、const-scalar 289(编译器折叠,非真 floor);2×2 块递归 / byte-split 只会
+    **增加**乘法数(3040 / ×2)→ 不可能 beat 2016。**触底 2016 需手写 inline-asm 软流水 scalar prefetch(提前 ~3 packet)**;
+    因前代回代仅 ~2% solve(merge 83%)而 defer,保留干净可移植形态。`gdn_diag_fwdsubst` helper 已抽出 + bit-exact。
+- **bit-exact 门通过**:offdiag-oc=1.35e-3、whole-oc=9.5e-5(对 `T_ref_h32.raw` fp64 逆),helper 抽出后全 solve 输出逐字节不变。
 - ⚠️ **方法论坑(已记)**:`GDNBM_GLUE_BENCH` 隔离 REPS 微基准报 diag64=11.7K、widen=91%——**全是假象**
   (隔离循环对 `Tblk[0]` 的冷 DDR 写 + pcyc 开销)。改 widen 后真实 solve 130K→131K **零变化**。
   **只信整 solve wall / ablation,微基准 REPS-loop 对带 DDR 写的阶段不可信。**
