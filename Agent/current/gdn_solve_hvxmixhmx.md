@@ -118,10 +118,15 @@ ablation(`ssh oneplus`,baremetal 默认 GDNSolveHVX 基线,A_u16_h32.raw,H=32 C=
     fwdsubst 被 -O2 hoist,旧测 ~300 < 2016 物理下限 = 假象;用 rep 间数据依赖才得真值)。
   - **瓶颈 = per-term scalar Afx load**:2016 个不同 A_ik 各用一次、编译器只把它调度到 vmpyacc 前 1 个 packet
     → ~3cyc scalar-load 延迟未隐藏。**行间串行依赖不是瓶颈(goal 前提错)。**
+  - **纯 vmpyacc 吞吐探针**(inline-asm,寄存器常驻,无 load/依赖):~0.4–1 cyc/op → 乘法不是限制,3.2 cyc/op
+    全是 load 喂数 → **load-bound 实锤**。
   - **idiom 全试过、device 实测、均不 beat 6402**(故保留 single-acc):4 独立累加器 6404(排除 acc→acc 延迟链)、
-    scalar 预载本地数组 8387(更差)、const-scalar 289(编译器折叠,非真 floor);2×2 块递归 / byte-split 只会
-    **增加**乘法数(3040 / ×2)→ 不可能 beat 2016。**触底 2016 需手写 inline-asm 软流水 scalar prefetch(提前 ~3 packet)**;
-    因前代回代仅 ~2% solve(merge 83%)而 defer,保留干净可移植形态。`gdn_diag_fwdsubst` helper 已抽出 + bit-exact。
+    scalar 预载本地数组 8387、**C 层 4-deep scalar-prefetch 软流水 6402**(-O2 调度器把它重排回 1-packet-ahead,需 inline-asm 才能强制)、
+    const-scalar 289(折叠);2×2 块递归/byte-split 只**增加**乘法数 → 不可能 beat 2016。
+  - **★决定性 cap-test(`-DGDN_BR_FWD_CAP` 把内层工作量砍到 1/16,timing-only):4 线程全 solve 没变快**
+    (142.9K→148.3K,噪声内)→ **前代回代在真实负载里被完全隐藏**(单线程 load 停顿被 SMT(其它 3 线程 HVX 填空闲槽)
+    + 与 merge HMX 交错吸收)。**所以 inline-asm scalar-prefetch 只救单线程 3×,对真实 4 线程 solve ~0%**(且 4 线程
+    wall 有 ~10% 噪声 ≫ 任何 fwdsubst 收益)→ **不值得写复杂的变长 asm,保留干净形态**。`gdn_diag_fwdsubst` 已抽出 + bit-exact。
 - **bit-exact 门通过**:offdiag-oc=1.35e-3、whole-oc=9.5e-5(对 `T_ref_h32.raw` fp64 逆),helper 抽出后全 solve 输出逐字节不变。
 - ⚠️ **方法论坑(已记)**:`GDNBM_GLUE_BENCH` 隔离 REPS 微基准报 diag64=11.7K、widen=91%——**全是假象**
   (隔离循环对 `Tblk[0]` 的冷 DDR 写 + pcyc 开销)。改 widen 后真实 solve 130K→131K **零变化**。

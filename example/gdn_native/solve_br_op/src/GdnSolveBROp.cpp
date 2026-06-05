@@ -256,13 +256,19 @@ static void gdn_fold_block_raw(const uint16_t *Au, int row_stride, int32_t *Afx,
  *     2016 distinct A_ik, each used once, scheduled only 1 packet before the vmpyacc that consumes it as
  *     Rt, so the ~3-cyc scalar-load latency is NOT hidden.  (Tc16 row vectors are reused/hot -> off the
  *     critical path; the vasr narrow is on the shift resource -> overlaps the multiplies.)
+ *   - pure-vmpyacc throughput probe (inline-asm, register-resident, NO loads/deps): ~0.4-1 cyc/op
+ *     -> the multiply is NOT the limit; the ~3.2 cyc/op is the load feed.  Load-bound CONFIRMED.
  *   - idioms TRIED, all device-measured, NONE beat 6402 (so kept the simple single-acc form): 4
  *     independent accumulators 6404 (rules OUT an acc->acc latency chain); bulk scalar preload into a
- *     local array 8387 (worse); const-scalar reference 289 (compiler-folded, not a real floor).  2x2
- *     block recursion / byte-split only INCREASE the multiply count (3040 / 2x) -> cannot beat 2016.
- *   - reaching ~2016 needs hand inline-asm with SW-pipelined scalar prefetch (load A_ik ~3 packets
- *     ahead).  Deferred: forward-subst is ~2% of the full solve (merge is 83%, see 阶段1 节) -> not the
- *     lever; this stays the clean portable form. */
+ *     local array 8387 (worse); C-level 4-deep scalar-prefetch SW-pipeline 6402 (the -O2 scheduler
+ *     re-collapses it back to 1-packet-ahead -> needs inline-asm to force); const-scalar 289 (folded).
+ *     2x2 block recursion / byte-split only INCREASE the multiply count (3040 / 2x) -> cannot beat 2016.
+ *   - DECISIVE cap-test (-DGDN_BR_FWD_CAP, cap inner work to 1/16, timing-only): the 4-THREAD full solve
+ *     did NOT speed up (142.9K -> 148.3K, within run-to-run noise).  => forward-subst is FULLY HIDDEN on
+ *     the real workload: its single-thread load stalls are absorbed by SMT (3 other threads' HVX fill the
+ *     idle issue slots) + overlapped with the merge HMX work.  So the inline-asm scalar-prefetch fix
+ *     recovers the 3x SINGLE-THREAD but gives ~0% on the real 4-thread solve (and 4-thread wall has ~10%
+ *     noise >> any fwdsubst gain).  NOT WORTH the intricate variable-trip asm -> kept the clean form. */
 static void gdn_diag_fwdsubst(const int32_t *__restrict Afx, int16_t *__restrict Tc16, int16_t ei16) {
     for (int i = 0; i < BL; ++i) {
         HVX_VectorPair acc = Q6_W_vzero();
