@@ -139,8 +139,7 @@ struct gdn_scr_t {
     int8_t  a8 [GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));    /* int8 vrmpy: A operand (row-major) */
     int8_t  b8 [GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));    /* int8 vrmpy: B operand (row-major k) */
 #if defined(GDN_BR_PREQUANT_A)
-    int8_t  a8c[GDN_BR_NBLK][GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));  /* A_ik int8, pre-quant once/head */
-    int32_t a8c_mx[GDN_BR_NBLK];                                                    /* per-block maxraw for the scale */
+    int32_t a8c_mx[GDN_BR_NBLK];   /* per-block maxraw (scalar, small -> DDR ok); the int8 blocks live in VTCM (vt->acache) */
 #endif
     int8_t  btp[GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));    /* int8 vrmpy: B transposed/packed [g][col][4] */
 #endif
@@ -1368,9 +1367,10 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
 #if defined(GDN_BR_PREQUANT_A) && defined(GDN_BR_MM_I8) && defined(GDN_BR_HVX_MERGE)
     /* FOLD the per-term A_ik quant: the input A is fixed -> quant each lower-tri block to int8 ONCE per head
      * (was re-quantized every time the (i,k) block appeared in a merge sum). Pure operand reuse, no oc change. */
-    for (int ii = 0; ii < NB; ++ii) for (int kk = 0; kk <= ii; ++kk) {
-        int key = gdn_blk_index(ii, kk);
-        sc->a8c_mx[key] = gdn_quant_i8_from_u16(Ah + (size_t)ii * BL * C + kk * BL, C, zpA, sc->a8c[key]);
+    for (int ii = 0; ii < NB; ++ii) for (int kk = 0; kk <= ii; ++kk) {   /* off-diag (ii>kk) only — diag A unused in merge */
+        int key = gdn_blk_index(ii, kk); if (ii == kk) continue;
+        int8_t *dst = (int8_t *)(vt->acache + (size_t)key * 0x1000);      /* VTCM-resident (HOT), 4KB/block */
+        sc->a8c_mx[key] = gdn_quant_i8_from_u16(Ah + (size_t)ii * BL * C + kk * BL, C, zpA, dst);
     }
 #endif
     for (int d = 1; d < NB; ++d) {
@@ -1403,8 +1403,8 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
 #if defined(GDN_BR_SKIP_QUANT)   /* perf-ceiling: skip per-term re-quant (stale a8/b8 -> wrong result, real cycles) */
                 int32_t mxraw = 127; float sBq = sc->Tscl[bkj];
 #elif defined(GDN_BR_PREQUANT_A) && defined(GDN_BR_HVX_MERGE)
-                int _kik = gdn_blk_index(i, k);              /* A pre-quantized once/head -> read the cache */
-                int32_t mxraw = sc->a8c_mx[_kik]; a8p = sc->a8c[_kik];
+                int _kik = gdn_blk_index(i, k);              /* A pre-quantized once/head -> read the VTCM cache */
+                int32_t mxraw = sc->a8c_mx[_kik]; a8p = (const int8_t *)(vt->acache + (size_t)_kik * 0x1000);
                 float sBq = gdn_quant_i8_from_codes(sc, sc->Tblk[bkj], sc->Tscl[bkj], sc->b8, -1);
 #else
                 int32_t mxraw = gdn_quant_i8_from_u16(Ah + (size_t)i * BL * C + k * BL, C, zpA, sc->a8);

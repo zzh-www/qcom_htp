@@ -33,11 +33,15 @@ QuRT 迁移线程 → 垃圾值)。它报 `zero=52%`,但**消阶段测 wall 的 
 - **acc + off-diag requant + B-pack = ~34.7K(36%)← merge-glue 最大子项**
 - matmul = ~20.6K(21%)
 
-**折叠 quant — 实测 FAILED(负结果,2026-06-05)**:加 `GDN_BR_PREQUANT_A`(把输入 A 每块预量化一次/head,
-存 `sc->a8c[NBLK]` 缓存,merge 读缓存)→ **98312 → 112227,反而 +14K**。原因:量化太便宜,而 `a8c` 落在
-**DDR scratch(40KB,冷)**,matmul 每 term 读冷 DDR 块 比 从**热的输入 A** 重量化还贵。**教训:operand caching
-只在缓存于热存储(VTCM/L1)才赢;缓存到冷 DDR scratch 时 recompute 更快**(这也是为何 HVX 路径原本不缓存 A、
-HMX 路径缓存到 VTCM）。**quant 不是值得折叠的瓶颈。** flag `GDN_BR_PREQUANT_A` 留作负结果(默认关)。
+**折叠 quant — 实测 DOUBLE FAILED(负结果,2026-06-05),根因明确**:加 `GDN_BR_PREQUANT_A`(输入 A 每块
+预量化一次/head 缓存,merge 读缓存):a8c 进 **DDR scratch(冷)** → 98312→**112227(+14K)**;a8c 进
+**VTCM(`vt->acache`)** → **210570(+112K,更糟 2.1×)**。**根因**:`gdn_matmul_i8_vrmpy` 读 A 算子是
+**SCALAR splat**(`Q6_V_vsplat_R(aw[g])`,aw=int32* 标量读),而 **scalar 访问 VTCM 是 catastrophically slow**
+(skill/[[reference_htp_hardware_scheduling_flow]] 警告"scalar scratch 进 VTCM → 7× 慢")。所以 A 算子**必须在
+热 L1**;现状"re-quant 进小而热的 `sc->a8`"对标量 splat 读已是最优——**quant 不是浪费,它把 A 保持在热 L1**。
+⇒ **vrmpy 路径的 quant 不可折叠**。**HMX 路径能缓存算子到 VTCM,是因为 HMX 把算子当 crouton VTCM tile 读
+(向量访问,快),不是标量** → operand caching 只对 HMX 有效。**通用教训:"全塞 VTCM" 有一条硬例外——SCALAR
+访问的数据进 VTCM 是灾难,必须留 L1/L2-cached DDR。** flag `GDN_BR_PREQUANT_A` 留作负结果(默认关,baseline 98179 不受影响)。
 
 **下一步(全局最优,修正后)**:真正的大头是 **acc(36% 里的主项)= 每个 term 的 fixed-point rescale 累加**(因每
 term 标度不同)。杠杆:**统一标度让 acc 退化成纯 int32 加**(无 per-term rescale 乘),或**利用 T_kj 三角性跳过

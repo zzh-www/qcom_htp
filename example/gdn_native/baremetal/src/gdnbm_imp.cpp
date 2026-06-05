@@ -278,6 +278,7 @@ static void solve_worker(void *arg) {
      * (here: A).  T writes go straight to DDR (sequential, L2-prefetch friendly). */
     gdn_scr_t *sc = &g_scr[w->slot];
     gdn_vtcm_t vt; memset(&vt, 0, sizeof(vt));
+    if (vtcm) vt.acache = vtcm + 0x40000;   /* free VTCM region (A ping-pong is 0x0..0x40000) for the PREQUANT_A op cache */
     const int CC = GDN_BR_C * GDN_BR_C;
     const uint32_t Abytes = (uint32_t)CC * 2u;              /* u16 A block = 128KB */
     uint16_t *Avt[2] = { (uint16_t *)vtcm, (uint16_t *)(vtcm + 0x20000) };
