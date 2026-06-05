@@ -138,8 +138,18 @@ crouton16   └─ 下一个 matmul 的 WEIGHT     ─▶ 必须重排 k-major :
    C-harness `deblock_a16_crouton16_row4`(已 byte-verified 解 KERNEL 输出)== `pack_a16_crouton16_row4_surface`
    (激活打包)的**精确逆**——64³/256³/64×128/128×64/64×192 全 True。→ **kernel 的 int16 输出 surface 与激活 surface
    逐字节同格式 → STEP A 输出当 STEP B 激活零重排**(w16a16 是 int16→int16,2-pass lo/hi 自然读),只 weight 端需 k-major。
-4. **接 baremetal**:`gdnbm_imp.cpp` 加 **`hm_w16a16_v73_kernel`**(非 convhbh!) + `GDNBM_MM_I16_TEST`(nthreads=1 小心,
-   SSR 风险),对 `gdn_matmul_i16` 验 + **测 w16a16 cyc**(决定是否仍 < vrmpy);再整块 producer-consumer,整 solve wall vs 基线(~122K)。
+4. **接 baremetal**(唯一剩余,device + SSR 风险;**融合累加正确性已被 256³ body-sim 预验**——w16a16 K=256 单 drain bit-exact,
+   merge 的 K≤192 是其子集):
+   - **w16a16 kernel 结构(从 body-sim 学到)**:N **拆 2 半**(split_n=N/2),kernel 跑**两次**(out_desc0=weight、out_desc1=
+     weight+weight_split_bytes),每次出半-N 输出,再 merge。weight sidecar `2×65536`=int16 全精度权重按 N 拆 2 块(非 hi/lo)。
+     描述符(`prepare_owned_inputs` L600-650):`n_tiles_pow2=256, m_total_minus_step=1, k_total_bytes=128`;输出 row4-dense。
+     header `include/handwritten_hmx_w16a16_kernel.h`,.inc `kernels/w16a16/v73deep_conv1x1_kernel.inc`。
+   - **步骤**:① `gdnbm_imp.cpp` 加 `hm_w16a16_v73_kernel`(含 w16a16 .inc,标签不与 u8i8 冲突)。
+     ② 写 `GDNBM_MM_I16_TEST`(仿现有 `GDNBM_MM_TEST` @ L354):确定性 int16 act/wt → crouton16 pack(`pack_a16_crouton16_row4_surface`)
+     + k-major weight(N 拆 2)→ 双 pass kernel → `deblock_a16_crouton16_row4` depack → 对 `gdn_matmul_i16` 验 + 测 cyc。
+     **nthreads=1 小心(SSR 风险),描述符确认对再上多线程。**
+     ③ 据微基准把整 solve 重构为 producer-consumer(4 HVX pack/diag + 1 main HMX),整 solve wall vs 基线 ~122K。
+   - **度量**:只信整 solve wall(stats[0])/ ablation;w16a16 实测 cyc 对照预估 ~1270/64³ < vrmpy 2081。
 
 ## 6. 设计决策
 
