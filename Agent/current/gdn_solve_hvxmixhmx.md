@@ -1,5 +1,37 @@
 # GDNSolveHVXMixHMX — HVX-feed + HMX-matmul producer/consumer pipeline (matmul-portion squeeze)
 
+## 验证用户假设"攒指令一次发射" + QNN native HMX 逆向（2026-06-05）
+
+**用户假设**：让 HMX 不抢 HVX 的关键 = 把要做的指令攒起来、一次 burst 发射(descriptor-driven 自治),
+HMX 线程只占极少 round-robin 轮次。
+
+**逆向验证结论:方向对,但字面"一次发射"在 HMX 上不成立;可落地的精确版 = "用最少的 packet,每个 packet
+做最多的自治工作,放进 zero-overhead 硬件 loop"。** 证据(`Agent/qnn_re/`):
+1. **没有"一条指令做完整个 matmul"**。64³ 必须**流式喂 K 个 weight/activation tile**:`activation.ub=mxmem(r6,r7)`
+   + `weight.b=mxmem(r8,r9)` 一次各喂一个 tile。v73deep 和 v75 native 都这样。
+2. **两者都用 Hexagon zero-overhead 硬件 loop**(`loop0(addr,cnt)`/`loop1`)流式发射 mxmem —— 这是最接近
+   "burst 无开销"的形态:硬件管 loop 计数+分支,**每迭代无 SW 分支开销**,mxmem 背靠背发射。✓ 用户直觉的硬件落地。
+3. **QNN 预建 descriptor/param 结构体**(`descriptor_builder` 把 stride/mask/tile-count 一次算好写进结构,kernel
+   读它驱动硬件 loop 边界)—— 这是"攒设置"。我的 v73deep 已有(od/ad/mask/ep)。✓
+4. **真正可拉的杠杆 = 每 packet 的自治工作量**(决定总 packet 数 → 占多少轮次):
+   - **v75 native**:`cvt.uh=acc:2x2`(**一次 drain 2×2=4 个输出 tile**)+ 开头 burst 预取 4 个 `bias=mxmem2`。
+   - **我的 v73deep(int8)**:`cvt.ub=acc(r25)` 平凡版(**1 tile/cvt**)+ `:deep:cm`(已有多通道自治)。
+   - 实测:P=1 一个 64³ matmul 提交 ~**203 个 packet**(COMMITTED_PKT_ANY)→ consumer 发射密集 → 占很多轮次。
+   **若 int8 路径能用更密的 drain/自治模式 → 每 matmul 发射更少 packet → 占更少 round-robin 轮次 → 与 HVX 争用更低。**
+
+**⇒ 关键发现(已逆向确认):int8 输出没有更密 drain 的 headroom。** 全仓库所有 int8/byte-输出 HMX kernel
+(`convbbb` v73、`convbbb` v75、`convbbh` v75)**一律用平凡 `cvt.ub=acc`(1 tile/cvt)**;**`:2x2`(4 tile/cvt)
+只出现在 fp16/16-bit 输出的 `convhbh`(`cvt.uh=acc:2x2`)**。即:HMX 的 4-tile 密集 drain 是 **16-bit 输出专属**,
+int8 输出本质 1-tile/cvt。我的 v73deep 已是 QNN int8 的最密形态 —— **靠"更密 int8 自治模式"压 packet 数这条路不存在。**
+
+**⇒ 但这揭示了一条连贯的真路径:把 HMX 输出从 int8 改成 16-bit(int16/fp16)。** 一举两得:
+(a) 解锁 `cvt.uh:2x2` → **每 matmul 的 cvt packet 数 ÷4** → consumer 占更少 round-robin 轮次 → SMT 争用降;
+(b) **彻底免掉 int8 的 multi-pass gain-search 税**(文档已证:GDNSolveHVX 的 int16 路径无 multi-pass)。
+代价:输出 2× 字节(更多 VTCM 流量,但已知不是瓶颈——瓶颈是 SMT)、下游需消费 16-bit。**这把"HMX 不该和 HVX 抢"
+和"免 multi-pass 税"统一成同一个改动:GDNSolveHVXMixHMX 应走 16-bit 输出 + `:2x2` drain。** 这是
+[[reference_hmx_dsp_vs_descriptor]] 的核心,也是 solve 重写时 HMX 路径的首选形态。下一步逆向:`convhbh` 的
+`:2x2` 配置(descriptor 怎么设)+ HMX 是否支持 int8×int8→int16 累加+`:2x2` drain。
+
 ## 探索 lever A（线程→cluster 放置 / 让 HMX 不与 HVX 抢）— 2026-06-05
 
 **结论先行：v75 上无法 pin cluster；优先级无效；真正的杠杆是把 HMX consumer 做成 descriptor-driven（发射少），
