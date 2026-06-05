@@ -1360,12 +1360,23 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
 #if defined(GDN_BR_PROBE_CYCLES)
     uint64_t z0; asm volatile("%0 = C15:14" : "=r"(z0));
 #endif
-#if !defined(GDN_BR_SKIP_ZERO)   /* timing-only ablation: skip the 128KB/head Th zero-fill */
+#if !defined(GDN_BR_SKIP_ZERO)   /* timing-only ablation: skip the Th zero-fill */
+    /* Zero ONLY the strict-block-upper-triangle of T (block-rows bi, block-cols bj>bi).  T is block-lower-
+     * triangular: the diagonal blocks AND the lower off-diagonal blocks are FULLY overwritten by
+     * gdn_requant_block_out (diag incl. its zpT upper-tri), so zeroing them is wasted work.  Only the
+     * upper off-diagonal blocks are never written -> need zpT.  Cuts zero-fill NB^2 -> NB(NB-1)/2 blocks
+     * (C=256: 16->6, -62%; C=128: 4->1).  Each 64-wide block-col = one 128B vector per row. */
     { HVX_Vector vzph = Q6_Vh_vsplat_R(zpT);
-      if (((uintptr_t)Th & 127) == 0) { HVX_Vector *op = (HVX_Vector *)Th;
-          for (int i = 0; i < (C * C) / 64; ++i) op[i] = vzph; }
-      else { HVX_UVector *op = (HVX_UVector *)Th;
-          for (int i = 0; i < (C * C) / 64; ++i) op[i] = vzph; } }
+      int aligned = (((uintptr_t)Th & 127) == 0);
+      for (int bi = 0; bi < NB - 1; ++bi) {
+        int nbc = NB - 1 - bi;                                   /* # upper block-cols in this block-row */
+        for (int r = 0; r < BL; ++r) {
+          uint16_t *rowp = Th + ((size_t)bi * BL + r) * C + (size_t)(bi + 1) * BL;
+          if (aligned) { HVX_Vector  *op = (HVX_Vector  *)rowp; for (int b = 0; b < nbc; ++b) op[b] = vzph; }
+          else        { HVX_UVector *op = (HVX_UVector *)rowp; for (int b = 0; b < nbc; ++b) op[b] = vzph; }
+        }
+      }
+    }
 #endif
 #if defined(GDN_BR_PROBE_CYCLES)
     { uint64_t z; asm volatile("%0 = C15:14" : "=r"(z)); g_c_zero += z - z0; }
