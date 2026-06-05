@@ -6,6 +6,9 @@
 #include "HAP_power.h"
 #include "HAP_farf.h"
 #include "qurt.h"
+#if defined(GDNBM_PMU)
+#include "qurt_pmu.h"              /* QuRT PMU: program PMUEVTCFG + read PMUCNT0..3 (raw v75 event codes) */
+#endif
 #include <hexagon_types.h>
 #include <hexagon_protos.h>
 #include <string.h>
@@ -995,6 +998,17 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
         }
         uint64_t c_spin = 0, c_zero = 0, c_kern = 0, c_dep = 0;   /* consumer breakdown */
         (void)csc; (void)coutc;
+#if defined(GDNBM_PMU)
+        /* DIRECT SMT-contention proof via the v75 PMU (raw event codes, Table 9-1). PMUEVTCFG packs 4
+         * 8-bit event selectors for PMUCNT0..3. Deltas over the consumer window (all P producers live):
+         *   cnt0 COMMITTED_PKT_ANY (0x03), cnt1 CYCLES_2_THREAD_RUNNING (0x3c),
+         *   cnt2 CYCLES_5_THREAD_RUNNING (0x0a), cnt3 SMT_BANK_CONFLICT (0xb9 inter-thread SMT bank conflict). */
+        qurt_pmu_set(QURT_PMUEVTCFG, (0x0au<<24)|(0x3eu<<16)|(0x3du<<8)|0x3cu);  /* CYCLES 2/3/4/5-THREAD */
+        qurt_pmu_enable(1);
+        unsigned int pmu_base[4] = {
+            qurt_pmu_get(QURT_PMUCNT0), qurt_pmu_get(QURT_PMUCNT1),
+            qurt_pmu_get(QURT_PMUCNT2), qurt_pmu_get(QURT_PMUCNT3) };
+#endif
         for (uint32_t j = 0; j < FP_J; ++j) {                /* main consumer: drain in job order */
             int k = j % FP_K;
             uint64_t s0 = pcyc();
@@ -1046,6 +1060,15 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
         }
         uint64_t w1 = pcyc();
         g_fp_done = 1; __sync_synchronize();                 /* OPCACHE: release producers from their re-arm loop */
+#if defined(GDNBM_PMU)
+        unsigned int pmu_fin[4] = {
+            qurt_pmu_get(QURT_PMUCNT0), qurt_pmu_get(QURT_PMUCNT1),
+            qurt_pmu_get(QURT_PMUCNT2), qurt_pmu_get(QURT_PMUCNT3) };
+        if (statsLen > 5) stats[5] = (int)((pmu_fin[0] - pmu_base[0]) / FP_J);  /* COMMITTED_PKT_ANY /mm */
+        if (statsLen > 6) stats[6] = (int)((pmu_fin[1] - pmu_base[1]) / FP_J);  /* CYCLES_2_THREAD_RUNNING /mm */
+        if (statsLen > 7) stats[7] = (int)((pmu_fin[2] - pmu_base[2]) / FP_J);  /* CYCLES_5_THREAD_RUNNING /mm */
+        if (statsLen > 8) stats[8] = (int)((pmu_fin[3] - pmu_base[3]) / FP_J);  /* SMT_BANK_CONFLICT /mm */
+#endif
         uint32_t per = FP_J / (uint32_t)P;                   /* matmuls packed by producer 0 */
         if (statsLen > 2 && per) stats[2] = (int)(g_fp_pwork[0] / per);  /* producer0: pack-work / matmul */
         if (statsLen > 3 && per) stats[3] = (int)(g_fp_pspin[0] / per);  /* producer0: slot-wait / matmul */

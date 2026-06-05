@@ -50,6 +50,7 @@ int main(int argc, char **argv) {
         if (rc) break;
     }
     printf("  stats: [0]=%d [1]=%d [2]=%d [3]=%d [4]=%d\n", stats[0], stats[1], stats[2], stats[3], stats[4]);
+    printf("  stats: [5]=%d [6]=%d [7]=%d [8]=%d [9]=%d [10]=%d [11]=%d\n", stats[5], stats[6], stats[7], stats[8], stats[9], stats[10], stats[11]);
     if (stats[3] || stats[5] || stats[7]) {  /* PROBE_CYCLES per-stage (cyc/head) */
         int sum = stats[3]+stats[4]+stats[5]+stats[6]+stats[7]+stats[8]+stats[9];
         printf("  PROBE cyc/head: diag=%d zero=%d fold=%d quant=%d mm=%d acc=%d requant=%d  SUM=%d\n",

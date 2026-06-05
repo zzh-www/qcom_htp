@@ -258,6 +258,45 @@ slots), the only architectural lever would be thread→cluster *placement* (keep
 by itself), which QuRT controls, not us — a deep, separate probe. Confirms: no data-movement optimization
 can break the ~418 consumer-busy.
 
+#### DIRECT PMU silicon measurement of the SMT floor (2026-06-05) — the third, definitive proof
+Read the v75 PMU on-device via the **QuRT API** (`qurt_pmu_set(QURT_PMUEVTCFG, …)` + `qurt_pmu_get(QURT_PMUCNTn)`
+— note: `HAP_user_pmu.h` is NOT linked in the bare-metal skel, `__HAP_register_pmu_group` is a null weak symbol;
+`qurt_pmu_*` resolves at load like `qurt_thread_*`). PMUEVTCFG packs four 8-bit raw event codes from PRM
+Table 9-1. Build `-DGDNBM_PMU` on the OPCACHE+NODEP path (producers do ZERO data work — pure thread-presence).
+Thread-occupancy spectrum, per matmul:
+
+| P (producers) | threads | cyc | busy | CYC_2T | CYC_3T | CYC_4T | CYC_5T |
+|---|---|---|---|---|---|---|---|
+| 1 | 2 | 439 | 312 | 14 | 0 | 0 | 0 |
+| 2 | 3 | 393 | 332 | 13 | **341** | 0 | 0 |
+| 3 | 4 | 439 | 393 | 6 | 0 | **352** | 0 |
+| 4 | 5 | 486 | **441** | 4 | 0 | 0 | **386** |
+
+The diagonal lights up exactly: at P producers (=P+1 threads) the `CYCLES_(P+1)_THREAD_RUNNING` counter (raw
+codes 0x3c/0x3d/0x3e/0x0a) owns the window — **at P=4, 386/486 = 79% of every matmul has EXACTLY 5 threads
+running concurrently**, and consumer-busy climbs in lock-step (312→332→393→441). A separate run measured
+`SMT_BANK_CONFLICT` (raw 0xb9) ≈ **0-1/matmul** → it is NOT memory-bank contention. So the silicon directly
+confirms: the consumer's HMX thread is co-executing with the producer HVX threads ~79% of the time, the
+co-running count is what inflates its busy cycles, and it is execution-resource (SMT issue-slot) sharing —
+the PRM's `SMT_PKT_SLOT_CONFLICT` mechanism (raw 0x320, a 10-bit code needing extended PMUEVTCFG encoding,
+not read here) — NOT data movement (bank-conflict ≈ 0). Reproduce: `-DGDNBM_PMU` on the OPCACHE+NODEP 4P build.
+
+### Best practices distilled (v75 HVX-feed / HMX-consume pipelines)
+1. **The floor of a producer/consumer HVX→HMX pipeline is SMT execution-resource contention, not VTCM
+   bandwidth.** Verify with the PMU (`CYCLES_N_THREAD_RUNNING` + `SMT_BANK_CONFLICT`) before chasing a
+   data-movement lever — if bank-conflict≈0 and CYCLES_(maxthreads)_T owns the window, you're SMT-bound and
+   traffic optimizations (operand caching, depack elimination, layout) will only shrink the *spin*, never the
+   consumer-busy.
+2. **More producer threads buys feed, but each co-running thread costs the consumer ~30-40 cyc/matmul of
+   busy** (SMT slot sharing). The optimum is the smallest P that drives spin→~0; past that, added threads only
+   raise contention. Here P=4 (spin already ~50-100) is the knee.
+3. **The only sub-floor lever is thread→cluster placement** (v75 = 2 clusters, "cluster-private execution
+   resources", PRM p128): isolating the latency-critical HMX consumer on its own cluster would cut in-cluster
+   SMT slot conflicts. QuRT-controlled (priority / `qurt_sysenv` / hardware-thread pinning) — an open probe.
+4. **PMU is your ground truth on this silicon.** `qurt_pmu_*` works from the unsigned user PD; program
+   PMUEVTCFG with raw 8-bit event codes from PRM Table 9-1 (≤0xff), read PMUCNT0-3 deltas around the window.
+   `HAP_user_pmu.h` (which takes itrace 0x8xxx IDs) is unavailable here.
+
 ### (superseded) original stop-point at ~585
 Producer-bound at ~585 (vs the 388 HMX floor); consumer spun ~168/585 (~29% idle). The conclusion "this is
 the practical limit of the 4-HVX-unit silicon, can't be cut without more HVX units" was **refuted by lever
