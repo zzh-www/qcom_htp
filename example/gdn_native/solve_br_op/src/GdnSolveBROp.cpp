@@ -1048,6 +1048,14 @@ static void gdn_matmul_i16(const int16_t *A, const int16_t *B, int32_t *C) {
     }
 }
 
+/* NOTE (2026-06-05): a vector-read int16 matmul (vmem A + vdelta halfword-broadcast + Q6_Ww_vmpyacc_WwVhVh)
+ * was tried and dropped — it was incorrect (broadcast/even-odd not yet right) and showed no benefit. KEY
+ * difference from int8: int8 vrmpy needed vector-read because Q6_V_vsplat_R(memw) stalls; int16's
+ * Q6_Ww_vmpyacc_WwVhRh reads A[i][k] as a register-broadcast halfword (Rh) — a cheap scalar that does NOT
+ * stall — so the vector-read win is int8/vrmpy-specific. The new-version int16 matmul keeps the scalar-Rh
+ * path; A is small (4KB/block) so L2-cached DDR is fine (scalar-read fast) — int16 operands do NOT need
+ * VTCM residency. (The VTCM-vector-read principle applies to HMX-fed crouton tiles + int8 vrmpy, not int16.) */
+
 #if defined(GDN_BR_MM_I8)
 /* Pack B (int8, row-major [k][j]) into the vrmpy layout btp[g][col][m] = B[4g+m][col], so that one
  * vrmpy over a broadcast A-word reduces 4 consecutive k at once.  Per k-group g (rows 4g..4g+3): zip
