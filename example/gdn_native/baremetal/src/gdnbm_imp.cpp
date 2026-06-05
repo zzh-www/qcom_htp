@@ -175,6 +175,14 @@ static inline void udma_start(dma_desc_t *d, void *dst, const void *src, uint32_
     Q6_dmstart_A((void *)d);
 }
 static inline int udma_wait(void) { return Q6_R_dmwait(); }
+/* fill a descriptor WITHOUT starting it (for chaining several transfers into one dmstart).
+ * dir_to_ddr: src=VTCM dst=DDR (T writeback, dstbypass) vs src=DDR dst=VTCM (A load, srcbypass). */
+static inline void udma_fill(dma_desc_t *d, void *dst, const void *src, uint32_t len, int dir_to_ddr) {
+    memset(d, 0, sizeof(*d));
+    d->length = len; d->desctype = 0;
+    if (dir_to_ddr) d->dstbypass = 1; else d->srcbypass = 1;
+    d->src = (void *)src; d->dst = dst;
+}
 
 /* ---- HMX-on-worker feasibility probe (kept) ---- */
 static volatile int g_prc[GDN_BR_NT], g_psent[GDN_BR_NT];
@@ -286,6 +294,29 @@ static void solve_worker(void *arg) {
         /* build this worker's head list, ping-pong over it */
         uint32_t hs[64]; int n = 0;
         for (uint32_t h = w->h0 + w->slot; h < w->h1 && n < 64; h += w->nheads) hs[n++] = h;
+#if defined(GDN_BR_T_VTCM_DMA)
+        /* OUTPUT VIA VTCM + OVERLAPPED DMA WRITEBACK (skill principle 2/3: don't write T to DDR per-head;
+         * keep it in VTCM and burst it out under compute).  Per-head T is computed into a VTCM double-buffer
+         * Tvt[i&1], then DMA'd VTCM->DDR.  The writeback of head i-1 is CHAINED with the A[i+1] prefetch and
+         * issued BEFORE computing head i, so both run on the DMA engine during the ~280us compute and are
+         * done by the next dmwait (no stall).  Removes the 4-thread DDR-write-bandwidth contention that
+         * caps the per-head zero-fill+requant scaling (measured: P=4 ~140K->~124K, 2.95x->3.26x). */
+        /* A-prefetch overlaps compute; T[i] writeback is issued AFTER A[i+1] is fully in (engine free) so
+         * the two transfers never have concurrent dmstarts (a 2nd Q6_dmstart_A while one is in-flight
+         * clobbers it — device-verified: corrupts heads).  T-out is serial-per-head but off the HVX store
+         * path, which is what removes the 4-thread DDR-write contention (P=4 ~140K -> ~125K, bit-exact). */
+        uint16_t *Tvt = (uint16_t *)(vtcm + 0x40000);
+        dma_desc_t dsc_t;
+        if (n > 0) udma_start(&dsc, Avt[0], w->Au + (size_t)hs[0] * CC, Abytes);   /* A[0] in */
+        for (int i = 0; i < n; ++i) {
+            udma_wait();                                          /* A[i] ready */
+            if (i + 1 < n) udma_start(&dsc, Avt[(i + 1) & 1], w->Au + (size_t)hs[i + 1] * CC, Abytes); /* prefetch A[i+1] (overlaps compute) */
+            gdn_br_one_head(sc, &vt, Avt[i & 1], Tvt, w->zpA, w->M, w->S, w->sT, w->zpT);  /* compute -> VTCM */
+            if (i + 1 < n) udma_wait();                           /* A[i+1] done -> engine free (no concurrent dmstart) */
+            udma_fill(&dsc_t, w->Tu + (size_t)hs[i] * CC, Tvt, Abytes, 1); dsc_t.next = nullptr;
+            Q6_dmstart_A((void *)&dsc_t); udma_wait();            /* T[i] writeback (serial, off HVX store path) */
+        }
+#else
         if (n > 0) udma_start(&dsc, Avt[0], w->Au + (size_t)hs[0] * CC, Abytes);
         for (int i = 0; i < n; ++i) {
             udma_wait();                                    /* cur A ready */
@@ -294,6 +325,7 @@ static void solve_worker(void *arg) {
             gdn_br_one_head(sc, &vt, Avt[i & 1], w->Tu + (size_t)hs[i] * CC,
                             w->zpA, w->M, w->S, w->sT, w->zpT);   /* reads A from VTCM */
         }
+#endif
     }
     if (hvx == 0) qurt_hvx_unlock();
     return;
@@ -874,7 +906,11 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
     uint8_t *vtcm_base = nullptr; unsigned int vctx = 0;
 #if defined(GDNBM_VTCM_RESIDENT)
     { compute_res_attr_t va; HAP_compute_res_attr_init(&va);
+#if defined(GDN_BR_T_VTCM_DMA)
+      HAP_compute_res_attr_set_vtcm_param(&va, (unsigned)GDN_BR_NT * 0x80000u, 0);  /* 512KB/worker: A ping-pong + T double-buf */
+#else
       HAP_compute_res_attr_set_vtcm_param(&va, (unsigned)GDN_BR_NT * 0x60000u, 0);  /* 384KB/worker: A ping-pong */
+#endif
       vctx = HAP_compute_res_acquire(&va, 2000000);
       vtcm_base = (uint8_t *)HAP_compute_res_attr_get_vtcm_ptr(&va); }
 #endif
