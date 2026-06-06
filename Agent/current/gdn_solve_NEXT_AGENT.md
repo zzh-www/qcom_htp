@@ -2,25 +2,28 @@
 
 接手前先读：本文件 + `Agent/current/gdn_solve_hvxmixhmx.md`（权威设计/命名/铁律）。
 
-> ## ⛔ 2026-06-06 实测推翻 — HMX-merge 路线作废,别再追(READ FIRST)
-> **"静态 int16 HMX-merge 比 vrmpy 便宜 ~18×"是错的(int8-HMX vs int16-vrmpy 不等精度比较)。** 实测推翻链(权威结论块
-> 在 `Agent/current/gdn_merge_static_int_design.md` 顶部;脚本 `scripts/gdn_convhbh_*`、`gdn_solve_fused_drain_probe.py`):
-> 1. **convhbh 是 8-bit/操作数 kernel**(`.ub` u8-act × `.b` i8-wt;单调用只用激活高字节,sim 实测 out≈floor(P/256))
->    → 所需 int16×int16 = **4 byte-pass ≈ 4×509 ≈ vrmpy 2081**,**matmul 零提速**。
-> 2. **静态-HVX merge 也不赢**:纯加 acc 要 int16 操作数(int8-static oc 0.0545 太松),但 HVX vrmpy int16 ≈ 4× int8
->    → matmul 4× 吃掉 glue 省 → ≈ 现 int16 ~125K。根因同一:**这硅 int16 精度结构性贵**。
-> 3. **w16a16 hand-written kernel UNSOLVED**(body-sim 18803/65536,非 bit-exact;只 QNN QHPI accepted 路径对)。
-> 4. **三角跳零**(roofline 的"真杠杆")实查只 **~6% solve** + vrmpy 内跳三角难。
-> - **下方"GO / 缺口 = 集成"全部作废。** 已 sim 完成且仍有效的:待办1(drain 语义)、待办2(融合累加 oc)、待办3(布局直通)。
-> - **GDN solve 现最优 = int8-dynamic + VEC_MM + PREQUANT_A = 89,880 cyc/head(已实测),已近精度×吞吐地板。**
-> - **下一个 agent 别再投 HMX/静态-int merge。** 若仍要提速,候选只剩:三角跳零(~6%,纯 HVX)、跳出 solve 看整图其它热点。
-> - 已交付且有效:bit-exact、已设默认的 **~13% 多线程提速**(T 经 VTCM+DMA 写回)。
+> ## 🎯 当前目标(2026-06-06 用户拍板,READ FIRST)
+> **先用 u8i8(int8)kernel 把 GDNSolveHVXMixHMX 的 producer-consumer 流水做成全 solve,精度先不管。**
+> int8 HMX matmul **实测 4× 便宜于 vrmpy**(FEED_4P 509 vs vrmpy-4-路 2081;微基准 2.77× vs 出货 vrmpy-4-thread 1601)——
+> 这条路**没被推翻,是 ACTIVE 主线**。下面的 int16 分析是**未来精度升级**的单独问题,不是放弃 u8i8 的理由。
+> - **现状**:FEED_4P 微基准(4 HVX producer + 1 main HMX consumer,u8i8 kernel)**已跑通**(`gdnbm_imp.cpp`,`-DGDNBM_FEED_4P`)。
+>   **缺口 = 全 solve 集成**:`GDNBM_HMX_MERGE_PATH` 全 solve **在 gdnbm_open 即 SSR**(`#error` 禁掉),**根因已定位**
+>   (`gdnbm_imp.cpp:268`:HMX-merge worker 调 `gdn_br_run_slot` 但 `vt` 的 VTCM 指针没建 → mxmem 命中 null)。
+> - **下一步**:① 修 SSR 根因(按 `gdn_br_run_slot` 建好 `vt` VTCM 指针);② 把 FEED_4P producer-consumer 接进真实 merge 循环
+>   (替 vrmpy matmul,精度用 u8i8 动态/或静态都行,先不纠结);③ 整 solve wall vs 基线 ~122K。**需设备**(SSR 风险,单线程先试)。
+> - **设备**:`ssh oneplus`(`source scripts/dssh.sh; dssh_open`)。2026-06-06 实测 **No route to host(手机掉线)**,需先上线。
+>
+> > ### ⚠️ 旁注:int16 精度升级是后话(别和上面的 u8i8 主线混)
+> > 若**将来**要 int16 操作数精度(现在不要):convhbh 是 8-bit/操作数 kernel(sim 实测单调用只用激活高字节)→ int16×int16 = 4 byte-pass
+> > ≈ vrmpy,**精度升级到 int16 时 matmul 不再便宜**;静态-HVX int16 也因 vrmpy int16≈4×int8 而对冲。**这只约束"未来上 int16",不影响现在的 u8i8 主线**(int8 matmul 4× 便宜是实的)。
+> > 详细分析见 `Agent/current/gdn_merge_static_int_design.md` §6(那是 int16 路的过程记录)。已交付有效:bit-exact、已设默认的 **~13% 多线程提速**(T 经 VTCM+DMA 写回)。
 
 ---
 
-## 0. 一句话现状(⚠️ 已被上方推翻,保留作过程记录)
+## 0. 一句话现状
 
-~~**make-or-break 已实测拍板 = GO**：静态 int16 HMX-merge 的 matmul 比现 vrmpy merge 便宜 ~18×~~（**实测推翻**,见顶部)。
+**主线 = u8i8 HVXMixHMX 全 solve(producer-consumer)。** 微基准(FEED_4P)已跑通、int8 matmul 4× 便宜于 vrmpy;
+缺口 = 全 solve 集成(SSR-at-open 根因已定位,需设备修+测)。精度先不管(用户拍板)。
 
 ---
 

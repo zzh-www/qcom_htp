@@ -1,21 +1,18 @@
 # GDN merge —「全程静态 int + 融合累加 + 布局直通」设计基线 (Step 2)
 
-> ## ⛔ 最终结论(2026-06-06,实测推翻,READ FIRST)
-> **HMX-merge 与静态-HVX-merge 在 GDN 所需的 int16 精度上都不提供有意义的加速。merge 已近"精度×吞吐地板"。**
-> 实测推翻链(每步 committed,脚本在 `scripts/gdn_convhbh_*`、`gdn_solve_fused_drain_probe.py`):
-> 1. **convhbh 是 8-bit/操作数 kernel**(`.ub` u8-act × `.b` i8-wt;单调用只用激活高字节,实测 out≈floor(P/256))。
->    → int16×int16 = **4 byte-pass ≈ 4×509 ≈ vrmpy 2081**,matmul 无提速。原"18× 便宜"是 int8-HMX vs int16-vrmpy 不等精度比较。
-> 2. **静态-HVX 也不赢**:要"纯加 acc"(消 acc-rescale 36%)必须 int16 操作数(int8-static oc 0.0545 太松);
->    但 **HVX vrmpy int16 ≈ 4× int8**(`GdnSolveBROp.cpp:1164`)→ matmul 4× 吃掉 glue 省的 → 静态 int16 ≈ 现 int16(~125K),非赢。
-> 3. **根因同一**:这颗硅 int16 精度结构性贵(HMX 只 int8 需 4× 字节分解;HVX vrmpy 只 int8 满速)。
-> 4. **三角跳零**(roofline 点的"真杠杆")实查只 **~6% solve**(内层 Σ_k 仅 k=j 的 T_jj 块三角,6/10 term;k>j 块 dense)
->    且 vrmpy 内跳三角难实现 → 非银弹。
-> - **现最优 = int8-dynamic + VEC_MM + PREQUANT_A = 89,880 cyc/head(已实测),已近最优。** w16a16 hand-written kernel 另外 UNSOLVED。
-> - **可做但价值有限的剩余**:三角跳零(~6%)、扩展性微调(SMT 争用,难)。**别再投 HMX/静态-int 大改。**
-> - 下方原"设计基线"是推翻前的内容,保留作过程记录(§6 决策表含逐步纠错)。
+> ## ⚠️ 范围澄清(2026-06-06,READ FIRST)—— 本文是 **int16-精度路** 的分析,不是当前主线
+> **当前主线 = u8i8(int8)HVXMixHMX,精度先不管**(见 `gdn_solve_NEXT_AGENT.md` 顶部);int8 matmul 实测 4× 便宜于 vrmpy,**ACTIVE**。
+> 本文整篇是**"如果将来要 int16 操作数精度"**的探路,结论是:**int16 精度升级在这硅上贵**——
+> 1. convhbh 是 8-bit/操作数 kernel(sim 实测单调用只用激活高字节,out≈floor(P/256))→ int16×int16 = **4 byte-pass ≈ vrmpy**,matmul 不再便宜。
+> 2. 静态-HVX int16 也对冲(vrmpy int16 ≈ 4× int8,`GdnSolveBROp.cpp:1164`,吃掉 glue 省)。
+> 3. w16a16 hand-written kernel UNSOLVED(body-sim 18803/65536)。
+> - **这些只约束"未来上 int16",不影响 u8i8 主线。** 别因为本文就放弃 HMX-merge —— u8i8 HMX matmul 4× 便宜是实的。
+> - sim 已验且对**任意精度都有效的复用件**:待办1 drain 语义(`gdn_convhbh_control_word_sweep.py`)、待办3 布局直通(`gdn_merge_layout_directpipe_probe.py`)、
+>   64³ convhbh ntp=M_t*16 写满(`gdn_convhbh_i16_block_sim.py`)。
+> - 参考:int8-dynamic + VEC_MM + PREQUANT_A = 89,880 cyc/head(纯 HVX 基线,无 HMX)。
 
 承接第1步(convhbh int16 matmul 已 sim bit-exact,见 `gdn_solve_NEXT_AGENT.md` 第1步)。
-本文是 Step 2 (把 convhbh int16 接进 GDN merge) 的设计基线,**已被上方最终结论推翻**(过程记录见下)。
+本文是 Step 2 的 **int16-精度路设计探路**(全程静态 int + 融合累加 + 布局直通);**当前主线是 u8i8,见上方范围澄清**。
 
 > 状态标注:**【已验证】** = sim/实测铁证;**【设计】** = 本文拍的方向,尚未在 GDN merge 上 bit-exact 验证。
 > 第1步的「单个 convhbh 64³ matmul bit-exact」是【已验证】;本文的融合累加/布局直通在 GDN merge 上是【设计】,待 sim 钉。
