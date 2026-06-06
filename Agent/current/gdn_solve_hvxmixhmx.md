@@ -1,6 +1,10 @@
 # GDNSolveHVXMixHMX — HVX 喂数 + HMX 矩阵乘流水线（持续优化目标）
 
-**持续优化的就是这一个：GDNSolveHVXMixHMX。** 当前阶段目标 = 把它做成 **静态 int16 版**（见"目标架构"）。
+**持续优化的就是这一个：GDNSolveHVXMixHMX。**
+> **🎯 当前阶段目标(2026-06-06 用户拍板)= 先用 u8i8(int8)kernel 把 producer-consumer 流水做成全 solve,精度先不管。**
+> int8 HMX matmul 实测 4× 便宜于 vrmpy(FEED_4P 509 vs 2081)。微基准已跑通,缺口 = 全 solve 集成
+> (SSR-at-open 根因已定位,见 `gdn_solve_NEXT_AGENT.md` 顶部)。下面"目标架构/静态 int16"是**未来精度升级**的设计,
+> int16 升级在这硅上贵(convhbh 8-bit → int16²≈vrmpy,见 `gdn_merge_static_int_design.md`)——**先不做,不影响 u8i8 主线**。
 基线 GDNSolveHVX 只用来对照测量，**不改**。
 
 ## 命名定义（GDN 三角求逆三实现，全仓库统一）
