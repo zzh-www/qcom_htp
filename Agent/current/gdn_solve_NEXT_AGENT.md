@@ -1,15 +1,26 @@
 # GDN solve — 下一个 Agent 交接（2026-06-06）
 
 接手前先读：本文件 + `Agent/current/gdn_solve_hvxmixhmx.md`（权威设计/命名/铁律）。
-目标不变：把 GDNSolveHVXMixHMX 重写成「静态对称 int16」版（merge 用 HMX + int16 输出）。
+
+> ## ⛔ 2026-06-06 实测推翻 — HMX-merge 路线作废,别再追(READ FIRST)
+> **"静态 int16 HMX-merge 比 vrmpy 便宜 ~18×"是错的(int8-HMX vs int16-vrmpy 不等精度比较)。** 实测推翻链(权威结论块
+> 在 `Agent/current/gdn_merge_static_int_design.md` 顶部;脚本 `scripts/gdn_convhbh_*`、`gdn_solve_fused_drain_probe.py`):
+> 1. **convhbh 是 8-bit/操作数 kernel**(`.ub` u8-act × `.b` i8-wt;单调用只用激活高字节,sim 实测 out≈floor(P/256))
+>    → 所需 int16×int16 = **4 byte-pass ≈ 4×509 ≈ vrmpy 2081**,**matmul 零提速**。
+> 2. **静态-HVX merge 也不赢**:纯加 acc 要 int16 操作数(int8-static oc 0.0545 太松),但 HVX vrmpy int16 ≈ 4× int8
+>    → matmul 4× 吃掉 glue 省 → ≈ 现 int16 ~125K。根因同一:**这硅 int16 精度结构性贵**。
+> 3. **w16a16 hand-written kernel UNSOLVED**(body-sim 18803/65536,非 bit-exact;只 QNN QHPI accepted 路径对)。
+> 4. **三角跳零**(roofline 的"真杠杆")实查只 **~6% solve** + vrmpy 内跳三角难。
+> - **下方"GO / 缺口 = 集成"全部作废。** 已 sim 完成且仍有效的:待办1(drain 语义)、待办2(融合累加 oc)、待办3(布局直通)。
+> - **GDN solve 现最优 = int8-dynamic + VEC_MM + PREQUANT_A = 89,880 cyc/head(已实测),已近精度×吞吐地板。**
+> - **下一个 agent 别再投 HMX/静态-int merge。** 若仍要提速,候选只剩:三角跳零(~6%,纯 HVX)、跳出 solve 看整图其它热点。
+> - 已交付且有效:bit-exact、已设默认的 **~13% 多线程提速**(T 经 VTCM+DMA 写回)。
 
 ---
 
-## 0. 一句话现状
+## 0. 一句话现状(⚠️ 已被上方推翻,保留作过程记录)
 
-**make-or-break 已实测拍板 = GO**：静态 int16 HMX-merge 的 matmul 比现 vrmpy merge 便宜 ~18×、精度比出货 int8 好
-~60×、kernel 在 hexagon-sim 跑通。**当前唯一缺口 = 把它做 bit-exact 并集成**（纯 sim 可迭代，无 SSR 风险）。
-顺带已交付一个 bit-exact、已设默认的 **~13% 多线程实测提速**（T 输出经 VTCM+DMA 写回）。
+~~**make-or-break 已实测拍板 = GO**：静态 int16 HMX-merge 的 matmul 比现 vrmpy merge 便宜 ~18×~~（**实测推翻**,见顶部)。
 
 ---
 
