@@ -157,6 +157,9 @@ static const uint8_t *gdn_get_act_Tdiag16(gdn_scr_t *sc, const gdn_vtcm_t *vt, i
 /* ---- the int16 static solve (mirrors gdn_br_one_head HMX path, Tblk/Sacc -> int16) ---- */
 static void gdn_br_one_head16(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t *Ah, uint16_t *Th,
                               int zpA, int M, int S, float sT, int zpT) {
+#if defined(GDN_BR_TRACE)
+    uint32_t _tid = (uint32_t)(sc - g_scr); uint64_t _hd0 = gdn_trnow();
+#endif
     for (int b = 0; b < GDN_BR_NBLK; ++b) { sc->vAa[b] = 0; sc->vTw[b] = 0; }
     for (int i = 0; i < NB; ++i) sc->vTa[i] = 0;
     /* diag: forward-subst (proven int32 path) -> narrow to int16 store. */
@@ -166,6 +169,9 @@ static void gdn_br_one_head16(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_
         gdn_narrow_i32_to_i16(sc->Tc, sc->Tblk16[bi]);
         sc->Tscl[bi] = GDN_BR_TI;
     }
+#if defined(GDN_BR_TRACE)
+    gdn_tr_push(_tid, 1, _hd0, gdn_trnow());   /* DIAG */
+#endif
     /* zero strict-upper-tri of Th. */
     { HVX_Vector vzph = Q6_Vh_vsplat_R(zpT); int aligned = (((uintptr_t)Th & 127) == 0);
       for (int bi = 0; bi < NB - 1; ++bi) { int nbc = NB - 1 - bi;
@@ -183,26 +189,50 @@ static void gdn_br_one_head16(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_
             float s_S = 0.f; int first = 1;
             for (int k = j; k < i; ++k) {
                 float sa, sw, sterm; const int32_t *eff; int wcolabs;
+#if defined(GDN_BR_TRACE)
+                uint64_t _p0 = gdn_trnow();
+#endif
                 const uint8_t *a = gdn_get_act_A(sc, vt, Ah, i, k, C, zpA, M, S, &sa);
                 const int8_t  *w = gdn_get_wt_T16(sc, vt, k, j, &sw, &eff, &wcolabs);
+#if defined(GDN_BR_TRACE)
+                uint64_t _p1 = gdn_trnow(); gdn_tr_push(_tid, 5, _p0, _p1);   /* PREP */
+#endif
                 gdn_merge_packed(sc, vt, a, sa, w, eff, sw, wcolabs, sc->termi, &sterm);
+#if defined(GDN_BR_TRACE)
+                uint64_t _p2 = gdn_trnow(); gdn_tr_push(_tid, 3, _p1, _p2);   /* MM */
+#endif
                 if (first) s_S = sterm;                          /* static: all inner terms share scale (sAa,sTw fixed) */
                 gdn_acc16(sc, sc->termi, first);
+#if defined(GDN_BR_TRACE)
+                gdn_tr_push(_tid, 6, _p2, gdn_trnow());   /* ACC */
+#endif
                 first = 0;
             }
             /* final merge T_ij = T_ii @ Sacc. */
             float sa_ii, sw_S, sij; int scolabs;
+#if defined(GDN_BR_TRACE)
+            uint64_t _f0 = gdn_trnow();
+#endif
             const uint8_t *a_ii = gdn_get_act_Tdiag16(sc, vt, i, &sa_ii);
             gdn_quant_i8_i16w(sc->Sacc16, s_S, GDN_OPS_sSacc, sc->wtbuf);   /* int16-lane (g=5.77>1, widening mult) */
             sw_S = GDN_OPS_sSacc;
             gdn_effective(sc->wtbuf, sc->eff, &scolabs);
             gdn_pack_w8_kmajor(sc->wtbuf, vt->wt);
+#if defined(GDN_BR_TRACE)
+            uint64_t _f1 = gdn_trnow(); gdn_tr_push(_tid, 5, _f0, _f1);   /* PREP (final) */
+#endif
             g_force_sP = GDN_OPS_sTw;
             gdn_merge_packed(sc, vt, a_ii, sa_ii, vt->wt, sc->eff, sw_S, scolabs, sc->termi, &sij);
             g_force_sP = 0.f;
+#if defined(GDN_BR_TRACE)
+            uint64_t _f2 = gdn_trnow(); gdn_tr_push(_tid, 3, _f1, _f2);   /* MM (final) */
+#endif
             gdn_widen_i8_to_i16(sc->termi, sc->Tblk16[bij]);    /* store result i16 */
             sc->Tscl[bij] = sij;
             gdn_requant_i16(sc->Tblk16[bij], sij, sT, zpT, Th, i * BL, j * BL, C);   /* int16-lane requant */
+#if defined(GDN_BR_TRACE)
+            gdn_tr_push(_tid, 7, _f2, gdn_trnow());   /* REQ (widen+requant) */
+#endif
         }
     }
 }

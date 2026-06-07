@@ -9,7 +9,13 @@ import sys, struct, collections
 
 STAGE = {0: "HEAD", 1: "DIAG", 2: "MERGE", 3: "MM", 4: "QUANT", 5: "PREP", 6: "ACC", 7: "REQ", 8: "PACK", 9: "EFF"}
 CH = {1: "D", 3: "m", 4: "q", 5: "p", 6: "a", 7: "r", 8: "K", 9: "e"}   # diag/matmul/quant/prep/acc/requant/pack/effective(-128*Sumwt)
-CONTAINER = {0, 2, 5}   # HEAD, MERGE, PREP are containers (leaves QUANT/PACK below PREP) -> skip in fill/busy
+import os
+# coarse view (GDN_TL_COARSE=1): PREP(5) is a leaf, skip the fine QUANT/PACK/EFF (4/8/9) — for the int16
+# driver which only emits coarse DIAG/PREP/MM/ACC/REQ (its getters don't push fine leaves).
+if os.environ.get("GDN_TL_COARSE"):
+    CONTAINER = {0, 2, 4, 8, 9}
+else:
+    CONTAINER = {0, 2, 5}   # fine view: HEAD/MERGE/PREP containers (QUANT/PACK leaves below PREP)
 
 def main():
     path = sys.argv[1] if len(sys.argv) > 1 else "T.raw"
