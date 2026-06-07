@@ -68,10 +68,29 @@
   | GDNSolveHVX 4-thread 基线 | ~3.90M | 1.00× |
 - **结论(换 total-wall 后翻转)**:**PIPE HVXMixHMX 已经打过纯 HVX 基线 ~1.09–1.13×**(还只是朴素同步 hand-off scaffold)。
   ⚠️ 之前 per-head 框架说"慢 1.26×"是**被 88K/head 假基线误导**——那是 tiler 低估 artifact(真实 HVX ~128–146K/head=3.9–4.7M total)。**只信 32-head total wall。**
-- **剩余杠杆(把 3.55M 继续往下压)**:
-  1. consumer 仍在 `gdn_hmx_run_only` 里做 bias-pack + out-zero(HVX 活),拖慢 consumer 吞吐 → 仿 FEED_4P 把 bias-pack 挪到 producer,consumer 纯 mxmem。
-  2. 同步 hand-off → producer 等自己 matmul 时空转;可用 head-interleave 或多槽 ring 把延迟藏起来。
-  3. consumer 主线程跑 HVX intrinsic(bias-pack)却没锁 HVX → 跟 producer 抢 HVX/SMT issue slot。
+### 步骤 4b ★ timeline 驱动优化(2026-06-08)— 3.55M → 2.50M
+**铁律:分析瓶颈先画 per-thread timeline**(`-DGDN_BR_TRACE` dump 进 Tu,`scripts/gdn_pipe_timeline.py` 渲染)。
+- **诊断(聚合)**:consumer busy **9%**(HMX 91% 空转)、producer0 spin **3%** → **彻底 producer-bound**,
+  原先那 3 个"为 consumer-bound 设计"的杠杆方向全错(先测才没白做)。
+- **P-sweep(32-head total wall)**:P=1 6.12M / P=2 3.35M / **P=3 2.68M** / **P=4 3.55M(反而更差!)**。
+- **timeline 看穿 P=4 反常**:只有 4 个 HVX 单元;P=4 producer + main consumer(bias-pack 碰 HVX)=**5 线程挤 4 单元**
+  → 一个 producer(P1)被饿死跑满全宽 94%,另 3 个半程就干完(46%);aggregate MERGE 6.73M(vs P=3 5.25M,+28% 抖动)。
+- **真·杠杆1(重解)**:bias-pack+out-zero 挪到 producer,**consumer 纯 mxmem 完全不碰 HVX** → 腾出那单元,
+  P=4=4 producer 贴 4 单元,**饿死消失**(timeline 确认 4 producer 78–87% busy 一起收尾)。
+  `-DGDNBM_PIPE_PURE_HMX`(已设 PIPE 默认;`-DGDNBM_PIPE_HVX_CONSUMER` 退回旧版)。
+- **结果(warmup+REPS=8 稳态,A/B 控热,HVX 冷起占优):**
+  | 配置 | 32-head total wall | vs HVX |
+  |---|---|---|
+  | GDNSolveHVX 4-thread 基线 | ~3.97M | 1.00× |
+  | PIPE P=4 朴素(consumer 碰 HVX) | ~3.55M | 1.12× |
+  | PIPE P=3 | ~2.68M | 1.48× |
+  | **PIPE PURE-HMX P=4(当前最佳)** | **~2.50M** | **1.59× ✓** |
+  全部 bit-exact vs 单线程(maxdiff=0)。
+
+### 还能往下压(算法级,非结构)
+- producer 仍 ~17% idle + MERGE 占 producer ~72%(fold/quant/pack/depack/acc/widen/requant glue)。
+  按 [[reference_gdn_solve_global_roofline]] merge-glue 51% 是大头 → 攻 glue:T 三角性跳零块、更便宜 quant/acc。
+- 多线程 per-op 成本随线程涨(VTCM 带宽 + 2-cluster SMT 争用):P=4 aggregate MERGE 6.89M > P=3 5.25M,是收益递减根因。
 
 ---
 

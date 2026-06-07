@@ -43,6 +43,13 @@
 #endif
 #include "../../solve_br_op/src/GdnSolveBROp.cpp"
 
+/* PIPE default = PURE-HMX consumer (lever 1): bias-pack+out-zero on the producer so the consumer is pure
+ * mxmem and frees its HVX unit -> P=4 producers fit 4 HVX units (no SMT starvation; timeline-verified).
+ * Opt out with -DGDNBM_PIPE_HVX_CONSUMER (consumer does bias-pack; then use P=3 to avoid 5-on-4 thrash). */
+#if defined(GDNBM_HMX_PIPE) && !defined(GDNBM_PIPE_HVX_CONSUMER) && !defined(GDNBM_PIPE_PURE_HMX)
+#define GDNBM_PIPE_PURE_HMX 1
+#endif
+
 /* FULLY-VECTORIZED eff+bias for the GDNSolveHVXMixHMX producer: replaces gdn_effective's scalar tail (64 scalar
  * -128*col) + gdn_pack_bias's 128 SCALAR VTCM writes (the documented pathology) with HVX column-sum +
  * 4 vector stores. Produces the identical bias layout: [ctrl×32][eff0:32][ctrl×32][eff32:64],
@@ -275,15 +282,29 @@ struct hmx_job {
 static struct hmx_job g_pjob[GDN_BR_NT];
 static volatile int g_pipe_pdone;       /* # producers that finished all their heads (drain-exit signal) */
 static char __attribute__((aligned(128))) g_pipe_stack[GDN_BR_NT][32768];
+static volatile uint64_t g_pipe_cbusy;          /* consumer: cyc inside the HMX kernel (busy, not spinning) */
+static volatile uint64_t g_pipe_pspin[GDN_BR_NT];   /* producer t: cyc spinning for its matmul result */
+static volatile uint32_t g_pipe_pcnt[GDN_BR_NT];    /* producer t: # matmuls dispatched */
 
 /* dispatch hook (installed into g_hmx_dispatch): hand the kernel to the main consumer, spin for the result. */
 static void gdn_pipe_dispatch(gdn_scr_t *sc, const gdn_vtcm_t *vt, const int8_t *wt, const int32_t *eff,
                               float scale, int baseline, int round) {
     struct hmx_job *jb = &g_pjob[(int)(sc - g_scr)];           /* slot = this producer's scratch index */
+#if defined(GDNBM_PIPE_PURE_HMX)
+    /* LEVER 1: do the bias-pack + out-zero HERE (producer, HVX) so the consumer is PURE mxmem and never
+     * touches an HVX unit -> frees its unit for a 4th producer (P=4 fits 4 HVX units w/o SMT oversubscribe). */
+    { int rdelta = round ? (int)(256.0f / scale + 0.5f) : 0;
+      gdn_pack_bias(eff, scale, baseline, (int32_t *)vt->bias, rdelta);
+      HVX_Vector z = Q6_V_vzero(); HVX_Vector *op = (HVX_Vector *)vt->out;
+      for (int i = 0; i < (64 * 64) / 128; ++i) op[i] = z; }
+#endif
     jb->vt = vt; jb->wt = wt; jb->eff = eff; jb->scale = scale; jb->baseline = baseline; jb->round = round;
     __sync_synchronize();
+    int slot = (int)(sc - g_scr);
     jb->state = 1;                                             /* arm: consumer may run it */
+    uint64_t s0 = pcyc();
     while (jb->state != 2) { /* spin for the HMX result */ }
+    g_pipe_pspin[slot] += pcyc() - s0; g_pipe_pcnt[slot]++;
     __sync_synchronize();
     jb->state = 0;                                             /* consumed; idle until next dispatch */
 }
@@ -995,12 +1016,16 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
         if (!vbase || hl != 0) { FARF(ALWAYS, "PIPE: acquire failed vbase=%p hl=%d", vbase, hl);
             if (hl == 0) HAP_compute_res_hmx_unlock(hctx); if (hctx) HAP_compute_res_release(hctx);
             if (vctx2) HAP_compute_res_release(vctx2); return -1; }
-        for (int t = 0; t < P; ++t) g_pjob[t].state = 0;
+        for (int t = 0; t < P; ++t) { g_pjob[t].state = 0; g_pipe_pspin[t] = 0; g_pipe_pcnt[t] = 0; }
+        g_pipe_cbusy = 0;
         g_pipe_pdone = 0;
         g_hmx_dispatch = gdn_pipe_dispatch;                                    /* matmuls now delegate to this consumer */
         __sync_synchronize();
         gdn_work_t work[GDN_BR_NT]; qurt_thread_t tid[GDN_BR_NT];
         uint64_t t0 = pcyc();
+#if defined(GDN_BR_TRACE)
+        g_tr_n = 0; g_tr_base = t0;   /* per-thread event timeline: producers push DIAG/MERGE/HEAD, consumer MM */
+#endif
         for (int t = 0; t < P; ++t) {
             work[t] = (gdn_work_t){ t, 0u, (uint32_t)H, (uint32_t)P, Au, Tu, zpA, M, S, sT, zpT, vbase };
             qurt_thread_attr_t a; qurt_thread_attr_init(&a); qurt_thread_attr_set_name(&a,(char*)"pipeprod");
@@ -1009,11 +1034,31 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
         }
         /* consumer drain: run any armed job; exit when all producers finished.  A producer bumps g_pipe_pdone
          * only AFTER its last dispatch fully returned -> pdone==P implies no job is still armed. */
+#if defined(GDNBM_PIPE_PURE_HMX)
+        uint32_t pipe_ep[2] __attribute__((aligned(16))) = {1u, 0u};                  /* PURE-HMX consumer: bias-pack */
+        uint32_t pipe_mb[16] __attribute__((aligned(16))); for (int i = 0; i < 16; ++i) pipe_mb[i] = GDN_BR_MASK_WORDS[i];
+#endif
         while (g_pipe_pdone < P) {
             for (int t = 0; t < P; ++t) {
                 if (g_pjob[t].state == 1) {
                     struct hmx_job *jb = &g_pjob[t];
+                    uint64_t k0 = pcyc();
+#if defined(GDNBM_PIPE_PURE_HMX)
+                    /* LEVER 1: PURE mxmem — bias-pack+out-zero already done producer-side; consumer never
+                     * touches an HVX unit -> P=4 producers fit 4 HVX units without SMT starvation. */
+                    { const gdn_vtcm_t *cvt = jb->vt;
+                      hmx_conv_out_desc_t od __attribute__((aligned(64))) = { cvt->outtab, GDN_BR_OUT_TABLE_STRIDE,
+                          GDN_BR_OUT_Y_STRIDE, GDN_BR_N_TILES_POW2, GDN_BR_M_TOTAL_MINUS_STEP, GDN_BR_K_TOTAL_BYTES };
+                      hmx_conv_act_desc_t ad __attribute__((aligned(64))) = { cvt->acttab, GDN_BR_N_ACT_PAIRS, GDN_BR_ACT_Y_STRIDE };
+                      our_v73deep_kernel(&od, &ad, (const uint8_t *)jb->wt, (const uint8_t *)cvt->bias,
+                                         (const hmx_conv_mask_desc_t *)pipe_mb, pipe_ep); }
+#else
                     gdn_hmx_run_only(jb->vt, jb->wt, jb->eff, jb->scale, jb->baseline, jb->round);
+#endif
+                    uint64_t k1 = pcyc(); g_pipe_cbusy += k1 - k0;
+#if defined(GDN_BR_TRACE)
+                    gdn_tr_push((uint32_t)GDN_BR_NT, GDN_TR_MM, k0, k1);   /* consumer tid=GDN_BR_NT, MM span */
+#endif
                     __sync_synchronize();
                     jb->state = 2;
                 }
@@ -1028,8 +1073,28 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
         if (statsLen > 0) stats[0] = (int)(t1 - t0);
         if (statsLen > 1) stats[1] = P;
         if (statsLen > 2) stats[2] = H;
-        FARF(ALWAYS, "gdnbm_solve(PIPE): wall=%llu cyc / %d heads / %d producers -> %llu cyc/head",
-             (unsigned long long)(t1-t0), H, P, (unsigned long long)((t1-t0)/(H>0?H:1)));
+        uint64_t wall = t1 - t0;
+        uint32_t mm0 = g_pipe_pcnt[0] ? g_pipe_pcnt[0] : 1;
+        if (statsLen > 3) stats[3] = (int)(g_pipe_cbusy * 100 / (wall ? wall : 1));   /* consumer busy % of wall */
+        if (statsLen > 4) stats[4] = (int)(g_pipe_pspin[0] * 100 / (wall ? wall : 1));/* producer0 spin % of wall */
+        if (statsLen > 5) stats[5] = (int)(g_pipe_cbusy / (mm0 * (uint64_t)P > 0 ? mm0 * (uint64_t)P : 1)); /* ~cyc/kernel */
+        FARF(ALWAYS, "PIPE wall=%llu (32h) | consumer busy=%llu (%llu%%) | prod0 spin=%llu (%llu%%) over %u mm",
+             (unsigned long long)wall, (unsigned long long)g_pipe_cbusy,
+             (unsigned long long)(g_pipe_cbusy*100/(wall?wall:1)),
+             (unsigned long long)g_pipe_pspin[0], (unsigned long long)(g_pipe_pspin[0]*100/(wall?wall:1)),
+             (unsigned)g_pipe_pcnt[0]);
+#if defined(GDN_BR_TRACE)
+        /* serialize per-thread event timeline into Tu (overwrites T): [magic][n][wall u64][base u64] then
+         * n*{tid u32, stage u32, t0 u64, t1 u64}.  Host renders ASCII timeline (scripts/gdn_pipe_timeline.py). */
+        { int n = g_tr_n; if (n > GDN_TR_MAX) n = GDN_TR_MAX;
+          uint32_t *hdr = (uint32_t *)Tu; hdr[0] = 0x47545203u; hdr[1] = (uint32_t)n;
+          ((uint64_t *)(hdr + 2))[0] = wall; ((uint64_t *)(hdr + 2))[1] = t0;
+          uint8_t *p = (uint8_t *)Tu + 24;
+          for (int e = 0; e < n; ++e) { uint32_t *q = (uint32_t *)(p + (size_t)e * 24);
+            q[0] = g_tr[e].tid; q[1] = g_tr[e].stage;
+            ((uint64_t *)(q + 2))[0] = g_tr[e].t0; ((uint64_t *)(q + 2))[1] = g_tr[e].t1; }
+          FARF(ALWAYS, "PIPE TRACE: %d events, wall=%llu", n, (unsigned long long)wall); }
+#endif
         return 0;
     }
 #endif
