@@ -88,9 +88,11 @@
   全部 bit-exact vs 单线程(maxdiff=0)。
 
 ### 还能往下压(算法级,非结构)
-- producer 仍 ~17% idle + MERGE 占 producer ~72%(fold/quant/pack/depack/acc/widen/requant glue)。
-  按 [[reference_gdn_solve_global_roofline]] merge-glue 51% 是大头 → 攻 glue:T 三角性跳零块、更便宜 quant/acc。
-- 多线程 per-op 成本随线程涨(VTCM 带宽 + 2-cluster SMT 争用):P=4 aggregate MERGE 6.89M > P=3 5.25M,是收益递减根因。
+- **PREP 拆解(fine timeline 2026-06-08,权威)**:producer 全栈排序(/producer)= **QUANT 23% > DIAG 21% > MM 17% > PACK 7% ≈ REQ 6% > ACC 3%**。
+  aggregate:**QUANT(fold+quant+effective)≈2.30M** vs **PACK(crouton/kmajor)≈0.69M**(QUANT 是 PACK 的 ~3.3×)。
+  - ⚠️ **推翻"PACK 是大头"旧假设**;也是 2-head pack-fusion 失败的第二因(攻的是只占 7% 的 PACK)。
+  - **下一步真正该攻 = QUANT**(`gdn_fold_quant_u8` A 折叠+量化 / `gdn_quant_i8_from_codes` T int32→i8 / `gdn_effective` 列和 bias)。先拆 QUANT 内部再攻。
+- 多线程 per-op 成本随线程涨(VTCM 带宽 + 2-cluster SMT 争用),是收益递减根因。
 
 ---
 
