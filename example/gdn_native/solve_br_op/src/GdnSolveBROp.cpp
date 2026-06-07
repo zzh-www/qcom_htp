@@ -971,6 +971,28 @@ static void gdn_merge_packed(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint8_t 
      * (scripts/gdn_solve_maxp_probe.py); fallback to LOOSE if colabsmax==0. */
     int maxP_est = 128 * wt_colabsmax;
     float g1 = (maxP_est > 0) ? (127.0f / (float)maxP_est) : (127.0f / (float)GDN_BR_LOOSE_CONST);
+#if defined(GDN_BR_STATIC_GAIN)
+    /* STATIC SINGLE-PASS (precision先不管): use the colabsmax-PREDICTED gain g1 directly as the OUTPUT
+     * gain — skip the PASS-1 HMX run + gdn_surf_maxabs read AND the PASS-3 re-run.  g1 is a Holder upper
+     * bound on max|P| (codes fill int8 without saturating; slightly looser than the dynamic tight gain).
+     * Kills the multi-pass gain-search HMX tax (~2x the HMX work).  sP uses the predicted maxP_est so
+     * dequant value = code*sP = round(P*g1)*(maxP_est*sa*sw/127) ~= P*sa*sw (exact up to the round). */
+    {
+        float maxP = (maxP_est > 0) ? (float)maxP_est : (float)GDN_BR_LOOSE_CONST;
+        float sP = (maxP * sa * sw) / 127.0f; if (sP <= 0.0f) sP = 1e-12f;
+        gdn_hmx_run_only(vt, wt_kmajor, eff, g1 * 512.0f, 128 << 7, 1);   /* single output pass (round) */
+#if defined(GDN_BR_PROBE_CYCLES)
+        { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_hmxkern += q - es0; }
+        uint64_t d0; asm volatile("%0 = C15:14" : "=r"(d0));
+#endif
+        gdn_depack_out_fast(sc, vt->out, 128, out_codes);
+#if defined(GDN_BR_PROBE_CYCLES)
+        { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_hmxdepack += q - d0; }
+#endif
+        *s_out = sP;
+        return;
+    }
+#endif
     gdn_hmx_run_only(vt, wt_kmajor, eff, g1 * 512.0f, 128 << 7, 0);
     int code1 = gdn_surf_maxabs(vt->out, 128);                  /* max|P|*g1 — accurate now (PASS-1 fills range) */
     float maxP = (float)code1 / g1; if (maxP < 1.0f) maxP = 1.0f;
