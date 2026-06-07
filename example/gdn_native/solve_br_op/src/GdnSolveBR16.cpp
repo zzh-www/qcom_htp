@@ -128,13 +128,25 @@ static const int8_t *gdn_get_wt_T16(gdn_scr_t *sc, const gdn_vtcm_t *vt, int k, 
     int key = gdn_blk_index(k, j);
     int8_t *km = vt->wcache + (size_t)key * 0x1000;
     if (!sc->vTw[key]) {
+#if defined(GDN_BR_TRACE)
+        uint64_t _t0 = gdn_trnow();
+#endif
         if (k != j && sc->Tscl[key] == GDN_OPS_sTw) {                       /* clean i16->i8 narrow */
             gdn_narrow_i16_to_i8(sc->Tblk16[key], sc->wtbuf); sc->sTw[key] = GDN_OPS_sTw;
         } else {                                                            /* diag block: int16-native Q15 quant (g≈0.008<1) */
             gdn_quant_i8_q15(sc->Tblk16[key], sc->Tscl[key], GDN_OPS_sTw, sc->wtbuf); sc->sTw[key] = GDN_OPS_sTw;
         }
+#if defined(GDN_BR_TRACE)
+        uint64_t _t1 = gdn_trnow(); gdn_tr_push((uint32_t)(sc - g_scr), 4, _t0, _t1);   /* QUANT(narrow/quant) */
+#endif
         gdn_effective(sc->wtbuf, sc->effc[key]); sc->colabsc[key] = GDN_OPS_COLABS;
+#if defined(GDN_BR_TRACE)
+        uint64_t _t2 = gdn_trnow(); gdn_tr_push((uint32_t)(sc - g_scr), 9, _t1, _t2);   /* EFF */
+#endif
         gdn_pack_w8_kmajor(sc->wtbuf, km);
+#if defined(GDN_BR_TRACE)
+        gdn_tr_push((uint32_t)(sc - g_scr), 8, _t2, gdn_trnow());   /* PACK (kmajor) */
+#endif
         sc->vTw[key] = 1;
     }
     *sw_out = sc->sTw[key]; *eff_out = sc->effc[key]; *colabs_out = sc->colabsc[key];
@@ -145,9 +157,18 @@ static const uint8_t *gdn_get_act_Tdiag16(gdn_scr_t *sc, const gdn_vtcm_t *vt, i
     uint8_t *cr = vt->acache + 0xA000 + (size_t)i * 0x1000;
     if (!sc->vTa[i]) {
         int bii = gdn_blk_index(i, i);
+#if defined(GDN_BR_TRACE)
+        uint64_t _t0 = gdn_trnow();
+#endif
         gdn_quant_u8_q15(sc->Tblk16[bii], sc->Tscl[bii], GDN_OPS_sTa, sc->actbuf);   /* int16-native Q15 (g≈0.008<1) */
         sc->sTa[i] = GDN_OPS_sTa;
+#if defined(GDN_BR_TRACE)
+        uint64_t _t1 = gdn_trnow(); gdn_tr_push((uint32_t)(sc - g_scr), 4, _t0, _t1);   /* QUANT */
+#endif
         gdn_pack_act_crouton8(sc->actbuf, cr);
+#if defined(GDN_BR_TRACE)
+        gdn_tr_push((uint32_t)(sc - g_scr), 8, _t1, gdn_trnow());   /* PACK (crouton) */
+#endif
         sc->vTa[i] = 1;
     }
     *sa_out = sc->sTa[i];

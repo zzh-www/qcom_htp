@@ -56,11 +56,29 @@
 | **A/B 控热** | `git stash`→build A→run→`git stash pop`→build B→run,各 REPS=8 取 median | ✅ 抗热噪声 |
 | **bit-exact 门** | dump 设备 T uint16,跟 `/tmp/T_avtcm.raw` `np.array_equal` | ✅ 正确性 |
 | **timeline 渲染** | `-DGDN_BR_TRACE` build → 设备跑 REPS=4 → dump T → `scripts/gdn_pipe_timeline.py T.raw [W]`(`GDN_TL_COARSE=1` 看粗粒度) | ✅ 看分布,⚠️ span 高估 SMT 隐藏的 load-bound 阶段(见 diag) |
-| **cap-test ablation** | 加 flag 砍某阶段工作量(如 `GDN_BR_FWD_CAP` 砍 diag 到 1/16),看 4线程 wall 是否降 | ✅ **SMT 隐藏阶段的唯一真相**;timeline span 不行时用它 |
+| **cap-test ablation** | 加 flag 砍某阶段工作量,看 4线程 wall 是否降 | ✅ 对 SMT 隐藏阶段有效,**但⚠️见下方致命前提** |
 | **dssh.sh** | `source scripts/dssh.sh; dssh_open oneplus; dssh "cmd"`(ControlMaster 复用,抗 ssh 假死) | ✅ 设备必用 |
 | **PROBE_CYCLES** | `-DGDN_BR_PROBE_CYCLES` 每阶段 C15:14 桶 | ❌ **不可信**(嵌套 C15:14 求和 = 3.5× wall);只用 timeline disjoint span |
 | **per-head metric** | — | ❌ tiler 低估 artifact(88K 假基线),**禁用** |
 | **min-of-reps** | — | ❌ 抓快异常值,系统性高估;用 median 稳态 reps2-4 |
+
+> ### ⚠️ cap-test 的致命前提(2026-06-08 踩坑)
+> cap-test 砍工作量只在**该阶段的输出不喂数据相关时序的下游**时有效。
+> **反例**:砍 A 的 fold(`GDN_BR_CAP_FOLD`)→ 留下垃圾 u8 operand → 喂进 HMX matmul/量化链 →
+> 数据相关下游变慢 → **实测 capped 反而更慢(2.01M→2.15M)**,得出"fold 越少越慢"的假结论。
+> diag 的 `GDN_BR_FWD_CAP` 有效是因为它的垃圾输出没显著改下游时序(凑巧)。
+> **→ 对喂 matmul/量化链的阶段(fold/quant/pack),cap-test 无效;只能直接实现 int16-lane 版 + A/B + bit-exact 验。**
+
+---
+
+## 2.5 PREP 细分(2026-06-08,fine timeline)
+| PREP 子项 | aggregate | /producer | 备注 |
+|---|---|---|---|
+| QUANT(A `gdn_fold_quant_u8` + T quant) | 0.87M | ~10% | A 的 u16→u8 fold 主导(32-lane);T quant 已 int16-lane Q15 |
+| PACK(crouton + kmajor) | 0.59M | ~7% | u8/i8 字节 op,128-lane 已最优 |
+| EFF | 0.18M | ~2% | 留(精度税,只 3-4% 不值) |
+- **PREP 碎(每项 <10%),无单一大杠杆。** 最大的 A-fold(QUANT)是唯一未吃 int16-lane 的,但:cap-test 无效(上面的坑)+ int16-lane 化不确定(reverted-quant 先例:fused-widen 可能更慢)。
+- 唯一干净的下一步 = 直接实现 int16-lane fold(`Q6_Ww_vmpy` + u16 XOR 0x8000 当 i16 零点)+ A/B,**期望小(~3%)且可能更慢**。优先级低。
 
 ---
 

@@ -449,7 +449,15 @@ static void gdn_fold_quant_u8(gdn_scr_t *sc, const uint16_t *Au, int row_stride,
     const HVX_Vector vzp = Q6_V_vsplat_R(zpA), vrndS = Q6_V_vsplat_R(1 << (S - 1)), vrndQ = Q6_V_vsplat_R(1 << (Q - 1));
     const HVX_Vector vlim = Q6_V_vsplat_R(127), vnlim = Q6_V_vsplat_R(-127), v128 = Q6_V_vsplat_R(128);
     HVX_Vector *qp = (HVX_Vector *)sc->qbuf;
-    for (int r = 0; r < BL; ++r) {
+#if defined(GDN_BR_CAP_FOLD)
+    /* ⚠️ INVALID cap-test: capping fold leaves GARBAGE u8 operands -> feed HMX matmul/quant chain ->
+     * data-dependent downstream slowdown -> measured SLOWER not faster (2.01M->2.15M). cap-test only works
+     * for stages whose output does NOT feed data-dependent-timing downstream.  Kept as a documented trap. */
+    const int FOLD_ROWS = BL / 4;
+#else
+    const int FOLD_ROWS = BL;
+#endif
+    for (int r = 0; r < FOLD_ROWS; ++r) {
         const HVX_UVector *Av = (const HVX_UVector *)(Au + r * row_stride);
         HVX_VectorPair w = Q6_Wuw_vzxt_Vuh(Av[0]);
         HVX_Vector c0 = Q6_Vw_vsub_VwVw(Q6_V_lo_W(w), vzp), c1 = Q6_Vw_vsub_VwVw(Q6_V_hi_W(w), vzp);
