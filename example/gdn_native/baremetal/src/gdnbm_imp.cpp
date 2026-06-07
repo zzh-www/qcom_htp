@@ -337,6 +337,31 @@ static void gdn_pipe_dispatch(gdn_scr_t *sc, const gdn_vtcm_t *vt, const int8_t 
     jb->state = 0;                                             /* consumed; idle until next dispatch */
 }
 
+/* ASYNC: bias-pack + signal the consumer, return immediately (NO spin) — for the software pipeline. */
+static void gdn_pipe_dispatch_async(gdn_scr_t *sc, const gdn_vtcm_t *vt, const int8_t *wt, const int32_t *eff,
+                                    float scale, int baseline, int round) {
+    struct hmx_job *jb = &g_pjob[(int)(sc - g_scr)];
+#if defined(GDNBM_PIPE_PURE_HMX)
+    { int rdelta = round ? (int)(256.0f / scale + 0.5f) : 0;
+      gdn_pack_bias(eff, scale, baseline, (int32_t *)vt->bias, rdelta); }
+#endif
+    jb->vt = vt; jb->wt = wt; jb->eff = eff; jb->scale = scale; jb->baseline = baseline; jb->round = round;
+    __sync_synchronize();
+    jb->state = 1;                                             /* arm; do NOT spin (caller preps next, then waits) */
+}
+/* wait for THIS producer's in-flight matmul result (the spin, hidden under the caller's next-operand prep). */
+static void gdn_pipe_wait(gdn_scr_t *sc) {
+    int slot = (int)(sc - g_scr); struct hmx_job *jb = &g_pjob[slot];
+    uint64_t s0 = pcyc();
+    while (jb->state != 2) { /* spin */ }
+    uint64_t s1 = pcyc(); g_pipe_pspin[slot] += s1 - s0; g_pipe_pcnt[slot]++;
+#if defined(GDN_BR_TRACE)
+    gdn_tr_push((uint32_t)slot, 11, s0, s1);   /* SPIN */
+#endif
+    __sync_synchronize();
+    jb->state = 0;
+}
+
 /* producer thread: full per-head solve over this slot's head-stripe, A VTCM-resident ping-pong. */
 static void pipe_producer(void *arg) {
     gdn_work_t *w = (gdn_work_t *)arg;
@@ -1055,6 +1080,7 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
         g_pipe_cbusy = 0;
         g_pipe_pdone = 0;
         g_hmx_dispatch = gdn_pipe_dispatch;                                    /* matmuls now delegate to this consumer */
+        g_hmx_dispatch_async = gdn_pipe_dispatch_async; g_hmx_wait = gdn_pipe_wait;   /* + async split for the SW pipeline */
         __sync_synchronize();
         gdn_work_t work[GDN_BR_NT]; qurt_thread_t tid[GDN_BR_NT];
         uint64_t us0 = HAP_perf_get_time_us();

@@ -103,7 +103,10 @@ MM(producer 的 `gdn_merge_packed`,~21%)细分:
 | DEPACK(de-crouton) | 0.24M | ~3% | 已 byte-lane 128 最优,**非杠杆** |
 | 其余(bias-pack/dispatch/set-tabs) | ~1.14M | ~11% | 疑似 SMT-stall 虚高(像 diag,span 高估) |
 - **out-zero 删除 = neutral**(kernel 全覆盖输出,删对了但不提速;`-DGDNBM_PIPE_OUTZERO` 恢复)。
-- **下一个杠杆 = 藏 SPIN(software-pipeline)**:内层 k 循环里**下一个 matmul 的操作数 prep 与当前 matmul 结果无关** → 在 spin 等待时预取 k+1 的操作数。需把 `gdn_merge_packed` 拆成 **dispatch-async(signal 即返回)+ wait-depack(spin+depack)**,内层循环改软流水:`prep(j); disp(j); for k: prep(k+1); wait(k); acc(k); disp(k+1)`。**实打实重构(触及共享 gdn_merge_packed),是已定位/已测量的下一步,不是"不值得"。**
+- **software-pipeline 藏 SPIN 已做到底 + 实测 = ❌ REFUTED(无效)**:完整实现了 `gdn_merge_dispatch`(async)+ `gdn_merge_wait_depack` + 内层 k 循环软流水(`-DGDN_BR_SWPIPE`,bit-exact),但 **timeline 显示 SPIN 没降(0.55M→0.71M),perf neutral**。
+  根因:**操作数 cache 把 prefetch 变成了命中(no-op)** —— 内层 k 操作数在 head 内复用、早缓存好,`prep(k+1)` 是 cache HIT、瞬间返回,**没有真实 prep 工作能盖住 spin**;spin 是 producer 等 consumer 的固有延迟,而此时 producer 没别的活干。
+  → **新原则:有 operand cache 时,"prefetch 下一个操作数藏延迟"无效(prep 是命中)。要藏 spin 得用 cache-MISS 的工作或别的 producer 活(如跨 head),不是同 head 内的 prefetch。** flag-gated 保留 `-DGDN_BR_SWPIPE`(默认 off)。
+- **SPIN(同步 hand-off,~7%)仍是 MM 的最大真目标,但 prefetch 路已堵死。** 别再试同 head prefetch。
 
 ---
 

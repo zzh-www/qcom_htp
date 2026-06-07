@@ -208,6 +208,29 @@ static void gdn_br_one_head16(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_
         for (int j = 0; j + d < NB; ++j) {
             int i = j + d, bij = gdn_blk_index(i, j);
             float s_S = 0.f; int first = 1;
+#if defined(GDN_BR_SWPIPE)
+            /* SOFTWARE PIPELINE: dispatch matmul k async, prep k+1's operands WHILE the consumer computes k
+             * (next-operand prep is independent of k's result) -> hides the spin under the prep.  Single vt +
+             * slot is safe: only 1 job in flight; prep(k+1) writes a DIFFERENT cache slot, not vt->bias/out. */
+            { float sa, sw; const int32_t *eff; int wc;
+              const uint8_t *a = gdn_get_act_A(sc, vt, Ah, i, j, C, zpA, M, S, &sa);
+              const int8_t  *w = gdn_get_wt_T16(sc, vt, j, j, &sw, &eff, &wc);
+              float sP = gdn_merge_dispatch(sc, vt, a, sa, w, eff, sw, wc);
+              for (int k = j; k < i; ++k) {
+                  float sa2 = 0, sw2 = 0; const int32_t *eff2 = nullptr; int wc2 = 0;
+                  const uint8_t *a2 = nullptr; const int8_t *w2 = nullptr;
+                  if (k + 1 < i) {                              /* prefetch next operands (overlaps consumer running k) */
+                      a2 = gdn_get_act_A(sc, vt, Ah, i, k + 1, C, zpA, M, S, &sa2);
+                      w2 = gdn_get_wt_T16(sc, vt, k + 1, j, &sw2, &eff2, &wc2);
+                  }
+                  gdn_merge_wait_depack(sc, vt, sc->termi);     /* wait k + depack (spin now hidden by the prefetch) */
+                  if (first) s_S = sP;
+                  gdn_acc16(sc, sc->termi, first);
+                  first = 0;
+                  if (k + 1 < i) sP = gdn_merge_dispatch(sc, vt, a2, sa2, w2, eff2, sw2, wc2);
+              }
+            }
+#else
             for (int k = j; k < i; ++k) {
                 float sa, sw, sterm; const int32_t *eff; int wcolabs;
 #if defined(GDN_BR_TRACE)
@@ -229,6 +252,7 @@ static void gdn_br_one_head16(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_
 #endif
                 first = 0;
             }
+#endif
             /* final merge T_ij = T_ii @ Sacc. */
             float sa_ii, sw_S, sij; int scolabs;
 #if defined(GDN_BR_TRACE)

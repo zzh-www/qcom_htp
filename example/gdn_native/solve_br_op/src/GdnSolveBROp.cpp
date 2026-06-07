@@ -1144,6 +1144,39 @@ static const int8_t *gdn_get_wt_T(gdn_scr_t *sc, const gdn_vtcm_t *vt, int k, in
 typedef void (*gdn_hmx_dispatch_fn)(gdn_scr_t *sc, const gdn_vtcm_t *vt, const int8_t *wt_kmajor,
                                     const int32_t *eff, float scale_f16, int baseline_u16, int round_out);
 static gdn_hmx_dispatch_fn g_hmx_dispatch = nullptr;
+/* ASYNC variants for the software-pipeline (hide spin): dispatch_async = bias-pack + signal (NO spin);
+ * wait = spin for this producer's result.  Set by the bare-metal pipeline (gdnbm_imp.cpp). */
+static gdn_hmx_dispatch_fn g_hmx_dispatch_async = nullptr;
+typedef void (*gdn_hmx_wait_fn)(gdn_scr_t *sc);
+static gdn_hmx_wait_fn g_hmx_wait = nullptr;
+
+/* split of gdn_merge_packed's STATIC path for the inner-k software pipeline (GDN_BR_STATIC_GAIN only):
+ *   gdn_merge_dispatch: set tabs + g1/sP + bias-pack + signal consumer; returns sP.  Does NOT spin/depack.
+ *   gdn_merge_wait_depack: spin for the result + de-crouton into out_codes.
+ * Between them the caller preps the NEXT matmul's operands -> overlaps the consumer kernel + hides the spin. */
+#if defined(GDN_BR_STATIC_GAIN)
+static float gdn_merge_dispatch(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint8_t *act_crouton, float sa,
+                                const int8_t *wt_kmajor, const int32_t *eff, float sw, int wt_colabsmax) {
+    vt->acttab[0] = (int32_t)(uintptr_t)(act_crouton + 0);
+    vt->acttab[1] = (int32_t)(uintptr_t)(act_crouton + 64 * 32);
+    vt->outtab[0] = (int32_t)(uintptr_t)(vt->out + 0);
+    vt->outtab[1] = (int32_t)(uintptr_t)(vt->out + 64 * 32);
+    int maxP_est = 128 * wt_colabsmax;
+    float g1 = (maxP_est > 0) ? (127.0f / (float)maxP_est) : (127.0f / (float)GDN_BR_LOOSE_CONST);
+    float maxP = (maxP_est > 0) ? (float)maxP_est : (float)GDN_BR_LOOSE_CONST;
+    float sP = (maxP * sa * sw) / 127.0f; if (sP <= 0.0f) sP = 1e-12f;
+#if defined(GDN_BR_STATIC_FULL)
+    if (g_force_sP > 0.f) { sP = g_force_sP; maxP = (sa * sw > 0.f) ? (127.0f * sP / (sa * sw)) : maxP;
+                            g1 = (maxP > 0.f) ? (127.0f / maxP) : g1; }
+#endif
+    g_hmx_dispatch_async(sc, vt, wt_kmajor, eff, g1 * 512.0f, 128 << 7, 1);   /* bias-pack + signal, no spin */
+    return sP;
+}
+static void gdn_merge_wait_depack(gdn_scr_t *sc, const gdn_vtcm_t *vt, int8_t *out_codes) {
+    g_hmx_wait(sc);                                  /* spin for the consumer's result */
+    gdn_depack_out_fast(sc, vt->out, 128, out_codes);
+}
+#endif
 
 static void gdn_merge_packed(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint8_t *act_crouton, float sa,
                              const int8_t *wt_kmajor, const int32_t *eff, float sw,
