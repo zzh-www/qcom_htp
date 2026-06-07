@@ -46,6 +46,15 @@ int 域 glue(quant-rescale + ACC + REQ + widen/narrow)是真目标;int16 让它�
 - 风险:scale 敏感,一个 pre-shift/符号扩展错就 relerr 炸 → 逐函数改、每改完跑一次整 solve relerr。
 - 退路:GDN_BR_I16 flag,坏了直接关。
 
-## 已确证的交付(本轮)
+## 已确证的交付
 - 成本:effective 仅 3-4%(不碰);int 域 glue 是目标。
-- 精度:int16 ≈ 无损(数据证实 0% 超界)。commit fb752a7。
+- 精度:int16 ≈ 无损(数据证实 0% 超界)。
+- **落地:`GdnSolveBR16.cpp` int16 静态 solve,2.45M→2.19M(~11%)bit-exact,已设 PIPE 默认**(commit 4e5111f)。
+
+## ⚠️ Review 发现的反直觉结论(2026-06-08):VTCM round-trip 在 v75 是免费的,别去抠它
+按"数据源头/不做自我抵消 round-trip"原则 review,发现 5 处 `i16→i32 widen-back`(为复用 int32 quant/requant)。
+**实现了 int16-native(寄存器内 widen,无 int32 round-trip)→ A/B 实测反而慢 ~3%(2.21M→2.27M),已 revert。**
+- 根因:**VTCM 带宽充足,int32 round-trip(写/读 Tc)几乎免费**;而 int16-native 把 vshuff widen 揉进 multiply + q4 寄存器 juggling → **HVX 调度更差**。两个干净的 streaming pass(单独 widen + int32 quant)比 fused 流水更好。
+- **大教训:v75 这条管线瓶颈是 HVX issue/compute,不是 VTCM 带宽。** 所以有效杠杆是"**更少 HVX op/lane**"(int16 lane 减半、少 pass),不是"更少内存搬运"(round-trip 消除)。
+  → 这也解释了为何 int16 有用(widen/narrow/acc lane 减半 = 真减 compute),而 round-trip 消除没用(compute 没减,只挪了内存)。
+- diag 的 i32→i16 narrow(diag 内部算 i16 却输出 i32)同理 —— 没去碰,大概率也是中性。
