@@ -37,17 +37,6 @@ static void gdn_narrow_i16_to_i8(const int16_t *codes, int8_t *out) {
     for (int v = 0; v < (BL * BL) / 128; ++v) op[v] = Q6_Vb_vpack_VhVh_sat(p[2*v+1], p[2*v]);
 }
 
-/* order-preserving i16 -> i32 (for reusing the proven int32 quant/requant). */
-static void gdn_widen_i16_to_i32(const int16_t *src, int32_t *dst) {
-    const HVX_Vector *sp = (const HVX_Vector *)src;          /* 64 i16 / vec */
-    HVX_Vector *dp = (HVX_Vector *)dst;                      /* 32 i32 / vec */
-    for (int b = 0; b < (BL * BL) / 64; ++b) {
-        HVX_VectorPair w = Q6_Ww_vsxt_Vh(sp[b]);            /* lo=even hw, hi=odd hw (deinterleaved) */
-        HVX_VectorPair s = Q6_W_vshuff_VVR(Q6_V_hi_W(w), Q6_V_lo_W(w), -4);  /* interleave words -> natural */
-        dp[2*b] = Q6_V_lo_W(s); dp[2*b+1] = Q6_V_hi_W(s);
-    }
-}
-
 /* PURE-ADD accumulate one i8 term into the int16 Sacc16 (static scales -> g=1, no rescale). */
 static void gdn_acc16(gdn_scr_t *sc, const int8_t *term, int first) {
     if (first) { gdn_widen_i8_to_i16(term, sc->Sacc16); return; }
@@ -83,6 +72,52 @@ static void gdn_quant_u8_q15(const int16_t *codes, float scale_in, float sQ, uin
         HVX_Vector q0 = Q6_Vh_vadd_VhVh(Q6_Vh_vmpy_VhRh_s1_rnd_sat(p[2*v+0], Rh), v128);
         HVX_Vector q1 = Q6_Vh_vadd_VhVh(Q6_Vh_vmpy_VhRh_s1_rnd_sat(p[2*v+1], Rh), v128);
         op[v] = Q6_Vub_vpack_VhVh_sat(q1, q0);
+    }
+}
+
+/* int16-lane WIDENING multiply (for g>=1, e.g. Sacc g=5.77): Q6_Ww_vmpy_VhRh = ONE instruction does 64
+ * int16 codes -> int32 pair (fuses widen+multiply; half the mults vs int32, no separate widen pass / Tc).
+ * The pair is deinterleaved (lo=even, hi=odd) -> vshuff -4 restores natural order before shift/narrow. */
+static void gdn_quant_i8_i16w(const int16_t *codes, float scale_in, float sQ, int8_t *out) {
+    float g = scale_in / sQ; int Q = 14;
+    while (Q > 1  && g * (float)(1 << Q) >= 32768.0f) --Q;
+    while (Q < 28 && g * (float)(1 << (Q + 1)) < 16384.0f) ++Q;
+    int Mg16 = (int)(g * (float)(1 << Q) + 0.5f) & 0xFFFF; int Rh = Mg16 | (Mg16 << 16);
+    const HVX_Vector vrnd = Q6_V_vsplat_R(1 << (Q - 1)), vlim = Q6_V_vsplat_R(127), vnlim = Q6_V_vsplat_R(-127);
+    const HVX_Vector *p = (const HVX_Vector *)codes; HVX_Vector *op = (HVX_Vector *)out;
+    for (int v = 0; v < (BL * BL) / 128; ++v) {
+        HVX_Vector q4[4];
+        for (int hv = 0; hv < 2; ++hv) {
+            HVX_VectorPair pr = Q6_Ww_vmpy_VhRh(p[2*v+hv], Rh);
+            HVX_VectorPair s = Q6_W_vshuff_VVR(Q6_V_hi_W(pr), Q6_V_lo_W(pr), -4);
+            HVX_Vector pp[2] = { Q6_V_lo_W(s), Q6_V_hi_W(s) };
+            for (int h = 0; h < 2; ++h) {
+                HVX_Vector q = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(pp[h], vrnd), Q);
+                q4[2*hv+h] = Q6_Vw_vmax_VwVw(Q6_Vw_vmin_VwVw(q, vlim), vnlim);
+            }
+        }
+        op[v] = Q6_Vb_vpack_VhVh_sat(Q6_Vh_vpack_VwVw_sat(q4[3], q4[2]), Q6_Vh_vpack_VwVw_sat(q4[1], q4[0]));
+    }
+}
+/* int16-lane requant: read i16 rows directly + widening multiply -> u16 Th (no widen pass / Tc). */
+static void gdn_requant_i16(const int16_t *codes, float scale_in, float sT, int zpT,
+                            uint16_t *Th, int roff, int coff, int row_stride) {
+    float g = scale_in / sT; int Q = 14;
+    while (Q > 1  && g * (float)(1 << Q) >= 32768.0f) --Q;
+    while (Q < 28 && g * (float)(1 << (Q + 1)) < 16384.0f) ++Q;
+    int Mg16 = (int)(g * (float)(1 << Q) + 0.5f) & 0xFFFF; int Rh = Mg16 | (Mg16 << 16);
+    const HVX_Vector vrnd = Q6_V_vsplat_R(1 << (Q - 1)), vzpT = Q6_V_vsplat_R(zpT);
+    const HVX_Vector vlim = Q6_V_vsplat_R(32767), vnlim = Q6_V_vsplat_R(-32767);
+    for (int r = 0; r < BL; ++r) {
+        HVX_VectorPair pr = Q6_Ww_vmpy_VhRh(*(const HVX_Vector *)(codes + r * BL), Rh);
+        HVX_VectorPair s = Q6_W_vshuff_VVR(Q6_V_hi_W(pr), Q6_V_lo_W(pr), -4);
+        HVX_Vector pp[2] = { Q6_V_lo_W(s), Q6_V_hi_W(s) }, q[2];
+        for (int h = 0; h < 2; ++h) {
+            HVX_Vector qq = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(pp[h], vrnd), Q);
+            qq = Q6_Vw_vmax_VwVw(Q6_Vw_vmin_VwVw(qq, vlim), vnlim);
+            q[h] = Q6_Vw_vadd_VwVw(qq, vzpT);
+        }
+        *(HVX_UVector *)(Th + (roff + r) * row_stride + coff) = Q6_Vuh_vpack_VwVw_sat(q[1], q[0]);
     }
 }
 
@@ -137,10 +172,9 @@ static void gdn_br_one_head16(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_
         for (int r = 0; r < BL; ++r) { uint16_t *rowp = Th + ((size_t)bi*BL + r)*C + (size_t)(bi+1)*BL;
           if (aligned) { HVX_Vector *op = (HVX_Vector *)rowp; for (int b=0;b<nbc;++b) op[b]=vzph; }
           else { HVX_UVector *op = (HVX_UVector *)rowp; for (int b=0;b<nbc;++b) op[b]=vzph; } } } }
-    /* diag requant: widen i16->i32, reuse proven requant. */
+    /* diag requant: int16-lane (read i16 directly + widening multiply). */
     for (int i = 0; i < NB; ++i) { int bi = gdn_blk_index(i, i);
-        gdn_widen_i16_to_i32(sc->Tblk16[bi], sc->Tc);
-        gdn_requant_block_out(sc->Tc, sc->Tscl[bi], sT, zpT, Th, i * BL, i * BL, C);
+        gdn_requant_i16(sc->Tblk16[bi], sc->Tscl[bi], sT, zpT, Th, i * BL, i * BL, C);
     }
     /* off-diagonal merges. */
     for (int d = 1; d < NB; ++d) {
@@ -159,9 +193,8 @@ static void gdn_br_one_head16(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_
             /* final merge T_ij = T_ii @ Sacc. */
             float sa_ii, sw_S, sij; int scolabs;
             const uint8_t *a_ii = gdn_get_act_Tdiag16(sc, vt, i, &sa_ii);
-            gdn_widen_i16_to_i32(sc->Sacc16, sc->Tc);            /* Sacc16 -> i32 for the proven quant */
-            g_ops_i8 = GDN_OPS_sSacc;
-            sw_S = gdn_quant_i8_from_codes(sc, sc->Tc, s_S, sc->wtbuf, -1);
+            gdn_quant_i8_i16w(sc->Sacc16, s_S, GDN_OPS_sSacc, sc->wtbuf);   /* int16-lane (g=5.77>1, widening mult) */
+            sw_S = GDN_OPS_sSacc;
             gdn_effective(sc->wtbuf, sc->eff, &scolabs);
             gdn_pack_w8_kmajor(sc->wtbuf, vt->wt);
             g_force_sP = GDN_OPS_sTw;
@@ -169,8 +202,7 @@ static void gdn_br_one_head16(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_
             g_force_sP = 0.f;
             gdn_widen_i8_to_i16(sc->termi, sc->Tblk16[bij]);    /* store result i16 */
             sc->Tscl[bij] = sij;
-            gdn_widen_i16_to_i32(sc->Tblk16[bij], sc->Tc);      /* requant (proven int32) */
-            gdn_requant_block_out(sc->Tc, sij, sT, zpT, Th, i * BL, j * BL, C);
+            gdn_requant_i16(sc->Tblk16[bij], sij, sT, zpT, Th, i * BL, j * BL, C);   /* int16-lane requant */
         }
     }
 }
