@@ -1077,10 +1077,12 @@ static void gdn_merge_packed(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint8_t 
     {
         float maxP = (maxP_est > 0) ? (float)maxP_est : (float)GDN_BR_LOOSE_CONST;
         float sP = (maxP * sa * sw) / 127.0f; if (sP <= 0.0f) sP = 1e-12f;
+#if defined(GDN_BR_STATIC_FULL)
         if (g_force_sP > 0.f) {   /* drain at a CHOSEN scale (e.g. sTw): sP=force -> maxP=127*force/(sa*sw). */
             sP = g_force_sP; maxP = (sa * sw > 0.f) ? (127.0f * sP / (sa * sw)) : maxP;
             g1 = (maxP > 0.f) ? (127.0f / maxP) : g1;
         }
+#endif
         gdn_hmx_run_only(vt, wt_kmajor, eff, g1 * 512.0f, 128 << 7, 1);   /* single output pass (round) */
 #if defined(GDN_BR_PROBE_CYCLES)
         { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_hmxkern += q - es0; }
