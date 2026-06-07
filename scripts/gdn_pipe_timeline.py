@@ -7,9 +7,9 @@ Usage: gdn_pipe_timeline.py T.raw [width]
 """
 import sys, struct, collections
 
-STAGE = {0: "HEAD", 1: "DIAG", 2: "MERGE", 3: "MM", 4: "QUANT", 5: "PREP", 6: "ACC", 7: "REQ"}
-CH = {1: "D", 3: "m", 4: "q", 5: "p", 6: "a", 7: "r"}   # diag/matmul(+depack)/quant/prep(fold+quant+pack)/acc/requant
-CONTAINER = {0, 2}   # HEAD, MERGE are containers (leaves below them) -> skip in fill/busy
+STAGE = {0: "HEAD", 1: "DIAG", 2: "MERGE", 3: "MM", 4: "QUANT", 5: "PREP", 6: "ACC", 7: "REQ", 8: "PACK"}
+CH = {1: "D", 3: "m", 4: "q", 5: "p", 6: "a", 7: "r", 8: "K"}   # diag/matmul/quant(fold+quant+eff)/prep/acc/requant/pack(crouton/kmajor)
+CONTAINER = {0, 2, 5}   # HEAD, MERGE, PREP are containers (leaves QUANT/PACK below PREP) -> skip in fill/busy
 
 def main():
     path = sys.argv[1] if len(sys.argv) > 1 else "T.raw"
@@ -48,7 +48,7 @@ def main():
         span = (span_hi - span_lo) or 1
         bd = " ".join(f"{STAGE[s]}={busy[s]*100//span}%" for s in sorted(busy))
         print(f"{label:5s}|{''.join(row)}| busy={tot_busy*100//wall}%wall  [{bd}]")
-    print("\nlegend: D=diag  p=prep(fold+quant+pack)  m=matmul(dispatch+HMX+depack)  a=acc  r=requant+widen  q=quant")
+    print("\nlegend: D=diag  q=QUANT(fold+quant+eff)  K=PACK(crouton/kmajor)  m=matmul  a=acc  r=requant+widen")
     # aggregate
     agg = collections.Counter()
     for (t, stage, t0, t1) in evs:

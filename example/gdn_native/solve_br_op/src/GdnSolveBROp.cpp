@@ -879,12 +879,22 @@ static void gdn_hmx_run_only(const gdn_vtcm_t *vt, const int8_t *wt_kmajor, cons
  * The natural u8/i8 codes are transient (just feed the packer); the cache holds the HMX-ready packed
  * surface (crouton act / k-major wt) in VTCM + the operand scale (+ effective bias for weights). */
 
+#if defined(GDN_BR_TRACE)
+/* fwd-decl (def at the GDN_BR_TRACE facility below) so the operand getters can split PREP into QUANT vs PACK
+ * leaf spans on the producer timeline.  Stage codes: 4=QUANT(fold+quant+eff), 8=PACK(crouton/kmajor). */
+static inline void gdn_tr_push(uint32_t, uint32_t, uint64_t, uint64_t);
+static inline uint64_t gdn_trnow(void) { uint64_t t; asm volatile("%0 = C15:14" : "=r"(t)); return t; }
+#endif
+
 /* A_ik activation: fold + quant u8 + crouton-pack into the VTCM act cache; key gdn_blk_index(i,k). */
 static const uint8_t *gdn_get_act_A(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t *Ah, int i, int k,
                                     int C_, int zpA, int M, int S, float *sa_out) {
     int key = gdn_blk_index(i, k);
     uint8_t *cr = vt->acache + (size_t)key * 0x1000;
     if (!sc->vAa[key]) {
+#if defined(GDN_BR_TRACE)
+        uint64_t _tq = gdn_trnow();
+#endif
 #if defined(GDN_BR_PROBE_CYCLES)
         uint64_t f0; asm volatile("%0 = C15:14" : "=r"(f0));
 #endif
@@ -909,7 +919,13 @@ static const uint8_t *gdn_get_act_A(gdn_scr_t *sc, const gdn_vtcm_t *vt, const u
         uint64_t p0; asm volatile("%0 = C15:14" : "=r"(p0));
 #endif
 #endif
+#if defined(GDN_BR_TRACE)
+        uint64_t _tp = gdn_trnow(); gdn_tr_push((uint32_t)(sc - g_scr), 4, _tq, _tp);   /* QUANT span */
+#endif
         gdn_pack_act_crouton8(sc->actbuf, cr);
+#if defined(GDN_BR_TRACE)
+        gdn_tr_push((uint32_t)(sc - g_scr), 8, _tp, gdn_trnow());                         /* PACK span */
+#endif
 #if defined(GDN_BR_PROBE_CYCLES)
         { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_actpack += q - p0; }
 #endif
@@ -924,6 +940,9 @@ static const uint8_t *gdn_get_act_Tdiag(gdn_scr_t *sc, const gdn_vtcm_t *vt, int
     uint8_t *cr = vt->acache + 0xA000 + (size_t)i * 0x1000;
     if (!sc->vTa[i]) {
         int bii = gdn_blk_index(i, i);
+#if defined(GDN_BR_TRACE)
+        uint64_t _tq = gdn_trnow();
+#endif
 #if defined(GDN_BR_PROBE_CYCLES)
         uint64_t q0; asm volatile("%0 = C15:14" : "=r"(q0));
 #endif
@@ -935,7 +954,13 @@ static const uint8_t *gdn_get_act_Tdiag(gdn_scr_t *sc, const gdn_vtcm_t *vt, int
         { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_quant += q - q0; }
         uint64_t p0; asm volatile("%0 = C15:14" : "=r"(p0));
 #endif
+#if defined(GDN_BR_TRACE)
+        uint64_t _tp = gdn_trnow(); gdn_tr_push((uint32_t)(sc - g_scr), 4, _tq, _tp);
+#endif
         gdn_pack_act_crouton8(sc->actbuf, cr);
+#if defined(GDN_BR_TRACE)
+        gdn_tr_push((uint32_t)(sc - g_scr), 8, _tp, gdn_trnow());
+#endif
 #if defined(GDN_BR_PROBE_CYCLES)
         { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_actpack += q - p0; }
 #endif
@@ -964,6 +989,9 @@ static const int8_t *gdn_get_wt_T(gdn_scr_t *sc, const gdn_vtcm_t *vt, int k, in
     int key = gdn_blk_index(k, j);
     int8_t *km = vt->wcache + (size_t)key * 0x1000;
     if (!sc->vTw[key]) {
+#if defined(GDN_BR_TRACE)
+        uint64_t _tq = gdn_trnow();
+#endif
 #if defined(GDN_BR_PROBE_CYCLES)
         uint64_t q0; asm volatile("%0 = C15:14" : "=r"(q0));
 #endif
@@ -994,7 +1022,13 @@ static const int8_t *gdn_get_wt_T(gdn_scr_t *sc, const gdn_vtcm_t *vt, int k, in
         { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_eff += q - e0; }
         uint64_t p0; asm volatile("%0 = C15:14" : "=r"(p0));
 #endif
+#if defined(GDN_BR_TRACE)
+        uint64_t _tp = gdn_trnow(); gdn_tr_push((uint32_t)(sc - g_scr), 4, _tq, _tp);   /* QUANT(+eff) span */
+#endif
         gdn_pack_w8_kmajor(sc->wtbuf, km);
+#if defined(GDN_BR_TRACE)
+        gdn_tr_push((uint32_t)(sc - g_scr), 8, _tp, gdn_trnow());                         /* PACK span */
+#endif
 #if defined(GDN_BR_PROBE_CYCLES)
         { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_wtpack += q - p0; }
 #endif
