@@ -24,26 +24,34 @@
 
 ---
 
-## 1. 流程循环(经验提炼,照这个走)
+## 1. 流程循环 + 态度(血泪提炼,照这个走)
 
+### 态度(最重要,先读)
+> **不做到极致、不实测,就别下"值不值得"的结论 —— 那是撒谎。**
+> 这几轮我栽过的跟头,全是"轻率下结论":
+> - 把 `if` 塞热循环 → 测出更慢 → 就下"int16 比 int32 慢"的假结论(其实是我实现错)。
+> - "预测"quant int16-lane 中性 → 没测就想跳过(其实额外 +5%)。
+> - 没做完 fold 就说 PREP"没杠杆,接近地板"(其实做到极致 fold+quant = +6.5%)。
+> **三条硬态度**:
+> 1. **一个优化点要做到极致**(所有能 int16-lane / 能省的子步都做完)**再测最终收益**,再谈值不值得。
+> 2. **反直觉结果(优化更慢 / int16 比 int32 慢)= 几乎一定是自己实现错** → 先查实现(热循环里的分支?寄存器溢出?对齐?次优 intrinsic?编译期 vs 运行期?用反汇编 / 编译期版排除),**别接受反直觉结论**。
+> 3. **每改一次代码都重画 timeline 看具体哪个阶段降了**(不是只看总 wall)—— 我反复忘这步,被点名两次。
+
+### 循环
 ```
-  ┌─> [1] 测量(4列 + A/B 控热 + 稳态)
-  │      └ 不准就停,先把基线测干净
-  │   [2] 画 timeline(每次改完都画)
-  │      └ ⚠️ span 会高估 SMT 隐藏的 load-bound 阶段
-  │   [3] 选候选瓶颈(从 timeline + 4列)
-  │   [4] ★ ablation 验证(cap-test 砍工作量看 4线程 wall 是否降)
-  │      └ 这步是真相;别只信 timeline span
-  │   [5] 上杠杆(优先级见 §3)
-  │   [6] 重测:bit-exact 门 + 4列 + 重画 timeline
-  └──[7] 变快→留+commit;变慢/无收益→revert+把负结论落盘(别重试)
+  ┌─> [1] 测量(4列 + A/B 控热 + 稳态)              不准就停,先把基线测干净
+  │   [2] 画 timeline 细分(给候选阶段加细桩)        ⚠️ span 高估 SMT 隐藏的 load-bound 阶段
+  │   [3] 选候选瓶颈(timeline + 4列)
+  │   [4] ablation 验证(cap-test)                  ⚠️ 输出喂数据相关下游的阶段(fold/quant/pack)cap-test 无效
+  │   [5] 上杠杆 —— ★做到极致(所有子步都 int16-lane/省完)
+  │   [6] 重测:relerr 门 + 4列 + ★重画 timeline 看该阶段是否真降
+  └──[7] 真快→留+commit;真慢→先查自己实现(态度2),排除后才 revert+落盘负结论
 ```
 
 **铁律**:
-- **每改一次代码都重画 timeline**(`feedback_retimeline_after_every_change`),别只看总 cycle。
-- **bit-exact 门**:每次改完跟 `/tmp/T_avtcm.raw` 比 `maxdiff==0`(int16 静态下应无损)。
-- **A/B 控热**:两个 build 交替跑(`git stash` 切),被测的那个常占热劣势→若它还赢就是真赢。
-- **负结论必须落盘**(`feedback_dont_chain_no_op_experiments`):2-head fusion / round-trip 消除 / diag 都试过更慢或无效,别重试。
+- **bit-exact / relerr 门**:每次改完跟 `/tmp/T_avtcm.raw` 比;无损改要 `maxdiff==0`,有损改(如 Q15)看 off-diag relerr 涨幅可接受(精度先不管)。
+- **A/B 控热**:两 build 交替跑(`git stash` 切或存 /tmp),被测的占热劣势→还赢才是真赢;噪声大就跑 3 轮。
+- **负结论落盘前先自查实现**:确认不是自己写错(反直觉时尤其),才记为真负结论。已证真负:2-head 同型 fusion、round-trip 消除(无往返可省时)、diag(SMT 隐藏)。
 
 ---
 
