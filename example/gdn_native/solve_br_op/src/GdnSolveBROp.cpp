@@ -161,8 +161,11 @@ static gdn_scr_t g_scr[GDN_BR_NT];
 #define GDN_OPS_COLABS 556
 #define GDN_OPS_sSacc 3.742e-03f   /* calibrated max Sacc scale (A_u16_h32) */
 static float g_cal_swS = 0.f;
-static float g_ops_u8 = 0.f, g_ops_i8 = 0.f;   /* >0 => fixed output scale for u8/i8 quant (single-thread) */
-static float g_force_sP = 0.f;   /* >0 => force gdn_merge_packed output to drain at this scale (e.g. sTw) */
+/* These toggle between phase-dependent values (sTw / sSacc / 0) WITHIN a head solve, so in the multi-producer
+ * GDNSolveHVXMixHMX pipeline they MUST be per-thread — else producer A's Sacc-phase write clobbers producer B's
+ * off-diag-wt-phase value (data race -> wrong quant scale -> corrupt T). __thread = each producer its own copy. */
+static __thread float g_ops_u8 = 0.f, g_ops_i8 = 0.f;   /* >0 => fixed output scale for u8/i8 quant */
+static __thread float g_force_sP = 0.f;   /* >0 => force gdn_merge_packed output to drain at this scale (e.g. sTw) */
 #endif
 
 /* VTCM scratch carved from the TCM_Only scratch tensor.  Buffers are spaced 0x10000 (64 KB) apart —
@@ -1057,6 +1060,14 @@ static const int8_t *gdn_get_wt_T(gdn_scr_t *sc, const gdn_vtcm_t *vt, int k, in
  *           (keeps accuracy, drops 2 HMX runs + 2 out-writes ≈ 33K/matmul);
  *       (c) tighten PASS-1's initial gain (norm-based) so PASS 2 is unnecessary -> 3 passes -> 2 (saves 1/3,
  *           lowest risk). */
+/* PRODUCER-CONSUMER hook (GDNSolveHVXMixHMX pipeline): when set (by the bare-metal -DGDNBM_HMX_PIPE driver),
+ * gdn_merge_packed's single HMX kernel call is DELEGATED to the main-thread consumer instead of run locally
+ * (1 HMX unit -> multi-thread HMX SSRs; only the main consumer touches mxmem, producers feed it).  null =
+ * single-thread (run gdn_hmx_run_only locally, unchanged).  slot derived from sc - g_scr in the impl. */
+typedef void (*gdn_hmx_dispatch_fn)(gdn_scr_t *sc, const gdn_vtcm_t *vt, const int8_t *wt_kmajor,
+                                    const int32_t *eff, float scale_f16, int baseline_u16, int round_out);
+static gdn_hmx_dispatch_fn g_hmx_dispatch = nullptr;
+
 static void gdn_merge_packed(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint8_t *act_crouton, float sa,
                              const int8_t *wt_kmajor, const int32_t *eff, float sw,
                              int wt_colabsmax, int8_t *out_codes, float *s_out) {
@@ -1090,7 +1101,10 @@ static void gdn_merge_packed(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint8_t 
             g1 = (maxP > 0.f) ? (127.0f / maxP) : g1;
         }
 #endif
-        gdn_hmx_run_only(vt, wt_kmajor, eff, g1 * 512.0f, 128 << 7, 1);   /* single output pass (round) */
+        if (g_hmx_dispatch)   /* pipeline: hand the kernel to the main-thread HMX consumer, spin for result */
+            g_hmx_dispatch(sc, vt, wt_kmajor, eff, g1 * 512.0f, 128 << 7, 1);
+        else
+            gdn_hmx_run_only(vt, wt_kmajor, eff, g1 * 512.0f, 128 << 7, 1);   /* single output pass (round) */
 #if defined(GDN_BR_PROBE_CYCLES)
         { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_hmxkern += q - es0; }
         uint64_t d0; asm volatile("%0 = C15:14" : "=r"(d0));

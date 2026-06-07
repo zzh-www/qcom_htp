@@ -38,7 +38,7 @@
 /* GDNSolveHVX mode (default): int16-HVX matmul merges -> pure HVX + BSS scratch, threads freely.
  * Disabled for the OVERLAP probe (int8-HMX merges) and for GDNBM_HMX_MERGE_PATH (run the REAL
  * GDNSolveHVXMixHMX gdn_merge_packed on baremetal w/ PROBE_CYCLES, to get its true per-stage breakdown). */
-#if !defined(GDNBM_OVERLAP_PROBE) && !defined(GDNBM_HMX_MERGE_PATH) && !defined(GDNBM_HMX_SOLVE)
+#if !defined(GDNBM_OVERLAP_PROBE) && !defined(GDNBM_HMX_MERGE_PATH) && !defined(GDNBM_HMX_SOLVE) && !defined(GDNBM_HMX_PIPE)
 #define GDN_BR_HVX_MERGE 1
 #endif
 #include "../../solve_br_op/src/GdnSolveBROp.cpp"
@@ -257,6 +257,61 @@ static qurt_thread_t ov_spawn(void (*f)(void *), void *arg, int slot) {
 }
 static void ov_join(qurt_thread_t tid) { if (tid) { int s; qurt_thread_join(tid, &s); } }
 #endif
+
+#if defined(GDNBM_HMX_PIPE)
+/* ===== GDNSolveHVXMixHMX producer-consumer (the real full solve, step 4) =====
+ * P HVX producers run the FULL per-head solve (diag/fold/quant/pack/acc/widen/requant — all HVX); each
+ * producer's per-matmul HMX kernel is DELEGATED to the single MAIN-thread consumer (1 HMX unit -> only the
+ * main thread touches mxmem; multi-thread HMX SSRs).  Hand-off = one job slot/producer (synchronous: producer
+ * fills slot, spins for the consumer's HMX result, then depacks).  A is VTCM-resident per-producer (step 1
+ * ping-pong; producers are fold/A-bound).  Build: -DGDNBM_HMX_PIPE -DGDN_BR_STATIC_GAIN -DGDN_BR_STATIC_FULL
+ * (run nthreads = #producers; consumer is the main thread, PURE HMX, frees its HVX unit for the Pth producer). */
+struct hmx_job {
+    volatile int state;                 /* 0=idle, 1=ready(consumer runs it), 2=done(producer depacks) */
+    const gdn_vtcm_t *vt; const int8_t *wt; const int32_t *eff;
+    float scale; int baseline; int round;
+    int _pad[16];                       /* own cache/SMT line -> no false sharing between producer slots */
+} __attribute__((aligned(128)));
+static struct hmx_job g_pjob[GDN_BR_NT];
+static volatile int g_pipe_pdone;       /* # producers that finished all their heads (drain-exit signal) */
+static char __attribute__((aligned(128))) g_pipe_stack[GDN_BR_NT][32768];
+
+/* dispatch hook (installed into g_hmx_dispatch): hand the kernel to the main consumer, spin for the result. */
+static void gdn_pipe_dispatch(gdn_scr_t *sc, const gdn_vtcm_t *vt, const int8_t *wt, const int32_t *eff,
+                              float scale, int baseline, int round) {
+    struct hmx_job *jb = &g_pjob[(int)(sc - g_scr)];           /* slot = this producer's scratch index */
+    jb->vt = vt; jb->wt = wt; jb->eff = eff; jb->scale = scale; jb->baseline = baseline; jb->round = round;
+    __sync_synchronize();
+    jb->state = 1;                                             /* arm: consumer may run it */
+    while (jb->state != 2) { /* spin for the HMX result */ }
+    __sync_synchronize();
+    jb->state = 0;                                             /* consumed; idle until next dispatch */
+}
+
+/* producer thread: full per-head solve over this slot's head-stripe, A VTCM-resident ping-pong. */
+static void pipe_producer(void *arg) {
+    gdn_work_t *w = (gdn_work_t *)arg;
+    int hvx = qurt_hvx_lock(QURT_HVX_MODE_128B);
+    gdn_scr_t *sc = &g_scr[w->slot];
+    uint8_t *vbase = w->vtcm_base + (size_t)w->slot * 0xA0000u;
+    gdn_vtcm_t vt = gdn_vtcm_from(vbase);
+    const int CC = GDN_BR_C * GDN_BR_C;
+    const uint32_t Abytes = (uint32_t)CC * 2u;
+    uint16_t *Avt[2] = { (uint16_t *)(vbase + 0x60000), (uint16_t *)(vbase + 0x80000) };
+    dma_desc_t dsc;
+    uint32_t hs[64]; int n = 0;
+    for (uint32_t h = w->h0 + w->slot; h < w->h1 && n < 64; h += w->nheads) hs[n++] = h;
+    if (n > 0) udma_start(&dsc, Avt[0], w->Au + (size_t)hs[0] * CC, Abytes);
+    for (int i = 0; i < n; ++i) {
+        udma_wait();                                                                    /* A[i] ready */
+        if (i + 1 < n) udma_start(&dsc, Avt[(i + 1) & 1], w->Au + (size_t)hs[i + 1] * CC, Abytes);
+        gdn_br_one_head(sc, &vt, Avt[i & 1], w->Tu + (size_t)hs[i] * CC,
+                        w->zpA, w->M, w->S, w->sT, w->zpT);    /* matmuls auto-delegate via g_hmx_dispatch */
+    }
+    __sync_fetch_and_add(&g_pipe_pdone, 1);
+    if (hvx == 0) qurt_hvx_unlock();
+}
+#endif  /* GDNBM_HMX_PIPE */
 
 static void solve_worker(void *arg) {
     gdn_work_t *w = (gdn_work_t *)arg;
@@ -926,6 +981,58 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
     static int g_pwr_client; void *pctx = &g_pwr_client;
     HAP_power_set_core_corner(pctx, HAP_DCVS_VCORNER_TURBO, HAP_DCVS_VCORNER_TURBO, HAP_DCVS_VCORNER_MAX);
     { HAP_power_request_t r; memset(&r,0,sizeof(r)); r.type=HAP_power_set_HMX; r.hmx.power_up=TRUE; HAP_power_set(pctx,&r); }
+
+#if defined(GDNBM_HMX_PIPE)
+    {   /* GDNSolveHVXMixHMX producer-consumer (step 4): P HVX producers feed 1 main-thread HMX consumer. */
+        int P = nthreads; if (P > GDN_BR_NT) P = GDN_BR_NT; if (P < 1) P = 1;
+        compute_res_attr_t va; HAP_compute_res_attr_init(&va);
+        HAP_compute_res_attr_set_vtcm_param(&va, (unsigned)P * 0xA0000u, 0);   /* 0xA0000/producer: vt + A ping-pong */
+        unsigned int vctx2 = HAP_compute_res_acquire(&va, 2000000);
+        uint8_t *vbase = (uint8_t *)HAP_compute_res_attr_get_vtcm_ptr(&va);
+        compute_res_attr_t ha; HAP_compute_res_attr_init(&ha); HAP_compute_res_attr_set_hmx_param(&ha, 1);
+        unsigned int hctx = HAP_compute_res_acquire(&ha, 2000000);
+        int hl = HAP_compute_res_hmx_lock(hctx);                               /* consumer = main, PURE HMX (no HVX lock) */
+        if (!vbase || hl != 0) { FARF(ALWAYS, "PIPE: acquire failed vbase=%p hl=%d", vbase, hl);
+            if (hl == 0) HAP_compute_res_hmx_unlock(hctx); if (hctx) HAP_compute_res_release(hctx);
+            if (vctx2) HAP_compute_res_release(vctx2); return -1; }
+        for (int t = 0; t < P; ++t) g_pjob[t].state = 0;
+        g_pipe_pdone = 0;
+        g_hmx_dispatch = gdn_pipe_dispatch;                                    /* matmuls now delegate to this consumer */
+        __sync_synchronize();
+        gdn_work_t work[GDN_BR_NT]; qurt_thread_t tid[GDN_BR_NT];
+        uint64_t t0 = pcyc();
+        for (int t = 0; t < P; ++t) {
+            work[t] = (gdn_work_t){ t, 0u, (uint32_t)H, (uint32_t)P, Au, Tu, zpA, M, S, sT, zpT, vbase };
+            qurt_thread_attr_t a; qurt_thread_attr_init(&a); qurt_thread_attr_set_name(&a,(char*)"pipeprod");
+            qurt_thread_attr_set_stack_addr(&a,g_pipe_stack[t]); qurt_thread_attr_set_stack_size(&a,sizeof(g_pipe_stack[t]));
+            if (qurt_thread_create(&tid[t],&a,pipe_producer,&work[t])!=QURT_EOK) tid[t]=0;  /* can't inline: main must drain */
+        }
+        /* consumer drain: run any armed job; exit when all producers finished.  A producer bumps g_pipe_pdone
+         * only AFTER its last dispatch fully returned -> pdone==P implies no job is still armed. */
+        while (g_pipe_pdone < P) {
+            for (int t = 0; t < P; ++t) {
+                if (g_pjob[t].state == 1) {
+                    struct hmx_job *jb = &g_pjob[t];
+                    gdn_hmx_run_only(jb->vt, jb->wt, jb->eff, jb->scale, jb->baseline, jb->round);
+                    __sync_synchronize();
+                    jb->state = 2;
+                }
+            }
+        }
+        uint64_t t1 = pcyc();
+        for (int t = 0; t < P; ++t) { int s; if (tid[t]) qurt_thread_join(tid[t], &s); }
+        g_hmx_dispatch = nullptr;
+        if (hl == 0) HAP_compute_res_hmx_unlock(hctx); if (hctx) HAP_compute_res_release(hctx);
+        if (vctx2) HAP_compute_res_release(vctx2);
+        { HAP_power_request_t off; memset(&off,0,sizeof(off)); off.type=HAP_power_set_HMX; off.hmx.power_up=FALSE; HAP_power_set(pctx,&off); }
+        if (statsLen > 0) stats[0] = (int)(t1 - t0);
+        if (statsLen > 1) stats[1] = P;
+        if (statsLen > 2) stats[2] = H;
+        FARF(ALWAYS, "gdnbm_solve(PIPE): wall=%llu cyc / %d heads / %d producers -> %llu cyc/head",
+             (unsigned long long)(t1-t0), H, P, (unsigned long long)((t1-t0)/(H>0?H:1)));
+        return 0;
+    }
+#endif
 
 #if defined(GDNBM_OVERLAP_PROBE)
     {   /* 3-phase HVX∥HMX overlap probe. iters tuned so HVX-solo ≈ HMX-solo (H*~16 diag-solves). */

@@ -53,11 +53,17 @@
 - 标定 Sacc 的固定标度(像 A/T 那样),`gdn_quant_i8_from_codes` 走固定标度(去 maxabs)。
 - ⚠️ Sacc 幅度随内层和(d 项)变 → 固定标度会 underflow,relerr 会涨。先测 relerr 可接受再留。
 
-### 步骤 4 ★ producer-consumer 并行(HVXMixHMX 本体)
-- 单线程 solve 优化到位后,重构成 **4 HVX producer + 1 main HMX consumer**(consumer 在 main 单 HMX,不 SSR;同 FEED_4P 结构)。
-- producer 做 diag+fold+quant+pack+acc(并行),consumer 纯排空 HMX matmul。
-- **A-VTCM(步骤1)对并行尤其重要**:producer 侧(diag/fold)是 producer-bound 的主体,A-bound 会拖慢 producer。
-- **预期**(待步骤 1-3 把单线程压下来后重算):producer 侧 / 4 vs 4 线程 HVX 基线 88K。
+### 步骤 4 ★ producer-consumer 并行(HVXMixHMX 本体)— ✅ 已搭起来 + 实测
+- **已落地**(`-DGDNBM_HMX_PIPE`,2026-06-08):4 HVX producer(各跑整 per-head solve,diag/fold/quant/pack/acc/widen/requant 全 HVX)
+  + 1 main-thread PURE-HMX consumer(单 HMX 不 SSR)。同步 hand-off:每 producer 一个 job slot,填好→自旋等 consumer 排空→depack。
+  - hook 机制:`gdn_merge_packed` 单 pass HMX kernel 调用改走运行时 `g_hmx_dispatch`(null=本地单线程;设了=委托 consumer);
+    `gdn_pipe_dispatch`(slot=`sc-g_scr`)填槽+自旋。A 每 producer 各自 VTCM 驻留 ping-pong(0xA0000/producer,VTCM 总 8MB 够)。
+  - **坑(已修)**:`g_ops_u8/g_ops_i8/g_force_sP` 是 solve 内随阶段切值的 mutable 全局 → 多 producer 互相 clobber(relerr 1.09e-1→1.84e-1,bytes 差)。改 `__thread` 后**与单线程逐字节相同**(maxdiff=0)。
+- **实测**(warmup+REPS=8 稳态 reps2-4):**~111K cyc/head**(4 producer)。vs 单线程 192K = **1.73×**;但 **vs GDNSolveHVX 4-thread 88K 还慢 ~1.26×**。
+- **现状结论**:scaffold 正确跑通,但**还没打过 88K HVX 基线**。剩余杠杆(下一步):
+  1. consumer 仍在 `gdn_hmx_run_only` 里做 bias-pack + out-zero(HVX 活),拖慢 consumer 吞吐 → 仿 FEED_4P 把 bias-pack 挪到 producer,consumer 纯 mxmem。
+  2. 同步 hand-off → producer 等自己 matmul 时空转;可用 head-interleave 或多槽 ring 把延迟藏起来。
+  3. consumer 主线程跑 HVX intrinsic(bias-pack)却没锁 HVX → 跟 producer 抢 HVX/SMT issue slot。
 
 ---
 
