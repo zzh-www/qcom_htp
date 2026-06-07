@@ -78,7 +78,10 @@
 | PACK(crouton + kmajor) | 0.59M | ~7% | u8/i8 字节 op,128-lane 已最优 |
 | EFF | 0.18M | ~2% | 留(精度税,只 3-4% 不值) |
 - **PREP 碎(每项 <10%),无单一大杠杆。** 最大的 A-fold(QUANT)。
-- **int16-lane fold = ✅ +1.4%(`GDN_BR_I16_FOLD`,已设 GDN_BR_I16 默认,bit-exact)**:`(A_u16-32768)=(i16)(A XOR 0x8000)` 免费零点 + `Q6_Ww_vmpy_VhRh` 64-lane 替 `vzxt+2vmpyi`。3 轮 A/B 稳定略快。
+- **int16-lane A-fold 做到极致 = ✅ ~6.5%(原 32-lane 2.15M → 2.01M,同会话 A/B)**:
+  - fold mult(`GDN_BR_I16_FOLD`,bit-exact):`(A-32768)=(i16)(A XOR 0x8000)` 免费零点 + `Q6_Ww_vmpy_VhRh` 64-lane 替 `vzxt+2vmpyi` → +1.4%。
+  - quant mult(`GDN_BR_I16_FOLD_QUANT`,Q15 int16):再 +5%(顺带消掉单独的 int32→u8 narrow pass);**非 bit-exact**(Q15 8-bit 乘子 → relerr 0.1093→0.1094 +0.5%,精度先不管 OK)。`-DGDN_BR_NO_I16_FOLD_QUANT` 退回 bit-exact。
+  - 两者已设 GDN_BR_I16 默认。
   > ### ⚠️⚠️ 血泪教训(2026-06-08):反直觉结果 = 先质疑自己的实现,别下结论
   > 我第一版把 `if (zpA==32768)` 放进**每行热循环**(64 迭代)→ 编译器没 hoist → ~10% 更慢 → 我**轻率得出"int16 比 int32 慢 / Ww_vmpy 双资源更慢"的假结论**。
   > **int16(64-lane)比 int32(32-lane)做同样计算还慢 = 反直觉 = 几乎一定是自己实现错了。**改成**编译期路径(无运行时分支)**后 → +1.4%。
