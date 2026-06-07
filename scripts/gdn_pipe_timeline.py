@@ -7,8 +7,8 @@ Usage: gdn_pipe_timeline.py T.raw [width]
 """
 import sys, struct, collections
 
-STAGE = {0: "HEAD", 1: "DIAG", 2: "MERGE", 3: "MM", 4: "QUANT", 5: "PREP", 6: "ACC", 7: "REQ", 8: "PACK"}
-CH = {1: "D", 3: "m", 4: "q", 5: "p", 6: "a", 7: "r", 8: "K"}   # diag/matmul/quant(fold+quant+eff)/prep/acc/requant/pack(crouton/kmajor)
+STAGE = {0: "HEAD", 1: "DIAG", 2: "MERGE", 3: "MM", 4: "QUANT", 5: "PREP", 6: "ACC", 7: "REQ", 8: "PACK", 9: "EFF"}
+CH = {1: "D", 3: "m", 4: "q", 5: "p", 6: "a", 7: "r", 8: "K", 9: "e"}   # diag/matmul/quant/prep/acc/requant/pack/effective(-128*Sumwt)
 CONTAINER = {0, 2, 5}   # HEAD, MERGE, PREP are containers (leaves QUANT/PACK below PREP) -> skip in fill/busy
 
 def main():

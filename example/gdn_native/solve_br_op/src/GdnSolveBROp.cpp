@@ -1012,6 +1012,9 @@ static const int8_t *gdn_get_wt_T(gdn_scr_t *sc, const gdn_vtcm_t *vt, int k, in
         { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_quant += q - q0; }
         uint64_t e0; asm volatile("%0 = C15:14" : "=r"(e0));
 #endif
+#if defined(GDN_BR_TRACE)
+        uint64_t _te = gdn_trnow(); gdn_tr_push((uint32_t)(sc - g_scr), 4, _tq, _te);   /* QUANT(narrow/rescale) span */
+#endif
 #if defined(GDN_BR_STATIC_FULL)
         gdn_effective(sc->wtbuf, sc->effc[key]);              /* static gain: colabs unused -> nullptr skips its reduction */
         sc->colabsc[key] = GDN_OPS_COLABS;
@@ -1023,7 +1026,7 @@ static const int8_t *gdn_get_wt_T(gdn_scr_t *sc, const gdn_vtcm_t *vt, int k, in
         uint64_t p0; asm volatile("%0 = C15:14" : "=r"(p0));
 #endif
 #if defined(GDN_BR_TRACE)
-        uint64_t _tp = gdn_trnow(); gdn_tr_push((uint32_t)(sc - g_scr), 4, _tq, _tp);   /* QUANT(+eff) span */
+        uint64_t _tp = gdn_trnow(); gdn_tr_push((uint32_t)(sc - g_scr), 9, _te, _tp);   /* EFF (-128*Sum wt) span */
 #endif
         gdn_pack_w8_kmajor(sc->wtbuf, km);
 #if defined(GDN_BR_TRACE)
@@ -1724,6 +1727,9 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
             g_ops_i8 = GDN_OPS_sSacc;   /* STATIC: fixed Sacc scale -> skip maxabs. */
 #endif
 #endif
+#if defined(GDN_BR_TRACE)
+            uint64_t _ssq = gdn_trnow();
+#endif
             sw_S = gdn_quant_i8_from_codes(sc, sc->Sacc, s_S, sc->wtbuf, -1);
 #if defined(GDN_BR_SACC_CAL)
             if (sw_S > g_cal_swS) g_cal_swS = sw_S;
@@ -1732,12 +1738,21 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
             { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_quant += q - sq0; }
             uint64_t se0; asm volatile("%0 = C15:14" : "=r"(se0));
 #endif
+#if defined(GDN_BR_TRACE)
+            uint64_t _sse = gdn_trnow(); gdn_tr_push(_tid, 4, _ssq, _sse);   /* Sacc QUANT span */
+#endif
             gdn_effective(sc->wtbuf, sc->eff, &scolabs);   /* #1c: col-abs-sum max for the S_ij wt */
 #if defined(GDN_BR_PROBE_CYCLES)
             { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_eff += q - se0; }
             uint64_t sp0; asm volatile("%0 = C15:14" : "=r"(sp0));
 #endif
+#if defined(GDN_BR_TRACE)
+            uint64_t _ssp = gdn_trnow(); gdn_tr_push(_tid, 9, _sse, _ssp);   /* Sacc EFF span */
+#endif
             gdn_pack_w8_kmajor(sc->wtbuf, vt->wt);
+#if defined(GDN_BR_TRACE)
+            gdn_tr_push(_tid, 8, _ssp, gdn_trnow());   /* Sacc PACK span */
+#endif
 #if defined(GDN_BR_PROBE_CYCLES)
             { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_wtpack += q - sp0; }
 #endif
