@@ -1186,7 +1186,13 @@ static void gdn_merge_packed(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint8_t 
         { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_hmxkern += q - es0; }
         uint64_t d0; asm volatile("%0 = C15:14" : "=r"(d0));
 #endif
+#if defined(GDN_BR_TRACE)
+        uint64_t _dp0 = gdn_trnow();
+#endif
         gdn_depack_out_fast(sc, vt->out, 128, out_codes);
+#if defined(GDN_BR_TRACE)
+        gdn_tr_push((uint32_t)(sc - g_scr), 10, _dp0, gdn_trnow());   /* DEPACK (sub-leaf of MM) */
+#endif
 #if defined(GDN_BR_PROBE_CYCLES)
         { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_hmxdepack += q - d0; }
 #endif

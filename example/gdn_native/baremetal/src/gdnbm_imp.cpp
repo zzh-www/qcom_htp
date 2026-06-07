@@ -312,12 +312,16 @@ static void gdn_pipe_dispatch(gdn_scr_t *sc, const gdn_vtcm_t *vt, const int8_t 
                               float scale, int baseline, int round) {
     struct hmx_job *jb = &g_pjob[(int)(sc - g_scr)];           /* slot = this producer's scratch index */
 #if defined(GDNBM_PIPE_PURE_HMX)
-    /* LEVER 1: do the bias-pack + out-zero HERE (producer, HVX) so the consumer is PURE mxmem and never
-     * touches an HVX unit -> frees its unit for a 4th producer (P=4 fits 4 HVX units w/o SMT oversubscribe). */
+    /* LEVER 1: bias-pack HERE (producer, HVX) so the consumer is PURE mxmem -> frees its HVX unit for a 4th
+     * producer.  out-zero REMOVED: the v73deep kernel fully overwrites the 4096B out surface (FEED_4P verified
+     * ovr_mism==0) -> zeroing it was 32 wasted vec-stores/matmul (the MM-dispatch bulk).  -DGDNBM_PIPE_OUTZERO restores. */
     { int rdelta = round ? (int)(256.0f / scale + 0.5f) : 0;
       gdn_pack_bias(eff, scale, baseline, (int32_t *)vt->bias, rdelta);
+#if defined(GDNBM_PIPE_OUTZERO)
       HVX_Vector z = Q6_V_vzero(); HVX_Vector *op = (HVX_Vector *)vt->out;
-      for (int i = 0; i < (64 * 64) / 128; ++i) op[i] = z; }
+      for (int i = 0; i < (64 * 64) / 128; ++i) op[i] = z;
+#endif
+    }
 #endif
     jb->vt = vt; jb->wt = wt; jb->eff = eff; jb->scale = scale; jb->baseline = baseline; jb->round = round;
     __sync_synchronize();
@@ -325,7 +329,10 @@ static void gdn_pipe_dispatch(gdn_scr_t *sc, const gdn_vtcm_t *vt, const int8_t 
     jb->state = 1;                                             /* arm: consumer may run it */
     uint64_t s0 = pcyc();
     while (jb->state != 2) { /* spin for the HMX result */ }
-    g_pipe_pspin[slot] += pcyc() - s0; g_pipe_pcnt[slot]++;
+    uint64_t s1 = pcyc(); g_pipe_pspin[slot] += s1 - s0; g_pipe_pcnt[slot]++;
+#if defined(GDN_BR_TRACE)
+    gdn_tr_push((uint32_t)slot, 11, s0, s1);   /* SPIN (sub-leaf of MM dispatch) */
+#endif
     __sync_synchronize();
     jb->state = 0;                                             /* consumed; idle until next dispatch */
 }
