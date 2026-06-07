@@ -457,12 +457,21 @@ static void gdn_fold_quant_u8(gdn_scr_t *sc, const uint16_t *Au, int row_stride,
 #else
     const int FOLD_ROWS = BL;
 #endif
+#if defined(GDN_BR_I16_FOLD)   /* COMPILE-TIME int16-lane fold (no per-iter branch); assumes zpA==32768 */
+    const HVX_Vector vxor = Q6_V_vsplat_R(0x80008000);
+#endif
     for (int r = 0; r < FOLD_ROWS; ++r) {
         const HVX_UVector *Av = (const HVX_UVector *)(Au + r * row_stride);
+#if defined(GDN_BR_I16_FOLD)
+        HVX_VectorPair fp = Q6_Ww_vmpy_VhRh(Q6_V_vxor_VV(Av[0], vxor), Mrep);   /* (A-32768)×M, 64-lane */
+        HVX_Vector i0 = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_V_lo_W(fp), vrndS), S);
+        HVX_Vector i1 = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_V_hi_W(fp), vrndS), S);
+#else
         HVX_VectorPair w = Q6_Wuw_vzxt_Vuh(Av[0]);
         HVX_Vector c0 = Q6_Vw_vsub_VwVw(Q6_V_lo_W(w), vzp), c1 = Q6_Vw_vsub_VwVw(Q6_V_hi_W(w), vzp);
         HVX_Vector i0 = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_Vw_vmpyi_VwRh(c0, Mrep), vrndS), S);  /* fold */
         HVX_Vector i1 = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_Vw_vmpyi_VwRh(c1, Mrep), vrndS), S);
+#endif
         HVX_VectorPair s = Q6_W_vshuff_VVR(i1, i0, -4);   /* even/odd -> natural cols 0..63 */
         HVX_Vector a = Q6_V_lo_W(s), b = Q6_V_hi_W(s);
         HVX_Vector qa = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_Vw_vmpyi_VwRh(a, MgRep), vrndQ), Q);    /* quant */

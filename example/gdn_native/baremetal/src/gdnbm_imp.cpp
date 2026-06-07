@@ -48,6 +48,12 @@
 #if defined(GDNBM_HMX_PIPE) && defined(GDN_BR_STATIC_FULL) && !defined(GDN_BR_NO_I16) && !defined(GDN_BR_I16)
 #define GDN_BR_I16 1
 #endif
+/* int16-lane A fold (gdn_fold_quant_u8): (A_u16-32768)=(i16)(A XOR 0x8000) free zp-sub + 64-lane Q6_Ww_vmpy.
+ * +1.4% bit-exact (3-round A/B).  COMPILE-TIME (no per-iter branch — a runtime branch in the hot loop cost
+ * ~10%, the bug that earlier made this look "slower").  Assumes zpA==32768 (always true for GDN int16 act). */
+#if defined(GDN_BR_I16) && !defined(GDN_BR_NO_I16_FOLD) && !defined(GDN_BR_I16_FOLD)
+#define GDN_BR_I16_FOLD 1
+#endif
 #include "../../solve_br_op/src/GdnSolveBROp.cpp"
 #include "../../solve_br_op/src/GdnSolveBR16.cpp"   /* clean int16 static solve (GDN_BR_I16) */
 

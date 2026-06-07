@@ -77,11 +77,12 @@
 | QUANT(A `gdn_fold_quant_u8` + T quant) | 0.87M | ~10% | A 的 u16→u8 fold 主导(32-lane);T quant 已 int16-lane Q15 |
 | PACK(crouton + kmajor) | 0.59M | ~7% | u8/i8 字节 op,128-lane 已最优 |
 | EFF | 0.18M | ~2% | 留(精度税,只 3-4% 不值) |
-- **PREP 碎(每项 <10%),无单一大杠杆。** 最大的 A-fold(QUANT)是唯一未吃 int16-lane 的。
-- **int16-lane fold 已做到底 + 实测 = ❌ REFUTED(~10% 更慢)**:`(A_u16-32768)=(i16)(A XOR 0x8000)` 免费零点 + `Q6_Ww_vmpy_VhRh` 64-lane 替 `vzxt+2vmpyi`,bit-exact,但 round2 **OLD 1.98M → NEW 2.17M**。
-  根因:**`Q6_Ww_vmpy_VhRh`(halfword×halfword)是双资源 1/cycle 乘法**;fold 的 int32 路 `vzxt` 是寄存器内 widen、**无内存往返可省** → Ww_vmpy 纯双资源惩罚 → 更慢。
-  **对比 Sacc/requant 的 Ww_vmpy 为什么快:那俩省掉了 `Tc` 内存往返;fold 没有。**
-  → **新原则:Ww_vmpy widening 乘只在能消掉内存往返时才赢;纯替寄存器内 vmpyi 会因双资源惩罚更慢。** 别再试无往返场景的 Ww_vmpy。
+- **PREP 碎(每项 <10%),无单一大杠杆。** 最大的 A-fold(QUANT)。
+- **int16-lane fold = ✅ +1.4%(`GDN_BR_I16_FOLD`,已设 GDN_BR_I16 默认,bit-exact)**:`(A_u16-32768)=(i16)(A XOR 0x8000)` 免费零点 + `Q6_Ww_vmpy_VhRh` 64-lane 替 `vzxt+2vmpyi`。3 轮 A/B 稳定略快。
+  > ### ⚠️⚠️ 血泪教训(2026-06-08):反直觉结果 = 先质疑自己的实现,别下结论
+  > 我第一版把 `if (zpA==32768)` 放进**每行热循环**(64 迭代)→ 编译器没 hoist → ~10% 更慢 → 我**轻率得出"int16 比 int32 慢 / Ww_vmpy 双资源更慢"的假结论**。
+  > **int16(64-lane)比 int32(32-lane)做同样计算还慢 = 反直觉 = 几乎一定是自己实现错了。**改成**编译期路径(无运行时分支)**后 → +1.4%。
+  > **流程补丁:得到反直觉的"优化更慢"结果时,先查实现(热循环里的分支?寄存器溢出?对齐?次优 intrinsic?),用反汇编/编译期版排除,再谈结论。`feedback_dont_chain_no_op_experiments` 不适用于"我没做对"的情况。**
 
 ---
 
