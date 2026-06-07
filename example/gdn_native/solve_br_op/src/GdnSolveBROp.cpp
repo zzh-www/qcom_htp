@@ -135,6 +135,13 @@ struct gdn_scr_t {
     int16_t Tc16[GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));   /* int16-packed diag T codes */
     int16_t a16[GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));    /* int16-HVX merge: 12-bit A operand */
     int16_t b16[GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));    /* int16-HVX merge: 12-bit B operand */
+#if defined(GDN_BR_I16)
+    /* int16 code storage for the clean GDN_BR_I16 static solve (GdnSolveBR16.cpp). All static T codes fit
+     * int16 (diag TI=2/32767 -> [-32767,32767]; merge i8; Sacc pure-add +-381) -> lossless, half bandwidth. */
+    int16_t Tblk16[GDN_BR_NBLK][GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));
+    int16_t Sacc16[GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));
+    int16_t qbuf16[GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));   /* i16 widen/quant scratch */
+#endif
 #if defined(GDN_BR_MM_I8)
     int8_t  a8 [GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));    /* int8 vrmpy: A operand (row-major) */
     int8_t  b8 [GDN_BR_BL * GDN_BR_BL] __attribute__((aligned(128)));    /* int8 vrmpy: B operand (row-major k) */

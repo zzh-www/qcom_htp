@@ -20,7 +20,14 @@ int 域 glue(quant-rescale + ACC + REQ + widen/narrow)是真目标;int16 让它�
 - Sacc 静态 **pure-add ≤3 个 i8 = ±381**(2^22 是动态路,静态不走)。
 - merge 块 = HMX 出 i8(±127)。
 - diag solve 本就在 int16(`Tc16`/`ei16`)算,只是 widen 进 int32 → 改 int16 反少一次 widen。
-- **结论:值逐位不变,只换更窄容器 → relerr ≈ 0。** 降幅估 2.50M→~2.2M(需落地实测)。
+- **结论:值逐位不变,只换更窄容器 → relerr ≈ 0。**
+
+## ⚠️ 修正 benefit(2026-06-08,读完 quant 内循环)
+- quant/requant 的乘法是**逐码一次**(`code×Mg`),int16 码要寄存器内 widen 回 int32 再乘 → **乘法次数不变,compute 不砍半**,只省读带宽。
+- **真正砍半的只有纯格式/加法 op**:widen i8→i16、narrow i16→i8、acc pure-add、maxabs(int16 lane 减半 / 少一级 pack)。
+- **修正降幅估 ~5-10%(2.50M→~2.3M),不是 ~12%**。quant-rescale(QUANT 2.73M 大头)基本不动。
+- 性价比:大工程(~400 行 precision-critical clean-room)换 ~5-10% → 建议开新上下文专做,别在小预算里硬塞(易留隐蔽 bug)。
+- 已起头:`gdn_scr_t` 加 `Tblk16/Sacc16/qbuf16`(GDN_BR_I16 gated,不影响现路)。
 
 ## 改法(GDN_BR_I16 flag,struct + ~8 函数 + 30+ 调用点)
 1. `gdn_scr_t`:`Tblk`、`Sacc` → `int16_t`(`qbuf` 当 widen 临时也要 i16,可复用现成 `Tc16`)。
