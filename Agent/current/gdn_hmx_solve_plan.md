@@ -59,8 +59,16 @@
   - hook 机制:`gdn_merge_packed` 单 pass HMX kernel 调用改走运行时 `g_hmx_dispatch`(null=本地单线程;设了=委托 consumer);
     `gdn_pipe_dispatch`(slot=`sc-g_scr`)填槽+自旋。A 每 producer 各自 VTCM 驻留 ping-pong(0xA0000/producer,VTCM 总 8MB 够)。
   - **坑(已修)**:`g_ops_u8/g_ops_i8/g_force_sP` 是 solve 内随阶段切值的 mutable 全局 → 多 producer 互相 clobber(relerr 1.09e-1→1.84e-1,bytes 差)。改 `__thread` 后**与单线程逐字节相同**(maxdiff=0)。
-- **实测**(warmup+REPS=8 稳态 reps2-4):**~111K cyc/head**(4 producer)。vs 单线程 192K = **1.73×**;但 **vs GDNSolveHVX 4-thread 88K 还慢 ~1.26×**。
-- **现状结论**:scaffold 正确跑通,但**还没打过 88K HVX 基线**。剩余杠杆(下一步):
+- **实测(指标统一为 32-head TOTAL wall,warmup+REPS=8 稳态 reps2-4,交替 A/B 控热)**:
+  | 配置 | 总 wall(32 head) | vs HVX |
+  |---|---|---|
+  | 单线程 HMX,A-DDR | ~11.9M | 0.30× |
+  | 单线程 HMX,A-VTCM(步骤1) | ~6.15M | 0.64× |
+  | **PIPE 4-prod(步骤4)** | **~3.55M** | **1.10× ✓** |
+  | GDNSolveHVX 4-thread 基线 | ~3.90M | 1.00× |
+- **结论(换 total-wall 后翻转)**:**PIPE HVXMixHMX 已经打过纯 HVX 基线 ~1.09–1.13×**(还只是朴素同步 hand-off scaffold)。
+  ⚠️ 之前 per-head 框架说"慢 1.26×"是**被 88K/head 假基线误导**——那是 tiler 低估 artifact(真实 HVX ~128–146K/head=3.9–4.7M total)。**只信 32-head total wall。**
+- **剩余杠杆(把 3.55M 继续往下压)**:
   1. consumer 仍在 `gdn_hmx_run_only` 里做 bias-pack + out-zero(HVX 活),拖慢 consumer 吞吐 → 仿 FEED_4P 把 bias-pack 挪到 producer,consumer 纯 mxmem。
   2. 同步 hand-off → producer 等自己 matmul 时空转;可用 head-interleave 或多槽 ring 把延迟藏起来。
   3. consumer 主线程跑 HVX intrinsic(bias-pack)却没锁 HVX → 跟 producer 抢 HVX/SMT issue slot。
