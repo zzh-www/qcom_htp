@@ -1,0 +1,156 @@
+/* GdnSolveBR16.cpp — CLEAN int16-only static HMX-pipe GDN solve (GDN_BR_I16).
+ * Included AFTER GdnSolveBROp.cpp (reuses its format/pack/kernel/diag helpers + gdn_scr_t/g_scr).
+ * T codes live in int16 (sc->Tblk16/Sacc16): all static codes fit int16 (diag TI=2/32767 -> [-32767,32767],
+ * merge=i8, Sacc pure-add +-381) -> lossless, half storage.  Clean win = i8->i16 widen / i16->i8 narrow /
+ * int16 pure-add acc / int16 maxabs (half the lanes, one fewer pack level).  quant/requant/diag reuse the
+ * proven int32 helpers via an order-preserving i16->i32 widen (correctness-first; multiply count unchanged). */
+#if defined(GDN_BR_I16) && defined(__hexagon__)
+
+/* max|code| over a 64x64 int16 block. */
+static int gdn_maxabs16(const int16_t *codes) {
+    HVX_Vector vmax = Q6_V_vzero();
+    const HVX_Vector *p = (const HVX_Vector *)codes;
+    for (int b = 0; b < (BL * BL) / 64; ++b) vmax = Q6_Vh_vmax_VhVh(vmax, Q6_Vh_vabs_Vh(p[b]));
+    vmax = Q6_Vh_vmax_VhVh(vmax, Q6_V_vror_VR(vmax, 2*32));
+    vmax = Q6_Vh_vmax_VhVh(vmax, Q6_V_vror_VR(vmax, 2*16));
+    vmax = Q6_Vh_vmax_VhVh(vmax, Q6_V_vror_VR(vmax, 2*8));
+    vmax = Q6_Vh_vmax_VhVh(vmax, Q6_V_vror_VR(vmax, 2*4));
+    vmax = Q6_Vh_vmax_VhVh(vmax, Q6_V_vror_VR(vmax, 2*2));
+    vmax = Q6_Vh_vmax_VhVh(vmax, Q6_V_vror_VR(vmax, 2*1));
+    int16_t lanes[64] __attribute__((aligned(128))); *(HVX_Vector *)lanes = vmax; return lanes[0];
+}
+
+/* i8 -> i16, natural order (one sext + one halfword shuffle, vs the i8->i32 4-way weave). */
+static void gdn_widen_i8_to_i16(const int8_t *src, int16_t *dst) {
+    const HVX_Vector *sp = (const HVX_Vector *)src;          /* 128 i8 / vec */
+    HVX_Vector *dp = (HVX_Vector *)dst;                      /* 64 i16 / vec */
+    for (int b = 0; b < (BL * BL) / 128; ++b) {
+        HVX_VectorPair w = Q6_Wh_vsxt_Vb(sp[b]);            /* lo=even bytes, hi=odd bytes (deinterleaved) */
+        HVX_VectorPair s = Q6_W_vshuff_VVR(Q6_V_hi_W(w), Q6_V_lo_W(w), -2);  /* interleave halfwords -> natural */
+        dp[2*b] = Q6_V_lo_W(s); dp[2*b+1] = Q6_V_hi_W(s);
+    }
+}
+
+/* i16 -> i8 (sat), natural order (one pack level, vs i32->i16->i8 two levels). */
+static void gdn_narrow_i16_to_i8(const int16_t *codes, int8_t *out) {
+    const HVX_Vector *p = (const HVX_Vector *)codes; HVX_Vector *op = (HVX_Vector *)out;
+    for (int v = 0; v < (BL * BL) / 128; ++v) op[v] = Q6_Vb_vpack_VhVh_sat(p[2*v+1], p[2*v]);
+}
+
+/* order-preserving i16 -> i32 (for reusing the proven int32 quant/requant). */
+static void gdn_widen_i16_to_i32(const int16_t *src, int32_t *dst) {
+    const HVX_Vector *sp = (const HVX_Vector *)src;          /* 64 i16 / vec */
+    HVX_Vector *dp = (HVX_Vector *)dst;                      /* 32 i32 / vec */
+    for (int b = 0; b < (BL * BL) / 64; ++b) {
+        HVX_VectorPair w = Q6_Ww_vsxt_Vh(sp[b]);            /* lo=even hw, hi=odd hw (deinterleaved) */
+        HVX_VectorPair s = Q6_W_vshuff_VVR(Q6_V_hi_W(w), Q6_V_lo_W(w), -4);  /* interleave words -> natural */
+        dp[2*b] = Q6_V_lo_W(s); dp[2*b+1] = Q6_V_hi_W(s);
+    }
+}
+
+/* PURE-ADD accumulate one i8 term into the int16 Sacc16 (static scales -> g=1, no rescale). */
+static void gdn_acc16(gdn_scr_t *sc, const int8_t *term, int first) {
+    if (first) { gdn_widen_i8_to_i16(term, sc->Sacc16); return; }
+    gdn_widen_i8_to_i16(term, sc->qbuf16);
+    const HVX_Vector *tp = (const HVX_Vector *)sc->qbuf16; HVX_Vector *sp = (HVX_Vector *)sc->Sacc16;
+    for (int b = 0; b < (BL * BL) / 64; ++b) sp[b] = Q6_Vh_vadd_VhVh(sp[b], tp[b]);   /* int16 add: half the lanes */
+}
+
+/* narrow int32 -> int16 (sat), natural order (diag output: i32 forward-subst -> i16 store). */
+static void gdn_narrow_i32_to_i16(const int32_t *src, int16_t *dst) {
+    const HVX_Vector *p = (const HVX_Vector *)src; HVX_Vector *dp = (HVX_Vector *)dst;
+    for (int v = 0; v < (BL * BL) / 64; ++v) dp[v] = Q6_Vh_vpack_VwVw_sat(p[2*v+1], p[2*v]);
+}
+
+/* ---- int16-reading operand getters (reuse pack/effective; quant via widen-then-proven-int32) ---- */
+/* T_kj weight: off-diag drained@sTw -> pure i16->i8 narrow (clean); diag(k==j) -> widen+quant. */
+static const int8_t *gdn_get_wt_T16(gdn_scr_t *sc, const gdn_vtcm_t *vt, int k, int j,
+                                    float *sw_out, const int32_t **eff_out, int *colabs_out) {
+    int key = gdn_blk_index(k, j);
+    int8_t *km = vt->wcache + (size_t)key * 0x1000;
+    if (!sc->vTw[key]) {
+        if (k != j && sc->Tscl[key] == GDN_OPS_sTw) {                       /* clean i16->i8 narrow */
+            gdn_narrow_i16_to_i8(sc->Tblk16[key], sc->wtbuf); sc->sTw[key] = GDN_OPS_sTw;
+        } else {                                                            /* diag block: widen + quant */
+            gdn_widen_i16_to_i32(sc->Tblk16[key], sc->Tc);
+            g_ops_i8 = GDN_OPS_sTw;
+            sc->sTw[key] = gdn_quant_i8_from_codes(sc, sc->Tc, sc->Tscl[key], sc->wtbuf, (k == j) ? sc->mxdiag[k] : -1);
+        }
+        gdn_effective(sc->wtbuf, sc->effc[key]); sc->colabsc[key] = GDN_OPS_COLABS;
+        gdn_pack_w8_kmajor(sc->wtbuf, km);
+        sc->vTw[key] = 1;
+    }
+    *sw_out = sc->sTw[key]; *eff_out = sc->effc[key]; *colabs_out = sc->colabsc[key];
+    return km;
+}
+/* T_ii activation: widen i16->i32 + quant u8 + crouton-pack. */
+static const uint8_t *gdn_get_act_Tdiag16(gdn_scr_t *sc, const gdn_vtcm_t *vt, int i, float *sa_out) {
+    uint8_t *cr = vt->acache + 0xA000 + (size_t)i * 0x1000;
+    if (!sc->vTa[i]) {
+        int bii = gdn_blk_index(i, i);
+        gdn_widen_i16_to_i32(sc->Tblk16[bii], sc->Tc);
+        g_ops_u8 = GDN_OPS_sTa;
+        sc->sTa[i] = gdn_quant_u8_from_codes(sc, sc->Tc, sc->Tscl[bii], sc->actbuf, sc->mxdiag[i]);
+        gdn_pack_act_crouton8(sc->actbuf, cr);
+        sc->vTa[i] = 1;
+    }
+    *sa_out = sc->sTa[i];
+    return cr;
+}
+
+/* ---- the int16 static solve (mirrors gdn_br_one_head HMX path, Tblk/Sacc -> int16) ---- */
+static void gdn_br_one_head16(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t *Ah, uint16_t *Th,
+                              int zpA, int M, int S, float sT, int zpT) {
+    for (int b = 0; b < GDN_BR_NBLK; ++b) { sc->vAa[b] = 0; sc->vTw[b] = 0; }
+    for (int i = 0; i < NB; ++i) sc->vTa[i] = 0;
+    /* diag: forward-subst (proven int32 path) -> narrow to int16 store. */
+    for (int i = 0; i < NB; ++i) {
+        int bi = gdn_blk_index(i, i);
+        gdn_solve_diag64(sc, Ah + (size_t)i * BL * C + i * BL, C, zpA, M, S, sc->Tc, nullptr);
+        gdn_narrow_i32_to_i16(sc->Tc, sc->Tblk16[bi]);
+        sc->Tscl[bi] = GDN_BR_TI;
+    }
+    /* zero strict-upper-tri of Th. */
+    { HVX_Vector vzph = Q6_Vh_vsplat_R(zpT); int aligned = (((uintptr_t)Th & 127) == 0);
+      for (int bi = 0; bi < NB - 1; ++bi) { int nbc = NB - 1 - bi;
+        for (int r = 0; r < BL; ++r) { uint16_t *rowp = Th + ((size_t)bi*BL + r)*C + (size_t)(bi+1)*BL;
+          if (aligned) { HVX_Vector *op = (HVX_Vector *)rowp; for (int b=0;b<nbc;++b) op[b]=vzph; }
+          else { HVX_UVector *op = (HVX_UVector *)rowp; for (int b=0;b<nbc;++b) op[b]=vzph; } } } }
+    /* diag requant: widen i16->i32, reuse proven requant. */
+    for (int i = 0; i < NB; ++i) { int bi = gdn_blk_index(i, i);
+        gdn_widen_i16_to_i32(sc->Tblk16[bi], sc->Tc);
+        gdn_requant_block_out(sc->Tc, sc->Tscl[bi], sT, zpT, Th, i * BL, i * BL, C);
+    }
+    /* off-diagonal merges. */
+    for (int d = 1; d < NB; ++d) {
+        for (int j = 0; j + d < NB; ++j) {
+            int i = j + d, bij = gdn_blk_index(i, j);
+            float s_S = 0.f; int first = 1;
+            for (int k = j; k < i; ++k) {
+                float sa, sw, sterm; const int32_t *eff; int wcolabs;
+                const uint8_t *a = gdn_get_act_A(sc, vt, Ah, i, k, C, zpA, M, S, &sa);
+                const int8_t  *w = gdn_get_wt_T16(sc, vt, k, j, &sw, &eff, &wcolabs);
+                gdn_merge_packed(sc, vt, a, sa, w, eff, sw, wcolabs, sc->termi, &sterm);
+                if (first) s_S = sterm;                          /* static: all inner terms share scale (sAa,sTw fixed) */
+                gdn_acc16(sc, sc->termi, first);
+                first = 0;
+            }
+            /* final merge T_ij = T_ii @ Sacc. */
+            float sa_ii, sw_S, sij; int scolabs;
+            const uint8_t *a_ii = gdn_get_act_Tdiag16(sc, vt, i, &sa_ii);
+            gdn_widen_i16_to_i32(sc->Sacc16, sc->Tc);            /* Sacc16 -> i32 for the proven quant */
+            g_ops_i8 = GDN_OPS_sSacc;
+            sw_S = gdn_quant_i8_from_codes(sc, sc->Tc, s_S, sc->wtbuf, -1);
+            gdn_effective(sc->wtbuf, sc->eff, &scolabs);
+            gdn_pack_w8_kmajor(sc->wtbuf, vt->wt);
+            g_force_sP = GDN_OPS_sTw;
+            gdn_merge_packed(sc, vt, a_ii, sa_ii, vt->wt, sc->eff, sw_S, scolabs, sc->termi, &sij);
+            g_force_sP = 0.f;
+            gdn_widen_i8_to_i16(sc->termi, sc->Tblk16[bij]);    /* store result i16 */
+            sc->Tscl[bij] = sij;
+            gdn_widen_i16_to_i32(sc->Tblk16[bij], sc->Tc);      /* requant (proven int32) */
+            gdn_requant_block_out(sc->Tc, sij, sT, zpT, Th, i * BL, j * BL, C);
+        }
+    }
+}
+#endif  /* GDN_BR_I16 && __hexagon__ */

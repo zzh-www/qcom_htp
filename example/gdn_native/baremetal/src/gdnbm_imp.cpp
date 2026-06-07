@@ -41,7 +41,14 @@
 #if !defined(GDNBM_OVERLAP_PROBE) && !defined(GDNBM_HMX_MERGE_PATH) && !defined(GDNBM_HMX_SOLVE) && !defined(GDNBM_HMX_PIPE)
 #define GDN_BR_HVX_MERGE 1
 #endif
+/* PIPE default = int16 T codes (GdnSolveBR16.cpp): bit-exact vs int32, ~11% faster (half storage + i16-native
+ * widen/narrow/acc/maxabs).  Opt out with -DGDN_BR_NO_I16.  Needs STATIC_FULL (all static codes fit int16).
+ * MUST precede the includes (gates struct fields in GdnSolveBROp.cpp + the GdnSolveBR16.cpp body). */
+#if defined(GDNBM_HMX_PIPE) && defined(GDN_BR_STATIC_FULL) && !defined(GDN_BR_NO_I16) && !defined(GDN_BR_I16)
+#define GDN_BR_I16 1
+#endif
 #include "../../solve_br_op/src/GdnSolveBROp.cpp"
+#include "../../solve_br_op/src/GdnSolveBR16.cpp"   /* clean int16 static solve (GDN_BR_I16) */
 
 /* PIPE default = PURE-HMX consumer (lever 1): bias-pack+out-zero on the producer so the consumer is pure
  * mxmem and frees its HVX unit -> P=4 producers fit 4 HVX units (no SMT starvation; timeline-verified).
@@ -326,8 +333,13 @@ static void pipe_producer(void *arg) {
     for (int i = 0; i < n; ++i) {
         udma_wait();                                                                    /* A[i] ready */
         if (i + 1 < n) udma_start(&dsc, Avt[(i + 1) & 1], w->Au + (size_t)hs[i + 1] * CC, Abytes);
+#if defined(GDN_BR_I16)
+        gdn_br_one_head16(sc, &vt, Avt[i & 1], w->Tu + (size_t)hs[i] * CC,
+                          w->zpA, w->M, w->S, w->sT, w->zpT);  /* int16 codes */
+#else
         gdn_br_one_head(sc, &vt, Avt[i & 1], w->Tu + (size_t)hs[i] * CC,
                         w->zpA, w->M, w->S, w->sT, w->zpT);    /* matmuls auto-delegate via g_hmx_dispatch */
+#endif
     }
     __sync_fetch_and_add(&g_pipe_pdone, 1);
     if (hvx == 0) qurt_hvx_unlock();
