@@ -160,6 +160,7 @@ static gdn_scr_t g_scr[GDN_BR_NT];
 #define GDN_OPS_sTa 7.874256e-03f
 #define GDN_OPS_COLABS 556
 static float g_ops_u8 = 0.f, g_ops_i8 = 0.f;   /* >0 => fixed output scale for u8/i8 quant (single-thread) */
+static float g_force_sP = 0.f;   /* >0 => force gdn_merge_packed output to drain at this scale (e.g. sTw) */
 #endif
 
 /* VTCM scratch carved from the TCM_Only scratch tensor.  Buffers are spaced 0x10000 (64 KB) apart —
@@ -935,6 +936,19 @@ static const uint8_t *gdn_get_act_Tdiag(gdn_scr_t *sc, const gdn_vtcm_t *vt, int
 }
 
 /* T_kj block as inner-merge weight: quant i8 + k-major-pack + effective bias; key gdn_blk_index(k,j). */
+#if defined(GDN_BR_STATIC_FULL)
+/* pure int32 -> int8 narrow (codes already in [-127,127] @sTw, drained by g_force_sP): NO rescale -> the
+ * off-diag T_kj weight quant collapses to just a narrow (saves the vmpyi+clip of the rescale). */
+static void gdn_narrow_i32_to_i8(const int32_t *codes, int8_t *out) {
+    const HVX_Vector *cp = (const HVX_Vector *)codes; HVX_Vector *op = (HVX_Vector *)out;
+    for (int v = 0; v < (BL * BL) / 128; ++v) {
+        HVX_Vector h0 = Q6_Vh_vpack_VwVw_sat(cp[v * 4 + 1], cp[v * 4 + 0]);
+        HVX_Vector h1 = Q6_Vh_vpack_VwVw_sat(cp[v * 4 + 3], cp[v * 4 + 2]);
+        op[v] = Q6_Vb_vpack_VhVh_sat(h1, h0);
+    }
+}
+#endif
+
 static const int8_t *gdn_get_wt_T(gdn_scr_t *sc, const gdn_vtcm_t *vt, int k, int j,
                                   float *sw_out, const int32_t **eff_out, int *colabs_out) {
     int key = gdn_blk_index(k, j);
@@ -945,10 +959,17 @@ static const int8_t *gdn_get_wt_T(gdn_scr_t *sc, const gdn_vtcm_t *vt, int k, in
 #endif
         /* diag T block (k==j) has a producer-tracked maxabs; off-diag must compute it. */
 #if defined(GDN_BR_STATIC_FULL)
-        g_ops_i8 = GDN_OPS_sTw;
-#endif
+        if (k != j && sc->Tscl[key] == GDN_OPS_sTw) {   /* off-diag T drained @sTw -> pure narrow (no rescale). */
+            gdn_narrow_i32_to_i8(sc->Tblk[key], sc->wtbuf); sc->sTw[key] = GDN_OPS_sTw;
+        } else {
+            g_ops_i8 = GDN_OPS_sTw;
+            sc->sTw[key] = gdn_quant_i8_from_codes(sc, sc->Tblk[key], sc->Tscl[key], sc->wtbuf,
+                                                   (k == j) ? sc->mxdiag[k] : -1);
+        }
+#else
         sc->sTw[key] = gdn_quant_i8_from_codes(sc, sc->Tblk[key], sc->Tscl[key], sc->wtbuf,
                                                (k == j) ? sc->mxdiag[k] : -1);
+#endif
 #if defined(GDN_BR_PROBE_CYCLES)
         { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_quant += q - q0; }
         uint64_t e0; asm volatile("%0 = C15:14" : "=r"(e0));
@@ -1056,6 +1077,10 @@ static void gdn_merge_packed(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint8_t 
     {
         float maxP = (maxP_est > 0) ? (float)maxP_est : (float)GDN_BR_LOOSE_CONST;
         float sP = (maxP * sa * sw) / 127.0f; if (sP <= 0.0f) sP = 1e-12f;
+        if (g_force_sP > 0.f) {   /* drain at a CHOSEN scale (e.g. sTw): sP=force -> maxP=127*force/(sa*sw). */
+            sP = g_force_sP; maxP = (sa * sw > 0.f) ? (127.0f * sP / (sa * sw)) : maxP;
+            g1 = (maxP > 0.f) ? (127.0f / maxP) : g1;
+        }
         gdn_hmx_run_only(vt, wt_kmajor, eff, g1 * 512.0f, 128 << 7, 1);   /* single output pass (round) */
 #if defined(GDN_BR_PROBE_CYCLES)
         { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_hmxkern += q - es0; }
@@ -1636,7 +1661,13 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
 #if defined(GDN_BR_PROBE_CYCLES)
             { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_wtpack += q - sp0; }
 #endif
+#if defined(GDN_BR_STATIC_FULL)
+            g_force_sP = GDN_OPS_sTw;   /* drain T_ij at sTw -> its later use as off-diag wt is a pure narrow (g=1) */
+#endif
             gdn_merge_packed(sc, vt, a_ii, sa_ii, vt->wt, sc->eff, sw_S, scolabs, sc->termi, &sij);
+#if defined(GDN_BR_STATIC_FULL)
+            g_force_sP = 0.f;
+#endif
 #if defined(GDN_BR_PROBE_CYCLES)
             uint64_t w0; asm volatile("%0 = C15:14" : "=r"(w0));
 #endif
