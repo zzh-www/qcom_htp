@@ -95,6 +95,16 @@
   > **int16(64-lane)比 int32(32-lane)做同样计算还慢 = 反直觉 = 几乎一定是自己实现错了。**改成**编译期路径(无运行时分支)**后 → +1.4%。
   > **流程补丁:得到反直觉的"优化更慢"结果时,先查实现(热循环里的分支?寄存器溢出?对齐?次优 intrinsic?),用反汇编/编译期版排除,再谈结论。`feedback_dont_chain_no_op_experiments` 不适用于"我没做对"的情况。**
 
+## 2.6 MM 细分(2026-06-08)+ 下一个杠杆
+MM(producer 的 `gdn_merge_packed`,~21%)细分:
+| MM 子项 | aggregate | /producer | 性质 |
+|---|---|---|---|
+| SPIN(等 consumer 排空) | 0.55M | ~7% | 同步 hand-off 等待 ← **杠杆** |
+| DEPACK(de-crouton) | 0.24M | ~3% | 已 byte-lane 128 最优,**非杠杆** |
+| 其余(bias-pack/dispatch/set-tabs) | ~1.14M | ~11% | 疑似 SMT-stall 虚高(像 diag,span 高估) |
+- **out-zero 删除 = neutral**(kernel 全覆盖输出,删对了但不提速;`-DGDNBM_PIPE_OUTZERO` 恢复)。
+- **下一个杠杆 = 藏 SPIN(software-pipeline)**:内层 k 循环里**下一个 matmul 的操作数 prep 与当前 matmul 结果无关** → 在 spin 等待时预取 k+1 的操作数。需把 `gdn_merge_packed` 拆成 **dispatch-async(signal 即返回)+ wait-depack(spin+depack)**,内层循环改软流水:`prep(j); disp(j); for k: prep(k+1); wait(k); acc(k); disp(k+1)`。**实打实重构(触及共享 gdn_merge_packed),是已定位/已测量的下一步,不是"不值得"。**
+
 ---
 
 ## 3. 杠杆优先级(v75 实测教训)
