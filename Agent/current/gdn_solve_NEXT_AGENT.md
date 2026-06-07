@@ -6,12 +6,16 @@
 > **先用 u8i8(int8)kernel 把 GDNSolveHVXMixHMX 的 producer-consumer 流水做成全 solve,精度先不管。**
 > int8 HMX matmul **实测 4× 便宜于 vrmpy**(FEED_4P 509 vs vrmpy-4-路 2081;微基准 2.77× vs 出货 vrmpy-4-thread 1601)——
 > 这条路**没被推翻,是 ACTIVE 主线**。下面的 int16 分析是**未来精度升级**的单独问题,不是放弃 u8i8 的理由。
-> - **现状**:FEED_4P 微基准(4 HVX producer + 1 main HMX consumer,u8i8 kernel)**已跑通**(`gdnbm_imp.cpp`,`-DGDNBM_FEED_4P`)。
->   **缺口 = 全 solve 集成**:`GDNBM_HMX_MERGE_PATH` 全 solve **在 gdnbm_open 即 SSR**(`#error` 禁掉),**根因已定位**
->   (`gdnbm_imp.cpp:268`:HMX-merge worker 调 `gdn_br_run_slot` 但 `vt` 的 VTCM 指针没建 → mxmem 命中 null)。
-> - **下一步**:① 修 SSR 根因(按 `gdn_br_run_slot` 建好 `vt` VTCM 指针);② 把 FEED_4P producer-consumer 接进真实 merge 循环
->   (替 vrmpy matmul,精度用 u8i8 动态/或静态都行,先不纠结);③ 整 solve wall vs 基线 ~122K。**需设备**(SSR 风险,单线程先试)。
-> - **设备**:`ssh oneplus`(`source scripts/dssh.sh; dssh_open`)。2026-06-06 实测 **No route to host(手机掉线)**,需先上线。
+> - **✅ 2026-06-07 突破:单线程 HMX-merge 全 solve 跑通**(`GDNBM_HMX_SOLVE`,`gdnbm_imp.cpp`)。
+>   **SSR-at-open 根因 = `qurt_hmx_lock` 在本设备是未解析符号(U)→ .so 加载失败 0x80000406**(不是 vt-null!);
+>   修复 = worker 用 **HAP `compute_res_hmx_lock`**(weak 符号,FEED_4P 同款),不用 qurt_hmx_lock。
+>   实测 `./gdnbm 1 ...`:rc=0x0,**457,726 cyc/head(1-thread),off-diag relerr 1.50e-2**(int8-HMX,精度先不管,正确)。
+>   build:`EXTRA_DEFS="-DGDNBM_HMX_SOLVE" bash build.sh`。worker 自取 0x60000 VTCM(`gdn_vtcm_from`),A 从 DDR 读(慢)。
+> - **缺口 = 并行(producer-consumer)**:单线程 457K 不比单线程 HVX(414K)快——HMX matmul 4× 便宜的收益要靠
+>   **4 HVX producer + 1 main HMX consumer** 并行 + 砍 multi-pass + A-resident 才显现(FEED_4P 微基准 525 cyc/matmul 已证)。
+> - **下一步**:① A-resident(VTCM ping-pong,去 DDR-A 慢);② 整 solve 重构为 producer-consumer(主线程 HMX consumer +
+>   HVX producer 池),对 ~88K 基线测;③ 砍 gdn_merge_packed 的 multi-pass gain search(静态标度)。
+> - **设备**:`ssh oneplus`(`source scripts/dssh.sh; dssh_open`),`pkill -9 gdnbm` between runs,**HMX solve 单线程**(多 HMX 线程会 SSR)。
 >
 > > ### ⚠️ 旁注:int16 精度升级是后话(别和上面的 u8i8 主线混)
 > > 若**将来**要 int16 操作数精度(现在不要):convhbh 是 8-bit/操作数 kernel(sim 实测单调用只用激活高字节)→ int16×int16 = 4 byte-pass
