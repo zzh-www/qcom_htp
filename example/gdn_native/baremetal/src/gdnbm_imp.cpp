@@ -38,7 +38,7 @@
 /* GDNSolveHVX mode (default): int16-HVX matmul merges -> pure HVX + BSS scratch, threads freely.
  * Disabled for the OVERLAP probe (int8-HMX merges) and for GDNBM_HMX_MERGE_PATH (run the REAL
  * GDNSolveHVXMixHMX gdn_merge_packed on baremetal w/ PROBE_CYCLES, to get its true per-stage breakdown). */
-#if !defined(GDNBM_OVERLAP_PROBE) && !defined(GDNBM_HMX_MERGE_PATH)
+#if !defined(GDNBM_OVERLAP_PROBE) && !defined(GDNBM_HMX_MERGE_PATH) && !defined(GDNBM_HMX_SOLVE)
 #define GDN_BR_HVX_MERGE 1
 #endif
 #include "../../solve_br_op/src/GdnSolveBROp.cpp"
@@ -270,6 +270,37 @@ static void solve_worker(void *arg) {
     gdn_br_run_slot(w);
     if (chmx == 0) qurt_hmx_unlock();
     if (hvx == 0) qurt_hvx_unlock();
+    return;
+#endif
+#if defined(GDNBM_HMX_SOLVE)
+    /* GDNSolveHVXMixHMX — SINGLE-THREAD de-risk version (precision先不管, u8i8 HMX merge).
+     * One worker locks HMX once and runs the FULL solve with the HMX matmul (gdn_merge_packed, the
+     * correct #else branch of gdn_br_one_head).  Acquires its OWN 0x60000 VTCM slice for vt's surfaces+
+     * caches (gdn_vtcm_from layout span < 0x59000).  A read straight from DDR (uncached — slower; this is
+     * the correctness+cyc baseline.  A-resident ping-pong + 4-producer/1-consumer pipeline come next).
+     * Run with nthreads=1 (1 HMX unit -> no multi-thread HMX SSR). */
+    {
+        /* VTCM context (0x60000 slice for vt surfaces+caches). */
+        compute_res_attr_t va; HAP_compute_res_attr_init(&va);
+        HAP_compute_res_attr_set_vtcm_param(&va, 0x60000u, 0);
+        unsigned int vctx = HAP_compute_res_acquire(&va, 2000000);
+        uint8_t *vtcm = (uint8_t *)HAP_compute_res_attr_get_vtcm_ptr(&va);
+        /* HMX via the HAP compute_res lock (NOT qurt_hmx_lock — that symbol is unresolved on this
+         * device -> .so load fails 0x80000406; FEED_4P's main-thread consumer uses HAP, same here). */
+        compute_res_attr_t ha; HAP_compute_res_attr_init(&ha); HAP_compute_res_attr_set_hmx_param(&ha, 1);
+        unsigned int hctx = HAP_compute_res_acquire(&ha, 2000000);
+        int hl = HAP_compute_res_hmx_lock(hctx);
+        gdn_scr_t *sc = &g_scr[w->slot];
+        gdn_vtcm_t vt = vtcm ? gdn_vtcm_from(vtcm) : gdn_vtcm_t{};
+        const int CC = GDN_BR_C * GDN_BR_C;
+        if (vtcm) for (uint32_t h = w->h0 + w->slot; h < w->h1; h += w->nheads)
+            gdn_br_one_head(sc, &vt, w->Au + (size_t)h * CC, w->Tu + (size_t)h * CC,
+                            w->zpA, w->M, w->S, w->sT, w->zpT);
+        if (hl == 0) HAP_compute_res_hmx_unlock(hctx);
+        if (hctx) HAP_compute_res_release(hctx);
+        if (vctx) HAP_compute_res_release(vctx);
+        if (hvx == 0) qurt_hvx_unlock();
+    }
     return;
 #endif
 #if defined(GDNBM_VTCM_RESIDENT) && !defined(GDNBM_MM_TEST) && !defined(GDNBM_Q_TEST) && !defined(GDNBM_MERGE_TEST)
