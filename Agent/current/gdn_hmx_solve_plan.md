@@ -32,7 +32,12 @@
 
 ## 2. 计划(按收益排序;每步 warmup+reps2-4 干净测)
 
-### 步骤 1 ★ A 驻 VTCM(最大,单线程 + 并行都受益)
+### 步骤 1 ★ A 驻 VTCM(最大,单线程 + 并行都受益)— ✅ 已做,实测 ~1.93×
+- **实测结果**(2026-06-08,warmup+REPS=8 稳态 reps2-4):
+  - DDR 读 A:**~371K cyc/head** → A 驻 VTCM ping-pong:**~192K cyc/head**(**1.93×**)。
+  - 精度:输出与 DDR 路**逐字节相同**(maxdiff=0,off-diag relerr 1.093495e-01 一字不差)→ 纯数据搬运,零精度影响。
+  - 验证:`-DGDNBM_HMX_A_DDR` 逃逸路径对照,bit-exact 确认。
+  - VTCM 预算:acquire 0xA0000(vt surfaces<0x59000 @ +0 + A ping-pong 2×0x20000 @ +0x60000/+0x80000),设备容纳无误。
 - **为什么最大**:diag(fold A_ii + 前向求逆)+ merge fold(A_ik)都在读/折叠 A;A 是 uncached DDR → 标量/向量读都慢。
   route doc 实测 A-resident 是量级提升(不是 ~6%)。**我之前的 HMX_SOLVE 偷懒从 DDR 读 A,这是真正被忽略的大杠杆。**
 - **做法**:仿现成 `GDNBM_VTCM_RESIDENT` 路径(`gdnbm_imp.cpp:275+`)——每 head 的 A(256×256 u16=128KB)DMA DDR→VTCM,ping-pong 让 head h+1 的 A 在 head h 计算时载入。

@@ -280,9 +280,9 @@ static void solve_worker(void *arg) {
      * the correctness+cyc baseline.  A-resident ping-pong + 4-producer/1-consumer pipeline come next).
      * Run with nthreads=1 (1 HMX unit -> no multi-thread HMX SSR). */
     {
-        /* VTCM context (0x60000 slice for vt surfaces+caches). */
+        /* VTCM: 0xA0000 = vt surfaces+caches (gdn_vtcm_from span <0x59000 @ +0) + A ping-pong (2x128KB @ +0x60000). */
         compute_res_attr_t va; HAP_compute_res_attr_init(&va);
-        HAP_compute_res_attr_set_vtcm_param(&va, 0x60000u, 0);
+        HAP_compute_res_attr_set_vtcm_param(&va, 0xA0000u, 0);
         unsigned int vctx = HAP_compute_res_acquire(&va, 2000000);
         uint8_t *vtcm = (uint8_t *)HAP_compute_res_attr_get_vtcm_ptr(&va);
         /* HMX via the HAP compute_res lock (NOT qurt_hmx_lock — that symbol is unresolved on this
@@ -293,9 +293,28 @@ static void solve_worker(void *arg) {
         gdn_scr_t *sc = &g_scr[w->slot];
         gdn_vtcm_t vt = vtcm ? gdn_vtcm_from(vtcm) : gdn_vtcm_t{};
         const int CC = GDN_BR_C * GDN_BR_C;
+#if defined(GDNBM_HMX_A_DDR)
         if (vtcm) for (uint32_t h = w->h0 + w->slot; h < w->h1; h += w->nheads)
             gdn_br_one_head(sc, &vt, w->Au + (size_t)h * CC, w->Tu + (size_t)h * CC,
                             w->zpA, w->M, w->S, w->sT, w->zpT);
+#else
+        /* A VTCM-RESIDENT: DMA each head's A (128KB) DDR->VTCM, ping-pong so head h+1's A loads while head h
+         * computes.  diag(fold A_ii)+merge(fold A_ik) are A-bound; uncached DDR A is ~7.8x slower (route doc). */
+        const uint32_t Abytes = (uint32_t)CC * 2u;
+        uint16_t *Avt[2] = { (uint16_t *)(vtcm + 0x60000), (uint16_t *)(vtcm + 0x80000) };
+        dma_desc_t dsc;
+        if (vtcm) {
+            uint32_t hs[64]; int n = 0;
+            for (uint32_t h = w->h0 + w->slot; h < w->h1 && n < 64; h += w->nheads) hs[n++] = h;
+            if (n > 0) udma_start(&dsc, Avt[0], w->Au + (size_t)hs[0] * CC, Abytes);
+            for (int i = 0; i < n; ++i) {
+                udma_wait();                                                                  /* A[i] ready */
+                if (i + 1 < n) udma_start(&dsc, Avt[(i + 1) & 1], w->Au + (size_t)hs[i + 1] * CC, Abytes);  /* prefetch A[i+1] */
+                gdn_br_one_head(sc, &vt, Avt[i & 1], w->Tu + (size_t)hs[i] * CC,
+                                w->zpA, w->M, w->S, w->sT, w->zpT);                            /* compute (overlaps prefetch) */
+            }
+        }
+#endif
         if (hl == 0) HAP_compute_res_hmx_unlock(hctx);
         if (hctx) HAP_compute_res_release(hctx);
         if (vctx) HAP_compute_res_release(vctx);
