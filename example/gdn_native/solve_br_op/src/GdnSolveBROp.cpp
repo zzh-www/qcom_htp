@@ -151,6 +151,17 @@ struct gdn_scr_t {
 };
 static gdn_scr_t g_scr[GDN_BR_NT];
 
+#if defined(GDN_BR_STATIC_FULL)
+/* FULL STATIC quantization (precision先不管): every operand+output uses a fixed (calibrated) scale, so
+ * ALL runtime dynamic-quant work is eliminated -- no maxabs scans, no colabs, no gain-search, pure-add acc.
+ * Calibrated on A_u16_h32 (global max scales). */
+#define GDN_OPS_sAa 4.895068e-03f
+#define GDN_OPS_sTw 7.874256e-03f
+#define GDN_OPS_sTa 7.874256e-03f
+#define GDN_OPS_COLABS 556
+static float g_ops_u8 = 0.f, g_ops_i8 = 0.f;   /* >0 => fixed output scale for u8/i8 quant (single-thread) */
+#endif
+
 /* VTCM scratch carved from the TCM_Only scratch tensor.  Buffers are spaced 0x10000 (64 KB) apart —
  * matching the proven M1 sim harness layout — so any HMX over-write/alignment slack can't clobber a
  * neighbouring buffer.  Total span < 0x60000 (384 KB; graph declares >= that). */
@@ -339,9 +350,12 @@ static int32_t gdn_maxabs_codes(const int32_t *codes) {
  * sQ = maxabs_value/127.  Returns sQ.  Vectorized: multiplier = round(scale_in/sQ * 2^Q) fixed-point. */
 static float gdn_quant_i8_from_codes(gdn_scr_t *sc, const int32_t *codes, float scale_in, int8_t *out,
                                     int32_t mx) {
-    if (mx < 0) mx = gdn_maxabs_codes(codes);   /* caller can pass a producer-tracked maxabs (bit-exact) */
-    float maxval = (float)mx * scale_in;
-    float sQ = (maxval > 0.0f) ? (maxval / 127.0f) : 1e-12f;
+    float sQ;
+#if defined(GDN_BR_STATIC_FULL)
+    if (g_ops_i8 > 0.f) sQ = g_ops_i8; else
+#endif
+    { if (mx < 0) mx = gdn_maxabs_codes(codes); float maxval = (float)mx * scale_in;
+      sQ = (maxval > 0.0f) ? (maxval / 127.0f) : 1e-12f; }
     /* code_q = round(code*g), g=scale_in/sQ.  Adaptive Q keeps Mg<2^15 so code(<2^15)*Mg < 2^30. */
     float g = scale_in / sQ;
     int Q = 14;
@@ -373,9 +387,12 @@ static float gdn_quant_i8_from_codes(gdn_scr_t *sc, const int32_t *codes, float 
 /* quantize 64x64 int32 codes into u8 activation (zp128) at symmetric scale sQ.  Returns sQ. */
 static float gdn_quant_u8_from_codes(gdn_scr_t *sc, const int32_t *codes, float scale_in, uint8_t *out,
                                     int32_t mx) {
-    if (mx < 0) mx = gdn_maxabs_codes(codes);   /* caller can pass a producer-tracked maxabs (bit-exact) */
-    float maxval = (float)mx * scale_in;
-    float sQ = (maxval > 0.0f) ? (maxval / 127.0f) : 1e-12f;
+    float sQ;
+#if defined(GDN_BR_STATIC_FULL)
+    if (g_ops_u8 > 0.f) sQ = g_ops_u8; else
+#endif
+    { if (mx < 0) mx = gdn_maxabs_codes(codes); float maxval = (float)mx * scale_in;
+      sQ = (maxval > 0.0f) ? (maxval / 127.0f) : 1e-12f; }
     float g = scale_in / sQ;
     int Q = 14;
     while (Q > 1  && g * (float)(1 << Q) >= 32768.0f) --Q;
@@ -828,6 +845,9 @@ static const uint8_t *gdn_get_act_A(gdn_scr_t *sc, const gdn_vtcm_t *vt, const u
         { uint64_t f; asm volatile("%0 = C15:14" : "=r"(f)); g_c_fold += f - f0; }
         uint64_t q0; asm volatile("%0 = C15:14" : "=r"(q0));
 #endif
+#if defined(GDN_BR_STATIC_FULL)
+        g_ops_u8 = GDN_OPS_sAa;
+#endif
         sc->sAa[key] = gdn_quant_u8_from_codes(sc, sc->Aoff, (float)(1.0 / (1 << GDN_BR_F)), sc->actbuf, mxA);
 #if defined(GDN_BR_PROBE_CYCLES)
         { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_quant += q - q0; }
@@ -850,6 +870,9 @@ static const uint8_t *gdn_get_act_Tdiag(gdn_scr_t *sc, const gdn_vtcm_t *vt, int
         int bii = gdn_blk_index(i, i);
 #if defined(GDN_BR_PROBE_CYCLES)
         uint64_t q0; asm volatile("%0 = C15:14" : "=r"(q0));
+#endif
+#if defined(GDN_BR_STATIC_FULL)
+        g_ops_u8 = GDN_OPS_sTa;
 #endif
         sc->sTa[i] = gdn_quant_u8_from_codes(sc, sc->Tblk[bii], sc->Tscl[bii], sc->actbuf, sc->mxdiag[i]);
 #if defined(GDN_BR_PROBE_CYCLES)
@@ -876,13 +899,21 @@ static const int8_t *gdn_get_wt_T(gdn_scr_t *sc, const gdn_vtcm_t *vt, int k, in
         uint64_t q0; asm volatile("%0 = C15:14" : "=r"(q0));
 #endif
         /* diag T block (k==j) has a producer-tracked maxabs; off-diag must compute it. */
+#if defined(GDN_BR_STATIC_FULL)
+        g_ops_i8 = GDN_OPS_sTw;
+#endif
         sc->sTw[key] = gdn_quant_i8_from_codes(sc, sc->Tblk[key], sc->Tscl[key], sc->wtbuf,
                                                (k == j) ? sc->mxdiag[k] : -1);
 #if defined(GDN_BR_PROBE_CYCLES)
         { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_quant += q - q0; }
         uint64_t e0; asm volatile("%0 = C15:14" : "=r"(e0));
 #endif
+#if defined(GDN_BR_STATIC_FULL)
+        gdn_effective(sc->wtbuf, sc->effc[key]);              /* static gain: colabs unused -> nullptr skips its reduction */
+        sc->colabsc[key] = GDN_OPS_COLABS;
+#else
         gdn_effective(sc->wtbuf, sc->effc[key], &sc->colabsc[key]);   /* #1c: cache col-abs-sum max too */
+#endif
 #if defined(GDN_BR_PROBE_CYCLES)
         { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_eff += q - e0; }
         uint64_t p0; asm volatile("%0 = C15:14" : "=r"(p0));
@@ -1258,6 +1289,16 @@ static void gdn_acc_i8_to_codes(gdn_scr_t *sc, const int8_t *term, float s_term,
         gdn_widen_i8_to_i32(term, sc->Sacc);
         return;
     }
+#if defined(GDN_BR_STATIC_FULL)
+    /* PURE-ADD: static scales -> all inner-sum terms share a scale (g=1) -> widen + int32 add, no rescale. */
+    {
+        (void)s_term; (void)s_S;
+        gdn_widen_i8_to_i32(term, sc->qbuf);
+        const HVX_Vector *tpa = (const HVX_Vector *)sc->qbuf; HVX_Vector *spa = (HVX_Vector *)sc->Sacc;
+        for (int b = 0; b < (BL * BL) / 32; ++b) spa[b] = Q6_Vw_vadd_VwVw(spa[b], tpa[b]);
+        return;
+    }
+#endif
     float g = s_term / s_S;
     int Q = 14;
     while (Q > 1  && g * (float)(1 << Q) >= 32768.0f) --Q;
@@ -1370,7 +1411,11 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
     for (int i = 0; i < NB; ++i) sc->vTa[i] = 0;
     for (int i = 0; i < NB; ++i) {
         int bi = gdn_blk_index(i, i);
+#if defined(GDN_BR_STATIC_FULL)
+        gdn_solve_diag64(sc, Ah + (size_t)i * BL * C + i * BL, C, zpA, M, S, sc->Tblk[bi], nullptr);  /* static: skip mx_out (downstream T quant fixed-scale) */
+#else
         gdn_solve_diag64(sc, Ah + (size_t)i * BL * C + i * BL, C, zpA, M, S, sc->Tblk[bi], &sc->mxdiag[i]);
+#endif
         sc->Tscl[bi] = GDN_BR_TI;
     }
 #if defined(GDN_BR_TRACE)
@@ -1528,6 +1573,9 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
             const uint8_t *a_ii = gdn_get_act_Tdiag(sc, vt, i, &sa_ii);
 #if defined(GDN_BR_PROBE_CYCLES)
             uint64_t sq0; asm volatile("%0 = C15:14" : "=r"(sq0));
+#endif
+#if defined(GDN_BR_STATIC_FULL)
+            g_ops_i8 = 0.f;   /* Sacc quant stays dynamic (different magnitude than T_kj) */
 #endif
             sw_S = gdn_quant_i8_from_codes(sc, sc->Sacc, s_S, sc->wtbuf, -1);
 #if defined(GDN_BR_PROBE_CYCLES)
