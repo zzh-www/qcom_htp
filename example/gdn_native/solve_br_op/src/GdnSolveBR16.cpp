@@ -62,6 +62,30 @@ static void gdn_narrow_i32_to_i16(const int32_t *src, int16_t *dst) {
     for (int v = 0; v < (BL * BL) / 64; ++v) dp[v] = Q6_Vh_vpack_VwVw_sat(p[2*v+1], p[2*v]);
 }
 
+/* int16-NATIVE Q15 quant -> i8 (g<1): q=round(code*g) via ONE int16 Q15 mult per 64 codes
+ * (Q6_Vh_vmpy_VhRh_s1_rnd_sat = sat16((Vh*Rh*2+0x8000)>>16) = round(code*Mg16/2^15)) -> NO widen to int32,
+ * HALF the lanes/instructions vs the int32 path.  16-bit multiplier (vs int32 adaptive ~Q20) = small
+ * precision trade (精度先不管).  Requires g<1 (Mg16<2^15); caller guarantees (diag-weight/T_ii g≈0.008). */
+static void gdn_quant_i8_q15(const int16_t *codes, float scale_in, float sQ, int8_t *out) {
+    float g = scale_in / sQ; int Mg16 = (int)(g * 32768.0f + 0.5f); if (Mg16 > 32767) Mg16 = 32767;
+    int Rh = (Mg16 & 0xFFFF) | (Mg16 << 16);
+    const HVX_Vector *p = (const HVX_Vector *)codes; HVX_Vector *op = (HVX_Vector *)out;
+    for (int v = 0; v < (BL * BL) / 128; ++v)
+        op[v] = Q6_Vb_vpack_VhVh_sat(Q6_Vh_vmpy_VhRh_s1_rnd_sat(p[2*v+1], Rh),
+                                     Q6_Vh_vmpy_VhRh_s1_rnd_sat(p[2*v+0], Rh));
+}
+/* int16-NATIVE Q15 quant -> u8 (zp128, g<1). */
+static void gdn_quant_u8_q15(const int16_t *codes, float scale_in, float sQ, uint8_t *out) {
+    float g = scale_in / sQ; int Mg16 = (int)(g * 32768.0f + 0.5f); if (Mg16 > 32767) Mg16 = 32767;
+    int Rh = (Mg16 & 0xFFFF) | (Mg16 << 16); const HVX_Vector v128 = Q6_Vh_vsplat_R(128);
+    const HVX_Vector *p = (const HVX_Vector *)codes; HVX_Vector *op = (HVX_Vector *)out;
+    for (int v = 0; v < (BL * BL) / 128; ++v) {
+        HVX_Vector q0 = Q6_Vh_vadd_VhVh(Q6_Vh_vmpy_VhRh_s1_rnd_sat(p[2*v+0], Rh), v128);
+        HVX_Vector q1 = Q6_Vh_vadd_VhVh(Q6_Vh_vmpy_VhRh_s1_rnd_sat(p[2*v+1], Rh), v128);
+        op[v] = Q6_Vub_vpack_VhVh_sat(q1, q0);
+    }
+}
+
 /* ---- int16-reading operand getters (reuse pack/effective; quant via widen-then-proven-int32) ---- */
 /* T_kj weight: off-diag drained@sTw -> pure i16->i8 narrow (clean); diag(k==j) -> widen+quant. */
 static const int8_t *gdn_get_wt_T16(gdn_scr_t *sc, const gdn_vtcm_t *vt, int k, int j,
@@ -71,10 +95,8 @@ static const int8_t *gdn_get_wt_T16(gdn_scr_t *sc, const gdn_vtcm_t *vt, int k, 
     if (!sc->vTw[key]) {
         if (k != j && sc->Tscl[key] == GDN_OPS_sTw) {                       /* clean i16->i8 narrow */
             gdn_narrow_i16_to_i8(sc->Tblk16[key], sc->wtbuf); sc->sTw[key] = GDN_OPS_sTw;
-        } else {                                                            /* diag block: widen + quant */
-            gdn_widen_i16_to_i32(sc->Tblk16[key], sc->Tc);
-            g_ops_i8 = GDN_OPS_sTw;
-            sc->sTw[key] = gdn_quant_i8_from_codes(sc, sc->Tc, sc->Tscl[key], sc->wtbuf, (k == j) ? sc->mxdiag[k] : -1);
+        } else {                                                            /* diag block: int16-native Q15 quant (g≈0.008<1) */
+            gdn_quant_i8_q15(sc->Tblk16[key], sc->Tscl[key], GDN_OPS_sTw, sc->wtbuf); sc->sTw[key] = GDN_OPS_sTw;
         }
         gdn_effective(sc->wtbuf, sc->effc[key]); sc->colabsc[key] = GDN_OPS_COLABS;
         gdn_pack_w8_kmajor(sc->wtbuf, km);
@@ -88,9 +110,8 @@ static const uint8_t *gdn_get_act_Tdiag16(gdn_scr_t *sc, const gdn_vtcm_t *vt, i
     uint8_t *cr = vt->acache + 0xA000 + (size_t)i * 0x1000;
     if (!sc->vTa[i]) {
         int bii = gdn_blk_index(i, i);
-        gdn_widen_i16_to_i32(sc->Tblk16[bii], sc->Tc);
-        g_ops_u8 = GDN_OPS_sTa;
-        sc->sTa[i] = gdn_quant_u8_from_codes(sc, sc->Tc, sc->Tscl[bii], sc->actbuf, sc->mxdiag[i]);
+        gdn_quant_u8_q15(sc->Tblk16[bii], sc->Tscl[bii], GDN_OPS_sTa, sc->actbuf);   /* int16-native Q15 (g≈0.008<1) */
+        sc->sTa[i] = GDN_OPS_sTa;
         gdn_pack_act_crouton8(sc->actbuf, cr);
         sc->vTa[i] = 1;
     }
