@@ -1432,13 +1432,17 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
              (unsigned long long)(mergeGlue / H), (unsigned long long)(g_c_fold / H),
              (unsigned long long)(g_c_quant / H), (unsigned long long)(other / H),
              (unsigned long long)(tot / H), (unsigned long long)((t1 - t0) / H));
-        if (statsLen > 3) stats[3] = (int)(g_c_diag / H);
-        if (statsLen > 4) stats[4] = (int)(mergeRun / H);
-        if (statsLen > 5) stats[5] = (int)(mergeGlue / H);
-        if (statsLen > 6) stats[6] = (int)(g_c_fold / H);
-        if (statsLen > 7) stats[7] = (int)(g_c_quant / H);
-        if (statsLen > 8) stats[8] = (int)(other / H);
-        if (statsLen > 9) stats[9] = (int)((t1 - t0) / H);   /* wall/head */
+        /* FINE per-glue-op breakdown (per head) so the dominant glue is visible, not lumped into "other". */
+        if (statsLen > 3) stats[3] = (int)(g_c_diag / H);                                   /* diag fwd-subst */
+        if (statsLen > 4) stats[4] = (int)(mergeRun / H);                                   /* HMX kernel (run_only) */
+        if (statsLen > 5) stats[5] = (int)(g_c_hmxdepack / H);                              /* depack out u8->codes */
+        if (statsLen > 6) stats[6] = (int)(g_c_fold / H);                                   /* fold A_ik */
+        if (statsLen > 7) stats[7] = (int)(g_c_quant / H);                                  /* operand quant */
+        if (statsLen > 8) stats[8] = (int)(g_c_acc / H);                                    /* acc terms */
+        if (statsLen > 9) stats[9] = (int)(g_c_requant / H);                                /* requant codes->u16 out */
+        if (statsLen > 10) stats[10] = (int)(g_c_widen / H);                               /* widen i8->i32 */
+        if (statsLen > 11) stats[11] = (int)((g_c_actpack + g_c_wtpack + g_c_eff) / H);     /* act/wt pack + eff */
+        (void)mergeGlue; (void)other;
     }
 #endif
     return 0;

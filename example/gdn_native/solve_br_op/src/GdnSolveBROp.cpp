@@ -1472,7 +1472,8 @@ static void gdn_br_head_scalar(const uint16_t *Au, int zpA, float sA,
  * C15:14 PCYCLE is a GLOBAL core cycle counter -> timestamps from the 4 worker threads share one timebase,
  * so the assembled trace shows real cross-thread overlap/load-balance.  gdnbm_solve sets g_tr_base at
  * spawn time and serializes g_tr[] into the output for the host to emit a Chrome/Perfetto trace JSON. */
-enum { GDN_TR_HEAD = 0, GDN_TR_DIAG = 1, GDN_TR_MERGE = 2, GDN_TR_MM = 3, GDN_TR_QUANT = 4 };
+enum { GDN_TR_HEAD = 0, GDN_TR_DIAG = 1, GDN_TR_MERGE = 2, GDN_TR_MM = 3, GDN_TR_QUANT = 4,
+       GDN_TR_PREP = 5, GDN_TR_ACC = 6, GDN_TR_REQ = 7 };   /* PREP=get_act+get_wt(fold/quant/pack), ACC, REQ=widen+requant */
 struct gdn_tr_ev { uint32_t tid, stage; uint64_t t0, t1; };
 #define GDN_TR_MAX 32768
 gdn_tr_ev g_tr[GDN_TR_MAX];
@@ -1647,14 +1648,26 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
             for (int k = j; k < i; ++k) {
                 /* cached: A_ik act (fold+quant+pack once per (i,k)), T_kj wt (quant+pack+eff once per (k,j)). */
                 float sa, sw, sterm; const int32_t *eff; int wcolabs;
+#if defined(GDN_BR_TRACE)
+                uint64_t _p0 = GDN_TR_NOW();
+#endif
                 const uint8_t *a = gdn_get_act_A(sc, vt, Ah, i, k, C, zpA, M, S, &sa);
                 const int8_t  *w = gdn_get_wt_T(sc, vt, k, j, &sw, &eff, &wcolabs);
+#if defined(GDN_BR_TRACE)
+                uint64_t _p1 = GDN_TR_NOW(); gdn_tr_push(_tid, GDN_TR_PREP, _p0, _p1);
+#endif
                 gdn_merge_packed(sc, vt, a, sa, w, eff, sw, wcolabs, sc->termi, &sterm);
+#if defined(GDN_BR_TRACE)
+                uint64_t _p2 = GDN_TR_NOW(); gdn_tr_push(_tid, GDN_TR_MM, _p1, _p2);
+#endif
                 if (first) s_S = sterm;
 #if defined(GDN_BR_PROBE_CYCLES)
                 uint64_t a0; asm volatile("%0 = C15:14" : "=r"(a0));
 #endif
                 gdn_acc_i8_to_codes(sc, sc->termi, sterm, s_S, first);
+#if defined(GDN_BR_TRACE)
+                gdn_tr_push(_tid, GDN_TR_ACC, _p2, GDN_TR_NOW());
+#endif
 #if defined(GDN_BR_PROBE_CYCLES)
                 { uint64_t a; asm volatile("%0 = C15:14" : "=r"(a)); g_c_acc += a - a0; }
 #endif
@@ -1663,6 +1676,9 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
             /* final merge T_ij = T_ii @ S_ij: cached T_ii act; S_ij (Sacc) is transient -> quant+pack into
              * the transient vt->wt surface (no cache slot — each S_ij is distinct). */
             float sa_ii, sw_S, sij; int scolabs;
+#if defined(GDN_BR_TRACE)
+            uint64_t _fp0 = GDN_TR_NOW();
+#endif
             const uint8_t *a_ii = gdn_get_act_Tdiag(sc, vt, i, &sa_ii);
 #if defined(GDN_BR_PROBE_CYCLES)
             uint64_t sq0; asm volatile("%0 = C15:14" : "=r"(sq0));
@@ -1691,12 +1707,18 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
 #if defined(GDN_BR_PROBE_CYCLES)
             { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_wtpack += q - sp0; }
 #endif
+#if defined(GDN_BR_TRACE)
+            uint64_t _fp1 = GDN_TR_NOW(); gdn_tr_push(_tid, GDN_TR_PREP, _fp0, _fp1);
+#endif
 #if defined(GDN_BR_STATIC_FULL)
             g_force_sP = GDN_OPS_sTw;   /* drain T_ij at sTw -> its later use as off-diag wt is a pure narrow (g=1) */
 #endif
             gdn_merge_packed(sc, vt, a_ii, sa_ii, vt->wt, sc->eff, sw_S, scolabs, sc->termi, &sij);
 #if defined(GDN_BR_STATIC_FULL)
             g_force_sP = 0.f;
+#endif
+#if defined(GDN_BR_TRACE)
+            uint64_t _fp2 = GDN_TR_NOW(); gdn_tr_push(_tid, GDN_TR_MM, _fp1, _fp2);
 #endif
 #if defined(GDN_BR_PROBE_CYCLES)
             uint64_t w0; asm volatile("%0 = C15:14" : "=r"(w0));
@@ -1711,6 +1733,9 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
             uint64_t rq0; asm volatile("%0 = C15:14" : "=r"(rq0));
 #endif
             gdn_requant_block_out(sc->Tblk[bij], sij, sT, zpT, Th, i * BL, j * BL, C);
+#if defined(GDN_BR_TRACE)
+            gdn_tr_push(_tid, GDN_TR_REQ, _fp2, GDN_TR_NOW());   /* widen + requant after the final MM */
+#endif
 #if defined(GDN_BR_PROBE_CYCLES)
             { uint64_t rq; asm volatile("%0 = C15:14" : "=r"(rq)); g_c_requant += rq - rq0; }
 #endif

@@ -7,8 +7,9 @@ Usage: gdn_pipe_timeline.py T.raw [width]
 """
 import sys, struct, collections
 
-STAGE = {0: "HEAD", 1: "DIAG", 2: "MERGE", 3: "MM", 4: "QUANT"}
-CH = {1: "D", 2: "M", 3: "k", 4: "q"}   # diag / merge / kernel(consumer) / quant
+STAGE = {0: "HEAD", 1: "DIAG", 2: "MERGE", 3: "MM", 4: "QUANT", 5: "PREP", 6: "ACC", 7: "REQ"}
+CH = {1: "D", 3: "m", 4: "q", 5: "p", 6: "a", 7: "r"}   # diag/matmul(+depack)/quant/prep(fold+quant+pack)/acc/requant
+CONTAINER = {0, 2}   # HEAD, MERGE are containers (leaves below them) -> skip in fill/busy
 
 def main():
     path = sys.argv[1] if len(sys.argv) > 1 else "T.raw"
@@ -33,7 +34,7 @@ def main():
             if t != tid:
                 continue
             span_lo = min(span_lo, t0); span_hi = max(span_hi, t1)
-            if stage == 0:
+            if stage in CONTAINER:
                 continue
             busy[stage] += t1 - t0
             c0 = int(t0 * W / wall); c1 = max(c0 + 1, int(t1 * W / wall))
@@ -47,11 +48,11 @@ def main():
         span = (span_hi - span_lo) or 1
         bd = " ".join(f"{STAGE[s]}={busy[s]*100//span}%" for s in sorted(busy))
         print(f"{label:5s}|{''.join(row)}| busy={tot_busy*100//wall}%wall  [{bd}]")
-    print("\nlegend: D=diag  M=merge(fold+quant+matmul+acc per producer)  k=consumer HMX kernel  q=quant")
+    print("\nlegend: D=diag  p=prep(fold+quant+pack)  m=matmul(dispatch+HMX+depack)  a=acc  r=requant+widen  q=quant")
     # aggregate
     agg = collections.Counter()
     for (t, stage, t0, t1) in evs:
-        if stage == 0: continue
+        if stage in CONTAINER: continue
         agg[stage] += t1 - t0
     print("aggregate stage cyc (summed over threads):", {STAGE[s]: agg[s] for s in sorted(agg)})
 
