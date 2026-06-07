@@ -4,6 +4,7 @@
 #include "HAP_compute_res.h"
 #include "HAP_vtcm_mgr.h"
 #include "HAP_power.h"
+#include "HAP_perf.h"             /* HAP_perf_get_time_us: real wall µs (to convert PCYCLE -> ms + derive clock) */
 #include "HAP_farf.h"
 #include "qurt.h"
 #if defined(GDNBM_PMU)
@@ -292,6 +293,7 @@ static char __attribute__((aligned(128))) g_pipe_stack[GDN_BR_NT][32768];
 static volatile uint64_t g_pipe_cbusy;          /* consumer: cyc inside the HMX kernel (busy, not spinning) */
 static volatile uint64_t g_pipe_pspin[GDN_BR_NT];   /* producer t: cyc spinning for its matmul result */
 static volatile uint32_t g_pipe_pcnt[GDN_BR_NT];    /* producer t: # matmuls dispatched */
+static volatile uint64_t g_pipe_plife[GDN_BR_NT];   /* producer t: total lifetime cyc (HVX busy = life - spin) */
 
 /* dispatch hook (installed into g_hmx_dispatch): hand the kernel to the main consumer, spin for the result. */
 static void gdn_pipe_dispatch(gdn_scr_t *sc, const gdn_vtcm_t *vt, const int8_t *wt, const int32_t *eff,
@@ -319,6 +321,7 @@ static void gdn_pipe_dispatch(gdn_scr_t *sc, const gdn_vtcm_t *vt, const int8_t 
 /* producer thread: full per-head solve over this slot's head-stripe, A VTCM-resident ping-pong. */
 static void pipe_producer(void *arg) {
     gdn_work_t *w = (gdn_work_t *)arg;
+    uint64_t _life0 = pcyc();
     int hvx = qurt_hvx_lock(QURT_HVX_MODE_128B);
     gdn_scr_t *sc = &g_scr[w->slot];
     uint8_t *vbase = w->vtcm_base + (size_t)w->slot * 0xA0000u;
@@ -341,6 +344,7 @@ static void pipe_producer(void *arg) {
                         w->zpA, w->M, w->S, w->sT, w->zpT);    /* matmuls auto-delegate via g_hmx_dispatch */
 #endif
     }
+    g_pipe_plife[w->slot] = pcyc() - _life0;   /* total lifetime cyc (HVX busy = lifetime - spin) */
     __sync_fetch_and_add(&g_pipe_pdone, 1);
     if (hvx == 0) qurt_hvx_unlock();
 }
@@ -1028,12 +1032,13 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
         if (!vbase || hl != 0) { FARF(ALWAYS, "PIPE: acquire failed vbase=%p hl=%d", vbase, hl);
             if (hl == 0) HAP_compute_res_hmx_unlock(hctx); if (hctx) HAP_compute_res_release(hctx);
             if (vctx2) HAP_compute_res_release(vctx2); return -1; }
-        for (int t = 0; t < P; ++t) { g_pjob[t].state = 0; g_pipe_pspin[t] = 0; g_pipe_pcnt[t] = 0; }
+        for (int t = 0; t < P; ++t) { g_pjob[t].state = 0; g_pipe_pspin[t] = 0; g_pipe_pcnt[t] = 0; g_pipe_plife[t] = 0; }
         g_pipe_cbusy = 0;
         g_pipe_pdone = 0;
         g_hmx_dispatch = gdn_pipe_dispatch;                                    /* matmuls now delegate to this consumer */
         __sync_synchronize();
         gdn_work_t work[GDN_BR_NT]; qurt_thread_t tid[GDN_BR_NT];
+        uint64_t us0 = HAP_perf_get_time_us();
         uint64_t t0 = pcyc();
 #if defined(GDN_BR_TRACE)
         g_tr_n = 0; g_tr_base = t0;   /* per-thread event timeline: producers push DIAG/MERGE/HEAD, consumer MM */
@@ -1077,6 +1082,7 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
             }
         }
         uint64_t t1 = pcyc();
+        uint64_t us1 = HAP_perf_get_time_us();
         for (int t = 0; t < P; ++t) { int s; if (tid[t]) qurt_thread_join(tid[t], &s); }
         g_hmx_dispatch = nullptr;
         if (hl == 0) HAP_compute_res_hmx_unlock(hctx); if (hctx) HAP_compute_res_release(hctx);
@@ -1085,16 +1091,18 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
         if (statsLen > 0) stats[0] = (int)(t1 - t0);
         if (statsLen > 1) stats[1] = P;
         if (statsLen > 2) stats[2] = H;
-        uint64_t wall = t1 - t0;
-        uint32_t mm0 = g_pipe_pcnt[0] ? g_pipe_pcnt[0] : 1;
-        if (statsLen > 3) stats[3] = (int)(g_pipe_cbusy * 100 / (wall ? wall : 1));   /* consumer busy % of wall */
-        if (statsLen > 4) stats[4] = (int)(g_pipe_pspin[0] * 100 / (wall ? wall : 1));/* producer0 spin % of wall */
-        if (statsLen > 5) stats[5] = (int)(g_pipe_cbusy / (mm0 * (uint64_t)P > 0 ? mm0 * (uint64_t)P : 1)); /* ~cyc/kernel */
-        FARF(ALWAYS, "PIPE wall=%llu (32h) | consumer busy=%llu (%llu%%) | prod0 spin=%llu (%llu%%) over %u mm",
-             (unsigned long long)wall, (unsigned long long)g_pipe_cbusy,
-             (unsigned long long)(g_pipe_cbusy*100/(wall?wall:1)),
-             (unsigned long long)g_pipe_pspin[0], (unsigned long long)(g_pipe_pspin[0]*100/(wall?wall:1)),
-             (unsigned)g_pipe_pcnt[0]);
+        uint64_t wall = t1 - t0;                              /* domain cycle = de-overlapped real time (makespan) */
+        uint64_t hvx_cyc = 0;                                 /* total HVX busy = sum over producers of (life - spin) */
+        for (int t = 0; t < P; ++t) hvx_cyc += g_pipe_plife[t] - g_pipe_pspin[t];
+        uint64_t hmx_cyc = g_pipe_cbusy;                      /* total HMX busy = consumer mxmem cycles */
+        uint64_t us = us1 - us0;
+        if (statsLen > 3) stats[3] = (int)hmx_cyc;            /* 总 HMX cycle */
+        if (statsLen > 4) stats[4] = (int)hvx_cyc;            /* 总 HVX cycle */
+        if (statsLen > 5) stats[5] = (int)wall;               /* 总 domain cycle (= wall) */
+        if (statsLen > 6) stats[6] = (int)us;                 /* 总时间 us (real, HAP_perf) */
+        FARF(ALWAYS, "PIPE 4col: HMX=%llu HVX=%llu DOMAIN=%llu cyc | %llu us | PCYCLE=%llu MHz",
+             (unsigned long long)hmx_cyc, (unsigned long long)hvx_cyc, (unsigned long long)wall,
+             (unsigned long long)us, (unsigned long long)(us ? wall / us : 0));
 #if defined(GDN_BR_TRACE)
         /* serialize per-thread event timeline into Tu (overwrites T): [magic][n][wall u64][base u64] then
          * n*{tid u32, stage u32, t0 u64, t1 u64}.  Host renders ASCII timeline (scripts/gdn_pipe_timeline.py). */
