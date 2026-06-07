@@ -420,6 +420,44 @@ static float gdn_quant_u8_from_codes(gdn_scr_t *sc, const int32_t *codes, float 
     return sQ;
 }
 
+#if defined(GDN_BR_STATIC_FULL)
+/* FUSED fold+quant for the A operand (static only): ONE pass u16 -> u8, NO int32 Aoff round-trip and NO
+ * separate quant loop.  Produces the IDENTICAL u8 output of gdn_fold_block_raw + gdn_quant_u8_from_codes
+ * (fold scale 2^-F, then static quant g=(2^-F)/sQ).  Two sequential vmpyi in-register (fold M, then quant
+ * Mg) avoid the M*Mg overflow while skipping the int32 memory round-trip. */
+static void gdn_fold_quant_u8(gdn_scr_t *sc, const uint16_t *Au, int row_stride, uint8_t *out,
+                              int zpA, int M, int S, float sQ) {
+    float g = (float)(1.0 / (1 << GDN_BR_F)) / sQ;
+    int Q = 14;
+    while (Q > 1  && g * (float)(1 << Q) >= 32768.0f) --Q;
+    while (Q < 28 && g * (float)(1 << (Q + 1)) < 16384.0f) ++Q;
+    int32_t Mg = (int32_t)(g * (float)(1 << Q) + 0.5f);
+    const int Mrep = (M & 0xFFFF) * 0x10001, MgRep = (Mg & 0xFFFF) * 0x10001;
+    const HVX_Vector vzp = Q6_V_vsplat_R(zpA), vrndS = Q6_V_vsplat_R(1 << (S - 1)), vrndQ = Q6_V_vsplat_R(1 << (Q - 1));
+    const HVX_Vector vlim = Q6_V_vsplat_R(127), vnlim = Q6_V_vsplat_R(-127), v128 = Q6_V_vsplat_R(128);
+    HVX_Vector *qp = (HVX_Vector *)sc->qbuf;
+    for (int r = 0; r < BL; ++r) {
+        const HVX_UVector *Av = (const HVX_UVector *)(Au + r * row_stride);
+        HVX_VectorPair w = Q6_Wuw_vzxt_Vuh(Av[0]);
+        HVX_Vector c0 = Q6_Vw_vsub_VwVw(Q6_V_lo_W(w), vzp), c1 = Q6_Vw_vsub_VwVw(Q6_V_hi_W(w), vzp);
+        HVX_Vector i0 = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_Vw_vmpyi_VwRh(c0, Mrep), vrndS), S);  /* fold */
+        HVX_Vector i1 = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_Vw_vmpyi_VwRh(c1, Mrep), vrndS), S);
+        HVX_VectorPair s = Q6_W_vshuff_VVR(i1, i0, -4);   /* even/odd -> natural cols 0..63 */
+        HVX_Vector a = Q6_V_lo_W(s), b = Q6_V_hi_W(s);
+        HVX_Vector qa = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_Vw_vmpyi_VwRh(a, MgRep), vrndQ), Q);    /* quant */
+        qa = Q6_Vw_vmin_VwVw(qa, vlim); qa = Q6_Vw_vmax_VwVw(qa, vnlim); qp[r * 2] = Q6_Vw_vadd_VwVw(qa, v128);
+        HVX_Vector qb = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_Vw_vmpyi_VwRh(b, MgRep), vrndQ), Q);
+        qb = Q6_Vw_vmin_VwVw(qb, vlim); qb = Q6_Vw_vmax_VwVw(qb, vnlim); qp[r * 2 + 1] = Q6_Vw_vadd_VwVw(qb, v128);
+    }
+    HVX_Vector *op = (HVX_Vector *)out;                   /* int32 -> u8 narrow (same as gdn_quant_u8) */
+    for (int v = 0; v < (BL * BL) / 128; ++v) {
+        HVX_Vector h0 = Q6_Vh_vpack_VwVw_sat(qp[v * 4 + 1], qp[v * 4 + 0]);
+        HVX_Vector h1 = Q6_Vh_vpack_VwVw_sat(qp[v * 4 + 3], qp[v * 4 + 2]);
+        op[v] = Q6_Vub_vpack_VhVh_sat(h1, h0);
+    }
+}
+#endif
+
 /* EXACT scale estimate: max|P_int| where P_int[i,c] = sum_k (act_u8[i,k]-128)*wt_i8[k,c].  This is the
  * exact int product the HMX kernel computes, so the derived scale is exact (not a loose bound) AND HVX
  * fast.  act is u8 (zp128), wt is i8, both 64x64 natural.  Returns max|P_int| (int32). */
@@ -839,19 +877,26 @@ static const uint8_t *gdn_get_act_A(gdn_scr_t *sc, const gdn_vtcm_t *vt, const u
 #if defined(GDN_BR_PROBE_CYCLES)
         uint64_t f0; asm volatile("%0 = C15:14" : "=r"(f0));
 #endif
+#if defined(GDN_BR_STATIC_FULL)
+        /* FUSED fold+quant: one pass u16 -> u8, no int32 Aoff round-trip (static fixed scale). */
+        gdn_fold_quant_u8(sc, Ah + (size_t)i * BL * C_ + k * BL, C_, sc->actbuf, zpA, M, S, GDN_OPS_sAa);
+        sc->sAa[key] = GDN_OPS_sAa;
+#if defined(GDN_BR_PROBE_CYCLES)
+        { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_quant += q - f0; }
+        uint64_t p0; asm volatile("%0 = C15:14" : "=r"(p0));
+#endif
+#else
         int32_t mxA;
         gdn_fold_block_raw(Ah + (size_t)i * BL * C_ + k * BL, C_, sc->Aoff, zpA, M, S, &mxA);
 #if defined(GDN_BR_PROBE_CYCLES)
         { uint64_t f; asm volatile("%0 = C15:14" : "=r"(f)); g_c_fold += f - f0; }
         uint64_t q0; asm volatile("%0 = C15:14" : "=r"(q0));
 #endif
-#if defined(GDN_BR_STATIC_FULL)
-        g_ops_u8 = GDN_OPS_sAa;
-#endif
         sc->sAa[key] = gdn_quant_u8_from_codes(sc, sc->Aoff, (float)(1.0 / (1 << GDN_BR_F)), sc->actbuf, mxA);
 #if defined(GDN_BR_PROBE_CYCLES)
         { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_quant += q - q0; }
         uint64_t p0; asm volatile("%0 = C15:14" : "=r"(p0));
+#endif
 #endif
         gdn_pack_act_crouton8(sc->actbuf, cr);
 #if defined(GDN_BR_PROBE_CYCLES)
