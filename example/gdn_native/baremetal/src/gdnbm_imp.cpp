@@ -54,6 +54,12 @@
 #if defined(GDN_BR_I16) && !defined(GDN_BR_NO_I16_FOLD) && !defined(GDN_BR_I16_FOLD)
 #define GDN_BR_I16_FOLD 1
 #endif
+/* + int16-lane QUANT (Q15) for the A fold: another ~5% (also kills the separate int32->u8 narrow pass).
+ * NOT bit-exact (Q15 8-bit multiplier -> off-diag relerr 0.1094 vs 0.1093, +0.5%; precision先不管 OK).
+ * Opt out with -DGDN_BR_NO_I16_FOLD_QUANT to stay bit-exact. */
+#if defined(GDN_BR_I16_FOLD) && !defined(GDN_BR_NO_I16_FOLD_QUANT) && !defined(GDN_BR_I16_FOLD_QUANT)
+#define GDN_BR_I16_FOLD_QUANT 1
+#endif
 #include "../../solve_br_op/src/GdnSolveBROp.cpp"
 #include "../../solve_br_op/src/GdnSolveBR16.cpp"   /* clean int16 static solve (GDN_BR_I16) */
 

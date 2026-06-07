@@ -446,6 +446,11 @@ static void gdn_fold_quant_u8(gdn_scr_t *sc, const uint16_t *Au, int row_stride,
     while (Q < 28 && g * (float)(1 << (Q + 1)) < 16384.0f) ++Q;
     int32_t Mg = (int32_t)(g * (float)(1 << Q) + 0.5f);
     const int Mrep = (M & 0xFFFF) * 0x10001, MgRep = (Mg & 0xFFFF) * 0x10001;
+#if defined(GDN_BR_I16_FOLD_QUANT)   /* Q15 int16 quant: q=round(folded*g), g<1 (g=(2^-F)/sQ≈0.006) */
+    int _mq = (int)(g * 32768.0f + 0.5f) & 0xFFFF; const int MgQ15 = _mq | (_mq << 16);
+    const HVX_Vector v128h = Q6_V_vsplat_R((128 << 16) | 128);
+    int16_t *q16buf = sc->Tc16;
+#endif
     const HVX_Vector vzp = Q6_V_vsplat_R(zpA), vrndS = Q6_V_vsplat_R(1 << (S - 1)), vrndQ = Q6_V_vsplat_R(1 << (Q - 1));
     const HVX_Vector vlim = Q6_V_vsplat_R(127), vnlim = Q6_V_vsplat_R(-127), v128 = Q6_V_vsplat_R(128);
     HVX_Vector *qp = (HVX_Vector *)sc->qbuf;
@@ -474,17 +479,28 @@ static void gdn_fold_quant_u8(gdn_scr_t *sc, const uint16_t *Au, int row_stride,
 #endif
         HVX_VectorPair s = Q6_W_vshuff_VVR(i1, i0, -4);   /* even/odd -> natural cols 0..63 */
         HVX_Vector a = Q6_V_lo_W(s), b = Q6_V_hi_W(s);
+#if defined(GDN_BR_I16_FOLD_QUANT)
+        /* int16-lane quant: narrow folded int32 -> int16 (fits), then ONE Q15 int16 mult per row (64-lane). */
+        HVX_Vector ab16 = Q6_Vh_vpack_VwVw_sat(b, a);                            /* natural 64 i16 codes */
+        ((HVX_Vector *)q16buf)[r] = Q6_Vh_vadd_VhVh(Q6_Vh_vmpy_VhRh_s1_rnd_sat(ab16, MgQ15), v128h);
+#else
         HVX_Vector qa = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_Vw_vmpyi_VwRh(a, MgRep), vrndQ), Q);    /* quant */
         qa = Q6_Vw_vmin_VwVw(qa, vlim); qa = Q6_Vw_vmax_VwVw(qa, vnlim); qp[r * 2] = Q6_Vw_vadd_VwVw(qa, v128);
         HVX_Vector qb = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_Vw_vmpyi_VwRh(b, MgRep), vrndQ), Q);
         qb = Q6_Vw_vmin_VwVw(qb, vlim); qb = Q6_Vw_vmax_VwVw(qb, vnlim); qp[r * 2 + 1] = Q6_Vw_vadd_VwVw(qb, v128);
+#endif
     }
-    HVX_Vector *op = (HVX_Vector *)out;                   /* int32 -> u8 narrow (same as gdn_quant_u8) */
-    for (int v = 0; v < (BL * BL) / 128; ++v) {
+    HVX_Vector *op = (HVX_Vector *)out;
+#if defined(GDN_BR_I16_FOLD_QUANT)
+    for (int v = 0; v < (BL * BL) / 128; ++v)                                    /* i16 -> u8 (2 rows -> 1 vec) */
+        op[v] = Q6_Vub_vpack_VhVh_sat(((HVX_Vector *)q16buf)[2*v+1], ((HVX_Vector *)q16buf)[2*v]);
+#else
+    for (int v = 0; v < (BL * BL) / 128; ++v) {                                  /* int32 -> u8 narrow */
         HVX_Vector h0 = Q6_Vh_vpack_VwVw_sat(qp[v * 4 + 1], qp[v * 4 + 0]);
         HVX_Vector h1 = Q6_Vh_vpack_VwVw_sat(qp[v * 4 + 3], qp[v * 4 + 2]);
         op[v] = Q6_Vub_vpack_VhVh_sat(h1, h0);
     }
+#endif
 }
 #endif
 
