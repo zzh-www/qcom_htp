@@ -77,8 +77,11 @@
 | QUANT(A `gdn_fold_quant_u8` + T quant) | 0.87M | ~10% | A 的 u16→u8 fold 主导(32-lane);T quant 已 int16-lane Q15 |
 | PACK(crouton + kmajor) | 0.59M | ~7% | u8/i8 字节 op,128-lane 已最优 |
 | EFF | 0.18M | ~2% | 留(精度税,只 3-4% 不值) |
-- **PREP 碎(每项 <10%),无单一大杠杆。** 最大的 A-fold(QUANT)是唯一未吃 int16-lane 的,但:cap-test 无效(上面的坑)+ int16-lane 化不确定(reverted-quant 先例:fused-widen 可能更慢)。
-- 唯一干净的下一步 = 直接实现 int16-lane fold(`Q6_Ww_vmpy` + u16 XOR 0x8000 当 i16 零点)+ A/B,**期望小(~3%)且可能更慢**。优先级低。
+- **PREP 碎(每项 <10%),无单一大杠杆。** 最大的 A-fold(QUANT)是唯一未吃 int16-lane 的。
+- **int16-lane fold 已做到底 + 实测 = ❌ REFUTED(~10% 更慢)**:`(A_u16-32768)=(i16)(A XOR 0x8000)` 免费零点 + `Q6_Ww_vmpy_VhRh` 64-lane 替 `vzxt+2vmpyi`,bit-exact,但 round2 **OLD 1.98M → NEW 2.17M**。
+  根因:**`Q6_Ww_vmpy_VhRh`(halfword×halfword)是双资源 1/cycle 乘法**;fold 的 int32 路 `vzxt` 是寄存器内 widen、**无内存往返可省** → Ww_vmpy 纯双资源惩罚 → 更慢。
+  **对比 Sacc/requant 的 Ww_vmpy 为什么快:那俩省掉了 `Tc` 内存往返;fold 没有。**
+  → **新原则:Ww_vmpy widening 乘只在能消掉内存往返时才赢;纯替寄存器内 vmpyi 会因双资源惩罚更慢。** 别再试无往返场景的 Ww_vmpy。
 
 ---
 
