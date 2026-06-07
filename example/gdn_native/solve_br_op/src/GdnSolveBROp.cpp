@@ -159,6 +159,8 @@ static gdn_scr_t g_scr[GDN_BR_NT];
 #define GDN_OPS_sTw 7.874256e-03f
 #define GDN_OPS_sTa 7.874256e-03f
 #define GDN_OPS_COLABS 556
+#define GDN_OPS_sSacc 3.742e-03f   /* calibrated max Sacc scale (A_u16_h32) */
+static float g_cal_swS = 0.f;
 static float g_ops_u8 = 0.f, g_ops_i8 = 0.f;   /* >0 => fixed output scale for u8/i8 quant (single-thread) */
 static float g_force_sP = 0.f;   /* >0 => force gdn_merge_packed output to drain at this scale (e.g. sTw) */
 #endif
@@ -498,7 +500,12 @@ static void gdn_requant_block_out(const int32_t *codes, float scale_in, float sT
                                   uint16_t *Th, int roff, int coff, int row_stride) {
     /* PRE-SHIFT: code*Mg overflows int32 for code>~2^15; the int16-HVX matmul output reaches 2^22.  Shift
      * codes >> psh and compensate g so the fixed-point stays in range (no-op for the small-code HMX path). */
+#if defined(GDN_BR_STATIC_FULL)
+    int psh = 0;   /* STATIC: T codes bounded < 2^15 (off-diag @sTw <=127, diag @GDN_BR_TI <32767) -> psh==0,
+                    * skip the gdn_maxabs_codes scan entirely. */
+#else
     int psh = 0; { int32_t mx = gdn_maxabs_codes(codes); int32_t m = mx; while (m >= (1 << 15)) { m >>= 1; ++psh; } }
+#endif
     float g = (scale_in / sT) * (float)(1 << psh);
     int Q = 14;
     while (Q > 1  && g * (float)(1 << Q) >= 32768.0f) --Q;
@@ -1647,9 +1654,16 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
             uint64_t sq0; asm volatile("%0 = C15:14" : "=r"(sq0));
 #endif
 #if defined(GDN_BR_STATIC_FULL)
-            g_ops_i8 = 0.f;   /* Sacc quant stays dynamic (different magnitude than T_kj) */
+#if defined(GDN_BR_SACC_CAL)
+            g_ops_i8 = 0.f;   /* CAL: run dynamic, track max sw_S to calibrate GDN_OPS_sSacc. */
+#else
+            g_ops_i8 = GDN_OPS_sSacc;   /* STATIC: fixed Sacc scale -> skip maxabs. */
+#endif
 #endif
             sw_S = gdn_quant_i8_from_codes(sc, sc->Sacc, s_S, sc->wtbuf, -1);
+#if defined(GDN_BR_SACC_CAL)
+            if (sw_S > g_cal_swS) g_cal_swS = sw_S;
+#endif
 #if defined(GDN_BR_PROBE_CYCLES)
             { uint64_t q; asm volatile("%0 = C15:14" : "=r"(q)); g_c_quant += q - sq0; }
             uint64_t se0; asm volatile("%0 = C15:14" : "=r"(se0));

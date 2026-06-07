@@ -299,6 +299,9 @@ static void solve_worker(void *arg) {
         if (hl == 0) HAP_compute_res_hmx_unlock(hctx);
         if (hctx) HAP_compute_res_release(hctx);
         if (vctx) HAP_compute_res_release(vctx);
+#if defined(GDN_BR_SACC_CAL)
+        ((float *)w->Tu)[0] = g_cal_swS;   /* dump calibrated max Sacc scale */
+#endif
         if (hvx == 0) qurt_hvx_unlock();
     }
     return;
