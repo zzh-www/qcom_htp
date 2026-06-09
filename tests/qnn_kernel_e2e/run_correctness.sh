@@ -29,5 +29,8 @@ echo "=== qnn correctness ci: w4a16 lpbq custom/native exactness ==="
 echo "=== qnn correctness ci: w4a16 per-channel chain1 precision ==="
 "$ROOT_DIR/tests/qnn_kernel_e2e/correctness/test_w4a16_per_channel_chain1_e2e.sh"
 
+echo "=== qnn correctness ci: w16a16 == two w8a16 (byte decomposition gate) ==="
+"$ROOT_DIR/tests/qnn_kernel_e2e/correctness/test_w16a16_two_w8a16_e2e.sh"
+
 echo "=== handwritten hmx matmul correctness ci ==="
 "$ROOT_DIR/tests/qnn_kernel_e2e/correctness/test_handwritten_hmx_matmul_e2e.sh"
