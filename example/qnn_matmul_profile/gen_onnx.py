@@ -74,14 +74,39 @@ def _quantize_native(values: np.ndarray, bits: int) -> tuple[np.ndarray, dict]:
     raise ValueError(f"unsupported native activation bitwidth: {bits}")
 
 
-def _emit_onnx(cfg: dict, path: str, m: int, k: int, n: int):
-    rng = np.random.default_rng(42)
+def _draw(rng, shape, dist: str, dtype):
+    """Value-distribution edge cases (scale stays the symmetric 1/maxint; only
+    the distribution of the float values changes). Used to exercise correctness
+    at saturation / zero / impulse / bimodal extremes, not just uniform noise."""
+    if dist == "uniform":
+        v = rng.uniform(-0.5, 0.5, size=shape)
+    elif dist == "extreme":          # near-max magnitude -> push output saturation
+        v = rng.choice([-1.0, 1.0], size=shape) * 0.999
+    elif dist == "signs":            # bimodal +-0.5
+        v = rng.choice([-0.5, 0.5], size=shape)
+    elif dist == "zeros":            # all zero -> output = zero-point/bias baseline
+        v = np.zeros(shape)
+    elif dist == "impulse":          # mostly zero, a few +-max
+        v = np.zeros(shape)
+        flat = v.reshape(-1)
+        idx = rng.choice(flat.size, size=max(1, flat.size // 64), replace=False)
+        flat[idx] = rng.choice([-1.0, 1.0], size=idx.size) * 0.999
+    elif dist == "sparse":           # ~15% nonzero uniform
+        v = rng.uniform(-0.5, 0.5, size=shape)
+        v *= (rng.random(size=shape) < 0.15)
+    else:
+        raise ValueError(f"unknown dist: {dist}")
+    return v.astype(dtype)
+
+
+def _emit_onnx(cfg: dict, path: str, m: int, k: int, n: int, seed: int = 42, dist: str = "uniform"):
+    rng = np.random.default_rng(seed)
     if cfg["dtype"] == "float":
         onnx_dtype, np_dtype = TensorProto.FLOAT16, np.float16
     else:
         onnx_dtype, np_dtype = TensorProto.FLOAT, np.float32
 
-    W_val = rng.uniform(-0.5, 0.5, size=(1, k, n)).astype(np_dtype)
+    W_val = _draw(rng, (1, k, n), dist, np_dtype)
     W_init = numpy_helper.from_array(W_val, name="W")
 
     A = helper.make_tensor_value_info("A", onnx_dtype, [1, m, k])
@@ -120,9 +145,9 @@ def _emit_quant(cfg: dict, path: str, n: int):
         json.dump(enc, f, indent=2)
 
 
-def _emit_input(cfg: dict, out_dir: str, m: int, k: int, n: int):
-    rng = np.random.default_rng(0xBEEF)
-    A = rng.uniform(-0.5, 0.5, size=(1, m, k)).astype(np.float32)
+def _emit_input(cfg: dict, out_dir: str, m: int, k: int, n: int, seed: int = 0xBEEF, dist: str = "uniform"):
+    rng = np.random.default_rng(seed)
+    A = _draw(rng, (1, m, k), dist, np.float32)
     raw = os.path.join(out_dir, "input_A.raw")
     A.tofile(raw)
     with open(os.path.join(out_dir, "input_list.txt"), "w") as f:
@@ -172,17 +197,36 @@ def main():
     ap.add_argument("--m", type=int, default=32, help="rows of A / rows of output")
     ap.add_argument("--k", type=int, default=32, help="reduction dim (cols of A, rows of W)")
     ap.add_argument("--n", type=int, default=32, help="cols of W / cols of output")
+    ap.add_argument("--seed", type=int, default=None,
+                    help="base RNG seed (W:seed, A:seed^0xBEEF); default keeps 42/0xBEEF")
+    _DISTS = ["uniform", "extreme", "signs", "zeros", "impulse", "sparse"]
+    ap.add_argument("--dist", default=os.environ.get("GEN_DIST", "uniform"), choices=_DISTS,
+                    help="value distribution for W and A (also via GEN_DIST env); "
+                         "edge cases for correctness, scale unchanged")
+    ap.add_argument("--weight-dist", default=os.environ.get("GEN_WDIST"), choices=_DISTS,
+                    help="override weight distribution (else --dist / GEN_WDIST env)")
+    ap.add_argument("--act-dist", default=os.environ.get("GEN_ADIST"), choices=_DISTS,
+                    help="override activation distribution (else --dist / GEN_ADIST env)")
     args = ap.parse_args()
+    w_dist = args.weight_dist or args.dist
+    a_dist = args.act_dist or args.dist
+    if args.seed is None:
+        env = os.environ.get("GEN_SEED")
+        args.seed = int(env) if env is not None else None
+    w_seed = 42 if args.seed is None else args.seed
+    a_seed = 0xBEEF if args.seed is None else (args.seed ^ 0xBEEF)
 
     cfg = CONFIGS[args.config]
     os.makedirs(args.out_dir, exist_ok=True)
 
-    _emit_onnx(cfg, os.path.join(args.out_dir, "matmul.onnx"), args.m, args.k, args.n)
+    _emit_onnx(cfg, os.path.join(args.out_dir, "matmul.onnx"), args.m, args.k, args.n,
+               seed=w_seed, dist=w_dist)
     if cfg["dtype"] == "quant":
         _emit_quant(cfg, os.path.join(args.out_dir, "quant_overrides.json"), args.n)
-    _emit_input(cfg, args.out_dir, args.m, args.k, args.n)
+    _emit_input(cfg, args.out_dir, args.m, args.k, args.n, seed=a_seed, dist=a_dist)
 
-    print(f"  [{args.config}] wrote {args.out_dir}/ (dtype={cfg['dtype']}, {args.m}x{args.k}x{args.n})")
+    print(f"  [{args.config}] wrote {args.out_dir}/ (dtype={cfg['dtype']}, "
+          f"{args.m}x{args.k}x{args.n}, wdist={w_dist}, adist={a_dist}, seed={args.seed})")
 
 
 if __name__ == "__main__":

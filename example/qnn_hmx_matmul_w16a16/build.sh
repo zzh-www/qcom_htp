@@ -51,10 +51,14 @@ case "$W16A16_KERNEL_PROFILE" in
         )
         ;;
     native_record_256)
+        # Shape-general production profile: computed weight/bias sidecar + f(M_t,K_t)
+        # formula descriptors -> byte-exact vs QNN native for any 32-multiple shape
+        # with M>=64 (K,N can be 32). See Agent/current/w16a16_production_kernel_plan.md.
         PROFILE_DEFS+=(
             -UHMX_W16A16_SKIP_KERNEL
             -DHMX_W16A16_ALLOW_UNVALIDATED_KERNEL
             -DHMX_W16A16_NATIVE_RECORD_256_PROFILE
+            -DHMX_W16A16_FORMULA_DESC
         )
         ;;
     *)

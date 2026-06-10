@@ -36,13 +36,21 @@ def _load_w(path: Path, name: str) -> np.ndarray:
 
 
 def generate_sidecar(w: np.ndarray) -> bytes:
-    if w.shape[0] % 32 or w.shape[1] % 128:
-        raise ValueError(f"W shape must be K multiple of 32 and N multiple of 128, got {w.shape}")
-    q16 = np.clip(np.rint(w * 32767.0), -32768, 32767).astype(np.int32)
+    if w.shape[0] % 32 or w.shape[1] % 32:
+        raise ValueError(f"W shape must be K and N multiples of 32, got {w.shape}")
+    # Upper clip is 32639, NOT 32767: the HMX int16-weight byte split stores the
+    # rounded high byte (q16+128)>>8 as a SIGNED int8. q16 in [32640, 32767] would
+    # need high byte 128 (= 0x80 = -128 signed) -> the hardware reconstructs a
+    # large-negative weight. 127*256+127 = 32639 is the max representable, and
+    # native saturates there too (byte-exact at W~=+-1 / impulse weights). The
+    # 256^3 uniform oracle (|q16|<=16384) never exercised this -> long-hidden bug.
+    q16 = np.clip(np.rint(w * 32767.0), -32768, 32639).astype(np.int32)
     out = bytearray()
     k_total, n_total = q16.shape
     for n_base in range(0, n_total, 128):
-        for nt in range(4):
+        # Last 128-block may be partial (N%128 != 0): pack only the present 32-tiles.
+        tiles_this_block = min(4, (n_total - n_base) // 32)
+        for nt in range(tiles_this_block):
             for half in range(2):
                 for kt in range(k_total // 32):
                     for grp in range(8):
@@ -66,20 +74,25 @@ def generate_sidecar(w: np.ndarray) -> bytes:
 
 
 def generate_bias_sidecar(w: np.ndarray) -> bytes:
-    if w.shape[0] % 32 or w.shape[1] % 128:
-        raise ValueError(f"W shape must be K multiple of 32 and N multiple of 128, got {w.shape}")
-    q16 = np.clip(np.rint(w * 32767.0), -32768, 32767).astype(np.int64)
+    if w.shape[0] % 32 or w.shape[1] % 32:
+        raise ValueError(f"W shape must be K and N multiples of 32, got {w.shape}")
+    # same 32639 clip as generate_sidecar (HMX int16 high-byte representable max)
+    q16 = np.clip(np.rint(w * 32767.0), -32768, 32639).astype(np.int64)
+    n_total = w.shape[1]
     control = np.array([0x00404420, 0x40000000] * 16, dtype="<i4")
-    records = np.zeros((w.shape[1] // 128, 512), dtype="<i4")
-    for split, n_base in enumerate(range(0, w.shape[1], 128)):
-        vals = ((-q16[:, n_base:n_base + 128].sum(axis=0)) // 2).astype(np.int32)
-        for group in range(8):
-            records[split, group * 64:group * 64 + 32] = control
-            value_base = group * 64 + 32
+    out = bytearray()
+    for n_base in range(0, n_total, 128):
+        present = min(128, n_total - n_base)        # partial last block (N%128)
+        n_groups = present // 16                    # 16 N-cols/group; 8 groups per full 128-block
+        vals = ((-q16[:, n_base:n_base + present].sum(axis=0)) // 2).astype(np.int32)
+        rec = np.zeros((n_groups, 64), dtype="<i4")
+        for group in range(n_groups):
+            rec[group, 0:32] = control
             for idx, value in enumerate(vals[group * 16:(group + 1) * 16]):
-                records[split, value_base + idx * 2] = value
-                records[split, value_base + idx * 2 + 1] = 0
-    return records.tobytes()
+                rec[group, 32 + idx * 2] = value
+                rec[group, 32 + idx * 2 + 1] = 0
+        out.extend(rec.tobytes())
+    return out
 
 
 def main() -> int:

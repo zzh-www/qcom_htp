@@ -47,7 +47,13 @@ def conv1x1_words(arg1: int, arg2: int, arg3: int, arg4: int, arg5: int) -> list
         r15 = r9 << 1
         if p3:
             r15 = 0x800
-        if not p_r13_eq_2:
+        # The r9 span-doubling applies to the non-dilate (`:deep`, arg5 bit7
+        # clear) weight feed. In dilate mode (arg5 & 0x80, e.g. W16A16 int16
+        # weight = 2 byte planes), the activation is read in pairs so the rt
+        # span stays halved: r9 keeps r8*r6 (verified byte-exact vs the real
+        # skel set_hmx_params_conv1x1 dump: arg5=0x80 -> word6=0x3ff).
+        dilate = (arg5 & 0x80) != 0
+        if not p_r13_eq_2 and not dilate:
             r9 = r15
         if p_r13_eq_2 and r6 == 2:
             r9 = (r6 * r13) << 5
