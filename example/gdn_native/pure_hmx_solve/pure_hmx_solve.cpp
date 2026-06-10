@@ -713,34 +713,69 @@ static void p4_bias_fin(int32_t *bias, const long *cs) {
 /* K-stack mm: out = sum_b act_b @ wt_b (b=0..d-1), all wt pre-aligned to e_common */
 static void p4_mm_stack(int slot, int d, const int16_t *const *acts, const int16_t *const *wts,
                         const int *wshift, int16_t *out_cv) {
+#if defined(P4_STACK_NOOP)
+    (void)slot; (void)d; (void)acts; (void)wts; (void)wshift; (void)out_cv; return;
+#endif
     p4_slot *S = &g_p4s[slot];
     uint16_t *act = (uint16_t *)S->mm.act;
     uint64_t p0 = phs_pcyc();
     int Kt = 2 * d;
+#if !defined(P4_STACK_NOATAB)
     for (int rg = 0; rg < 64; ++rg) for (int kt = 0; kt < Kt; ++kt)
         S->mm.atab[rg * Kt + kt] = (int32_t)(uintptr_t)((uint8_t *)act + (((rg & 7) * Kt + kt) * 2048));
+#endif
+#if !defined(P4_STACK_NOACT)
     for (int b = 0; b < d; ++b)
         for (int r4 = 0; r4 < 8; ++r4) for (int kk = 0; kk < 2; ++kk)
             p4v_i16_to_u16(act + ((r4 * Kt) + b * 2 + kk) * 1024, acts[b] + (r4 * 2 + kk) * 256, 256);
+#endif
     static long cs_slot[PHS_NT][64];
     long *cs = cs_slot[slot];
     for (int n = 0; n < 64; ++n) cs[n] = 0;
     for (int b = 0; b < d; ++b) {
         const int16_t *w = wts[b];
+#if !defined(P4_STACK_NOSHR)
         if (wshift[b] > 0) { p4v_cv_shr(g_p4stage[slot] + 4096 + 128, w, wshift[b]); w = g_p4stage[slot] + 4096 + 128; }
+#endif
+#if defined(P4_STACK_NOWT)
+        (void)w; ++cs[0];
+#elif defined(P4_STACK_SCALARWT)
+        {   /* bisect: scalar packer (lin via LUT, full 8K stream) split into nt segments */
+            static int16_t lin[PHS_NT][4096]; static uint8_t tmp[PHS_NT][8192];
+            for (int i = 0; i < 4096; ++i) lin[slot][i] = w[g_p4lut[i]];
+            w16a16_pack_wt_kmajor(lin[slot], tmp[slot], 64, 64);
+            memcpy(S->mm.wt + (size_t)b * 4096, tmp[slot], 4096);
+            memcpy(S->mm.wt + (size_t)(d + b) * 4096, tmp[slot] + 4096, 4096);
+            for (int n = 0; n < 64; ++n) { long c = 0; for (int k = 0; k < 64; ++k) c += lin[slot][k * 64 + n]; cs[n] += c; }
+        }
+#else
         p4v_pack_wt_seg(w, g_p4stage[slot],
                         (HVX_Vector *)(S->mm.wt + (size_t)b * 4096),
                         (HVX_Vector *)(S->mm.wt + (size_t)(d + b) * 4096), cs);
+#endif
     }
+#if !defined(P4_STACK_NOBIAS)
     p4_bias_fin(S->mm.bias, cs);
+#endif
     hmx_conv_act_desc_t *ad = (hmx_conv_act_desc_t *)S->mm.ad;
+#if defined(P4_STACK_D1KERNEL)
+    ad->n_act_pairs = 2u; ad->act_table_y_stride_words = 128u;  /* bisect: prep stacked, kernel d=1 (WRONG math) */
+    for (int rg = 0; rg < 64; ++rg) for (int t2 = 0; t2 < 2; ++t2)
+        S->mm.atab[rg * 2 + t2] = (int32_t)(uintptr_t)((uint8_t *)act + (((rg & 7) * Kt + t2) * 2048));
+#else
     ad->n_act_pairs = (uint32_t)Kt; ad->act_table_y_stride_words = (uint32_t)(64 * Kt);
+#endif
     uint64_t p1 = phs_pcyc(); phs_tr((uint32_t)slot, PHS_S_PREP, p0, p1);
+#if !defined(P4_STACK_NOHMX)
     PHS_ARM(&g_job[slot]);
     uint64_t s0 = phs_pcyc(); PHS_WAIT(&g_job[slot]); PHS_RESET(&g_job[slot]);
     uint64_t s1 = phs_pcyc(); g_pspin[slot] += s1 - s0; phs_tr((uint32_t)slot, PHS_S_SPIN, s0, s1);
+#endif
     const uint16_t *o = (const uint16_t *)S->mm.out;
+#if !defined(P4_STACK_NOOUT)
     for (int b = 0; b < 16; ++b) p4v_u16_to_i16(out_cv + b * 256, o + b * 1024, 256);
+#endif
+    (void)o;
     ad->n_act_pairs = 2u; ad->act_table_y_stride_words = 128u;   /* restore d=1 for diag mms */
     for (int rg = 0; rg < 64; ++rg) for (int t2 = 0; t2 < 2; ++t2)
         S->mm.atab[rg * 2 + t2] = (int32_t)(uintptr_t)((uint8_t *)act + (((rg & 7) * 2 + t2) * 2048));
@@ -1054,6 +1089,75 @@ static int mm64_test(const uint8_t *A, int *stats, int statsLen, void *T, int TL
     return 0;
 }
 
+/* ---- mm64-K128 probe (H==10): single M=64 K=128 N=64 matmul, clean buffers.
+ * payload A: [0..16K) act u16 64x128, [16K..32K) wt q16 128x64. out T: Y 8K. */
+static int mm64_k128(const uint8_t *A, int *stats, int statsLen, void *T, int TLen) {
+    if (TLen < 8192) return -2;
+    static int pwr_client; void *pctx = &pwr_client;
+    HAP_power_set_core_corner(pctx, HAP_DCVS_VCORNER_TURBO, HAP_DCVS_VCORNER_TURBO, HAP_DCVS_VCORNER_MAX);
+    { HAP_power_request_t r; memset(&r, 0, sizeof(r)); r.type = HAP_power_set_HMX; r.hmx.power_up = TRUE; HAP_power_set(pctx, &r); }
+    compute_res_attr_t va; HAP_compute_res_attr_init(&va);
+    HAP_compute_res_attr_set_vtcm_param(&va, 0x100000u, 0);
+    unsigned int vctx = HAP_compute_res_acquire(&va, 2000000);
+    uint8_t *vbase = (uint8_t *)HAP_compute_res_attr_get_vtcm_ptr(&va);
+    compute_res_attr_t ha; HAP_compute_res_attr_init(&ha); HAP_compute_res_attr_set_hmx_param(&ha, 1);
+    unsigned int hctx = HAP_compute_res_acquire(&ha, 2000000);
+    int hl = HAP_compute_res_hmx_lock(hctx);
+    if (!vbase || hl != 0) { if (hl == 0) HAP_compute_res_hmx_unlock(hctx); if (hctx) HAP_compute_res_release(hctx);
+        if (vctx) HAP_compute_res_release(vctx); return -1; }
+    uint8_t *act = vbase;                          /* 32 padded blocks x2048 = 64K */
+    uint8_t *wt  = vbase + 0x10000;                /* 16K */
+    int32_t *bias = (int32_t *)(vbase + 0x14000);
+    int32_t *atab = (int32_t *)(vbase + 0x15000), *otab = (int32_t *)(vbase + 0x15800);
+    uint32_t *ep = (uint32_t *)(vbase + 0x15C00), *mb = (uint32_t *)(vbase + 0x15C40);
+    uint8_t *out = vbase + 0x16000;                /* 32K padded */
+    memset(act, 0, 0x10000u); memset(out, 0, 0x8000u);
+    const uint16_t *Au = (const uint16_t *)A;      /* 64x128 */
+    for (int r4 = 0; r4 < 8; ++r4) for (int kt = 0; kt < 4; ++kt) {
+        uint16_t *blk = (uint16_t *)(act + (r4 * 4 + kt) * 2048);
+        for (int m32 = 0; m32 < 2; ++m32) for (int rp = 0; rp < 2; ++rp) {
+            int r0 = m32 * 32 + r4 * 4 + rp * 2;
+            uint16_t *d = blk + (m32 * 2 + rp) * 64;
+            for (int c = 0; c < 32; ++c) { d[c*2] = Au[r0*128 + kt*32 + c]; d[c*2+1] = Au[(r0+1)*128 + kt*32 + c]; }
+        }
+    }
+    w16a16_pack_wt_kmajor((const int16_t *)(A + 0x4000), wt, 128, 64);
+    w16a16_pack_bias((const int16_t *)(A + 0x4000), bias, 128, 64);
+    for (int rg = 0; rg < 16; ++rg) for (int kt = 0; kt < 4; ++kt)
+        atab[rg * 4 + kt] = (int32_t)(uintptr_t)(act + ((rg & 7) * 4 + kt) * 2048);
+    for (int rg = 0; rg < 16; ++rg) for (int t = 0; t < 2; ++t)
+        otab[rg * 2 + t] = (int32_t)(uintptr_t)(out + ((rg & 7) * 2 + t) * 2048);
+    static const uint32_t MASK[16] = { 0x0u,0x700u,0x0u,0x77cu,0x0u,0x0u,0x3ffu,0x0u,
+                                       0x0u,0x0u,0x0u,0x0u,0x80u,0x0u,0x0u,0x0u };
+    ep[0] = 1u; ep[1] = 1536u;
+    for (int i = 0; i < 16; ++i) mb[i] = MASK[i];
+    mb[14] = (uint32_t)(uintptr_t)ep;
+    static uint8_t descs[256] __attribute__((aligned(64)));
+    hmx_conv_out_desc_t *od = (hmx_conv_out_desc_t *)descs;
+    hmx_conv_act_desc_t *ad = (hmx_conv_act_desc_t *)(descs + 64);
+    od->out_tile_ptr_table = otab; od->out_table_stride_dwords = 2u; od->out_y_stride_words = 64u;
+    od->n_tiles_pow2 = 64u; od->m_total_minus_step = 1; od->k_total_bytes = 64u;
+    ad->act_ptr_pairs = atab; ad->n_act_pairs = 4u; ad->act_table_y_stride_words = 256u;
+    uint64_t k0 = phs_pcyc();
+    our_v73deep_kernel_i16(od, ad, wt, (const uint8_t *)bias, (const hmx_conv_mask_desc_t *)mb, ep);
+    uint64_t k1 = phs_pcyc();
+    uint16_t *Y = (uint16_t *)T;
+    for (int r4 = 0; r4 < 8; ++r4) for (int nt = 0; nt < 2; ++nt) {
+        const uint16_t *blk = (const uint16_t *)(out + (r4 * 2 + nt) * 2048);
+        for (int m32 = 0; m32 < 2; ++m32) for (int rp = 0; rp < 2; ++rp) {
+            int r0 = m32 * 32 + r4 * 4 + rp * 2;
+            const uint16_t *sp = blk + (m32 * 2 + rp) * 64;
+            for (int c = 0; c < 32; ++c) { Y[r0*64 + nt*32 + c] = sp[c*2]; Y[(r0+1)*64 + nt*32 + c] = sp[c*2+1]; }
+        }
+    }
+    if (hl == 0) HAP_compute_res_hmx_unlock(hctx); if (hctx) HAP_compute_res_release(hctx);
+    if (vctx) HAP_compute_res_release(vctx);
+    { HAP_power_request_t off; memset(&off, 0, sizeof(off)); off.type = HAP_power_set_HMX; off.hmx.power_up = FALSE; HAP_power_set(pctx, &off); }
+    if (statsLen > 3) stats[3] = (int)(k1 - k0);
+    FARF(ALWAYS, "MM64K128 kernel=%llu", (unsigned long long)(k1 - k0));
+    return 0;
+}
+
 /* ---- Phase-4 floor bench (H==4): steady-state carrier mm + pack-stage costs.
  * stats: [3]=cyc/mm steady (100 back-to-back) [4]=act64 pack [5]=wt pack [7]=bias pack [8]=depack */
 static int floor_bench(const uint8_t *A, int *stats, int statsLen, void *T, int TLen) {
@@ -1112,6 +1216,7 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *Tu, int 
     if (H == 3) return head_solve(A, stats, statsLen, Tu, TLen); /* Phase-3 full C=256 head */
     if (H == 4) return floor_bench(A, stats, statsLen, Tu, TLen); /* Phase-4 stage-cost floor */
     if (H == 9) return mm64_test(A, stats, statsLen, Tu, TLen);   /* TRUE 64^3 (padded out blocks) */
+    if (H == 10) return mm64_k128(A, stats, statsLen, Tu, TLen);  /* M=64 K=128 probe */
     g_p4trace = (H == 33); if (H == 33) H = 32;
     if (H >= 5) return (P >= 2) ? p4_threads(A, P, H, stats, statsLen, Tu, TLen)
                                 : p4_head_solve(A, H, stats, statsLen, Tu, TLen); /* Phase-4 */

@@ -118,7 +118,7 @@ diag 标量补丁用交织索引 `(i>>6)*64 + (off&1)*32 + (off>>1)`。
 | 杠杆 | verdict | 数 |
 |---|---|---|
 | #1 Newton 4→2 | ✅ KEEP | 36.5→29.1M；oc 双 scale 持平(9.66e-3/4.50e-3)；1 轮否决(0.25-scale 退27%) |
-| #2 merge K-stack | ❌ REFUTED | d≥2 必崩(M=64×K>64 包络外，0x8000040d)；d=1 stack oc 退 1.05e-2(丢 renorm-up)；acc 路保留 |
+| #2 merge K-stack | ❌ REFUTED(根因已查清) | 崩=布局 bug(w16a16_mm.h act 32K 被 64-96K stack act 碾过,改 96K 后可跑)。**M=64 K=128 单发 byte-exact PROVEN(H==10, max diff=3, 19.1K cold)**=非内核包络限制。但 d≥2 全链 wall 23.7M > 基线 18.7M(stack prep 串行加厚>HMX 省) → 否决；acc 路保留 |
 | #3 bias HVX colsum | ✅ KEEP | vsxt 序 lo+hi=列和；28.9→24.0M |
 | #5 A/T 装出 vgather perm | ✅ KEEP | 正/逆 LUT gather；24.0→19.1M |
 | #4 async dispatch | ❌ 不适用 | HMX 已 82% busy、producer spin 58%＝prep 已全隐藏；async 不降 HMX busy |

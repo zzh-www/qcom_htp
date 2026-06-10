@@ -41,14 +41,14 @@ static inline int16_t w16a16_clip_q16(int v) { return (int16_t)(v > 32639 ? 3263
 /* init: carve VTCM + fill the proven M=256,K=64,N=64 single-full-N descriptors (op formula:
  * out {tbl, N_t, M, M, 1, N}, act {tbl, K_t, K_t*64}; tables rg 0..63 x {kt|nt}). */
 static void w16a16_mm_init(w16a16_mm_t *b, uint8_t *vtcm, void *desc_mem) {
-    b->act  = vtcm;                                /* 0x0000 */
-    b->wt   = vtcm + 0x8000;
-    b->bias = (int32_t *)(vtcm + 0xA000);
-    b->atab = (int32_t *)(vtcm + 0xA800);          /* 128 entries */
-    b->otab = (int32_t *)(vtcm + 0xAC00);          /* 128 entries */
-    b->ep   = (uint32_t *)(vtcm + 0xB000);
-    b->mb   = (uint32_t *)(vtcm + 0xB040);
-    b->out  = vtcm + 0xC000;                       /* ..0x14000 */
+    b->act  = vtcm;                                /* 0x0..0x18000 (96K: up to K=192 stack) */
+    b->wt   = vtcm + 0x18000;                      /* 24K */
+    b->bias = (int32_t *)(vtcm + 0x1E000);
+    b->atab = (int32_t *)(vtcm + 0x1E800);         /* up to 384 entries (K-stack d=3) */
+    b->otab = (int32_t *)(vtcm + 0x1F400);
+    b->ep   = (uint32_t *)(vtcm + 0x1F800);
+    b->mb   = (uint32_t *)(vtcm + 0x1F840);
+    b->out  = vtcm + 0x20000;                      /* 32K */
     for (int rg = 0; rg < 64; ++rg) for (int t = 0; t < 2; ++t) {
         b->atab[rg * 2 + t] = (int32_t)(uintptr_t)(b->act + (((rg & 7) * 2 + t) * 2048));
         b->otab[rg * 2 + t] = (int32_t)(uintptr_t)(b->out + (((rg & 7) * 2 + t) * 2048));
