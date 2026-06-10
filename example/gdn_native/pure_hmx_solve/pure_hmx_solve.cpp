@@ -651,6 +651,79 @@ static p4_slot g_p4s[PHS_NT];
 static const uint8_t *g_p4Ah; static uint8_t *g_p4Th; static int g_p4H;
 
 static int16_t *g_p4stage[PHS_NT];   /* per-slot VTCM staging for the HVX weight gather */
+
+/* cv >> sh with sat (for K-stack common-exponent alignment) */
+static inline void p4v_cv_shr(int16_t *dst, const int16_t *src, int sh) {
+    const HVX_Vector *v = (const HVX_Vector *)src; HVX_Vector *d = (HVX_Vector *)dst;
+    for (int i = 0; i < 64; ++i) d[i] = Q6_Vh_vasr_VhR(v[i], sh & 15);
+}
+/* weight gather pack of ONE 64x64 cv into two nt segment dsts (each 32 vecs) + colsum accumulate */
+static void p4v_pack_wt_seg(const int16_t *w_cv, int16_t *stage, HVX_Vector *dst0, HVX_Vector *dst1, long *cs) {
+    for (int i = 0; i < 4096 / 64; ++i) ((HVX_Vector *)stage)[i] = ((const HVX_Vector *)w_cv)[i];
+    HVX_Vector *gtmp = (HVX_Vector *)(stage + 4096);
+    const HVX_Vector *ofs = (const HVX_Vector *)g_p4hw;
+    for (int v = 0; v < 64; v += 2) {
+        Q6_vgather_ARMVh((void *)&gtmp[0], (uint32_t)(uintptr_t)stage, 8191, ofs[v]);
+        Q6_vgather_ARMVh((void *)&gtmp[1], (uint32_t)(uintptr_t)stage, 8191, ofs[v + 1]);
+        HVX_Vector q0 = gtmp[0], q1 = gtmp[1];
+        HVX_Vector lo = Q6_Vb_vpacke_VhVh(q1, q0);
+        const HVX_Vector K128 = Q6_Vh_vsplat_R(128);
+        HVX_Vector h0 = Q6_Vh_vasr_VhR(Q6_Vh_vadd_VhVh_sat(q0, K128), 8);
+        HVX_Vector h1 = Q6_Vh_vasr_VhR(Q6_Vh_vadd_VhVh_sat(q1, K128), 8);
+        HVX_Vector hi = Q6_Vb_vpack_VhVh_sat(h1, h0);
+        HVX_VectorPair il = Q6_W_vshuff_VVR(hi, lo, -4);
+        if (v < 32) { dst0[v] = Q6_V_lo_W(il); dst0[v + 1] = Q6_V_hi_W(il); }
+        else        { dst1[v - 32] = Q6_V_lo_W(il); dst1[v - 31] = Q6_V_hi_W(il); }
+    }
+    for (int n = 0; n < 64; ++n) {
+        long c = 0; for (int k = 0; k < 64; ++k) c += w_cv[g_p4lut[k * 64 + n]];
+        cs[n] += c;
+    }
+}
+static void p4_bias_fin(int32_t *bias, const long *cs) {
+    static const int32_t ctrl[2] = { 0x00404420, 0x40000000 };
+    for (int n = 0; n < 64; ++n) {
+        long v2 = -cs[n], eff = (v2 >= 0) ? (v2 / 2) : -(((-v2) + 1) / 2);
+        int g = n >> 4, idx = n & 15;
+        bias[g * 64 + 32 + idx * 2] = (int32_t)eff; bias[g * 64 + 32 + idx * 2 + 1] = 0;
+    }
+    for (int g = 0; g < 4; ++g) for (int i = 0; i < 32; ++i) bias[g * 64 + i] = ctrl[i & 1];
+}
+/* K-stack mm: out = sum_b act_b @ wt_b (b=0..d-1), all wt pre-aligned to e_common */
+static void p4_mm_stack(int slot, int d, const int16_t *const *acts, const int16_t *const *wts,
+                        const int *wshift, int16_t *out_cv) {
+    p4_slot *S = &g_p4s[slot];
+    uint16_t *act = (uint16_t *)S->mm.act;
+    uint64_t p0 = phs_pcyc();
+    int Kt = 2 * d;
+    for (int rg = 0; rg < 64; ++rg) for (int kt = 0; kt < Kt; ++kt)
+        S->mm.atab[rg * Kt + kt] = (int32_t)(uintptr_t)((uint8_t *)act + (((rg & 7) * Kt + kt) * 2048));
+    for (int b = 0; b < d; ++b)
+        for (int r4 = 0; r4 < 8; ++r4) for (int kk = 0; kk < 2; ++kk)
+            p4v_i16_to_u16(act + ((r4 * Kt) + b * 2 + kk) * 1024, acts[b] + (r4 * 2 + kk) * 256, 256);
+    static long cs_slot[PHS_NT][64];
+    long *cs = cs_slot[slot];
+    for (int n = 0; n < 64; ++n) cs[n] = 0;
+    for (int b = 0; b < d; ++b) {
+        const int16_t *w = wts[b];
+        if (wshift[b] > 0) { p4v_cv_shr(g_p4stage[slot] + 4096 + 128, w, wshift[b]); w = g_p4stage[slot] + 4096 + 128; }
+        p4v_pack_wt_seg(w, g_p4stage[slot],
+                        (HVX_Vector *)(S->mm.wt + (size_t)b * 4096),
+                        (HVX_Vector *)(S->mm.wt + (size_t)(d + b) * 4096), cs);
+    }
+    p4_bias_fin(S->mm.bias, cs);
+    hmx_conv_act_desc_t *ad = (hmx_conv_act_desc_t *)S->mm.ad;
+    ad->n_act_pairs = (uint32_t)Kt; ad->act_table_y_stride_words = (uint32_t)(64 * Kt);
+    uint64_t p1 = phs_pcyc(); phs_tr((uint32_t)slot, PHS_S_PREP, p0, p1);
+    PHS_ARM(&g_job[slot]);
+    uint64_t s0 = phs_pcyc(); PHS_WAIT(&g_job[slot]); PHS_RESET(&g_job[slot]);
+    uint64_t s1 = phs_pcyc(); g_pspin[slot] += s1 - s0; phs_tr((uint32_t)slot, PHS_S_SPIN, s0, s1);
+    const uint16_t *o = (const uint16_t *)S->mm.out;
+    for (int b = 0; b < 16; ++b) p4v_u16_to_i16(out_cv + b * 256, o + b * 1024, 256);
+    ad->n_act_pairs = 2u; ad->act_table_y_stride_words = 128u;   /* restore d=1 for diag mms */
+    for (int rg = 0; rg < 64; ++rg) for (int t2 = 0; t2 < 2; ++t2)
+        S->mm.atab[rg * 2 + t2] = (int32_t)(uintptr_t)((uint8_t *)act + (((rg & 7) * 2 + t2) * 2048));
+}
 static void p4_mm_thr(int slot, const int16_t *a_cv, const int16_t *w_cv, int16_t *out_cv) {
     p4_slot *S = &g_p4s[slot];
     uint16_t *act = (uint16_t *)S->mm.act;
@@ -707,7 +780,13 @@ static void p4_producer(void *arg) {
         for (int b = 0; b < 4; ++b) eT[b * 5] = p4_diag_thr(slot, S->A[b * 5], S->T[b * 5]);
         for (int d = 1; d < 4; ++d)
             for (int i = d; i < 4; ++i) {
-                int j = i - d, eAcc = 0;
+                int j = i - d;
+#ifndef P4_NOSTACK
+#define P4_NOSTACK 1   /* K-stack REFUTED: d>=2 crashes (M=64 envelope unproven); d=1 stack costs oc 9.7e-3->1.05e-2 (loses renorm-up). acc path stays */
+#endif
+#if P4_NOSTACK
+                if (d > P4_NOSTACK - 1) {
+                int eAcc = 0;
                 p4v_acc_zero(S->acc);
                 for (int k = j; k < i; ++k) {
                     p4_mm_thr(slot, S->A[i * 4 + k], S->T[k * 4 + j], S->prod);
@@ -717,10 +796,33 @@ static void p4_producer(void *arg) {
                     int sh = eAcc - ep;
                     if (sh < 31) p4v_acc_addsh(S->acc, S->prod, sh);
                 }
-                int eS = eAcc + p4v_renorm(S->acc, S->prod);
+                int eC = eAcc + p4v_renorm(S->acc, S->prod);
                 p4_mm_thr(slot, S->T[i * 4 + i], S->prod, S->T[i * 4 + j]);
                 p4v_acc_from_cv(S->acc, S->T[i * 4 + j]);
-                eT[i * 4 + j] = eT[i * 4 + i] + eS + p4v_renorm(S->acc, S->T[i * 4 + j]);
+                eT[i * 4 + j] = eT[i * 4 + i] + eC + p4v_renorm(S->acc, S->T[i * 4 + j]);
+                continue;
+                }
+                {
+                const int16_t *acts[3], *wts[3]; int wsh[3];
+                int eC = eT[j * 4 + j];
+                for (int k = j; k < i; ++k) if (eT[k * 4 + j] > eC) eC = eT[k * 4 + j];
+                for (int k = j; k < i; ++k) { acts[k - j] = S->A[i * 4 + k]; wts[k - j] = S->T[k * 4 + j]; wsh[k - j] = eC - eT[k * 4 + j]; }
+                p4_mm_stack(slot, d, acts, wts, wsh, S->prod);
+                p4_mm_thr(slot, S->T[i * 4 + i], S->prod, S->T[i * 4 + j]);
+                p4v_acc_from_cv(S->acc, S->T[i * 4 + j]);
+                eT[i * 4 + j] = eT[i * 4 + i] + eC + p4v_renorm(S->acc, S->T[i * 4 + j]);
+                continue;
+                }
+#else
+                const int16_t *acts[3], *wts[3]; int wsh[3];
+                int eC = eT[j * 4 + j];
+                for (int k = j; k < i; ++k) if (eT[k * 4 + j] > eC) eC = eT[k * 4 + j];
+                for (int k = j; k < i; ++k) { acts[k - j] = S->A[i * 4 + k]; wts[k - j] = S->T[k * 4 + j]; wsh[k - j] = eC - eT[k * 4 + j]; }
+                p4_mm_stack(slot, d, acts, wts, wsh, S->prod);                 /* e = eC */
+                p4_mm_thr(slot, S->T[i * 4 + i], S->prod, S->T[i * 4 + j]);
+                p4v_acc_from_cv(S->acc, S->T[i * 4 + j]);
+                eT[i * 4 + j] = eT[i * 4 + i] + eC + p4v_renorm(S->acc, S->T[i * 4 + j]);
+#endif
             }
         int16_t *To = (int16_t *)(g_p4Th + (size_t)h * 131072);
         memset(To, 0, 131072);
@@ -752,12 +854,12 @@ static int p4_threads(const uint8_t *Ah, int P, int H, int *stats, int statsLen,
     if (!vbase || hl != 0) { if (hl == 0) HAP_compute_res_hmx_unlock(hctx); if (hctx) HAP_compute_res_release(hctx);
         if (vctx) HAP_compute_res_release(vctx); return -1; }
     p4_lut_init(); p4_lutc_init();
-    g_p4hw = (uint16_t *)(vbase + 0x70000);
+    g_p4hw = (uint16_t *)(vbase + 0xC8000);
     p4_hwlut_init();
     for (int i = 0; i < 4096; ++i) g_p4lut2[i] = g_p4lut[i];
     for (int t = 0; t < P; ++t) {
-        g_p4stage[t] = (int16_t *)(vbase + (size_t)t * 0x1C000 + 0x16000);
-        w16a16_mm_init(&g_p4s[t].mm, vbase + (size_t)t * 0x1C000, g_p4s[t].descs);
+        g_p4stage[t] = (int16_t *)(vbase + (size_t)t * 0x30000 + 0x28000);
+        w16a16_mm_init(&g_p4s[t].mm, vbase + (size_t)t * 0x30000, g_p4s[t].descs);
         {   /* TRUE 64^3 descriptors (4x less HMX than the M=256 carrier; padded 2048B blocks, live 512B) */
             hmx_conv_out_desc_t *od = (hmx_conv_out_desc_t *)g_p4s[t].mm.od;
             od->out_y_stride_words = 64u; od->n_tiles_pow2 = 64u;
