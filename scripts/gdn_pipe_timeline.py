@@ -7,7 +7,7 @@ Usage: gdn_pipe_timeline.py T.raw [width]
 """
 import sys, struct, collections
 
-STAGE = {0: "HEAD", 1: "DIAG", 2: "MERGE", 3: "MM", 4: "QUANT", 5: "PREP", 6: "ACC", 7: "REQ", 8: "PACK", 9: "EFF", 10: "DEPACK", 11: "SPIN"}
+STAGE = {0: "HEAD", 1: "DIAG", 2: "MERGE", 3: "MM", 4: "QUANT", 5: "PREP", 6: "ACC", 7: "REQ", 8: "PACK", 9: "EFF", 10: "DEPACK", 11: "SPIN", 12: "BIAS", 13: "SIG", 14: "POST", 15: "TABS"}
 CH = {1: "D", 3: "m", 4: "q", 5: "p", 6: "a", 7: "r", 8: "K", 9: "e", 10: "x"}   # +DEPACK(sub-leaf of MM; agg only)
 import os
 # coarse view (GDN_TL_COARSE=1): PREP(5) is a leaf, skip the fine QUANT/PACK/EFF (4/8/9) — for the int16

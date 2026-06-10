@@ -113,10 +113,23 @@ HVX lane 序硬经验：**Q6_Ww_vunpack 与 Q6_Vh_vasr_VwVwR 不配对（一个�
 diag 标量补丁用交织索引 `(i>>6)*64 + (off&1)*32 + (off>>1)`。
 余下 gap(36.5 vs 21.6) = bias scalar 12K/mm + A/T 头装出 + 轮询/尾部，收益递减，停。
 
+### 5.3 优化穷尽轮（2026-06-11，验收=全杠杆做完或实测否决）
+基线 36.5M → **终态 18.7M cyc（11.8ms，复测 19.1M），HMX busy 15.4M=82%，oc 9.662e-3 / 0.25-scale 4.50e-3**。
+| 杠杆 | verdict | 数 |
+|---|---|---|
+| #1 Newton 4→2 | ✅ KEEP | 36.5→29.1M；oc 双 scale 持平(9.66e-3/4.50e-3)；1 轮否决(0.25-scale 退27%) |
+| #2 merge K-stack | ❌ REFUTED | d≥2 必崩(M=64×K>64 包络外，0x8000040d)；d=1 stack oc 退 1.05e-2(丢 renorm-up)；acc 路保留 |
+| #3 bias HVX colsum | ✅ KEEP | vsxt 序 lo+hi=列和；28.9→24.0M |
+| #5 A/T 装出 vgather perm | ✅ KEEP | 正/逆 LUT gather；24.0→19.1M |
+| #4 async dispatch | ❌ 不适用 | HMX 已 82% busy、producer spin 58%＝prep 已全隐藏；async 不降 HMX busy |
+| #6 三角 mask | ❌ REFUTED(算术) | 64³ mm 仅 8.6K；拆分省 ≤25%(2.1K) < 新增 dispatch ≥3K |
+**结论：HMX-bound(82%)，wall=1.22×纯 kernel 地板(15.4M)，无剩余可行杠杆。**
+
 ## 6. 终态结论
-w16a16 全 HMX 三角求逆 REAL 实现完成:**32-head wall 36.5M cyc(真 64³ 链+全 HVX prep),HMX 59% busy(12.1K/mm),oc≈9.7e-3**
-(‖A‖₂≲4 全可用,≥5 爆炸=int16 数值真相)。w16a16 原语可用性 PROVEN(64³ 与 M=256 carrier 双 byte-exact);
-对比出货 GDNSolveHVXMixHMX 1.78M:慢 ~20×,本质 = 56×w16a16 mm/头的 HMX 算力成本,非实现缺陷(本项目目标为实现+学清,非比快)。
+w16a16 全 HMX 三角求逆 REAL 实现完成并**优化穷尽**:**32-head wall 18.7M cyc(11.8ms),HMX busy 82%(8.6K/mm 真 64³),
+oc 9.66e-3**(‖A‖₂≲4 全可用,≥5 爆炸=int16 数值真相)。w16a16 原语可用性 PROVEN(64³/M=256 双 byte-exact)。
+对比出货 GDNSolveHVXMixHMX 1.78M:慢 ~10.5×,本质 = 48×w16a16 mm/头 ×8.6K 的 HMX 算力成本(非实现缺陷);
+全旅程 60.2M/头(Phase3)→0.58M/头 = 103×。
 
 ### 关键提醒（避免重蹈我的错）
 - w16a16 matmul **已 byte-exact、可用**（CI-gated）；drain 是 **2 的幂**不是 fp16。任何"f16 drain 有损/blocker"

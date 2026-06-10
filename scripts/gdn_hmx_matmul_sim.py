@@ -379,8 +379,11 @@ def main() -> int:
     ap.add_argument("--mode", choices=["probe", "real", "random"], default="real")
     ap.add_argument("--seed", type=int, default=7, help="seed for --mode random")
     ap.add_argument("--keep", action="store_true")
+    ap.add_argument("--size", type=int, default=64)
     args = ap.parse_args()
 
+    global M, K, N
+    M = K = N = args.size
     tabs = descriptor_tables(M, K, N)
     out_bytes = M * N  # 4096 for 64x64 u8
 

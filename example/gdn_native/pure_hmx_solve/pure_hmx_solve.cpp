@@ -596,6 +596,17 @@ static inline void p4v_acc_from_cv(int32_t *acc, const int16_t *a) {  /* widen c
 /* HVX weight pack: gather q16 (stream order) from a VTCM staging copy of w_cv, then lo/hi split +
  * 4lo|4hi interleave (vshuff 4B grains). g_p4hw[h] = byte offset (in staging) of stream halfword h. */
 static uint16_t *g_p4hw;          /* shared VTCM LUT, 4096 u16 */
+static uint16_t *g_p4il, *g_p4fl; /* inverse/forward permutation LUTs (VTCM, byte offsets) */
+/* permute via vgather: dst[j] = src[ofs[j]/2]; src must be staged in VTCM (8KB) */
+static void p4v_perm(int16_t *dst, const int16_t *src, const uint16_t *ofs, int16_t *stage) {
+    for (int i = 0; i < 64; ++i) ((HVX_Vector *)stage)[i] = ((const HVX_Vector *)src)[i];
+    HVX_Vector *g = (HVX_Vector *)(stage + 4096);
+    const HVX_Vector *o = (const HVX_Vector *)ofs;
+    for (int v = 0; v < 64; ++v) {
+        Q6_vgather_ARMVh((void *)g, (uint32_t)(uintptr_t)stage, 8191, o[v]);
+        ((HVX_Vector *)dst)[v] = *g;
+    }
+}
 static void p4_hwlut_init(void) { /* stream order from the proven scalar packer loops */
     int h = 0;
     for (int nt = 0; nt < 2; ++nt)
@@ -783,9 +794,9 @@ static void p4_producer(void *arg) {
         const int16_t *Aq = (const int16_t *)(g_p4Ah + (size_t)h * 131072);
         int eT[16];
         for (int bi = 0; bi < 4; ++bi) for (int bj = 0; bj <= bi; ++bj) {
-            int16_t *dst = S->A[bi * 4 + bj];
-            for (int r = 0; r < 64; ++r) for (int c = 0; c < 64; ++c)
-                dst[g_p4lut[r * 64 + c]] = Aq[(bi * 64 + r) * 256 + bj * 64 + c];
+            static int16_t lin[PHS_NT][4096] __attribute__((aligned(128)));
+            for (int r = 0; r < 64; ++r) memcpy(&lin[slot][r * 64], &Aq[(bi * 64 + r) * 256 + bj * 64], 128);
+            p4v_perm(S->A[bi * 4 + bj], lin[slot], g_p4il, g_p4stage[slot]);
         }
         for (int b = 0; b < 4; ++b) eT[b * 5] = p4_diag_thr(slot, S->A[b * 5], S->T[b * 5]);
         for (int d = 1; d < 4; ++d)
@@ -837,9 +848,9 @@ static void p4_producer(void *arg) {
         int16_t *To = (int16_t *)(g_p4Th + (size_t)h * 131072);
         memset(To, 0, 131072);
         for (int bi = 0; bi < 4; ++bi) for (int bj = 0; bj <= bi; ++bj) {
-            const int16_t *src = S->T[bi * 4 + bj];
-            for (int r = 0; r < 64; ++r) for (int c = 0; c < 64; ++c)
-                To[(bi * 64 + r) * 256 + bj * 64 + c] = src[g_p4lut[r * 64 + c]];
+            static int16_t lin[PHS_NT][4096] __attribute__((aligned(128)));
+            p4v_perm(lin[slot], S->T[bi * 4 + bj], g_p4fl, g_p4stage[slot]);
+            for (int r = 0; r < 64; ++r) memcpy(&To[(bi * 64 + r) * 256 + bj * 64], &lin[slot][r * 64], 128);
         }
         memcpy((uint8_t *)To + 128, eT, 64);
     }
@@ -866,6 +877,9 @@ static int p4_threads(const uint8_t *Ah, int P, int H, int *stats, int statsLen,
     p4_lut_init(); p4_lutc_init();
     g_p4hw = (uint16_t *)(vbase + 0xC8000);
     p4_hwlut_init();
+    g_p4il = (uint16_t *)(vbase + 0xCA000);   /* inverse lut: cv idx -> lin byte ofs */
+    g_p4fl = (uint16_t *)(vbase + 0xCC000);   /* forward lut: lin idx -> cv byte ofs */
+    for (int i = 0; i < 4096; ++i) { g_p4il[g_p4lut[i]] = (uint16_t)(2 * i); g_p4fl[i] = (uint16_t)(2 * g_p4lut[i]); }
     for (int i = 0; i < 4096; ++i) g_p4lut2[i] = g_p4lut[i];
     for (int t = 0; t < P; ++t) {
         g_p4stage[t] = (int16_t *)(vbase + (size_t)t * 0x30000 + 0x28000);

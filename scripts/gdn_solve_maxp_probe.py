@@ -2,7 +2,7 @@
 
 The GDNSolveHVXMixHMX solve runs the 64^3 HMX kernel 2-3x per logical matmul: PASS 1/2 just measure max|P| (the
 int32-codes output magnitude) to pick the tight output gain g2=127/max|P|; their outputs are thrown away.
-That probing is ~66% of the path's VTCM traffic (Agent/current/gdn_solve_hvxmixhmx.md).
+That probing is ~66% of the path's VTCM traffic (Agent/current/gdn_solve.md).
 
 This probe asks: can we PREDICT max|P| from cheap input norms (no extra HMX run), accurately enough that a
 single pass at gain=127/est fills the int8 output range (so the gain search collapses to 1 pass)?
