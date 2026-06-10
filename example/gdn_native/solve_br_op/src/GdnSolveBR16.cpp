@@ -175,6 +175,50 @@ static const uint8_t *gdn_get_act_Tdiag16(gdn_scr_t *sc, const gdn_vtcm_t *vt, i
     return cr;
 }
 
+#if defined(GDN_BR_W16) || defined(GDN_BR_BP4)
+/* shared q15 helpers (W16 fused route + BP4 byte-pass route) */
+#define GDN_W16_sAa  (GDN_OPS_sAa / 128.0f)
+/* widening quant int16->int16 (any g), clip +-32639 (kernel hi-byte contract). */
+static void gdn_w16_quant_i16_wide(const int16_t *codes, float g, int16_t *out) {
+    int Q = 14;
+    while (Q > 1  && g * (float)(1 << Q) >= 32768.0f) --Q;
+    while (Q < 28 && g * (float)(1 << (Q + 1)) < 16384.0f) ++Q;
+    int Mg = (int)(g * (float)(1 << Q) + 0.5f) & 0xFFFF; int Rh = Mg | (Mg << 16);
+    const HVX_Vector vrnd = Q6_V_vsplat_R(1 << (Q - 1));
+    const HVX_Vector vlim = Q6_V_vsplat_R(32639), vnlim = Q6_V_vsplat_R(-32639);
+    for (int v = 0; v < (BL * BL) / 64; ++v) {
+        HVX_VectorPair pr = Q6_Ww_vmpy_VhRh(((const HVX_Vector *)codes)[v], Rh);
+        HVX_VectorPair s = Q6_W_vshuff_VVR(Q6_V_hi_W(pr), Q6_V_lo_W(pr), -4);
+        HVX_Vector q0 = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_V_lo_W(s), vrnd), Q);
+        HVX_Vector q1 = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_V_hi_W(s), vrnd), Q);
+        q0 = Q6_Vw_vmax_VwVw(Q6_Vw_vmin_VwVw(q0, vlim), vnlim);
+        q1 = Q6_Vw_vmax_VwVw(Q6_Vw_vmin_VwVw(q1, vlim), vnlim);
+        ((HVX_Vector *)out)[v] = Q6_Vh_vpack_VwVw_sat(q1, q0);
+    }
+}
+
+/* A_ik act: fold (int16-lane, zpA==32768) + Q15 quant @sAa16 -> u16 rows -> padded crouton16. */
+static void gdn_w16_fold_quant_act(gdn_scr_t *sc, const uint16_t *Au, int row_stride,
+                                   int zpA, int M, int S) {
+    (void)zpA;
+    const int Mrep = (M & 0xFFFF) * 0x10001;
+    float g = (float)(1.0 / (1 << GDN_BR_F)) / GDN_W16_sAa;
+    int Mq = (int)(g * 32768.0f + 0.5f); if (Mq > 32767) Mq = 32767;
+    int Rq = (Mq & 0xFFFF) | (Mq << 16);
+    const HVX_Vector vxor = Q6_V_vsplat_R(0x80008000), vrndS = Q6_V_vsplat_R(1 << (S - 1));
+    uint16_t *nat = (uint16_t *)sc->qbuf16;
+    for (int r = 0; r < BL; ++r) {
+        HVX_VectorPair fp = Q6_Ww_vmpy_VhRh(Q6_V_vxor_VV(*(const HVX_UVector *)(Au + r * row_stride), vxor), Mrep);
+        HVX_Vector i0 = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_V_lo_W(fp), vrndS), S);
+        HVX_Vector i1 = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_V_hi_W(fp), vrndS), S);
+        HVX_VectorPair s = Q6_W_vshuff_VVR(i1, i0, -4);
+        HVX_Vector f16 = Q6_Vh_vpack_VwVw_sat(Q6_V_hi_W(s), Q6_V_lo_W(s));   /* folded int16, natural */
+        ((HVX_Vector *)nat)[r] = Q6_V_vxor_VV(Q6_Vh_vmpy_VhRh_s1_rnd_sat(f16, Rq), Q6_V_vsplat_R(0x80008000));
+    }
+}
+
+#endif
+
 #if defined(GDN_BR_W16)
 /* ============================== GDN_BR_W16: w16a16 merge matmul ==============================
  * The merge mm switches from u8i8 (our_v73deep_kernel) to w16a16 (our_v73deep_kernel_i16): int16 act
@@ -184,7 +228,6 @@ static const uint8_t *gdn_get_act_Tdiag16(gdn_scr_t *sc, const gdn_vtcm_t *vt, i
  * so the fixed drain lands EXACTLY on the static chain: K-stack out scale = 32767*sAa16*sTw16 (=sSacc16,
  * codes <=~12.5K), final out = 32767*sTa16*sW16 = sTw16 (T_kj weight reuse stays a no-op).
  * int32 acc safe per byte-pass: 192*16256*255 < 2^31.  Layout 64^3 padded 2048B (PROVEN H=9/H=10). */
-#define GDN_W16_sAa  (GDN_OPS_sAa / 128.0f)
 #define GDN_W16_sTw  (GDN_OPS_sTw / 256.0f)
 #define GDN_W16_sTa  (GDN_OPS_sTa / 128.0f)
 #define GDN_W16_sS   (32767.0f * GDN_W16_sAa * GDN_W16_sTw)
@@ -273,45 +316,6 @@ static void gdn_w16_quant_u16_q15(const int16_t *codes, float g, uint16_t *out) 
     const HVX_Vector X = Q6_Vh_vsplat_R(0x8000);
     for (int v = 0; v < (BL * BL) / 64; ++v)
         ((HVX_Vector *)out)[v] = Q6_V_vxor_VV(Q6_Vh_vmpy_VhRh_s1_rnd_sat(((const HVX_Vector *)codes)[v], Rh), X);
-}
-
-/* widening quant int16->int16 (any g), clip +-32639 (kernel hi-byte contract). */
-static void gdn_w16_quant_i16_wide(const int16_t *codes, float g, int16_t *out) {
-    int Q = 14;
-    while (Q > 1  && g * (float)(1 << Q) >= 32768.0f) --Q;
-    while (Q < 28 && g * (float)(1 << (Q + 1)) < 16384.0f) ++Q;
-    int Mg = (int)(g * (float)(1 << Q) + 0.5f) & 0xFFFF; int Rh = Mg | (Mg << 16);
-    const HVX_Vector vrnd = Q6_V_vsplat_R(1 << (Q - 1));
-    const HVX_Vector vlim = Q6_V_vsplat_R(32639), vnlim = Q6_V_vsplat_R(-32639);
-    for (int v = 0; v < (BL * BL) / 64; ++v) {
-        HVX_VectorPair pr = Q6_Ww_vmpy_VhRh(((const HVX_Vector *)codes)[v], Rh);
-        HVX_VectorPair s = Q6_W_vshuff_VVR(Q6_V_hi_W(pr), Q6_V_lo_W(pr), -4);
-        HVX_Vector q0 = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_V_lo_W(s), vrnd), Q);
-        HVX_Vector q1 = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_V_hi_W(s), vrnd), Q);
-        q0 = Q6_Vw_vmax_VwVw(Q6_Vw_vmin_VwVw(q0, vlim), vnlim);
-        q1 = Q6_Vw_vmax_VwVw(Q6_Vw_vmin_VwVw(q1, vlim), vnlim);
-        ((HVX_Vector *)out)[v] = Q6_Vh_vpack_VwVw_sat(q1, q0);
-    }
-}
-
-/* A_ik act: fold (int16-lane, zpA==32768) + Q15 quant @sAa16 -> u16 rows -> padded crouton16. */
-static void gdn_w16_fold_quant_act(gdn_scr_t *sc, const uint16_t *Au, int row_stride,
-                                   int zpA, int M, int S) {
-    (void)zpA;
-    const int Mrep = (M & 0xFFFF) * 0x10001;
-    float g = (float)(1.0 / (1 << GDN_BR_F)) / GDN_W16_sAa;
-    int Mq = (int)(g * 32768.0f + 0.5f); if (Mq > 32767) Mq = 32767;
-    int Rq = (Mq & 0xFFFF) | (Mq << 16);
-    const HVX_Vector vxor = Q6_V_vsplat_R(0x80008000), vrndS = Q6_V_vsplat_R(1 << (S - 1));
-    uint16_t *nat = (uint16_t *)sc->qbuf16;
-    for (int r = 0; r < BL; ++r) {
-        HVX_VectorPair fp = Q6_Ww_vmpy_VhRh(Q6_V_vxor_VV(*(const HVX_UVector *)(Au + r * row_stride), vxor), Mrep);
-        HVX_Vector i0 = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_V_lo_W(fp), vrndS), S);
-        HVX_Vector i1 = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_V_hi_W(fp), vrndS), S);
-        HVX_VectorPair s = Q6_W_vshuff_VVR(i1, i0, -4);
-        HVX_Vector f16 = Q6_Vh_vpack_VwVw_sat(Q6_V_hi_W(s), Q6_V_lo_W(s));   /* folded int16, natural */
-        ((HVX_Vector *)nat)[r] = Q6_V_vxor_VV(Q6_Vh_vmpy_VhRh_s1_rnd_sat(f16, Rq), Q6_V_vsplat_R(0x80008000));
-    }
 }
 
 /* ---- W16 operand getters ---- */
@@ -412,6 +416,127 @@ static void gdn_w16_kstack(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint8_t *c
     gdn_w16_depack_out(vt->out, out_codes);
 }
 #endif  /* GDN_BR_W16 */
+
+#if defined(GDN_BR_BP4)
+/* ============================== GDN_BR_BP4: byte-pass merge ==============================
+ * Keep the 313-cyc u8i8 kernel; precision from byte-decomposing both operands (oracle
+ * scripts/gdn_solve_bp2_oracle.py: 3.0x oc vs u8i8).  q15 act -> Ah/Al u8 croutons (zp128),
+ * 16-bit T wt -> Wh/Wl i8 kmajor; 3 K-stack passes (HH/LH/HL, LL dropped), all int8 drains:
+ *   Sacc16 = 256*HH(gb) + 4*LH(gb/4) + 8*HL(gb/8) + round(128*colsum(Wh)*gb),  gb = 8*g1
+ * (act q15 grid = sAa/128, hi lane value = 2*sAa -> gb doubles the oracle B=4 boost).
+ * Final merge identical with K=1: gOH = 256*TI*sSacc16/sTw, Tij16 = 256*Oh + 32*Ol + 8*Ohl.
+ * Combos sat-add (clip 32767); +128 act constant rides AFTER drain (in-acc clips, oracle). */
+#define GDN_BP_sAa16   (GDN_OPS_sAa / 128.0f)
+#define GDN_BP_sTw16   (GDN_OPS_sTw / 256.0f)
+#define GDN_BP_sSacc16 (GDN_OPS_sSacc / 256.0f)
+#define GDN_BP_SLOT(vt, n) ((uint8_t *)(vt)->wcache + 0xA000 + (size_t)(n) * 0x1000)   /* 7 free 4K slots */
+
+/* split natural u16 rows (zp 0x8000) into hi/lo byte planes (u8, kernel zp128 both). */
+static void gdn_bp_split_u16(const uint16_t *nat, uint8_t *hi, uint8_t *lo) {
+    const HVX_Vector *p = (const HVX_Vector *)nat; HVX_Vector *hp = (HVX_Vector *)hi, *lp = (HVX_Vector *)lo;
+    for (int v = 0; v < (BL * BL) / 128; ++v) {
+        HVX_Vector a = p[2 * v], b = p[2 * v + 1];
+        HVX_VectorPair dl = Q6_W_vdeal_VVR(b, a, -1);   /* lo = even (low) bytes row a then b; hi = odd */
+        lp[v] = Q6_V_lo_W(dl); hp[v] = Q6_V_hi_W(dl);
+    }
+}
+/* split int16 codes (|w|<=32639) into Wh = round(w/256) i8 and Wl = w - 256*Wh i8. */
+static void gdn_bp_split_w16(const int16_t *w, int8_t *wh, int8_t *wl) {
+    const HVX_Vector vone = Q6_Vh_vsplat_R(0x0080);
+    const HVX_Vector *p = (const HVX_Vector *)w; HVX_Vector *hp = (HVX_Vector *)wh, *lp = (HVX_Vector *)wl;
+    for (int v = 0; v < (BL * BL) / 128; ++v) {
+        HVX_Vector h0 = Q6_Vh_vasr_VhR(Q6_Vh_vadd_VhVh_sat(p[2*v],   vone), 8);   /* round(w/256) */
+        HVX_Vector h1 = Q6_Vh_vasr_VhR(Q6_Vh_vadd_VhVh_sat(p[2*v+1], vone), 8);
+        HVX_Vector l0 = Q6_Vh_vsub_VhVh(p[2*v],   Q6_Vh_vasl_VhR(h0, 8));         /* w - 256*Wh in [-128,127] */
+        HVX_Vector l1 = Q6_Vh_vsub_VhVh(p[2*v+1], Q6_Vh_vasl_VhR(h1, 8));
+        hp[v] = Q6_Vb_vpack_VhVh_sat(h1, h0); lp[v] = Q6_Vb_vpack_VhVh_sat(l1, l0);
+    }
+}
+/* A_ik act: fold to q15 (u16 nat in qbuf16) -> split -> two u8 croutons (transient slots m / 3+m). */
+static void gdn_bp_get_act_A(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t *Ah, int i, int k,
+                             int C_, int zpA, int M, int S, int m, const uint8_t **hi_cr, const uint8_t **lo_cr) {
+    uint8_t *hc = GDN_BP_SLOT(vt, m), *lc = GDN_BP_SLOT(vt, 3 + m);
+#if defined(GDN_BR_TRACE)
+    uint64_t _t0 = gdn_trnow();
+#endif
+    gdn_w16_fold_quant_act(sc, Ah + (size_t)i * BL * C_ + k * BL, C_, zpA, M, S);
+    gdn_bp_split_u16((const uint16_t *)sc->qbuf16, sc->actbuf, sc->surf_sub);
+#if defined(GDN_BR_TRACE)
+    uint64_t _t1 = gdn_trnow(); gdn_tr_push((uint32_t)(sc - g_scr), 4, _t0, _t1);
+#endif
+    gdn_pack_act_crouton8(sc->actbuf, hc); gdn_pack_act_crouton8(sc->surf_sub, lc);
+#if defined(GDN_BR_TRACE)
+    gdn_tr_push((uint32_t)(sc - g_scr), 8, _t1, gdn_trnow());
+#endif
+    *hi_cr = hc; *lo_cr = lc;
+}
+/* T_ii act: Tblk16 IS q15 (@TI) -> split+pack (hi cached 4K/diag, lo transient slot 0 reuse). */
+static void gdn_bp_get_act_Tdiag(gdn_scr_t *sc, const gdn_vtcm_t *vt, int i,
+                                 const uint8_t **hi_cr, const uint8_t **lo_cr) {
+    uint8_t *hc = vt->acache + 0xA000 + (size_t)i * 0x1000, *lc = GDN_BP_SLOT(vt, 0);
+    int bii = gdn_blk_index(i, i);
+    const HVX_Vector X = Q6_Vh_vsplat_R(0x8000);
+    HVX_Vector *q = (HVX_Vector *)sc->qbuf16; const HVX_Vector *t = (const HVX_Vector *)sc->Tblk16[bii];
+    for (int v = 0; v < (BL * BL) / 64; ++v) q[v] = Q6_V_vxor_VV(t[v], X);
+    gdn_bp_split_u16((const uint16_t *)sc->qbuf16, sc->actbuf, sc->surf_sub);
+    if (!sc->vTa[i]) { gdn_pack_act_crouton8(sc->actbuf, hc); sc->vTa[i] = 1; }
+    gdn_pack_act_crouton8(sc->surf_sub, lc);
+    *hi_cr = hc; *lo_cr = lc;
+}
+/* T_kj wt: 16-bit codes @sTw16 -> Wh kmajor (cached) + Wl kmajor (transient, contiguous in wt+0x4000). */
+static void gdn_bp_get_wt(gdn_scr_t *sc, const gdn_vtcm_t *vt, int k, int j, int m,
+                          const int8_t **wh_km, const int8_t **wl_km, const int32_t **effh, int32_t *effl) {
+    int key = gdn_blk_index(k, j);
+    int8_t *whc = vt->wcache + (size_t)key * 0x1000;
+    int8_t *wlc = (int8_t *)vt->wt + 0x4000 + (size_t)m * 0x1000;
+    const int16_t *w16 = sc->Tblk16[key];
+    if (k == j) { gdn_w16_quant_i16_wide(sc->Tblk16[key], GDN_BR_TI / GDN_BP_sTw16, sc->qbuf16); w16 = sc->qbuf16; }
+    gdn_bp_split_w16(w16, sc->wtbuf, (int8_t *)sc->actbuf);
+    if (!sc->vTw[key]) { gdn_effective(sc->wtbuf, sc->effc[key]); gdn_pack_w8_kmajor(sc->wtbuf, whc); sc->vTw[key] = 1; }
+    gdn_effective((int8_t *)sc->actbuf, effl); gdn_pack_w8_kmajor((int8_t *)sc->actbuf, wlc);
+    *wh_km = whc; *wl_km = wlc; *effh = sc->effc[key];
+}
+/* one u8i8 K-stack pass at an explicit drain gain g (codes int8 in out8). */
+static void gdn_bp_pass(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint8_t *const act_cr[],
+                        const int8_t *wcontig, const int32_t *effs, int d, float g, int8_t *out8) {
+    for (int m = 0; m < d; ++m) {
+        vt->acttab[2*m + 0] = (int32_t)(uintptr_t)(act_cr[m] + 0);
+        vt->acttab[2*m + 1] = (int32_t)(uintptr_t)(act_cr[m] + 64 * 32);
+    }
+    vt->outtab[0] = (int32_t)(uintptr_t)(vt->out + 0);
+    vt->outtab[1] = (int32_t)(uintptr_t)(vt->out + 64 * 32);
+    g_kstack_nap = 2 * d;
+    if (g_hmx_dispatch) g_hmx_dispatch(sc, vt, wcontig, effs, g * 512.0f, 128 << 7, 1);
+    else                gdn_hmx_run_only(vt, wcontig, effs, g * 512.0f, 128 << 7, 1);
+    g_kstack_nap = 2;
+    gdn_depack_out_fast(sc, vt->out, 128, out8);
+}
+/* combine 256*HH + wl*LH + whl*HL + corr(col) -> int16 sat.  corr[c] = round(-effh_sum[c]*gb)
+ * (eff = -128*colsum -> +128*colsum(Wh)*gb, the q15 +128 act constant, added EXACTLY post-drain). */
+static void gdn_bp_combine(const int8_t *hh, const int8_t *lh, const int8_t *hl, int wl, int whl,
+                           const int32_t *effh_sum, float gb, int16_t *out) {
+    int16_t corr[BL] __attribute__((aligned(128)));
+    for (int c = 0; c < BL; ++c) { float v = -(float)effh_sum[c] * gb; corr[c] = (int16_t)(v >= 0 ? v + 0.5f : v - 0.5f); }
+    HVX_Vector vc = *(HVX_Vector *)corr;                        /* 64 cols = one row vec */
+    int shl = (wl == 4) ? 2 : 5, shq = (whl == 8) ? 3 : 5;      /* pass weights are powers of two */
+    const HVX_Vector *ph = (const HVX_Vector *)hh, *pl = (const HVX_Vector *)lh, *pq = (const HVX_Vector *)hl;
+    HVX_Vector *po = (HVX_Vector *)out;
+    for (int v = 0; v < (BL * BL) / 128; ++v) {
+        HVX_VectorPair h16 = Q6_Wh_vsxt_Vb(ph[v]);                       /* lo=even bytes, hi=odd bytes */
+        HVX_VectorPair l16 = Q6_Wh_vsxt_Vb(pl[v]);
+        HVX_VectorPair q16 = Q6_Wh_vsxt_Vb(pq[v]);
+        HVX_Vector se = Q6_Vh_vadd_VhVh_sat(Q6_Vh_vasl_VhR(Q6_V_lo_W(h16), 8),
+                          Q6_Vh_vadd_VhVh_sat(Q6_Vh_vasl_VhR(Q6_V_lo_W(l16), shl),
+                                              Q6_Vh_vasl_VhR(Q6_V_lo_W(q16), shq)));
+        HVX_Vector so = Q6_Vh_vadd_VhVh_sat(Q6_Vh_vasl_VhR(Q6_V_hi_W(h16), 8),
+                          Q6_Vh_vadd_VhVh_sat(Q6_Vh_vasl_VhR(Q6_V_hi_W(l16), shl),
+                                              Q6_Vh_vasl_VhR(Q6_V_hi_W(q16), shq)));
+        HVX_VectorPair nat = Q6_W_vshuff_VVR(so, se, -2);                /* interleave back to natural */
+        po[2*v]   = Q6_Vh_vadd_VhVh_sat(Q6_V_lo_W(nat), vc);
+        po[2*v+1] = Q6_Vh_vadd_VhVh_sat(Q6_V_hi_W(nat), vc);
+    }
+}
+#endif  /* GDN_BR_BP4 */
 
 /* ---- the int16 static solve (mirrors gdn_br_one_head HMX path, Tblk/Sacc -> int16) ---- */
 static void gdn_br_one_head16(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t *Ah, uint16_t *Th,
@@ -517,6 +642,69 @@ static void gdn_br_one_head16(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_
                 gdn_tr_push(_tid, 3, _m0, gdn_trnow());   /* MM (K-stack + depack) */
 #endif
             }
+#elif defined(GDN_BR_BP4)
+            /* byte-pass inner: 3 u8i8 K-stack passes (HH/LH/HL) + HVX combine -> Sacc16 @ sP/1024. */
+            {
+                const uint8_t *ah_cr[GDN_BR_NB], *al_cr[GDN_BR_NB];
+                const int8_t *wh_km[GDN_BR_NB], *wl_km0 = (const int8_t *)vt->wt + 0x4000;
+                int32_t effh[BL] __attribute__((aligned(128))), effl[BL] __attribute__((aligned(128)));
+                int32_t efk[BL] __attribute__((aligned(128)));
+                for (int n = 0; n < BL; ++n) { effh[n] = 0; effl[n] = 0; }
+                for (int k = j; k < i; ++k) {
+                    int m = k - j; const int32_t *eh; const int8_t *wl;
+#if defined(GDN_BR_TRACE)
+                    uint64_t _p0 = gdn_trnow();
+#endif
+                    gdn_bp_get_act_A(sc, vt, Ah, i, k, C, zpA, M, S, m, &ah_cr[m], &al_cr[m]);
+#if defined(GDN_BP_DBG_S)
+                    /* q15 act A(1,0) -> Th (3,3) (diag, never rewritten) as u16 verbatim */
+                    if (i == 1 && j == 0)
+                        for (int r = 0; r < BL; ++r) for (int c = 0; c < BL; ++c)
+                            Th[(size_t)(3*BL + r) * C + 3*BL + c] = ((const uint16_t *)sc->qbuf16)[r * BL + c];
+#endif
+                    gdn_bp_get_wt(sc, vt, k, j, m, &wh_km[m], &wl, &eh, efk);
+#if defined(GDN_BP_DBG_S)
+                    /* Wh i8 codes of T(0,0) -> Th (0,1) (Sacc dump dropped this round) */
+                    if (i == 1 && j == 0)
+                        for (int r = 0; r < BL; ++r) for (int c = 0; c < BL; ++c)
+                            Th[(size_t)r * C + BL + c] = (uint16_t)((int16_t)((int8_t *)sc->wtbuf)[r * BL + c] ^ 0x8000);
+#endif
+                    for (int n = 0; n < BL; ++n) { effh[n] += eh[n]; effl[n] += efk[n]; }
+#if defined(GDN_BR_TRACE)
+                    gdn_tr_push(_tid, 5, _p0, gdn_trnow());   /* PREP */
+#endif
+                }
+                int8_t *whc = (int8_t *)vt->wt;                       /* contiguous Wh gather (transient) */
+                for (int m = 0; m < d; ++m) {
+                    const HVX_Vector *src = (const HVX_Vector *)wh_km[m];
+                    HVX_Vector *dst = (HVX_Vector *)(whc + (size_t)m * (BL * BL));
+                    for (int v = 0; v < (BL * BL) / 128; ++v) dst[v] = src[v];
+                }
+#if defined(GDN_BR_TRACE)
+                uint64_t _m0 = gdn_trnow();
+#endif
+                float g1 = 127.0f / (128.0f * (float)GDN_OPS_COLABS * (float)d), gb = 8.0f * g1;
+                gdn_bp_pass(sc, vt, ah_cr, whc,    effh, d, gb,         sc->termi);
+                gdn_bp_pass(sc, vt, al_cr, whc,    effh, d, gb * 0.25f, (int8_t *)sc->wtbuf);
+                gdn_bp_pass(sc, vt, ah_cr, wl_km0, effl, d, gb * 0.125f, (int8_t *)sc->actbuf);
+                gdn_bp_combine(sc->termi, (const int8_t *)sc->wtbuf, (const int8_t *)sc->actbuf,
+                               4, 8, effh, gb, sc->Sacc16);
+                s_S = (128.0f * (float)GDN_OPS_COLABS * (float)d * GDN_OPS_sAa * GDN_OPS_sTw / 127.0f) / 1024.0f;
+#if defined(GDN_BP_DBG_S)
+                /* dump (1,0): Sacc16 -> (0,1); HH -> (0,2); LH -> (0,3); HL -> (1,2)rows; effh -> (1,3)row0 lo16. */
+                if (i == 1 && j == 0) {
+                    for (int r = 0; r < BL; ++r) for (int c = 0; c < BL; ++c) {
+                        /* (0,1) holds the Wh dump this round */
+                        Th[(size_t)r * C + 2*BL + c] = (uint16_t)((int16_t)sc->termi[r * BL + c] ^ 0x8000);
+                        Th[(size_t)r * C + 3*BL + c] = (uint16_t)((int16_t)((int8_t*)sc->wtbuf)[r * BL + c] ^ 0x8000);
+                        Th[(size_t)(BL + r) * C + 2*BL + c] = (uint16_t)((int16_t)((int8_t*)sc->actbuf)[r * BL + c] ^ 0x8000);
+                    }
+                }
+#endif
+#if defined(GDN_BR_TRACE)
+                gdn_tr_push(_tid, 3, _m0, gdn_trnow());   /* MM (3 byte passes + combine) */
+#endif
+            }
 #elif defined(GDN_BR_KSTACK)
             /* K-STACK: fold the d-term Sigma_k into ONE K=64d HMX matmul (accumulate in the HMX int32 acc,
              * single drain) -> no per-k handshake, no gdn_acc16.  Operands come from the same caches. */
@@ -593,7 +781,52 @@ static void gdn_br_one_head16(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_
             }
 #endif
             /* final merge T_ij = T_ii @ Sacc. */
-#if defined(GDN_BR_W16)
+#if defined(GDN_BR_BP4)
+            float sij;
+            {
+#if defined(GDN_BR_TRACE)
+                uint64_t _f0 = gdn_trnow();
+#endif
+                const uint8_t *ah_cr, *al_cr;
+                gdn_bp_get_act_Tdiag(sc, vt, i, &ah_cr, &al_cr);
+                /* Sacc16 @ s_S -> 16-bit weight @ sSacc16 (g<1), then byte-split. */
+                gdn_w16_quant_i16_wide(sc->Sacc16, s_S / GDN_BP_sSacc16, sc->qbuf16);
+                gdn_bp_split_w16(sc->qbuf16, sc->wtbuf, (int8_t *)sc->actbuf);
+                int32_t effh[BL] __attribute__((aligned(128))), effl[BL] __attribute__((aligned(128)));
+                gdn_effective(sc->wtbuf, effh);
+                gdn_effective((int8_t *)sc->actbuf, effl);
+                gdn_pack_w8_kmajor(sc->wtbuf, vt->wt);
+                gdn_pack_w8_kmajor((int8_t *)sc->actbuf, (int8_t *)vt->wt + 0x4000);
+                const uint8_t *ah1[1] = { ah_cr }, *al1[1] = { al_cr };
+#if defined(GDN_BR_TRACE)
+                uint64_t _f1 = gdn_trnow(); gdn_tr_push(_tid, 5, _f0, _f1);   /* PREP (final) */
+#endif
+                /* per-raw-code drain gain: raw * (256*TI)*(256*sSacc16) lands @sTw */
+                float gOH = 65536.0f * GDN_BR_TI * GDN_BP_sSacc16 / GDN_OPS_sTw;
+                gdn_bp_pass(sc, vt, ah1, vt->wt, effh, 1, gOH,           sc->termi);
+                gdn_bp_pass(sc, vt, al1, vt->wt, effh, 1, gOH / 32.0f, (int8_t *)sc->wtbuf);
+                gdn_bp_pass(sc, vt, ah1, (const int8_t *)vt->wt + 0x4000, effl, 1, gOH / 8.0f, (int8_t *)sc->actbuf);
+                gdn_bp_combine(sc->termi, (const int8_t *)sc->wtbuf, (const int8_t *)sc->actbuf,
+                               32, 8, effh, gOH, sc->Tblk16[bij]);
+                sij = GDN_BP_sTw16;
+#if defined(GDN_BP_DBG_S)
+                /* final (1,0): Wq16 -> (1,3); Oh -> (2,3) rows; Ol -> (2,3)+32 rows. */
+                if (i == 1 && j == 0) {
+                    for (int r = 0; r < BL; ++r) for (int c = 0; c < BL; ++c) {
+                        Th[(size_t)(BL + r) * C + 3*BL + c] = (uint16_t)(sc->qbuf16[r * BL + c] ^ 0x8000);
+                        Th[(size_t)(2*BL + r) * C + 3*BL + c] = (uint16_t)((int16_t)sc->termi[r * BL + c] ^ 0x8000);
+                    }
+                }
+#endif
+#if defined(GDN_BR_TRACE)
+                gdn_tr_push(_tid, 3, _f1, gdn_trnow());   /* MM (final 3 passes + combine) */
+#endif
+            }
+            sc->Tscl[bij] = sij;
+#if defined(GDN_BR_TRACE)
+            uint64_t _f2 = gdn_trnow();
+#endif
+#elif defined(GDN_BR_W16)
             float sij;
             {
 #if defined(GDN_BR_TRACE)
