@@ -30,7 +30,7 @@
  * The plan is NOT to fix this build but to REWRITE the whole solve from the (trusted) microbench findings.
  * Until then, only the microbenches are valid: -DGDNBM_FEED_PIPE[/_FEED_4P], -DGDNBM_HMX_BENCH,
  * -DGDNBM_GLUE_BENCH, -DGDNBM_FEED_MULTIPASS, and the GDNSolveHVX baseline (default / -DGDN_BR_MM_I8).
- * See Agent/current/gdn_solve_hvxmixhmx.md (top "⛔ 工作方式" banner). Escape hatch (debug only):
+ * See Agent/current/gdn_solve.md (top "⛔ 工作方式" banner). Escape hatch (debug only):
  * add -DGDNBM_ALLOW_BROKEN_HMX_MERGE to build it anyway (will SSR; needs a reboot to clear). */
 #if defined(GDNBM_HMX_MERGE_PATH) && !defined(GDNBM_ALLOW_BROKEN_HMX_MERGE)
 #error "GDNBM_HMX_MERGE_PATH is DISABLED: the full GDNSolveHVXMixHMX solve SSRs the cDSP at open (rc=0x80000406, void). Run only the microbenches; the solve will be rewritten from them. Override with -DGDNBM_ALLOW_BROKEN_HMX_MERGE (debug only, will SSR)."
@@ -60,8 +60,55 @@
 #if defined(GDN_BR_I16_FOLD) && !defined(GDN_BR_NO_I16_FOLD_QUANT) && !defined(GDN_BR_I16_FOLD_QUANT)
 #define GDN_BR_I16_FOLD_QUANT 1
 #endif
+/* K-STACK off-diag merge: fold the Sigma_k reduction into the HMX accumulator (one K=64d matmul, single drain)
+ * instead of d per-k dispatches + HVX gdn_acc16 -> kills the per-k handshakes (the sync root cause).  Default
+ * on with the int16 pipe; opt out with -DGDN_BR_NO_KSTACK.  Verified by -DGDNBM_KSTACK_BENCH (3 bit-exact gates). */
+#if defined(GDN_BR_I16) && !defined(GDN_BR_NO_KSTACK) && !defined(GDN_BR_KSTACK)
+#define GDN_BR_KSTACK 1
+#endif
+/* int16-DIRECT diag: fwdsubst writes int16 straight to Tblk16, skipping the redundant int32 widen+narrow
+ * round-trip (merge consumes int16).  少指令 win on DIAG (throughput-bound in-solve).  -DGDN_BR_NO_DIAG_I16 reverts. */
+#if defined(GDN_BR_I16) && !defined(GDN_BR_NO_DIAG_I16) && !defined(GDN_BR_DIAG_I16)
+#define GDN_BR_DIAG_I16 1
+#endif
 #include "../../solve_br_op/src/GdnSolveBROp.cpp"
 #include "../../solve_br_op/src/GdnSolveBR16.cpp"   /* clean int16 static solve (GDN_BR_I16) */
+
+#if defined(GDNBM_HMX_BENCH_I16)
+/* byte-proven W16A16 (int16xint16->u16) 4-pass HMX kernel, renamed our_v73deep_kernel_i16
+ * (sha256-identical to the device-byte-exact custom op .inc). Measures the ISOLATED 64^3
+ * int16 matmul run_only cycle (with per-op setup) -> Cmm for the full-HMX D&C verdict. */
+#include "../inc/v73deep_conv1x1_kernel_i16.h"
+/* int16 native conv1x1 mask words = set_hmx_params_conv1x1(0x70b,0,0,0,0x80), derived from
+ * the int8 GDN_BR_MASK_WORDS rule (word1=ARG1, word3=ARG1|0x1f, word6=ARG1|0xff, word12=ARG5). */
+/* GROUND TRUTH from scripts/emulate_hmx_conv1x1_params.conv1x1_words(0x70b,0,0,0,0x80)
+ * (emulator validated: (0x700,0x20) reproduces int8 GDN_BR_MASK_WORDS exactly).
+ * Earlier hand-derivation was WRONG: word[1]=0x700 (not 0x70b), word[3]=0x77c (not 0x71f). */
+static const uint32_t GDN_I16_MASK_WORDS[16] = {
+    0x0u, 0x700u, 0x0u, 0x77cu, 0x0u, 0x0u, 0x7ffu, 0x0u,
+    0x0u, 0x0u, 0x0u, 0x0u, 0x80u, 0x0u, 0x0u, 0x0u
+};
+/* descriptor fields: geometry = int8-proven GDN_BR_* (64^3); width-dependent ones doubled for u16,
+ * overridable for the byte-verify scan ({64,128} x {8,16} x tab-offset {2048,4096}). */
+#ifndef GDN_I16_K_TOTAL_BYTES
+#define GDN_I16_K_TOTAL_BYTES 64u      /* N-tile byte count; int8=64, scan {64,128} */
+#endif
+#ifndef GDN_I16_ACT_Y_STRIDE
+#define GDN_I16_ACT_Y_STRIDE  8u       /* int8=8, scan {8,16} */
+#endif
+#ifndef GDN_I16_OUT_Y_STRIDE
+#define GDN_I16_OUT_Y_STRIDE  8u       /* int8=8, scan {8,16} */
+#endif
+#ifndef GDN_I16_ACT_TAB_OFF
+#define GDN_I16_ACT_TAB_OFF   4096u    /* kt1 act ptr offset; int8=2048(64*32), u16 doubled 4096 */
+#endif
+#ifndef GDN_I16_OUT_TAB_OFF
+#define GDN_I16_OUT_TAB_OFF   4096u    /* nt1 out ptr offset; int8=2048, u16 doubled 4096 */
+#endif
+#ifndef GDN_I16_EXTRA1
+#define GDN_I16_EXTRA1        1536u    /* extra_param[1]; native record value, scan if needed */
+#endif
+#endif  /* GDNBM_HMX_BENCH_I16 */
 
 /* PIPE default = PURE-HMX consumer (lever 1): bias-pack+out-zero on the producer so the consumer is pure
  * mxmem and frees its HVX unit -> P=4 producers fit 4 HVX units (no SMT starvation; timeline-verified).
@@ -297,10 +344,30 @@ struct hmx_job {
     volatile int state;                 /* 0=idle, 1=ready(consumer runs it), 2=done(producer depacks) */
     const gdn_vtcm_t *vt; const int8_t *wt; const int32_t *eff;
     float scale; int baseline; int round;
-    int _pad[16];                       /* own cache/SMT line -> no false sharing between producer slots */
+    int n_act_pairs;                    /* K-stack: 2*d K-tiles for a K=64d matmul (default 2 = single 64-block) */
+    int _pad[15];                       /* own cache/SMT line -> no false sharing between producer slots */
 } __attribute__((aligned(128)));
 static struct hmx_job g_pjob[GDN_BR_NT];
+/* hand-off sync: the full __sync_synchronize() barriers (SIG+POST) cost 28% of MM (604K cyc, trace-confirmed).
+ * The handshake only needs ACQUIRE/RELEASE ordering on `state`, not a full barrier: producer release-stores
+ * state=1 after writing job fields (consumer acquire-loads => sees fields); consumer release-stores state=2
+ * after writing vt->out (producer acquire-loads => sees out); the idle reset state=0 needs no ordering (the
+ * consumer only ever acts on ==1, which a later re-arm release publishes).  Default = light; A/B via -DGDN_BR_HEAVY_SYNC. */
+#if defined(GDN_BR_HEAVY_SYNC)
+#define GDN_JOB_ARM(jb)   do { __sync_synchronize(); (jb)->state = 1; } while (0)
+#define GDN_JOB_WAIT(jb)  do { while ((jb)->state != 2) {} } while (0)
+#define GDN_JOB_RESET(jb) do { __sync_synchronize(); (jb)->state = 0; } while (0)
+#define GDN_JOB_POLL(jb)  ((jb)->state == 1)
+#define GDN_JOB_DONE(jb)  do { __sync_synchronize(); (jb)->state = 2; } while (0)
+#else
+#define GDN_JOB_ARM(jb)   __atomic_store_n(&(jb)->state, 1, __ATOMIC_RELEASE)
+#define GDN_JOB_WAIT(jb)  do { while (__atomic_load_n(&(jb)->state, __ATOMIC_ACQUIRE) != 2) {} } while (0)
+#define GDN_JOB_RESET(jb) __atomic_store_n(&(jb)->state, 0, __ATOMIC_RELAXED)
+#define GDN_JOB_POLL(jb)  (__atomic_load_n(&(jb)->state, __ATOMIC_ACQUIRE) == 1)
+#define GDN_JOB_DONE(jb)  __atomic_store_n(&(jb)->state, 2, __ATOMIC_RELEASE)
+#endif
 static volatile int g_pipe_pdone;       /* # producers that finished all their heads (drain-exit signal) */
+static volatile int g_next_head;        /* DYNAMIC head scheduler: shared atomic counter producers pull from */
 static char __attribute__((aligned(128))) g_pipe_stack[GDN_BR_NT][32768];
 static volatile uint64_t g_pipe_cbusy;          /* consumer: cyc inside the HMX kernel (busy, not spinning) */
 static volatile uint64_t g_pipe_pspin[GDN_BR_NT];   /* producer t: cyc spinning for its matmul result */
@@ -311,10 +378,11 @@ static volatile uint64_t g_pipe_plife[GDN_BR_NT];   /* producer t: total lifetim
 static void gdn_pipe_dispatch(gdn_scr_t *sc, const gdn_vtcm_t *vt, const int8_t *wt, const int32_t *eff,
                               float scale, int baseline, int round) {
     struct hmx_job *jb = &g_pjob[(int)(sc - g_scr)];           /* slot = this producer's scratch index */
+    int slot = (int)(sc - g_scr);
+#if defined(GDN_BR_TRACE)
+    uint64_t _b0 = gdn_trnow();
+#endif
 #if defined(GDNBM_PIPE_PURE_HMX)
-    /* LEVER 1: bias-pack HERE (producer, HVX) so the consumer is PURE mxmem -> frees its HVX unit for a 4th
-     * producer.  out-zero REMOVED: the v73deep kernel fully overwrites the 4096B out surface (FEED_4P verified
-     * ovr_mism==0) -> zeroing it was 32 wasted vec-stores/matmul (the MM-dispatch bulk).  -DGDNBM_PIPE_OUTZERO restores. */
     { int rdelta = round ? (int)(256.0f / scale + 0.5f) : 0;
       gdn_pack_bias(eff, scale, baseline, (int32_t *)vt->bias, rdelta);
 #if defined(GDNBM_PIPE_OUTZERO)
@@ -323,18 +391,26 @@ static void gdn_pipe_dispatch(gdn_scr_t *sc, const gdn_vtcm_t *vt, const int8_t 
 #endif
     }
 #endif
+#if defined(GDN_BR_TRACE)
+    uint64_t _b1 = gdn_trnow(); gdn_tr_push((uint32_t)slot, 12, _b0, _b1);   /* BIAS-PACK */
+#endif
     jb->vt = vt; jb->wt = wt; jb->eff = eff; jb->scale = scale; jb->baseline = baseline; jb->round = round;
-    __sync_synchronize();
-    int slot = (int)(sc - g_scr);
-    jb->state = 1;                                             /* arm: consumer may run it */
+    jb->n_act_pairs = g_kstack_nap;     /* publish the K-stack width to the consumer (producer-thread read) */
+    GDN_JOB_ARM(jb);                                          /* release-store: arm + publish job fields */
+#if defined(GDN_BR_TRACE)
+    gdn_tr_push((uint32_t)slot, 13, _b1, gdn_trnow());   /* SIG = barrier1 + signal */
+#endif
     uint64_t s0 = pcyc();
-    while (jb->state != 2) { /* spin for the HMX result */ }
+    GDN_JOB_WAIT(jb);                                         /* acquire-spin for the HMX result */
     uint64_t s1 = pcyc(); g_pipe_pspin[slot] += s1 - s0; g_pipe_pcnt[slot]++;
 #if defined(GDN_BR_TRACE)
-    gdn_tr_push((uint32_t)slot, 11, s0, s1);   /* SPIN (sub-leaf of MM dispatch) */
+    gdn_tr_push((uint32_t)slot, 11, s0, s1);   /* SPIN */
+    uint64_t _po0 = gdn_trnow();
 #endif
-    __sync_synchronize();
-    jb->state = 0;                                             /* consumed; idle until next dispatch */
+    GDN_JOB_RESET(jb);                                        /* relaxed: idle until next dispatch */
+#if defined(GDN_BR_TRACE)
+    gdn_tr_push((uint32_t)slot, 14, _po0, gdn_trnow());   /* POST = barrier2 + reset */
+#endif
 }
 
 /* ASYNC: bias-pack + signal the consumer, return immediately (NO spin) — for the software pipeline. */
@@ -346,20 +422,19 @@ static void gdn_pipe_dispatch_async(gdn_scr_t *sc, const gdn_vtcm_t *vt, const i
       gdn_pack_bias(eff, scale, baseline, (int32_t *)vt->bias, rdelta); }
 #endif
     jb->vt = vt; jb->wt = wt; jb->eff = eff; jb->scale = scale; jb->baseline = baseline; jb->round = round;
-    __sync_synchronize();
-    jb->state = 1;                                             /* arm; do NOT spin (caller preps next, then waits) */
+    jb->n_act_pairs = g_kstack_nap;     /* publish the K-stack width to the consumer (producer-thread read) */
+    GDN_JOB_ARM(jb);                                          /* arm; do NOT spin (caller preps next, then waits) */
 }
 /* wait for THIS producer's in-flight matmul result (the spin, hidden under the caller's next-operand prep). */
 static void gdn_pipe_wait(gdn_scr_t *sc) {
     int slot = (int)(sc - g_scr); struct hmx_job *jb = &g_pjob[slot];
     uint64_t s0 = pcyc();
-    while (jb->state != 2) { /* spin */ }
+    GDN_JOB_WAIT(jb);                                         /* acquire-spin */
     uint64_t s1 = pcyc(); g_pipe_pspin[slot] += s1 - s0; g_pipe_pcnt[slot]++;
 #if defined(GDN_BR_TRACE)
     gdn_tr_push((uint32_t)slot, 11, s0, s1);   /* SPIN */
 #endif
-    __sync_synchronize();
-    jb->state = 0;
+    GDN_JOB_RESET(jb);
 }
 
 /* producer thread: full per-head solve over this slot's head-stripe, A VTCM-resident ping-pong. */
@@ -374,20 +449,32 @@ static void pipe_producer(void *arg) {
     const uint32_t Abytes = (uint32_t)CC * 2u;
     uint16_t *Avt[2] = { (uint16_t *)(vbase + 0x60000), (uint16_t *)(vbase + 0x80000) };
     dma_desc_t dsc;
+#if defined(GDN_BR_DYN_HEAD)
+    /* DYNAMIC head grab (REFUTED, opt-in only): shared atomic counter.  Measured WORSE than static — heads are
+     * ~equal work so static 8/8/8/8 is already balanced; dynamic grab adds +-1-head variance (imbalance 8.7%
+     * -> 10.6%).  The residual imbalance is thread START-SKEW (sequential qurt_thread_create) + consumer tail,
+     * which head-stealing can't fix.  Kept flag-gated for the record. */
+    int cur = (int)__sync_fetch_and_add(&g_next_head, 1);
+    if (cur < (int)w->h1) udma_start(&dsc, Avt[0], w->Au + (size_t)cur * CC, Abytes);
+    for (int par = 0; cur < (int)w->h1; ++par) {
+        int nxt = (int)__sync_fetch_and_add(&g_next_head, 1);                            /* claim next head */
+        udma_wait();                                                                    /* cur's A ready */
+        if (nxt < (int)w->h1) udma_start(&dsc, Avt[(par + 1) & 1], w->Au + (size_t)nxt * CC, Abytes);
+        gdn_br_one_head16(sc, &vt, Avt[par & 1], w->Tu + (size_t)cur * CC, w->zpA, w->M, w->S, w->sT, w->zpT);
+        cur = nxt;
+    }
+#else
+    /* static interleave (DEFAULT): producer `slot` owns heads slot, slot+P, ... -> exactly H/P each = optimal
+     * for equal-work heads (beats dynamic, measured). */
     uint32_t hs[64]; int n = 0;
     for (uint32_t h = w->h0 + w->slot; h < w->h1 && n < 64; h += w->nheads) hs[n++] = h;
     if (n > 0) udma_start(&dsc, Avt[0], w->Au + (size_t)hs[0] * CC, Abytes);
     for (int i = 0; i < n; ++i) {
         udma_wait();                                                                    /* A[i] ready */
         if (i + 1 < n) udma_start(&dsc, Avt[(i + 1) & 1], w->Au + (size_t)hs[i + 1] * CC, Abytes);
-#if defined(GDN_BR_I16)
-        gdn_br_one_head16(sc, &vt, Avt[i & 1], w->Tu + (size_t)hs[i] * CC,
-                          w->zpA, w->M, w->S, w->sT, w->zpT);  /* int16 codes */
-#else
-        gdn_br_one_head(sc, &vt, Avt[i & 1], w->Tu + (size_t)hs[i] * CC,
-                        w->zpA, w->M, w->S, w->sT, w->zpT);    /* matmuls auto-delegate via g_hmx_dispatch */
-#endif
+        gdn_br_one_head16(sc, &vt, Avt[i & 1], w->Tu + (size_t)hs[i] * CC, w->zpA, w->M, w->S, w->sT, w->zpT);
     }
+#endif
     g_pipe_plife[w->slot] = pcyc() - _life0;   /* total lifetime cyc (HVX busy = lifetime - spin) */
     __sync_fetch_and_add(&g_pipe_pdone, 1);
     if (hvx == 0) qurt_hvx_unlock();
@@ -777,9 +864,9 @@ static void solve_worker(void *arg) {
 #if defined(GDNBM_FEED_PIPE)
 /* ===== GDNSolveHVXMixHMX PIPELINE: P HVX producers pack a VTCM ring; 1 main-thread PURE-HMX consumer drains it =====
  * (Naming: GDNSolveHVX = baseline pure-HVX; GDNSolveHVXMixHMX = this HVX-feed + HMX-matmul path;
- *  GDNSolveHMX = full-HMX, refuted. See Agent/current/gdn_solve_hvxmixhmx.md top.)
+ *  GDNSolveHMX = full-HMX, refuted. See Agent/current/gdn_solve.md top.)
  * Throughput test of "feed a continuous HMX with cheaply-packed data". Each job = one 64^3 matmul.
- * Full state + reproduce: Agent/current/gdn_solve_hvxmixhmx.md.
+ * Full state + reproduce: Agent/current/gdn_solve.md.
  *
  * CURRENT IMPLEMENTATION (4P, -DGDNBM_FEED_4P):
  *   - 4 HVX producers (== 4 HVX units), static-stripe 2-head pairs into FP_K=16 VTCM slots (20KB each).
@@ -1031,12 +1118,18 @@ static void feed_producer(void *arg) {
 }
 #endif
 
+#if defined(GDNBM_PURE_HMX_SOLVE)
+#include "../../pure_hmx_solve/pure_hmx_solve.cpp"   /* isolated pure-HMX experiment (own namespace) */
+#endif
 int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, int zpA, int zpT,
                 int sA_bits, int sT_bits, int nthreads, uint8_t *T, int TLen, int *stats, int statsLen) {
     (void)_h; (void)ALen; (void)TLen;
     if (C != GDN_BR_C) return -1;
     if (nthreads > GDN_BR_NT) nthreads = GDN_BR_NT; if (nthreads < 1) nthreads = 1;
     if (H < nthreads) nthreads = H;
+#if defined(GDNBM_PURE_HMX_SOLVE)   /* isolated experiment: pure-HMX all-w16a16 schedule (logic in ../../pure_hmx_solve/) */
+    return pure_hmx::run(nthreads, H, A, stats, statsLen, T, TLen);
+#endif
     const uint16_t *Au = (const uint16_t *)A;
     uint16_t *Tu = (uint16_t *)T;
     float sA = i2f(sA_bits), sT = i2f(sT_bits);
@@ -1079,6 +1172,7 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
         for (int t = 0; t < P; ++t) { g_pjob[t].state = 0; g_pipe_pspin[t] = 0; g_pipe_pcnt[t] = 0; g_pipe_plife[t] = 0; }
         g_pipe_cbusy = 0;
         g_pipe_pdone = 0;
+        g_next_head = 0;                                                       /* dynamic head scheduler counter */
         g_hmx_dispatch = gdn_pipe_dispatch;                                    /* matmuls now delegate to this consumer */
         g_hmx_dispatch_async = gdn_pipe_dispatch_async; g_hmx_wait = gdn_pipe_wait;   /* + async split for the SW pipeline */
         __sync_synchronize();
@@ -1102,7 +1196,7 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
 #endif
         while (g_pipe_pdone < P) {
             for (int t = 0; t < P; ++t) {
-                if (g_pjob[t].state == 1) {
+                if (GDN_JOB_POLL(&g_pjob[t])) {
                     struct hmx_job *jb = &g_pjob[t];
                     uint64_t k0 = pcyc();
 #if defined(GDNBM_PIPE_PURE_HMX)
@@ -1111,7 +1205,7 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
                     { const gdn_vtcm_t *cvt = jb->vt;
                       hmx_conv_out_desc_t od __attribute__((aligned(64))) = { cvt->outtab, GDN_BR_OUT_TABLE_STRIDE,
                           GDN_BR_OUT_Y_STRIDE, GDN_BR_N_TILES_POW2, GDN_BR_M_TOTAL_MINUS_STEP, GDN_BR_K_TOTAL_BYTES };
-                      hmx_conv_act_desc_t ad __attribute__((aligned(64))) = { cvt->acttab, GDN_BR_N_ACT_PAIRS, GDN_BR_ACT_Y_STRIDE };
+                      hmx_conv_act_desc_t ad __attribute__((aligned(64))) = { cvt->acttab, (uint32_t)jb->n_act_pairs, GDN_BR_ACT_Y_STRIDE };
                       our_v73deep_kernel(&od, &ad, (const uint8_t *)jb->wt, (const uint8_t *)cvt->bias,
                                          (const hmx_conv_mask_desc_t *)pipe_mb, pipe_ep); }
 #else
@@ -1121,8 +1215,7 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
 #if defined(GDN_BR_TRACE)
                     gdn_tr_push((uint32_t)GDN_BR_NT, GDN_TR_MM, k0, k1);   /* consumer tid=GDN_BR_NT, MM span */
 #endif
-                    __sync_synchronize();
-                    jb->state = 2;
+                    GDN_JOB_DONE(jb);                        /* release-store: publish vt->out + mark done */
                 }
             }
         }
@@ -1145,6 +1238,19 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
         if (statsLen > 4) stats[4] = (int)hvx_cyc;            /* 总 HVX cycle */
         if (statsLen > 5) stats[5] = (int)wall;               /* 总 domain cycle (= wall) */
         if (statsLen > 6) stats[6] = (int)us;                 /* 总时间 us (real, HAP_perf) */
+        /* direction-A diagnostic: per-producer lifetime + spin -> is the HVX idle from imbalance(tail) or spin? */
+        { uint64_t lmin = ~0ull, lmax = 0, spinsum = 0;
+          for (int t = 0; t < P; ++t) { uint64_t l = g_pipe_plife[t];
+              if (l < lmin) lmin = l; if (l > lmax) lmax = l; spinsum += g_pipe_pspin[t]; }
+          if (statsLen > 7)  stats[7]  = (int)lmin;            /* earliest-finishing producer lifetime */
+          if (statsLen > 8)  stats[8]  = (int)lmax;            /* latest-finishing producer lifetime (~wall) */
+          if (statsLen > 9)  stats[9]  = (int)(spinsum / (P ? P : 1)); /* avg spin / producer */
+          if (statsLen > 10) stats[10] = (int)g_pipe_plife[0];
+          if (statsLen > 11) stats[11] = (int)g_pipe_pspin[0];
+          FARF(ALWAYS, "PIPE A-diag: plife[min=%llu max=%llu] wall=%llu  avg_spin=%llu  imbalance=%llu (%llu%% wall)",
+               (unsigned long long)lmin, (unsigned long long)lmax, (unsigned long long)wall,
+               (unsigned long long)(spinsum / (P ? P : 1)), (unsigned long long)(lmax - lmin),
+               (unsigned long long)(wall ? (lmax - lmin) * 100 / wall : 0)); }
         FARF(ALWAYS, "PIPE 4col: HMX=%llu HVX=%llu DOMAIN=%llu cyc | %llu us | PCYCLE=%llu MHz",
              (unsigned long long)hmx_cyc, (unsigned long long)hvx_cyc, (unsigned long long)wall,
              (unsigned long long)us, (unsigned long long)(us ? wall / us : 0));
@@ -1305,6 +1411,191 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
         if (statsLen > 9) stats[9] = ovr_mism;                  /* 0 => kernel overwrites (pre-zero unneeded) AND effbias2 OK */
         FARF(ALWAYS, "HMX_BENCH: run_only=%d run+depack=%d ceil=%d depack old=%d new=%d depmism=%d ovrmism=%d (J=%d)",
              (int)((a1-a0)/J), (int)((a2-a1)/J), (int)((a6-a5)/J), (int)((d1-d0)/J), (int)((d2-d1)/J), dep_mism, ovr_mism, J);
+        if (bhl == 0) HAP_compute_res_hmx_unlock(bhctx); if (bhctx) HAP_compute_res_release(bhctx);
+        if (bhvx == 0) qurt_hvx_unlock();
+        { HAP_power_request_t off; memset(&off,0,sizeof(off)); off.type=HAP_power_set_HMX; off.hmx.power_up=FALSE; HAP_power_set(pctx,&off); }
+        if (vctx) HAP_compute_res_release(vctx);
+        return 0;
+    }
+#endif
+#if defined(GDNBM_HMX_BENCH_I16)
+    /* ISOLATED 64^3 int16 (u16xi16->u16) HMX run_only cycle. A = act_cr16(8192) | wt_4pass(8192) |
+     * bias(1024) packed offline (scripts/gen_w16a16_64_bm.py). Copy -> VTCM, set int16 descriptors,
+     * loop the byte-proven our_v73deep_kernel_i16. stats[0]=cyc/matmul; T <- output crouton16 surface. */
+    if (vtcm_base && ALen >= 17408) {
+        if (statsLen > 11) stats[11] = 0x1600;   /* sentinel: bench block reached */
+        int bhvx = qurt_hvx_lock(QURT_HVX_MODE_128B);
+        compute_res_attr_t bha; HAP_compute_res_attr_init(&bha); HAP_compute_res_attr_set_hmx_param(&bha, 1);
+        unsigned int bhctx = HAP_compute_res_acquire(&bha, 2000000); int bhl = HAP_compute_res_hmx_lock(bhctx);
+        gdn_vtcm_t vt = gdn_vtcm_from(vtcm_base);
+        memcpy(vt.act,           A + 0,     8192);   /* crouton16 activation surface (u16) */
+        memcpy((void *)vt.wt,    A + 8192,  8192);   /* 4-pass hi/lo k-major weight stream */
+        memcpy((void *)vt.bias,  A + 16384, 1024);   /* int16 native folded-bias record   */
+        /* FULL int16 crouton16 row4 pointer tables (sim-proven): mt_groups=M_t*8=16 row4 groups,
+         * K_t=N_t=2 tiles -> 32 entries; tab[row4*2+t] = base + ((row4&7)*2+t)*512. The kernel reads
+         * the whole table (only filling 2 entries -> reads garbage atab[4] -> mxmem fault/SSR). */
+        for (int r4 = 0; r4 < 16; ++r4) {
+            for (int t = 0; t < 2; ++t) {
+                int off = (((r4 & 7) * 2) + t) * 512;
+                vt.acttab[r4 * 2 + t] = (int32_t)(uintptr_t)(vt.act + off);
+                vt.outtab[r4 * 2 + t] = (int32_t)(uintptr_t)(vt.out + off);
+            }
+        }
+        uint32_t ep[2] __attribute__((aligned(16))) = {1u, GDN_I16_EXTRA1};
+        uint32_t mb[16] __attribute__((aligned(16))); for (int i = 0; i < 16; ++i) mb[i] = GDN_I16_MASK_WORDS[i];
+#if defined(GDN_I16_REAL_MASK)
+        /* call the V75-skel set_hmx_params_conv1x1(0x70b,0,0,0,0x80) for the GROUND-TRUTH int16 mask,
+         * instead of the derived constants. Dump the 16 words to stats[]/T so we can read & pin them. */
+        {
+            extern void gdn_set_hmx_params_real(void *, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t)
+                asm("_Z22set_hmx_params_conv1x1P10hmx_paramsmmmmm");
+            for (int i = 0; i < 16; ++i) mb[i] = 0;
+            gdn_set_hmx_params_real(mb, 0x70bu, 0u, 0u, 0u, 0x80u);
+            if (TLen >= 8256) memcpy(T + 8192, mb, 64);   /* dump real mask words past the out surface */
+        }
+#endif
+#if !defined(GDN_I16_NO_MASK14_PATCH)
+        mb[14] = (uint32_t)(uintptr_t)ep;   /* int16 native patches mask[14] with extra_param ptr (op line 372) */
+#endif
+        /* sim-proven full-64^3-output descriptors: n_tiles_pow2=16, m_total_minus_step=16 (DOUBLE the
+         * int8 8/8 -> the int16 4-pass needs 2x M-loop; 8/8 computes only 1024/4096 outputs). */
+        hmx_conv_out_desc_t od __attribute__((aligned(64))) = { vt.outtab, GDN_BR_OUT_TABLE_STRIDE,
+            GDN_I16_OUT_Y_STRIDE, 16u, 16, GDN_I16_K_TOTAL_BYTES };
+        hmx_conv_act_desc_t ad __attribute__((aligned(64))) = { vt.acttab, GDN_BR_N_ACT_PAIRS, GDN_I16_ACT_Y_STRIDE };
+        /* zero out surface (8192 = 64 vecs), warm once */
+        { HVX_Vector z = Q6_V_vzero(); HVX_Vector *op = (HVX_Vector *)vt.out; for (int i = 0; i < 8192/128; ++i) op[i] = z; }
+        our_v73deep_kernel_i16(&od, &ad, (const uint8_t *)vt.wt, (const uint8_t *)vt.bias,
+                               (const hmx_conv_mask_desc_t *)mb, ep);
+        const int J = 512;
+        uint64_t a0 = pcyc();
+        for (int j = 0; j < J; ++j)
+            our_v73deep_kernel_i16(&od, &ad, (const uint8_t *)vt.wt, (const uint8_t *)vt.bias,
+                                   (const hmx_conv_mask_desc_t *)mb, ep);
+        uint64_t a1 = pcyc();
+        if (statsLen > 0) stats[0] = (int)((a1 - a0) / J);   /* ISOLATED int16 64^3 run_only cyc/matmul = Cmm */
+        if (statsLen > 1) stats[1] = (int)GDN_I16_K_TOTAL_BYTES;
+        if (statsLen > 2) stats[2] = (int)GDN_I16_ACT_Y_STRIDE;
+        if (statsLen > 3) stats[3] = (int)GDN_I16_OUT_Y_STRIDE;
+        /* fresh run -> copy output crouton16 surface (8192 B) to T for offline byte-verify */
+        if (TLen >= 8192) {
+            our_v73deep_kernel_i16(&od, &ad, (const uint8_t *)vt.wt, (const uint8_t *)vt.bias,
+                                   (const hmx_conv_mask_desc_t *)mb, ep);
+            memcpy(T, vt.out, 8192);
+        }
+        FARF(ALWAYS, "HMX_BENCH_I16: Cmm(run_only)=%d cyc/matmul  K_TOT=%u ACT_Y=%u OUT_Y=%u ATAB=%u OTAB=%u EX1=%u (J=%d)",
+             (int)((a1-a0)/J), GDN_I16_K_TOTAL_BYTES, GDN_I16_ACT_Y_STRIDE, GDN_I16_OUT_Y_STRIDE,
+             GDN_I16_ACT_TAB_OFF, GDN_I16_OUT_TAB_OFF, GDN_I16_EXTRA1, J);
+        if (bhl == 0) HAP_compute_res_hmx_unlock(bhctx); if (bhctx) HAP_compute_res_release(bhctx);
+        if (bhvx == 0) qurt_hvx_unlock();
+        { HAP_power_request_t off; memset(&off,0,sizeof(off)); off.type=HAP_power_set_HMX; off.hmx.power_up=FALSE; HAP_power_set(pctx,&off); }
+        if (vctx) HAP_compute_res_release(vctx);
+        return 0;
+    }
+#endif
+#if defined(GDNBM_KSTACK_BENCH)
+    /* PHASE 0 MAKE-OR-BREAK: can ONE our_v73deep_kernel call accumulate a K=128 (d=2 stacked 64-blocks)
+     * matmul in the HMX accumulator and drain ONCE?  If yes, the Sigma_k merge reduction moves from HVX
+     * (per-k matmul + gdn_acc16) into HMX hardware -> kills the per-k handshakes (the sync root cause).
+     * Gates (all bit-exact, avoid replicating the drain): A) kstack[blk0,ZERO]==single(blk0) proves the
+     * K=128 descriptor accumulates+single-drains; B) kstack[ZERO,blk0]==single(blk0) proves K-tile order;
+     * C) kstack[blk0,blk1]==kstack[blk1,blk0] proves real 2-block accumulation commutes.  acttab is a
+     * pointer table (act K-tiles listed, no repack); wt kmajor is contiguous (blk0||blk1).
+     * Build: -DGDNBM_VTCM_RESIDENT -DGDNBM_KSTACK_BENCH. */
+    if (vtcm_base) {
+        int bhvx = qurt_hvx_lock(QURT_HVX_MODE_128B);
+        compute_res_attr_t bha; HAP_compute_res_attr_init(&bha); HAP_compute_res_attr_set_hmx_param(&bha, 1);
+        unsigned int bhctx = HAP_compute_res_acquire(&bha, 2000000); int bhl = HAP_compute_res_hmx_lock(bhctx);
+        gdn_vtcm_t vt = gdn_vtcm_from(vtcm_base);
+        gdn_scr_t *sc = &g_scr[0];
+        static uint8_t __attribute__((aligned(128))) a0[64*64], a1[64*64];
+        static int8_t  __attribute__((aligned(128))) w0[64*64], w1[64*64], wz[64*64];
+        for (int i = 0; i < 64*64; ++i) {
+            a0[i] = (uint8_t)((i % 200) + 28);  w0[i] = (int8_t)((i % 11) - 5);
+            a1[i] = (uint8_t)(((i*3) % 200) + 28); w1[i] = (int8_t)(((i*7) % 11) - 5);
+            wz[i] = 0;
+        }
+        const float scale_f16 = 1.0f / 128.0f; const int baseline_u16 = 128 << 7; const int base = baseline_u16 >> 7;
+        uint32_t ep[2] __attribute__((aligned(16))) = {1u, 0u};
+        uint32_t mb[16] __attribute__((aligned(16))); for (int i = 0; i < 16; ++i) mb[i] = GDN_BR_MASK_WORDS[i];
+        int32_t eff0[64], eff1[64], effs[64];
+        static int8_t __attribute__((aligned(128))) ref_out[64*64], ks_out[64*64], ks2_out[64*64];
+        /* act buffer: blk in tile-slot s at vt.act + s*4096 (each 4096B crouton = 2 K-tiles of 2048B).
+         * wt buffer: blk in slot s at vt.wt + s*4096 (contiguous kmajor). */
+        uint8_t *AB = vt.act; int8_t *WB = (int8_t *)vt.wt;
+        vt.outtab[0] = (int32_t)(uintptr_t)(vt.out + 0); vt.outtab[1] = (int32_t)(uintptr_t)(vt.out + 64*32);
+
+        /* ---- REFERENCE: single K=64, blk0 ---- */
+        gdn_effective(w0, eff0);
+        gdn_pack_act_crouton8(a0, AB + 0);
+        gdn_pack_w8_kmajor(w0, WB + 0);
+        gdn_pack_bias(eff0, scale_f16, baseline_u16, vt.bias, 0);
+        vt.acttab[0] = (int32_t)(uintptr_t)(AB + 0); vt.acttab[1] = (int32_t)(uintptr_t)(AB + 2048);
+        { hmx_conv_out_desc_t od __attribute__((aligned(64))) = { vt.outtab, GDN_BR_OUT_TABLE_STRIDE,
+              GDN_BR_OUT_Y_STRIDE, GDN_BR_N_TILES_POW2, GDN_BR_M_TOTAL_MINUS_STEP, 64u };
+          hmx_conv_act_desc_t ad __attribute__((aligned(64))) = { vt.acttab, 2u, GDN_BR_ACT_Y_STRIDE };
+          { HVX_Vector z = Q6_V_vzero(); HVX_Vector *op=(HVX_Vector*)vt.out; for(int i=0;i<(64*64)/128;++i) op[i]=z; }
+          our_v73deep_kernel(&od, &ad, (const uint8_t *)(WB + 0), (const uint8_t *)vt.bias, (const hmx_conv_mask_desc_t *)mb, ep); }
+        gdn_depack_out_fast(sc, vt.out, base, ref_out);
+
+        /* helper macro: pack 2 blocks into slots 0,1 (act crouton + wt kmajor), summed eff, K=128 run+depack into OUT */
+        #define KS_RUN(A_S0, W_S0, A_S1, W_S1, OUT) do {                                                    \
+            gdn_pack_act_crouton8((A_S0), AB + 0);     gdn_pack_w8_kmajor((W_S0), WB + 0);                   \
+            gdn_pack_act_crouton8((A_S1), AB + 4096);  gdn_pack_w8_kmajor((W_S1), WB + 4096);                \
+            gdn_effective((W_S0), eff0); gdn_effective((W_S1), eff1);                                        \
+            for (int n = 0; n < 64; ++n) effs[n] = eff0[n] + eff1[n];                                        \
+            gdn_pack_bias(effs, scale_f16, baseline_u16, vt.bias, 0);                                        \
+            vt.acttab[0]=(int32_t)(uintptr_t)(AB+0);    vt.acttab[1]=(int32_t)(uintptr_t)(AB+2048);          \
+            vt.acttab[2]=(int32_t)(uintptr_t)(AB+4096); vt.acttab[3]=(int32_t)(uintptr_t)(AB+4096+2048);     \
+            /* k_total_bytes = n_tiles*32 = N bytes (output N=64 -> stays 64); n_act_pairs = k_tiles = 4 (K=128). */ \
+            hmx_conv_out_desc_t od __attribute__((aligned(64))) = { vt.outtab, GDN_BR_OUT_TABLE_STRIDE,      \
+                GDN_BR_OUT_Y_STRIDE, GDN_BR_N_TILES_POW2, GDN_BR_M_TOTAL_MINUS_STEP, 64u };                  \
+            hmx_conv_act_desc_t ad __attribute__((aligned(64))) = { vt.acttab, 4u, GDN_BR_ACT_Y_STRIDE };    \
+            { HVX_Vector z = Q6_V_vzero(); HVX_Vector *op=(HVX_Vector*)vt.out; for(int i=0;i<(64*64)/128;++i) op[i]=z; } \
+            our_v73deep_kernel(&od, &ad, (const uint8_t *)(WB + 0), (const uint8_t *)vt.bias, (const hmx_conv_mask_desc_t *)mb, ep); \
+            gdn_depack_out_fast(sc, vt.out, base, (OUT));                                                    \
+        } while (0)
+
+        /* GATE A: kstack[blk0, ZERO] == single(blk0)  (2nd block wt=0 -> 0 products) */
+        KS_RUN(a0, w0, a1, wz, ks_out);
+        int mismA = 0; for (int i = 0; i < 64*64; ++i) if (ks_out[i] != ref_out[i]) ++mismA;
+        /* GATE B: kstack[ZERO, blk0] == single(blk0)  (blk0 in K-tile slot 1) */
+        KS_RUN(a1, wz, a0, w0, ks_out);
+        int mismB = 0; for (int i = 0; i < 64*64; ++i) if (ks_out[i] != ref_out[i]) ++mismB;
+        /* GATE C: kstack[blk0,blk1] == kstack[blk1,blk0]  (real 2-block accumulation commutes) */
+        KS_RUN(a0, w0, a1, w1, ks_out);
+        KS_RUN(a1, w1, a0, w0, ks2_out);
+        int mismC = 0, ndiff_ref = 0;
+        for (int i = 0; i < 64*64; ++i) { if (ks_out[i] != ks2_out[i]) ++mismC; if (ks_out[i] != ref_out[i]) ++ndiff_ref; }
+        #undef KS_RUN
+
+        /* perf: 1 K=128 kernel vs 2 K=64 kernels (cyc) */
+        const int J = 256; uint64_t p0, p1, p2;
+        gdn_pack_act_crouton8(a0, AB+0); gdn_pack_w8_kmajor(w0, WB+0);
+        gdn_pack_act_crouton8(a1, AB+4096); gdn_pack_w8_kmajor(w1, WB+4096);
+        gdn_effective(w0, eff0); gdn_effective(w1, eff1); for (int n=0;n<64;++n) effs[n]=eff0[n]+eff1[n];
+        gdn_pack_bias(effs, scale_f16, baseline_u16, vt.bias, 0);
+        vt.acttab[0]=(int32_t)(uintptr_t)(AB+0); vt.acttab[1]=(int32_t)(uintptr_t)(AB+2048);
+        vt.acttab[2]=(int32_t)(uintptr_t)(AB+4096); vt.acttab[3]=(int32_t)(uintptr_t)(AB+4096+2048);
+        hmx_conv_out_desc_t od128 __attribute__((aligned(64))) = { vt.outtab, GDN_BR_OUT_TABLE_STRIDE,
+            GDN_BR_OUT_Y_STRIDE, GDN_BR_N_TILES_POW2, GDN_BR_M_TOTAL_MINUS_STEP, 64u };   /* k_total_bytes=N=64 */
+        hmx_conv_act_desc_t ad128 __attribute__((aligned(64))) = { vt.acttab, 4u, GDN_BR_ACT_Y_STRIDE };
+        hmx_conv_out_desc_t od64 __attribute__((aligned(64))) = { vt.outtab, GDN_BR_OUT_TABLE_STRIDE,
+            GDN_BR_OUT_Y_STRIDE, GDN_BR_N_TILES_POW2, GDN_BR_M_TOTAL_MINUS_STEP, 64u };
+        hmx_conv_act_desc_t ad64 __attribute__((aligned(64))) = { vt.acttab, 2u, GDN_BR_ACT_Y_STRIDE };
+        our_v73deep_kernel(&od128, &ad128, (const uint8_t*)(WB+0), (const uint8_t*)vt.bias, (const hmx_conv_mask_desc_t*)mb, ep); /* warm */
+        p0 = pcyc(); for (int j=0;j<J;++j) our_v73deep_kernel(&od128, &ad128, (const uint8_t*)(WB+0), (const uint8_t*)vt.bias, (const hmx_conv_mask_desc_t*)mb, ep);
+        p1 = pcyc(); for (int j=0;j<J;++j) { our_v73deep_kernel(&od64, &ad64, (const uint8_t*)(WB+0), (const uint8_t*)vt.bias, (const hmx_conv_mask_desc_t*)mb, ep);
+                                             our_v73deep_kernel(&od64, &ad64, (const uint8_t*)(WB+4096), (const uint8_t*)vt.bias, (const hmx_conv_mask_desc_t*)mb, ep); }
+        p2 = pcyc();
+
+        if (statsLen > 0) stats[0] = mismA;            /* ==0 => K=128 accumulates + single-drains correctly */
+        if (statsLen > 1) stats[1] = mismB;            /* ==0 => K-tile slot-1 indexing correct */
+        if (statsLen > 2) stats[2] = mismC;            /* ==0 => 2-block accumulation commutes (real reduction) */
+        if (statsLen > 3) stats[3] = ndiff_ref;        /* >0 expected (blk1 nonzero changes the sum) */
+        if (statsLen > 4) stats[4] = (int)((p1 - p0) / J);   /* 1x K=128 kernel cyc */
+        if (statsLen > 5) stats[5] = (int)((p2 - p1) / J);   /* 2x K=64 kernels cyc */
+        FARF(ALWAYS, "KSTACK_BENCH: GATE_A(zero@1)=%d GATE_B(zero@0)=%d GATE_C(commute)=%d ndiff_ref=%d | K128=%dcyc 2xK64=%dcyc",
+             mismA, mismB, mismC, ndiff_ref, (int)((p1-p0)/J), (int)((p2-p1)/J));
         if (bhl == 0) HAP_compute_res_hmx_unlock(bhctx); if (bhctx) HAP_compute_res_release(bhctx);
         if (bhvx == 0) qurt_hvx_unlock();
         { HAP_power_request_t off; memset(&off,0,sizeof(off)); off.type=HAP_power_set_HMX; off.hmx.power_up=FALSE; HAP_power_set(pctx,&off); }
