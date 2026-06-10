@@ -125,11 +125,30 @@ diag 标量补丁用交织索引 `(i>>6)*64 + (off&1)*32 + (off>>1)`。
 | #6 三角 mask | ❌ REFUTED(算术) | 64³ mm 仅 8.6K；拆分省 ≤25%(2.1K) < 新增 dispatch ≥3K |
 **结论：HMX-bound(82%)，wall=1.22×纯 kernel 地板(15.4M)，无剩余可行杠杆。**
 
-## 6. 终态结论
-w16a16 全 HMX 三角求逆 REAL 实现完成并**优化穷尽**:**32-head wall 18.7M cyc(11.8ms),HMX busy 82%(8.6K/mm 真 64³),
-oc 9.66e-3**(‖A‖₂≲4 全可用,≥5 爆炸=int16 数值真相)。w16a16 原语可用性 PROVEN(64³/M=256 双 byte-exact)。
-对比出货 GDNSolveHVXMixHMX 1.78M:慢 ~10.5×,本质 = 48×w16a16 mm/头 ×8.6K 的 HMX 算力成本(非实现缺陷);
-全旅程 60.2M/头(Phase3)→0.58M/头 = 103×。
+## 6. 终态结论（正式收口 2026-06-11）
+
+**实现完成、优化穷尽。32-head TOTAL wall = 18.7M cyc（11.8ms，复测 19.1/19.3M），oc 9.662e-3
+（0.25-scale 4.50e-3），全程真设备。** 全旅程 60.2M/头(Phase3 scalar) → 0.58M/头 = **103×**。
+对比出货 GDNSolveHVXMixHMX 1.78M：慢 ~10.5×，全部为下述结构性成本，非实现缺陷。
+
+### 瓶颈在哪（三层，全部实测钉死）
+1. **第一层：HMX 喂数带宽（占 wall ~80%）。** mm 时间 8.6K cyc/64³ 中只有 ~1.2K 是 HMX 阵列计算
+   （理论地板 1167），其余 ~7.4K 是 mxmem 把 act(8KB)+wt(8KB,2-pass dilated) 流喂进阵列。
+   喂数字节 K-线性 → **K-stack 摊不掉**（K=192 实测 HMX 仅 −5%，只省 drain）；M 维更不摊
+   （carrier 10.6K/eq > 单发 8.6K）。QNN 256³ 的 5.84K/eq 是 K=256 形状的钱，64-块递归算法不给。
+   40 mm/头 × 8.6K = 11M HMX/32头 = wall 的地板。
+2. **第二层：单 HMX 串行 + 依赖链空隙（wall − HMX busy ≈ 20%）。** Newton 链内 mm 不能提前发，
+   consumer 4-slot 轮询有 ~2K/mm 间隙。三角拆分(#6)/async(#4) 实测/算术不值。
+3. **第三层：HVX 闲置 ≈58% = 纯 HMX 架构固有形态，不可转化。** mxmem 仅 HMX 能发，HVX 推不进字节;
+   HVX 仅剩 prep(12%)。唯一吃法 = HVX 自算部分 matmul = 混合执行 = GDNSolveHVXMixHMX(已存在,1.78M)，
+   越界本项目"纯 HMX"定义。
+
+### 数值
+oc 9.66e-3 ≈ 出货 1.22e-2 同级；可用域 ‖A‖₂≲4（Newton=2 充分），≥5 int16 爆炸=已知数值真相。
+
+### 复跑
+`uv run python scripts/run_w16a16_head_phase4.py --deploy --threads 4 --heads 32 --scale 0.05`
+(timeline: H=33 sentinel + scripts/gdn_pipe_timeline.py; 探针 H=9/10 = 64³/K128 单发 byte-exact)
 
 ### 关键提醒（避免重蹈我的错）
 - w16a16 matmul **已 byte-exact、可用**（CI-gated）；drain 是 **2 的幂**不是 fp16。任何"f16 drain 有损/blocker"
