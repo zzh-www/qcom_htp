@@ -95,9 +95,20 @@ dssh "cd $W && GDNBM_REPS=8 LD_LIBRARY_PATH=$W:/vendor/lib64:/system/lib64 \
 | oc vs fp64 | 1.17e-2 | **1.16e-3（12×）** |
 | Sacc bit-exact vs numpy | — | max\|code diff\|=3 ≤ 4 ✓ |
 
-死因 = **w16a16 64³ 单调用固定开销 ~10.4K cyc**（384 dispatch/run，4-pass wt stream + padded act/out 流 + drain，≈ standalone 8259 同级），不是 MAC 数：u8i8 同口径 313/call。"mxmem 只翻倍≈320K" 的设计假设错 10×。最优摊销也只到 5844/64³-equiv → ≥3M，永超 1.87M 门。混合档(只 final 6 calls/head)= ~1.9M HMX 同样超 5%。**与 GDNSolveHMX 否决同根因；勿再用 w16a16 做 64³ 粒度 merge。**
+死因 = **字节流量，不是 MAC**。"313×4≈1.2K"的预期错在 ① padding ×4（2048B 块只活 512B，唯一字节双射证过的布局；compact 512B 已设备否决）② lo/hi 双 pass 让 act/out 各流两遍。单调用流量 u8i8 ~12KB vs padded w16a16 ~136KB（act 32K×2 + out 32K×2 + wt 8K），@~13B/cyc ≈ 10K——10.4K 全被流量解释。**形态阶梯（vs u8i8 313/64³，全设备实测）：**
 
-实现保留可复跑：`EXTRA_DEFS="-DGDNBM_HMX_PIPE -DGDN_BR_STATIC_GAIN -DGDN_BR_STATIC_FULL -DGDN_BR_W16"`；bisect 旗 `-DGDN_W16_NOSTACK`（K-stack→d 次 K=64+HVX acc）、`-DGDN_W16_DBG_S`（dump Sacc/操作数 vs numpy）。两个真坑（已修，勿回退）：① wt 栈序 = [nt][half][kt 0..2d-1]，d=1 缓存块按 16-vec quarter 重排；② act 块必须 2048B padded（compact 512B 设备否决，kernel 读越界），32K/act → A act 不缓存（use-once 临时槽×3），Tdiag 缓存 nat 8K 每用重打包。
+| 形态 | per-64³ | vs u8i8 | 备注 |
+|---|---|---|---|
+| u8i8 in-pipe | 313 | 1× | 现行 merge |
+| w16a16 native supertile 地板 | 1167 | **3.7×** | QNN 整图大 op 才有（act-stream/drain 叠去别的单元） |
+| w16a16 M=256 carrier 实测 | 5844 | 18.7× | padding 消失，双 pass + drain 串行残留 |
+| **w16a16 padded 64³ in-pipe（本轮）** | **10.4K** | **33×** | padding×4 + 双 pass + per-call setup |
+
+"≈4×" 只在 supertile 极限成立；64³ 粒度 33×。384 调用 ≈4M HMX 串行 = wall 地板；即便拿到 1167 地板，16eq×32head=600K 也贴 40% 门。**勿再用 w16a16 做 64³ 粒度 merge。**
+
+实现保留可复跑：`EXTRA_DEFS="-DGDNBM_HMX_PIPE -DGDN_BR_STATIC_GAIN -DGDN_BR_STATIC_FULL -DGDN_BR_W16"`；bisect 旗 `-DGDN_W16_NOSTACK`（K-stack→d 次 K=64+HVX acc）、`-DGDN_W16_DBG_S`（dump Sacc/操作数 vs numpy）。
+
+**下一步（supertile 思路自建，容忍精度损失）**：1167 地板的本质 = act-stream/byte-decompose/drain 不占 HMX。自建等价 = **拆成 u8i8 byte-pass、由 producer 喂、HMX 只跑 313/调用的 u8i8 kernel**：act/wt 各拆 hi/lo 字节 → 1 个 64³ = 4 次 u8i8 pass（≈1252/eq ≈ 地板），HVX 组合 `(Ah@Wh)·65536+(Ah@Wl+Al@Wh)·256+Al@Wl`；hi-pass int8 drain 误差 ×256 ⇒ 输出 ≈14–15 bit（vs fused 16 bit，损失可容忍）。半档 a16w8/w8a16 = 2 pass（626/eq，16eq×32 = 320K = HMX ~18%，**唯一能进 wall≤1.87M+HMX≤40% 门的精度增强档**），oc 预期 ~4e-3 量级（act 或 wt 升 16-bit，drain ~15-bit），需设备验证。全部复用现有 u8i8 kernel + producer 基建,只加 hi/lo 打包与 HVX 组合。两个真坑（已修，勿回退）：① wt 栈序 = [nt][half][kt 0..2d-1]，d=1 缓存块按 16-vec quarter 重排；② act 块必须 2048B padded（compact 512B 设备否决，kernel 读越界），32K/act → A act 不缓存（use-once 临时槽×3），Tdiag 缓存 nat 8K 每用重打包。
 
 ### HVX vrmpy matmul ∝ N³（`scripts/gdn_mm_chunk_sweep.py`，sim）
 BL=32→1068, 64→7311, 128→52239, 256→402447。HMX 随 size 暴跌（setup 摊销）→ **HMX 比 HVX 便宜 17.5×(64³) → 32×(256³)**；HMX 最小块=64（M_t 必偶,32 要 pad）。

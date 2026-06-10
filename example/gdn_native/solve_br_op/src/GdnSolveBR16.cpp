@@ -616,6 +616,9 @@ static void gdn_br_one_head16(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_
 #endif
             }
             sc->Tscl[bij] = sij;
+#if defined(GDN_BR_TRACE)
+            uint64_t _f2 = gdn_trnow();
+#endif
 #else
             float sa_ii, sw_S, sij; int scolabs;
 #if defined(GDN_BR_TRACE)
