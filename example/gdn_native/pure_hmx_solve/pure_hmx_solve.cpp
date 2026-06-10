@@ -627,14 +627,24 @@ static void p4v_pack_wt_bias(const int16_t *w_cv, int16_t *stage /*VTCM 8KB*/, u
         HVX_VectorPair il = Q6_W_vshuff_VVR(hi, lo, -4);                            /* 4lo|4hi grains */
         ((HVX_Vector *)wt)[v] = Q6_V_lo_W(il); ((HVX_Vector *)wt)[v + 1] = Q6_V_hi_W(il);
     }
-    /* bias: scalar colsum via LUT (12K cyc; HVX lane-fold attempt was wrong - keep simple) */
+    /* bias colsum HVX (vsxt order: lo=even hw lanes -> col c parity0, hi -> parity1; cs = lo+hi) */
     static const int32_t ctrl[2] = { 0x00404420, 0x40000000 };
-    for (int n = 0; n < 64; ++n) {
-        long cs = 0;
-        for (int k = 0; k < 64; ++k) cs += w_cv[g_p4lut[k * 64 + n]];
-        long v2 = -cs, eff = (v2 >= 0) ? (v2 / 2) : -(((-v2) + 1) / 2);
-        int g = n >> 4, idx = n & 15;
-        bias[g * 64 + 32 + idx * 2] = (int32_t)eff; bias[g * 64 + 32 + idx * 2 + 1] = 0;
+    for (int nt = 0; nt < 2; ++nt) {
+        HVX_Vector aL = Q6_V_vzero(), aH = Q6_V_vzero();
+        for (int k4 = 0; k4 < 8; ++k4) {
+            const HVX_Vector *blk = (const HVX_Vector *)(w_cv + (k4 * 2 + nt) * 256);
+            for (int sv = 0; sv < 4; ++sv) {
+                HVX_VectorPair w = Q6_Ww_vsxt_Vh(blk[sv]);
+                aL = Q6_Vw_vadd_VwVw(aL, Q6_V_lo_W(w)); aH = Q6_Vw_vadd_VwVw(aH, Q6_V_hi_W(w));
+            }
+        }
+        union { HVX_Vector v; int32_t w[32]; } uL, uH; uL.v = aL; uH.v = aH;
+        for (int c = 0; c < 32; ++c) {
+            long cs = (long)uL.w[c] + uH.w[c];
+            long v2 = -cs, eff = (v2 >= 0) ? (v2 / 2) : -(((-v2) + 1) / 2);
+            int n = nt * 32 + c, g = n >> 4, idx = n & 15;
+            bias[g * 64 + 32 + idx * 2] = (int32_t)eff; bias[g * 64 + 32 + idx * 2 + 1] = 0;
+        }
     }
     for (int g = 0; g < 4; ++g) for (int i = 0; i < 32; ++i) bias[g * 64 + i] = ctrl[i & 1];
 }
