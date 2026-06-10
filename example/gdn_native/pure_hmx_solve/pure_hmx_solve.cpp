@@ -518,6 +518,81 @@ static inline void p4v_i16_to_u16(uint16_t *dst, const int16_t *src, int n) {
 /* u16->i16 (xor 0x8000) — same op both directions. */
 #define p4v_u16_to_i16(dst, src, n) p4v_i16_to_u16((uint16_t *)(dst), (const int16_t *)(src), (n))
 
+/* ---- HVX int32 acc helpers. acc layout = 64 chunks x {lo(even hw lanes), hi(odd)} vec pairs.
+ * Pointwise ops are order-agnostic; only the 64 diag fixups need the interleaved index. */
+static uint16_t g_p4lut2[4096];   /* fwd LUT copy needed before diag fixup helper (init alias) */
+static inline void p4v_acc3(int32_t *acc, const int16_t *a, const int16_t *b, const int16_t *c) {
+    const HVX_Vector *va = (const HVX_Vector *)a, *vb = (const HVX_Vector *)b, *vc = (const HVX_Vector *)c;
+    HVX_Vector *d = (HVX_Vector *)acc;
+    for (int i = 0; i < 64; ++i) {
+        HVX_VectorPair s = Q6_Ww_vadd_WwWw(Q6_Ww_vadd_WwWw(Q6_Ww_vsxt_Vh(va[i]), Q6_Ww_vsxt_Vh(vb[i])),
+                                           Q6_Ww_vsxt_Vh(vc[i]));
+        d[2 * i] = Q6_V_lo_W(s); d[2 * i + 1] = Q6_V_hi_W(s);
+    }
+}
+static inline void p4v_acc_negw(int32_t *acc, const int16_t *a) {     /* acc = -a (widened) */
+    const HVX_Vector *va = (const HVX_Vector *)a; HVX_Vector *d = (HVX_Vector *)acc;
+    HVX_VectorPair z = Q6_Ww_vsxt_Vh(Q6_V_vzero());
+    for (int i = 0; i < 64; ++i) {
+        HVX_VectorPair s = Q6_Ww_vsxt_Vh(va[i]);
+        d[2 * i] = Q6_Vw_vsub_VwVw(Q6_V_lo_W(z), Q6_V_lo_W(s));
+        d[2 * i + 1] = Q6_Vw_vsub_VwVw(Q6_V_hi_W(z), Q6_V_hi_W(s));
+    }
+}
+static inline void p4v_acc_zero(int32_t *acc) {
+    HVX_Vector *d = (HVX_Vector *)acc; HVX_Vector z = Q6_V_vzero();
+    for (int i = 0; i < 128; ++i) d[i] = z;
+}
+static inline void p4v_acc_addsh(int32_t *acc, const int16_t *p, int sh) {   /* acc += p>>sh */
+    const HVX_Vector *vp = (const HVX_Vector *)p; HVX_Vector *d = (HVX_Vector *)acc;
+    for (int i = 0; i < 64; ++i) {
+        HVX_VectorPair w = Q6_Ww_vsxt_Vh(vp[i]);
+        d[2 * i] = Q6_Vw_vadd_VwVw(d[2 * i], Q6_Vw_vasr_VwR(Q6_V_lo_W(w), sh));
+        d[2 * i + 1] = Q6_Vw_vadd_VwVw(d[2 * i + 1], Q6_Vw_vasr_VwR(Q6_V_hi_W(w), sh));
+    }
+}
+static inline void p4v_acc_shr(int32_t *acc, int sh) {
+    HVX_Vector *d = (HVX_Vector *)acc;
+    for (int i = 0; i < 128; ++i) d[i] = Q6_Vw_vasr_VwR(d[i], sh);
+}
+static inline int32_t p4v_acc_absmax(const int32_t *acc) {
+    const HVX_Vector *d = (const HVX_Vector *)acc;
+    HVX_Vector mx = Q6_V_vzero();
+    for (int i = 0; i < 128; ++i) mx = Q6_Vw_vmax_VwVw(mx, Q6_Vw_vabs_Vw(d[i]));
+    for (int sh = 64; sh >= 4; sh >>= 1) mx = Q6_Vw_vmax_VwVw(mx, Q6_V_vror_VR(mx, sh));
+    union { HVX_Vector v; int32_t w[32]; } u; u.v = mx; return u.w[0];
+}
+static inline void p4v_acc_to_cv(int16_t *cv, const int32_t *acc, int s) {   /* clip ±32639 */
+    const HVX_Vector *d = (const HVX_Vector *)acc; HVX_Vector *o = (HVX_Vector *)cv;
+    const HVX_Vector CP = Q6_Vh_vsplat_R(32639), CN = Q6_Vh_vsplat_R(-32639);
+    for (int i = 0; i < 64; ++i) {
+        HVX_Vector lo = d[2 * i], hi = d[2 * i + 1];
+        if (s < 0) { lo = Q6_Vw_vasl_VwR(lo, -s); hi = Q6_Vw_vasl_VwR(hi, -s); }
+        o[i] = Q6_Vh_vasr_VwVwR_sat(hi, lo, s > 0 ? (s & 31) : 0);
+        o[i] = Q6_Vh_vmin_VhVh(Q6_Vh_vmax_VhVh(o[i], CN), CP);
+    }
+}
+static inline int p4v_renorm(int32_t *acc, int16_t *cv) {
+    int32_t mx = p4v_acc_absmax(acc);
+    int s = 0; while ((mx >> s) > 32639) ++s;
+    if (s == 0) { while (mx && (mx << 1) <= 16384) { mx <<= 1; --s; } }
+    p4v_acc_to_cv(cv, acc, s);
+    return s;
+}
+static inline void p4v_acc_diag_add(int32_t *acc, int32_t add) {   /* vsxt/vasr = even/odd interleave */
+    for (int d = 0; d < 64; ++d) {
+        int i = g_p4lut2[d * 65], off = i & 63;
+        acc[(i >> 6) * 64 + (off & 1) * 32 + (off >> 1)] += add;
+    }
+}
+static inline void p4v_acc_from_cv(int32_t *acc, const int16_t *a) {  /* widen copy */
+    const HVX_Vector *va = (const HVX_Vector *)a; HVX_Vector *d = (HVX_Vector *)acc;
+    for (int i = 0; i < 64; ++i) {
+        HVX_VectorPair s = Q6_Ww_vsxt_Vh(va[i]);
+        d[2 * i] = Q6_V_lo_W(s); d[2 * i + 1] = Q6_V_hi_W(s);
+    }
+}
+
 /* HVX weight pack: gather q16 (stream order) from a VTCM staging copy of w_cv, then lo/hi split +
  * 4lo|4hi interleave (vshuff 4B grains). g_p4hw[h] = byte offset (in staging) of stream halfword h. */
 static uint16_t *g_p4hw;          /* shared VTCM LUT, 4096 u16 */
@@ -595,21 +670,21 @@ static int p4_diag_thr(int slot, const int16_t *Acv, int16_t *Xcv) {
     int32_t *acc = S->acc;
     p4_mm_thr(slot, Acv, Acv, AA);
     p4_mm_thr(slot, AA, Acv, A3);
-    for (int i = 0; i < 4096; ++i) acc[i] = (int32_t)Acv[i] + AA[i] + A3[i];
-    for (int d = 0; d < 64; ++d) acc[g_p4lut[d * 65]] += 32767;
-    int eX = ds_renorm(acc, Xcv);
-    for (int i = 0; i < 4096; ++i) acc[i] = -(int32_t)Acv[i];
-    for (int d = 0; d < 64; ++d) acc[g_p4lut[d * 65]] += 32767;
-    int eM = ds_renorm(acc, M);
+    p4v_acc3(acc, Acv, AA, A3);
+    p4v_acc_diag_add(acc, 32767);
+    int eX = p4v_renorm(acc, Xcv);
+    p4v_acc_negw(acc, Acv);
+    p4v_acc_diag_add(acc, 32767);
+    int eM = p4v_renorm(acc, M);
     for (int it = 0; it < 4; ++it) {
         p4_mm_thr(slot, M, Xcv, Z);
         int e = eM + eX;
-        for (int i = 0; i < 4096; ++i) acc[i] = -(int32_t)Z[i];
-        if (e < 31) for (int d = 0; d < 64; ++d) acc[g_p4lut[d * 65]] += (int32_t)(65534u >> e);
-        int eZ = e + ds_renorm(acc, Z);
+        p4v_acc_negw(acc, Z);
+        if (e < 31) p4v_acc_diag_add(acc, (int32_t)(65534u >> e));
+        int eZ = e + p4v_renorm(acc, Z);
         p4_mm_thr(slot, Xcv, Z, AA);
-        for (int i = 0; i < 4096; ++i) acc[i] = AA[i];
-        eX = eX + eZ + ds_renorm(acc, Xcv);
+        p4v_acc_from_cv(acc, AA);
+        eX = eX + eZ + p4v_renorm(acc, Xcv);
     }
     return eX;
 }
@@ -630,19 +705,19 @@ static void p4_producer(void *arg) {
         for (int d = 1; d < 4; ++d)
             for (int i = d; i < 4; ++i) {
                 int j = i - d, eAcc = 0;
-                for (int z = 0; z < 4096; ++z) S->acc[z] = 0;
+                p4v_acc_zero(S->acc);
                 for (int k = j; k < i; ++k) {
                     p4_mm_thr(slot, S->A[i * 4 + k], S->T[k * 4 + j], S->prod);
                     int ep = eT[k * 4 + j];
                     if (k == j) eAcc = ep;
-                    else if (ep > eAcc) { int sh = ep - eAcc; for (int z = 0; z < 4096; ++z) S->acc[z] >>= sh; eAcc = ep; }
+                    else if (ep > eAcc) { p4v_acc_shr(S->acc, ep - eAcc); eAcc = ep; }
                     int sh = eAcc - ep;
-                    for (int z = 0; z < 4096; ++z) S->acc[z] += (sh < 31) ? (S->prod[z] >> sh) : 0;
+                    if (sh < 31) p4v_acc_addsh(S->acc, S->prod, sh);
                 }
-                int eS = eAcc + ds_renorm(S->acc, S->prod);
+                int eS = eAcc + p4v_renorm(S->acc, S->prod);
                 p4_mm_thr(slot, S->T[i * 4 + i], S->prod, S->T[i * 4 + j]);
-                for (int z = 0; z < 4096; ++z) S->acc[z] = S->T[i * 4 + j][z];
-                eT[i * 4 + j] = eT[i * 4 + i] + eS + ds_renorm(S->acc, S->T[i * 4 + j]);
+                p4v_acc_from_cv(S->acc, S->T[i * 4 + j]);
+                eT[i * 4 + j] = eT[i * 4 + i] + eS + p4v_renorm(S->acc, S->T[i * 4 + j]);
             }
         int16_t *To = (int16_t *)(g_p4Th + (size_t)h * 131072);
         memset(To, 0, 131072);
@@ -676,6 +751,7 @@ static int p4_threads(const uint8_t *Ah, int P, int H, int *stats, int statsLen,
     p4_lut_init(); p4_lutc_init();
     g_p4hw = (uint16_t *)(vbase + 0x70000);
     p4_hwlut_init();
+    for (int i = 0; i < 4096; ++i) g_p4lut2[i] = g_p4lut[i];
     for (int t = 0; t < P; ++t) {
         g_p4stage[t] = (int16_t *)(vbase + (size_t)t * 0x1C000 + 0x16000);
         w16a16_mm_init(&g_p4s[t].mm, vbase + (size_t)t * 0x1C000, g_p4s[t].descs);
@@ -702,8 +778,28 @@ static int p4_threads(const uint8_t *Ah, int P, int H, int *stats, int statsLen,
         for (int i = 0; i < 256; ++i) if (bA[i] != bB[i]) ++db;
         FARF(ALWAYS, "P4 PACKCHK wt diff=%d first=%d bias diff=%d", dw, fw, db);
         if (statsLen > 9) stats[9] = dw;
-        if (statsLen > 10) stats[10] = bA[32];
-        if (statsLen > 11) stats[11] = bB[32];
+        /* HVX acc helper self-check: roundtrip + acc3 + diag-add vs scalar */
+        {
+            static int32_t acc[4096]; static int16_t cvA[4096], cvB[4096];
+            int hv = qurt_hvx_lock(QURT_HVX_MODE_128B);
+            p4v_acc_from_cv(acc, wcv);
+            p4v_acc_to_cv(cvA, acc, 0);
+            int rt = 0; for (int i = 0; i < 4096; ++i) if (cvA[i] != wcv[i]) ++rt;
+            p4v_acc3(acc, wcv, wcv, wcv);
+            p4v_acc_diag_add(acc, 5000);
+            int a3 = 0;
+            for (int i = 0; i < 4096; ++i) {
+                int off = i & 63;
+                int32_t got = acc[(i >> 6) * 64 + (off & 1) * 32 + (off >> 1)];
+                int32_t want = 3 * (int32_t)wcv[i];
+                ++a3; --a3;
+                int isdiag = 0; for (int d = 0; d < 64; ++d) if (g_p4lut2[d * 65] == i) { isdiag = 1; break; }
+                if (got != want + (isdiag ? 5000 : 0)) ++a3;
+            }
+            if (hv == 0) qurt_hvx_unlock();
+            if (statsLen > 10) stats[10] = rt;
+            if (statsLen > 11) stats[11] = a3;
+        }
     }
     g_p4Ah = Ah; g_p4Th = (uint8_t *)T; g_p4H = H; g_P = P; g_pdone = 0; g_next_head = 0;
     g_sat = 0; g_tr_n = 0; g_cbusy = 0;

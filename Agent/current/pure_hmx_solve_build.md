@@ -106,12 +106,18 @@ cd example/gdn_native/pure_hmx_solve && cc -O2 w16a16_pack_test.c -o /tmp/w16pt 
 描述符 {N_t=2, y=64, n_tiles=64, m_total=1, k_total=64}、act y=128 → **byte-exact**
 （identity max diff=2，随机对配 [-1,1] max diff=3）。
 **P=4 全链切真 64³ 后：32-head wall 79.1M（之前 101.3M），HMX busy 21.8M=12.1K/mm，oc 9.7e-3 不变。**
-现瓶颈回到 producer prep（HMX 27% busy）；余下杠杆 = renorm/add 全 HVX、bias 向量化。
+
+### 5.2 renorm/add 全 HVX（终态）
+int32 acc 链(widen-add3/neg/addsh/shr/absmax/renorm/diag-fix)全 HVX 后：**32-head wall = 36.5M cyc（22.9ms，复测 36.2M），
+HMX busy 21.6M = 59%，oc 9.704e-3 / 0.25-scale 4.5e-3 与 scalar 链逐位一致**（运行时自检 stats[10]=roundtrip=0、[11]=acc3+diag=0 守门）。
+HVX lane 序硬经验：**Q6_Ww_vunpack 与 Q6_Vh_vasr_VwVwR 不配对（一个偶/奇、一个 block 序）→ 必须 vsxt+vasr 成对**（自检抓出来，3968/4096 错）；
+diag 标量补丁用交织索引 `(i>>6)*64 + (off&1)*32 + (off>>1)`。
+余下 gap(36.5 vs 21.6) = bias scalar 12K/mm + A/T 头装出 + 轮询/尾部，收益递减，停。
 
 ## 6. 终态结论
-w16a16 全 HMX 三角求逆 REAL 实现完成:**32-head wall 79.1M cyc(真 64³ 链),HMX 12.1K/mm,oc≈9.7e-3**
+w16a16 全 HMX 三角求逆 REAL 实现完成:**32-head wall 36.5M cyc(真 64³ 链+全 HVX prep),HMX 59% busy(12.1K/mm),oc≈9.7e-3**
 (‖A‖₂≲4 全可用,≥5 爆炸=int16 数值真相)。w16a16 原语可用性 PROVEN(64³ 与 M=256 carrier 双 byte-exact);
-对比出货 GDNSolveHVXMixHMX 1.78M:慢 ~44×,本质 = 56×w16a16 mm/头的 HMX 算力成本,非实现缺陷(本项目目标为实现+学清,非比快)。
+对比出货 GDNSolveHVXMixHMX 1.78M:慢 ~20×,本质 = 56×w16a16 mm/头的 HMX 算力成本,非实现缺陷(本项目目标为实现+学清,非比快)。
 
 ### 关键提醒（避免重蹈我的错）
 - w16a16 matmul **已 byte-exact、可用**（CI-gated）；drain 是 **2 的幂**不是 fp16。任何"f16 drain 有损/blocker"
