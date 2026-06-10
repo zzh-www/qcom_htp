@@ -449,7 +449,11 @@ static void pipe_producer(void *arg) {
     uint64_t _life0 = pcyc();
     int hvx = qurt_hvx_lock(QURT_HVX_MODE_128B);
     gdn_scr_t *sc = &g_scr[w->slot];
+#if defined(GDN_BR_BP4)
+    uint8_t *vbase = w->vtcm_base + (size_t)w->slot * 0xE0000u;   /* +0x20000 BP4 hi/lo/Wl caches @ +0xA0000 */
+#else
     uint8_t *vbase = w->vtcm_base + (size_t)w->slot * 0xA0000u;
+#endif
     gdn_vtcm_t vt = gdn_vtcm_from(vbase);
 #if defined(GDN_BR_W16)
     { HVX_Vector z = Q6_V_vzero(); HVX_Vector *op = (HVX_Vector *)vt.out;       /* padded out: zero pad rows once */
@@ -515,7 +519,11 @@ static void solve_worker(void *arg) {
     {
         /* VTCM: 0xA0000 = vt surfaces+caches (gdn_vtcm_from span <0x59000 @ +0) + A ping-pong (2x128KB @ +0x60000). */
         compute_res_attr_t va; HAP_compute_res_attr_init(&va);
+#if defined(GDN_BR_BP4)
+        HAP_compute_res_attr_set_vtcm_param(&va, 0xE0000u, 0);
+#else
         HAP_compute_res_attr_set_vtcm_param(&va, 0xA0000u, 0);
+#endif
         unsigned int vctx = HAP_compute_res_acquire(&va, 2000000);
         uint8_t *vtcm = (uint8_t *)HAP_compute_res_attr_get_vtcm_ptr(&va);
         /* HMX via the HAP compute_res lock (NOT qurt_hmx_lock — that symbol is unresolved on this
@@ -1170,7 +1178,11 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
     {   /* GDNSolveHVXMixHMX producer-consumer (step 4): P HVX producers feed 1 main-thread HMX consumer. */
         int P = nthreads; if (P > GDN_BR_NT) P = GDN_BR_NT; if (P < 1) P = 1;
         compute_res_attr_t va; HAP_compute_res_attr_init(&va);
+#if defined(GDN_BR_BP4)
+        HAP_compute_res_attr_set_vtcm_param(&va, (unsigned)P * 0xE0000u, 0);   /* 0xC0000/producer: vt + A ping-pong + BP caches */
+#else
         HAP_compute_res_attr_set_vtcm_param(&va, (unsigned)P * 0xA0000u, 0);   /* 0xA0000/producer: vt + A ping-pong */
+#endif
         unsigned int vctx2 = HAP_compute_res_acquire(&va, 2000000);
         uint8_t *vbase = (uint8_t *)HAP_compute_res_attr_get_vtcm_ptr(&va);
         compute_res_attr_t ha; HAP_compute_res_attr_init(&ha); HAP_compute_res_attr_set_hmx_param(&ha, 1);

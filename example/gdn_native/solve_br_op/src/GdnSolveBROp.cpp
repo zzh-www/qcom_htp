@@ -154,6 +154,10 @@ struct gdn_scr_t {
     char    vAa[GDN_BR_NBLK], vTw[GDN_BR_NBLK], vTa[GDN_BR_NB];
     int32_t mxdiag[GDN_BR_NB];   /* producer-tracked maxabs of each diagonal T block (for quant fusion) */
     int32_t effc[GDN_BR_NBLK][64] __attribute__((aligned(128)));  /* cached effective-bias per T-wt block */
+#if defined(GDN_BR_BP4)
+    int32_t effl[GDN_BR_NBLK][64] __attribute__((aligned(128)));   /* BP4: cached effective of Wl per T-wt block */
+    char    vBa[GDN_BR_NBLK];                                      /* BP4: A hi/lo crouton pair valid flags */
+#endif
     int     colabsc[GDN_BR_NBLK];                                 /* cached max-col-abs-sum per T-wt block (#1c) */
 };
 static gdn_scr_t g_scr[GDN_BR_NT];
@@ -198,6 +202,9 @@ struct gdn_vtcm_t {
 #if defined(GDN_BR_W16)
     int16_t *stage;   /* W16: VTCM staging for the HVX vgather weight pack (8K codes + gather slots) */
 #endif
+#if defined(GDN_BR_BP4)
+    uint8_t *bpc;     /* BP4 caches @ base+0xA0000: A hi/lo crouton pairs 10x8K, Tdiag lo 4x4K, Wl kmajor 10x4K */
+#endif
 };
 #if defined(GDN_BR_W16)
 /* W16 layout: every HMX surface u16/int16.  Act/out keep the PROVEN padded 2048B-block layout
@@ -231,6 +238,9 @@ static gdn_vtcm_t gdn_vtcm_from(uint8_t *base) {
     v.outtab = (int32_t *)(base + 0x40080);
     v.acache = base + 0x41000;
     v.wcache = (int8_t *)(base + 0x4F000);
+#if defined(GDN_BR_BP4)
+    v.bpc = base + 0xA0000;
+#endif
     return v;
 }
 #endif
