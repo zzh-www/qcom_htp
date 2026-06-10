@@ -200,7 +200,7 @@ static bool hmx_w16a16_tile_counts_from_shapes(
         K = S;
         N = S;
     }
-    if (M < 128 || K < 128 || N < 32 || (M % 32) || (K % 32) || (N % 32)) {
+    if (M < 32 || K < 32 || N < 32 || (M % 32) || (K % 32) || (N % 32)) {
         return false;
     }
     *M_t = M / 32;
@@ -287,6 +287,9 @@ static inline uint32_t hmx_w16a16_act_desc_y_stride(uint32_t fallback)
 #if defined(HMX_W16A16_ACT_DESC_Y_STRIDE_OVERRIDE)
     (void)fallback;
     return HMX_W16A16_ACT_DESC_Y_STRIDE_OVERRIDE;
+#elif defined(HMX_W16A16_FORMULA_DESC)
+    /* fallback == K_t; native 256^3 record = 512 = K_t(8)*64. Scales for any K%32. */
+    return fallback * 64u;
 #elif defined(HMX_W16A16_NATIVE_RECORD_FIELDS)
     (void)fallback;
     return 512u;
@@ -446,6 +449,18 @@ static inline void hmx_w16a16_enter_kernel_maybe_split_n128(
                 hmx_conv_out_desc_t split_out_desc = *out_desc;
                 split_out_desc.out_tile_ptr_table = const_cast<int32_t *>(split_table);
                 split_out_desc.out_table_stride_dwords = kSplitNTiles;
+#if defined(HMX_W16A16_FORMULA_DESC)
+                /* Shape-general per-split (128-N) output descriptor, computed from M_t
+                 * (= mt_groups/8) and the fixed 128-N split. Reproduces the native 256
+                 * record at 256^3 (M_t=8 -> 256/256/128/1) and scales for any M%32. */
+                {
+                    const uint32_t M_t_local = mt_groups / 8u;
+                    split_out_desc.out_y_stride_words = M_t_local * 32u;   /* = M */
+                    split_out_desc.n_tiles_pow2 = M_t_local * 32u;         /* = M */
+                    split_out_desc.m_total_minus_step = 1;
+                    split_out_desc.k_total_bytes = kSplitNTiles * 32u;     /* = 128 (per split) */
+                }
+#else
                 split_out_desc.out_y_stride_words =
                     hmx_w16a16_out_y_stride(kSplitNTiles);
                 split_out_desc.n_tiles_pow2 =
@@ -454,6 +469,7 @@ static inline void hmx_w16a16_enter_kernel_maybe_split_n128(
                     hmx_w16a16_out_m_total_minus_step(split_out_desc.m_total_minus_step);
                 split_out_desc.k_total_bytes =
                     hmx_w16a16_k_total_bytes(kSplitNTiles, K_t);
+#endif
                 hmx_w16a16_enter_kernel(
                     &split_out_desc,
                     act_desc,
@@ -579,8 +595,9 @@ static uint32_t hmx_w16a16_precompute(
     }
     const uint32_t S = M_t * 32;
     const uint32_t block_rows = (S / 4) < 64 ? (S / 4) : 64;
-    const uint32_t mt_per_block = block_rows / 32;
-    if (mt_per_block == 0) return QHPI_Success;
+    /* mt_per_block is diagnostic-only (dumped, never used in dispatch); do not gate
+     * small M (M<128 gives block_rows<32 -> 0). M_t>=1 already guarantees validity. */
+    const uint32_t mt_per_block = (block_rows / 32) ? (block_rows / 32) : 1u;
 
     const uint32_t mt_groups = hmx_w16a16_crouton_row4_groups(M_t);
     const uint32_t act_table_stride = hmx_w16a16_act_table_stride(M_t, K_t);
@@ -685,6 +702,19 @@ static uint32_t hmx_w16a16_to_u16_matmul_precomputed_kernel(
     mask_desc = hmx_w16a16_maybe_patch_mask_extra(mask_desc, mask_local, extra_param);
 #endif
 
+#if defined(HMX_W16A16_FORMULA_DESC)
+    /* Shape-general output descriptor, used directly by the non-split path when
+     * N_t < 4 or N_t%4 != 0 (e.g. N=96). The split path (N_t%4==0) rebuilds per-split
+     * descriptors in maybe_split_n128. out_y/n_tiles = M; k_total = N (this single call). */
+    hmx_conv_out_desc_t out_desc_local __attribute__((aligned(64))) = {
+        out_tbl_ptr,
+        pc->N_t,
+        pc->M_t * 32u,        /* out_y_stride = M */
+        pc->M_t * 32u,        /* n_tiles_pow2 = M */
+        1,                    /* m_total_minus_step */
+        pc->N_t * 32u,        /* k_total_bytes = N (single call) */
+    };
+#else
     hmx_conv_out_desc_t out_desc_local __attribute__((aligned(64))) = {
         out_tbl_ptr,
         pc->N_t,
@@ -693,6 +723,7 @@ static uint32_t hmx_w16a16_to_u16_matmul_precomputed_kernel(
         hmx_w16a16_out_m_total_minus_step(8),
         hmx_w16a16_k_total_bytes(pc->N_t, pc->K_t),
     };
+#endif
     hmx_conv_act_desc_t act_desc_local __attribute__((aligned(64))) = {
         act_tbl_ptr,
         pc->K_t,
@@ -930,8 +961,9 @@ static uint32_t hmx_w16a16_to_u16_matmul_kernel(
     }
     const uint32_t S = M_t * 32;
     const uint32_t block_rows = (S / 4) < 64 ? (S / 4) : 64;
-    const uint32_t mt_per_block = block_rows / 32;
-    if (mt_per_block == 0) return QHPI_Success;
+    /* mt_per_block is diagnostic-only (dumped, never used in dispatch); do not gate
+     * small M (M<128 gives block_rows<32 -> 0). M_t>=1 already guarantees validity. */
+    const uint32_t mt_per_block = (block_rows / 32) ? (block_rows / 32) : 1u;
 
     /*
      * QNN's Crouton block table groups up to two 32-row tiles in one physical

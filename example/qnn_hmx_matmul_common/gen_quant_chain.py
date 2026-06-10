@@ -1273,6 +1273,12 @@ def generate(family: Family, args: argparse.Namespace) -> None:
                     f"out_part{split_idx}", graph_out_tp, split_graph_out_shape))
         else:
             outputs_info.append(helper.make_tensor_value_info("out", graph_out_tp, graph_out_shape))
+        if args.also_output_op_result:
+            # Expose the raw op (crouton) output tensor as an extra graph output.
+            # 'out' still carries the normal ForceFormat path; this dumps the
+            # pre-ForceFormat crouton bytes via --use_native_output_files.
+            outputs_info.append(helper.make_tensor_value_info(
+                f"hmx_{family.name}", graph_out_tp, op_out_shape))
         reshape_input = "act_raw"
         if args.mode == "chain_qdq":
             nodes.append(helper.make_node("QuantizeLinear", ["act_raw", "act_q_scale", "act_q_zp"], ["act_q"], name="quantize_act"))
@@ -1349,7 +1355,10 @@ def generate(family: Family, args: argparse.Namespace) -> None:
                     name=f"hmx_{family.name}_chain{i}",
                     domain=DOMAIN,
                 ))
-                value_infos.append(helper.make_tensor_value_info(out_name, graph_out_tp, op_out_shape))
+                # When the final op result is also a graph output, it lives in
+                # graph.output, not value_info (avoid duplicate declaration).
+                if not (args.also_output_op_result and out_name == f"hmx_{family.name}"):
+                    value_infos.append(helper.make_tensor_value_info(out_name, graph_out_tp, op_out_shape))
                 prev = out_name
             nodes.append(helper.make_node("Reshape", [f"hmx_{family.name}", "out_reshape_dims"], ["out"], name="reshape_out"))
     elif args.mode in ("direct", "direct_flat"):
@@ -1678,6 +1687,10 @@ def main(family_name: str) -> None:
     p.add_argument("--reference-contract", choices=["auto", "legacy", "native"], default="auto")
     p.add_argument("--final-output-rank", choices=["4d", "3d"], default="4d")
     p.add_argument("--native-split-output-mode", choices=["concat", "separate"], default="concat")
+    p.add_argument("--also-output-op-result", action="store_true",
+                   help="Additionally expose the raw op (crouton) output tensor as a graph output, "
+                        "alongside the normal ForceFormat'd 'out'. With --use_native_output_files this "
+                        "dumps the raw crouton bytes (ground-truth for the :2x2 output layout).")
     p.add_argument(
         "--op-input-layout",
         choices=[

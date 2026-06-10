@@ -45,6 +45,10 @@ for family in "${ACTIVE_FAMILIES[@]}"; do
     --json-out "$OUT_ROOT/artifact_body_${family}.json"
 done
 
+# QNN-free standalone W16A16 (handwriting route): byte-exact vs native, sim-only.
+OUT_ROOT="$OUT_ROOT" \
+  "tests/qnn_kernel_e2e/handwritten_hmx_matmul/test_w16a16_standalone.sh"
+
 uv run python scripts/prepare_w4a16_small_shape_direct_hmx_artifact.py \
   --custom-artifact "$W4A16_CHAIN8_CUSTOM_ARTIFACT" \
   --native-artifact "$W4A16_CHAIN8_CUSTOM_ARTIFACT" \
@@ -85,6 +89,23 @@ for family in u8i8 w4a8 w8a16; do
     --measure-repeats "$DEVICE_BODY_MEASURE_REPEATS" \
     --json-out "$OUT_ROOT/device_body_${family}.json"
 done
+
+# QNN-free standalone W16A16 on real CDSP (device-backed byte-exact gate).
+OUT_ROOT="$OUT_ROOT" DEVICE="$DEVICE" \
+  "tests/qnn_kernel_e2e/handwritten_hmx_matmul/test_w16a16_standalone_device.sh"
+
+# QNN-free standalone W16A16 value-distribution gate (uniform + the extreme/impulse
+# edge cases that catch the int16 weight high-byte clip bug). Always on.
+DEVICE="$DEVICE" \
+  "tests/qnn_kernel_e2e/handwritten_hmx_matmul/test_w16a16_standalone_dist.sh"
+
+# Exhaustive multi-shape + full value-distribution sweeps are heavy (one QNN
+# device run per shape/dist). Opt-in via W16A16_FULL_SWEEPS=1 to keep the
+# every-push preflight bounded.
+if [[ "${W16A16_FULL_SWEEPS:-0}" == "1" ]]; then
+  DEVICE="$DEVICE" \
+    "tests/qnn_kernel_e2e/handwritten_hmx_matmul/test_w16a16_standalone_sweep.sh"
+fi
 
 uv run python scripts/run_handwritten_artifact_body_device.py \
   --family w4a16 \

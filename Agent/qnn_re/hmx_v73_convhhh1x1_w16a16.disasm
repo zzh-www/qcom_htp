@@ -1,0 +1,455 @@
+
+tools/qnn-sdk/lib/hexagon-v75/unsigned/libQnnHtpV75Skel.so:	file format elf32-hexagon
+
+Disassembly of section .text:
+
+002fa740 <hmx_v73_convhhh1x1_stride1>:
+  2fa740:	7c 70 03 78	7803707c { 	r28 = #0x783
+  2fa744:	26 40 c4 91	91c44026   	r7:6 = memd(r4+#0x8)
+  2fa748:	0a c0 c4 91	91c4c00a   	r11:10 = memd(r4+#0x0) } 
+  2fa74c:	00 5c 86 c7	c7865c00 { 	p0 = bitsclr(r6,r28)
+  2fa750:	00 5c 8a c7	c78a5c00   	p0 = bitsclr(r10,r28)
+  2fa754:	02 44 44 f2	f2444402   	p2 = cmp.gt(r4,r4)
+  2fa758:	88 c1 84 91	9184c188   	r8 = memw(r4+#0x30) } 
+  2fa75c:	13 40 00 00	00004013 { 	immext(#0x4c0)
+  2fa760:	48 40 20 5c	5c204048   	if (!p0) jump:nt 0x2fac40 <hmx_v73_convhhh1x1_stride1_unaligned>
+  2fa764:	00 40 00 7f	7f004000   	nop
+  2fa768:	00 c0 00 7f	7f00c000   	nop } 
+  2fa76c:	c9 40 84 91	918440c9 { 	r9 = memw(r4+#0x18)
+  2fa770:	4f c0 81 91	9181c04f   	r15 = memw(r1+#0x8) } 
+  2fa774:	1d 78 fd bf	bffd781d { 	r29 = add(r29,#-0x40)
+  2fa778:	00 40 00 7f	7f004000   	nop
+  2fa77c:	f8 f0 dd a7	a7ddf0f8   	memd(r29+#-0x40) = r17:16 } 
+  2fa780:	4f 42 0f 8c	8c0f424f { 	r15 = asl(r15,#0x2)
+  2fa784:	52 40 00 78	78004052   	r18 = #0x2
+  2fa788:	16 0a 0d ea	ea0d0a16   	memd(r29+#0x8) = r19:18; 	memd(r29+#0x10) = r21:20 } 
+  2fa78c:	07 4b 07 8d	8d074b07 { 	r7 = extractu(r7,#0xb,#0x0)
+  2fa790:	11 00 14 01	01140011   	r4 = memw(r1+#0x4); 	r1 = memw(r1+#0x0) } 
+  2fa794:	20 40 44 75	75444020 { 	p0 = cmp.gt(r4,#0x1)
+  2fa798:	b3 40 52 76	765240b3   	r19 = sub(#0x5,r18)
+  2fa79c:	03 56 dd a1	a1dd5603   	memd(r29+#0x18) = r23:22
+  2fa7a0:	04 d8 dd a1	a1ddd804   	memd(r29+#0x20) = r25:24 } 
+  2fa7a4:	01 40 04 85	85044001 { 	p1 = tstbit(r4,#0x0)
+  2fa7a8:	f5 52 80 c6	c68052f5   	r21 = lsl(#0x1,r18)
+  2fa7ac:	08 02 09 01	01090208   	r17 = memw(r0+#0x4); 	r16 = memw(r0+#0x8) } 
+  2fa7b0:	50 42 50 80	80504250 { 	r17:16 = vaslw(r17:16,#0x2)
+  2fa7b4:	3c 41 04 8c	8c04413c   	r28 = lsr(r4,#0x1)
+  2fa7b8:	ad 40 80 91	918040ad   	r13 = memw(r0+#0x14)
+  2fa7bc:	05 da dd a1	a1ddda05   	memd(r29+#0x28) = r27:26 } 
+  2fa7c0:	06 40 31 62	62314006 { 	m0 = r17
+  2fa7c4:	f6 53 80 c6	c68053f6   	r22 = lsl(#0x1,r19)
+  2fa7c8:	74 40 80 91	91804074   	r20 = memw(r0+#0xc)
+  2fa7cc:	06 de dd a1	a1ddde06   	memd(r29+#0x30) = r31:30 } 
+  2fa7d0:	f4 5f 15 e2	e2155ff4 { 	r20 += add(r21,#-0x1)
+  2fa7d4:	00 40 00 7f	7f004000   	nop
+  2fa7d8:	8c 40 80 91	9180408c   	r12 = memw(r0+#0x10)
+  2fa7dc:	00 c0 80 91	9180c000   	r0 = memw(r0+#0x0) } 
+  2fa7e0:	54 52 54 c6	c6545254 { 	r20 = lsr(r20,r18)
+  2fa7e4:	0e 40 60 70	7060400e   	r14 = r0
+  2fa7e8:	12 40 01 f5	f5014012   	r19:18 = combine(r1,r0)
+  2fa7ec:	0e c1 9d a1	a19dc10e   	memw(r29+#0x38) = r1 } 
+  2fa7f0:	88 40 20 5c	5c204088 { 	if (!p0) jump:nt 0x2fa900 <hmx_v73_convhhh1x1_stride1+0x1c0>
+  2fa7f4:	00 40 00 7f	7f004000   	nop
+  2fa7f8:	00 40 00 7f	7f004000   	nop
+  2fa7fc:	3e c0 85 9b	9b85c03e   	r30 = memw(r5++#0x4) } 
+  2fa800:	00 44 1c 60	601c4400 { 	loop0(0x2fa840,r28)
+  2fa804:	1a 40 64 70	7064401a   	r26 = r4
+  2fa808:	18 4e 87 76	76874e18   	r24 = or(r7,#0x70)
+  2fa80c:	f9 ff 01 78	7801fff9   	r25 = #0x3ff } 
+  2fa810:	00 40 00 7f	7f004000 { 	nop
+  2fa814:	00 40 00 7f	7f004000   	nop
+  2fa818:	00 40 00 7f	7f004000   	nop
+  2fa81c:	00 c0 00 7f	7f00c000   	nop } 
+  2fa820:	00 40 00 7f	7f004000 { 	nop
+  2fa824:	00 40 00 7f	7f004000   	nop
+  2fa828:	0d 7e ed bf	bfed7e0d   	r13 = add(r13,#-0x10)
+  2fa82c:	11 c0 6c 70	706cc011   	r17 = r12 } 
+  2fa830:	00 41 34 60	60344100 { 	loop1(0x2fa840,r20)
+  2fa834:	00 52 13 f5	f5135200   	r1:0 = combine(r19,r18)
+  2fa838:	11 51 36 f3	f3365111   	r17 = sub(r17,r22)
+  2fa83c:	08 c0 62 70	7062c008   	r8 = r2 } 
+  2fa840:	40 40 1a 75	751a4040 { 	p0 = cmp.eq(r26,#0x2)
+  2fa844:	da 7f fa bf	bffa7fda   	r26 = add(r26,#-0x2)
+  2fa848:	46 40 81 9b	9b814046   	r6 = memw(r1++#0x8)
+  2fa84c:	37 c0 81 91	9181c037   	r23 = memw(r1+#0x4) } 
+  2fa850:	08 40 48 b0	b0484008 { 	r8 = add(r8,#0x400)
+  2fa854:	18 47 09 fd	fd094718   	if (p0) r25:24 = combine(r9,r7)
+  2fa858:	ec 58 06 92	920658ec   	activation.ub = mxmem(r6,r24)
+  2fa85c:	eb f9 08 92	9208f9eb   	weight.b = mxmem(r8,r25):dilate } 
+  2fa860:	28 80 19 e2	e2198028 { 	r8 += add(r25,#0x1)
+  2fa864:	ec 58 17 92	921758ec   	activation.ub = mxmem(r23,r24)
+  2fa868:	eb f9 08 92	9208f9eb   	weight.b = mxmem(r8,r25):dilate }  :endloop0
+  2fa86c:	08 5d 1c 60	601c5d08 { 	loop0(0x2fa840,r28)
+  2fa870:	18 4e 87 76	76874e18   	r24 = or(r7,#0x70)
+  2fa874:	10 41 20 5c	5c204110   	if (!p1) jump:nt 0x2fa88c <hmx_v73_convhhh1x1_stride1+0x14c>
+  2fa878:	0a c0 80 9d	9d80c00a   	r10 = memw(r0++m0) } 
+  2fa87c:	26 c0 81 9b	9b81c026 { 	r6 = memw(r1++#0x4) } 
+  2fa880:	28 40 09 e2	e2094028 { 	r8 += add(r9,#0x1)
+  2fa884:	ec 47 06 92	920647ec   	activation.ub = mxmem(r6,r7)
+  2fa888:	eb e9 08 92	9208e9eb   	weight.b = mxmem(r8,r9):dilate } 
+  2fa88c:	1a 44 08 f5	f508441a { 	r27:26 = combine(r8,r4)
+  2fa890:	08 40 62 70	70624008   	r8 = r2
+  2fa894:	19 40 7e 70	707e4019   	r25 = r30
+  2fa898:	0a c8 4a 74	744ac80a   	if (p2) r10 = add(r10,#0x40) } 
+  2fa89c:	03 60 03 b0	b0036003 { 	r3 = add(r3,#0x100)
+  2fa8a0:	f9 7f f9 bf	bff97ff9   	r25 = add(r25,#-0x1)
+  2fa8a4:	3f 40 85 9b	9b85403f   	r31 = memw(r5++#0x4)
+  2fa8a8:	fe c3 03 92	9203c3fe   	bias = mxmem2(r3) } 
+  2fa8ac:	00 40 59 75	75594000 { 	p0 = cmp.gt(r25,#0x0)
+  2fa8b0:	f8 68 df 5c	5cdf68f8   	if (p0.new) jump:nt 0x2fa89c <hmx_v73_convhhh1x1_stride1+0x15c>
+  2fa8b4:	10 d9 ff a6	a6ffd910   	cvt.uh = acc(r31):2x2 } 
+  2fa8b8:	45 42 1e 8e	8e1e4245 { 	r5 -= asl(r30,#0x2)
+  2fa8bc:	43 88 1e 8e	8e1e8843   	r3 -= asl(r30,#0x8)
+  2fa8c0:	f9 7f 01 78	78017ff9   	r25 = #0x3ff
+  2fa8c4:	1a cb ea a6	a6eacb1a   	mxmem(r10,r11):2x2 = cvt }  :endloop1
+  2fa8c8:	13 4f 13 f3	f3134f13 { 	r19 = add(r19,r15)
+  2fa8cc:	12 50 12 f3	f3125012   	r18 = add(r18,r16)
+  2fa8d0:	b4 c0 b9 10	10b9c0b4   	p0 = cmp.gt(r17,#0x0); if (p0.new) jump:nt 0x2fa830 <hmx_v73_convhhh1x1_stride1+0xf0> } 
+  2fa8d4:	c3 48 1e 8e	8e1e48c3 { 	r3 += asl(r30,#0x8)
+  2fa8d8:	12 40 6e 70	706e4012   	r18 = r14
+  2fa8dc:	8e 40 ce 74	74ce408e   	if (!p2) r14 = add(r14,#0x4)
+  2fa8e0:	d3 c1 9d 91	919dc1d3   	r19 = memw(r29+#0x38) } 
+  2fa8e4:	02 40 c2 6b	6bc24002 { 	p2 = not(p2)
+  2fa8e8:	02 40 7b 70	707b4002   	r2 = r27
+  2fa8ec:	00 40 4d 75	754d4000   	p0 = cmp.gt(r13,#0x0)
+  2fa8f0:	9e f8 df 5c	5cdff89e   	if (p0.new) jump:t 0x2fa820 <hmx_v73_convhhh1x1_stride1+0xe0> } 
+  2fa8f4:	4c c0 00 58	5800c04c { 	jump 0x2fa98c <hmx_v73_convhhh1x1_stride1+0x24c> } 
+  2fa8f8:	00 40 00 7f	7f004000 { 	nop
+  2fa8fc:	00 c0 00 7f	7f00c000   	nop } 
+  2fa900:	00 40 00 7f	7f004000 { 	nop
+  2fa904:	00 40 00 7f	7f004000   	nop
+  2fa908:	0d 7e ed bf	bfed7e0d   	r13 = add(r13,#-0x10)
+  2fa90c:	11 c0 6c 70	706cc011   	r17 = r12 } 
+  2fa910:	00 41 14 60	60144100 { 	loop0(0x2fa920,r20)
+  2fa914:	00 52 13 f5	f5135200   	r1:0 = combine(r19,r18)
+  2fa918:	11 51 36 f3	f3365111   	r17 = sub(r17,r22)
+  2fa91c:	00 c0 00 7f	7f00c000   	nop } 
+  2fa920:	26 40 81 9b	9b814026 { 	r6 = memw(r1++#0x4)
+  2fa924:	0a c0 80 9d	9d80c00a   	r10 = memw(r0++m0) } 
+  2fa928:	19 40 7e 70	707e4019 { 	r25 = r30
+  2fa92c:	0a 48 4a 74	744a480a   	if (p2) r10 = add(r10,#0x40)
+  2fa930:	ec 47 06 92	920647ec   	activation.ub = mxmem(r6,r7)
+  2fa934:	eb e9 02 92	9202e9eb   	weight.b = mxmem(r2,r9):dilate } 
+  2fa938:	03 60 03 b0	b0036003 { 	r3 = add(r3,#0x100)
+  2fa93c:	f9 7f f9 bf	bff97ff9   	r25 = add(r25,#-0x1)
+  2fa940:	3f 40 85 9b	9b85403f   	r31 = memw(r5++#0x4)
+  2fa944:	fe c3 03 92	9203c3fe   	bias = mxmem2(r3) } 
+  2fa948:	00 40 59 75	75594000 { 	p0 = cmp.gt(r25,#0x0)
+  2fa94c:	f8 68 df 5c	5cdf68f8   	if (p0.new) jump:nt 0x2fa938 <hmx_v73_convhhh1x1_stride1+0x1f8>
+  2fa950:	10 d9 ff a6	a6ffd910   	cvt.uh = acc(r31):2x2 } 
+  2fa954:	45 82 1e 8e	8e1e8245 { 	r5 -= asl(r30,#0x2)
+  2fa958:	43 48 1e 8e	8e1e4843   	r3 -= asl(r30,#0x8)
+  2fa95c:	1a cb ea a6	a6eacb1a   	mxmem(r10,r11):2x2 = cvt }  :endloop0
+  2fa960:	13 4f 13 f3	f3134f13 { 	r19 = add(r19,r15)
+  2fa964:	12 50 12 f3	f3125012   	r18 = add(r18,r16)
+  2fa968:	d8 c0 b9 10	10b9c0d8   	p0 = cmp.gt(r17,#0x0); if (p0.new) jump:nt 0x2fa910 <hmx_v73_convhhh1x1_stride1+0x1d0> } 
+  2fa96c:	c3 48 1e 8e	8e1e48c3 { 	r3 += asl(r30,#0x8)
+  2fa970:	12 40 6e 70	706e4012   	r18 = r14
+  2fa974:	8e 40 ce 74	74ce408e   	if (!p2) r14 = add(r14,#0x4)
+  2fa978:	d3 c1 9d 91	919dc1d3   	r19 = memw(r29+#0x38) } 
+  2fa97c:	22 40 09 e2	e2094022 { 	r2 += add(r9,#0x1)
+  2fa980:	02 40 c2 6b	6bc24002   	p2 = not(p2)
+  2fa984:	00 40 4d 75	754d4000   	p0 = cmp.gt(r13,#0x0)
+  2fa988:	c2 f8 df 5c	5cdff8c2   	if (p0.new) jump:t 0x2fa900 <hmx_v73_convhhh1x1_stride1+0x1c0> } 
+  2fa98c:	de 40 dd 91	91dd40de { 	r31:30 = memd(r29+#0x30)
+  2fa990:	11 c0 e0 a6	a6e0c011   	mxclracc } 
+  2fa994:	ba 40 dd 91	91dd40ba { 	r27:26 = memd(r29+#0x28)
+  2fa998:	98 c0 dd 91	91ddc098   	r25:24 = memd(r29+#0x20) } 
+  2fa99c:	16 1e 1f 3e	3e1f1e16 { 	r23:22 = memd(r29+#0x18); 	r21:20 = memd(r29+#0x10) } 
+  2fa9a0:	1d 48 1d b0	b01d481d { 	r29 = add(r29,#0x40)
+  2fa9a4:	00 40 9f 52	529f4000   	jumpr r31
+  2fa9a8:	04 1e 0d 3e	3e0d1e04   	r19:18 = memd(r29+#0x8); 	r17:16 = memd(r29+#0x0) } 
+		...
+
+002fa9c0 <hmx_v73_convhhh1x1_stride1_unaligned_sparsity>:
+  2fa9c0:	1d 78 fd bf	bffd781d { 	r29 = add(r29,#-0x40)
+  2fa9c4:	00 40 00 7f	7f004000   	nop
+  2fa9c8:	26 40 c4 91	91c44026   	r7:6 = memd(r4+#0x8)
+  2fa9cc:	0a c0 c4 91	91c4c00a   	r11:10 = memd(r4+#0x0) } 
+  2fa9d0:	c9 40 84 91	918440c9 { 	r9 = memw(r4+#0x18)
+  2fa9d4:	00 d0 dd a1	a1ddd000   	memd(r29+#0x0) = r17:16 } 
+  2fa9d8:	f4 77 03 78	780377f4 { 	r20 = #0x7bf
+  2fa9dc:	f5 7f 03 78	78037ff5   	r21 = #0x7ff
+  2fa9e0:	16 0a 0d ea	ea0d0a16   	memd(r29+#0x8) = r19:18; 	memd(r29+#0x10) = r21:20 } 
+  2fa9e4:	12 40 65 70	70654012 { 	r18 = r5
+  2fa9e8:	00 40 00 7f	7f004000   	nop
+  2fa9ec:	4f 40 81 91	9181404f   	r15 = memw(r1+#0x8)
+  2fa9f0:	65 c0 81 91	9181c065   	r5 = memw(r1+#0xc) } 
+  2fa9f4:	4f 42 0f 8c	8c0f424f { 	r15 = asl(r15,#0x2)
+  2fa9f8:	65 40 05 b0	b0054065   	r5 = add(r5,#0x3)
+  2fa9fc:	8e 40 81 91	9181408e   	r14 = memw(r1+#0x10)
+  2faa00:	24 c0 81 91	9181c024   	r4 = memw(r1+#0x4) } 
+  2faa04:	25 42 05 8c	8c054225 { 	r5 = lsr(r5,#0x2)
+  2faa08:	18 41 00 78	78004118   	r24 = #0x8
+  2faa0c:	03 56 dd a1	a1dd5603   	memd(r29+#0x18) = r23:22
+  2faa10:	04 d8 dd a1	a1ddd804   	memd(r29+#0x20) = r25:24 } 
+  2faa14:	e4 7f e4 bf	bfe47fe4 { 	r4 = add(r4,#-0x1)
+  2faa18:	76 50 00 78	78005076   	r22 = #0x83
+  2faa1c:	01 40 81 91	91814001   	r1 = memw(r1+#0x0)
+  2faa20:	79 c0 80 91	9180c079   	r25 = memw(r0+#0xc) } 
+  2faa24:	02 56 8a c7	c78a5602 { 	p2 = bitsclr(r10,r22)
+  2faa28:	99 60 d9 74	74d96099   	if (!p2.new) r25 = add(r25,#0x4)
+  2faa2c:	09 01 08 02	02080109   	r16 = memw(r0+#0x8); 	r17 = memw(r0+#0x4) } 
+  2faa30:	0d 40 61 70	7061400d { 	r13 = r1
+  2faa34:	00 40 00 7f	7f004000   	nop
+  2faa38:	bc 40 80 91	918040bc   	r28 = memw(r0+#0x14)
+  2faa3c:	8c c0 80 91	9180c08c   	r12 = memw(r0+#0x10) } 
+  2faa40:	59 42 05 8e	8e054259 { 	r25 -= asl(r5,#0x2)
+  2faa44:	fc 41 1c b0	b01c41fc   	r28 = add(r28,#0xf)
+  2faa48:	00 40 80 91	91804000   	r0 = memw(r0+#0x0)
+  2faa4c:	05 da dd a1	a1ddda05   	memd(r29+#0x28) = r27:26 } 
+  2faa50:	1c 44 1c 8c	8c1c441c { 	r28 = asr(r28,#0x4)
+  2faa54:	1e 40 67 70	7067401e   	r30 = r7
+  2faa58:	33 40 92 9b	9b924033   	r19 = memw(r18++#0x4)
+  2faa5c:	06 de dd a1	a1ddde06   	memd(r29+#0x30) = r31:30 } 
+  2faa60:	06 54 e6 d3	d3e65406 { 	r7:6 = and(r7:6,r21:20)
+  2faa64:	fc 7f fc bf	bffc7ffc   	r28 = add(r28,#-0x1)
+  2faa68:	0c 41 0c b0	b00c410c   	r12 = add(r12,#0x8)
+  2faa6c:	1f c0 02 78	7802c01f   	r31 = #0x400 } 
+  2faa70:	f5 cf 09 76	7609cff5 { 	r21 = and(r9,#0x7f) } 
+  2faa74:	03 40 15 75	75154003 { 	p3 = cmp.eq(r21,#0x0)
+  2faa78:	10 cb 00 5c	5c00cb10   	if (p3.new) jump:nt 0x2faa94 <hmx_v73_convhhh1x1_stride1_unaligned_sparsity+0xd4> } 
+  2faa7c:	35 c0 15 b0	b015c035 { 	r21 = add(r21,#0x1) } 
+  2faa80:	15 c4 15 8c	8c15c415 { 	r21 = asr(r21,#0x4) } 
+  2faa84:	35 c0 15 b0	b015c035 { 	r21 = add(r21,#0x1) } 
+  2faa88:	1f 50 15 e0	e015501f { 	r31 = +mpyi(r21,#0x80)
+  2faa8c:	f5 cf 09 76	7609cff5   	r21 = and(r9,#0x7f) } 
+  2faa90:	1f d5 3f f1	f13fd51f { 	r31 = or(r31,r21) } 
+  2faa94:	1f 70 ff bf	bfff701f { 	r31 = add(r31,#-0x80)
+  2faa98:	f5 ff 03 78	7803fff5   	r21 = #0x7ff } 
+  2faa9c:	50 42 50 80	80504250 { 	r17:16 = vaslw(r17:16,#0x2)
+  2faaa0:	1a 40 60 70	7060401a   	r26 = r0
+  2faaa4:	1b 40 00 78	7800401b   	r27 = #0x0
+  2faaa8:	00 c0 00 7f	7f00c000   	nop } 
+  2faaac:	00 c0 00 7f	7f00c000 { 	nop } 
+  2faab0:	00 40 00 7f	7f004000 { 	nop
+  2faab4:	00 40 00 7f	7f004000   	nop
+  2faab8:	00 40 00 7f	7f004000   	nop
+  2faabc:	00 c0 00 7f	7f00c000   	nop } 
+  2faac0:	00 42 25 60	60254200 { 	loop1(0x2faae0,r5)
+  2faac4:	17 40 00 78	78004017   	r23 = #0x0
+  2faac8:	76 50 00 78	78005076   	r22 = #0x83
+  2faacc:	00 c0 00 7f	7f00c000   	nop } 
+  2faad0:	02 56 8a c7	c78a5602 { 	p2 = bitsclr(r10,r22)
+  2faad4:	00 40 44 75	75444000   	p0 = cmp.gt(r4,#0x0)
+  2faad8:	01 58 4e f2	f24e5801   	p1 = cmp.gt(r14,r24)
+  2faadc:	07 c0 dd a1	a1ddc007   	memd(r29+#0x38) = r1:0 } 
+  2faae0:	18 42 04 60	60044218 { 	loop0(0x2fab0c,r4)
+  2faae4:	07 4e 87 76	76874e07   	r7 = or(r7,#0x70)
+  2faae8:	36 40 81 9b	9b814036   	r22 = memw(r1++#0x4)
+  2faaec:	37 cf 81 30	3081cf37   	if (p1) r23 = memw(r1+r15<<#0x0) } 
+  2faaf0:	15 f0 3f 76	763ff015 { 	r21 = and(r31,#-0x80) } 
+  2faaf4:	08 42 35 f3	f3354208 { 	r8 = sub(r2,r21)
+  2faaf8:	f5 ff 03 78	7803fff5   	r21 = #0x7ff } 
+  2faafc:	37 57 36 fb	fb365737 { 	if (p1) r23 = sub(r23,r22)
+  2fab00:	07 40 9e 74	749e4007   	if (!p0) r7 = add(r30,#0x0)
+  2fab04:	20 40 20 5c	5c204020   	if (!p0) jump:nt 0x2fab3c <hmx_v73_convhhh1x1_stride1_unaligned_sparsity+0x17c>
+  2fab08:	08 f0 e8 bf	bfe8f008   	r8 = add(r8,#-0x80) } 
+  2fab0c:	46 56 e6 d3	d3e65646 { 	r7:6 = or(r7:6,r23:22)
+  2fab10:	15 70 3f 76	763f7015   	r21 = and(r31,#-0x80)
+  2fab14:	36 40 81 9b	9b814036   	r22 = memw(r1++#0x4)
+  2fab18:	37 cf 81 30	3081cf37   	if (p1) r23 = memw(r1+r15<<#0x0) } 
+  2fab1c:	02 40 00 00	00004002 { 	immext(#0x80)
+  2fab20:	08 40 15 e2	e2154008   	r8 += add(r21,##0x80)
+  2fab24:	f5 ff 03 78	7803fff5   	r21 = #0x7ff } 
+  2fab28:	06 94 e6 d3	d3e69406 { 	r7:6 = and(r7:6,r21:20)
+  2fab2c:	37 57 36 fb	fb365737   	if (p1) r23 = sub(r23,r22)
+  2fab30:	f0 47 06 92	920647f0   	activation.ub = mxmem(r6,r7):single
+  2fab34:	e6 ff 08 92	9208ffe6   	weight.b = mxmem(r8,r31):single }  :endloop0
+  2fab38:	07 c0 7e 70	707ec007 { 	r7 = r30 } 
+  2fab3c:	15 f0 3f 76	763ff015 { 	r21 = and(r31,#-0x80) } 
+  2fab40:	02 40 00 00	00004002 { 	immext(#0x80)
+  2fab44:	08 40 15 e2	e2154008   	r8 += add(r21,##0x80)
+  2fab48:	f5 ff 03 78	7803fff5   	r21 = #0x7ff } 
+  2fab4c:	46 56 e6 d3	d3e65646 { 	r7:6 = or(r7:6,r23:22)
+  2fab50:	0a 54 0a f1	f10a540a   	r10 = and(r10,r20)
+  2fab54:	17 c0 73 70	7073c017   	r23 = r19 } 
+  2fab58:	06 54 e6 d3	d3e65406 { 	r7:6 = and(r7:6,r21:20)
+  2fab5c:	15 70 29 76	76297015   	r21 = and(r9,#-0x80)
+  2fab60:	f0 47 06 92	920647f0   	activation.ub = mxmem(r6,r7):single
+  2fab64:	e6 e9 08 92	9208e9e6   	weight.b = mxmem(r8,r9):single } 
+  2fab68:	02 40 00 00	00004002 { 	immext(#0x80)
+  2fab6c:	08 40 15 e2	e2154008   	r8 += add(r21,##0x80)
+  2fab70:	f5 ff 03 78	7803fff5   	r21 = #0x7ff } 
+  2fab74:	03 60 03 b0	b0036003 { 	r3 = add(r3,#0x100)
+  2fab78:	f7 7f f7 bf	bff77ff7   	r23 = add(r23,#-0x1)
+  2fab7c:	36 40 92 9b	9b924036   	r22 = memw(r18++#0x4)
+  2fab80:	fe c3 03 92	9203c3fe   	bias = mxmem2(r3) } 
+  2fab84:	03 40 57 75	75574003 { 	p3 = cmp.gt(r23,#0x0)
+  2fab88:	f8 6b df 5c	5cdf6bf8   	if (p3.new) jump:nt 0x2fab74 <hmx_v73_convhhh1x1_stride1_unaligned_sparsity+0x1b4>
+  2fab8c:	16 58 80 47	47805816   	if (!p3.new) r22 = memw(r0+#0x0)
+  2fab90:	10 d9 f6 a6	a6f6d910   	cvt.uh = acc(r22):2x2 } 
+  2fab94:	52 42 13 8e	8e134252 { 	r18 -= asl(r19,#0x2)
+  2fab98:	43 48 13 8e	8e134843   	r3 -= asl(r19,#0x8)
+  2fab9c:	16 db 16 f3	f316db16   	r22 = add(r22,r27) } 
+  2faba0:	0a 56 2a f1	f12a560a { 	r10 = or(r10,r22)
+  2faba4:	06 c2 20 5c	5c20c206   	if (!p2) jump:nt 0x2fabac <hmx_v73_convhhh1x1_stride1_unaligned_sparsity+0x1ec> } 
+  2faba8:	1a cb ea a6	a6eacb1a { 	mxmem(r10,r11):2x2 = cvt } 
+  2fabac:	02 42 e2 6b	6be24202 { 	p2 = or(p2,!p2)
+  2fabb0:	40 91 00 fb	fb009140   	if (p2) r0 = add(r0,r17)
+  2fabb4:	00 c0 00 7f	7f00c000   	nop }  :endloop1
+  2fabb8:	03 40 59 75	75594003 { 	p3 = cmp.gt(r25,#0x0)
+  2fabbc:	10 5b 20 5c	5c205b10   	if (!p3.new) jump:t 0x2fabd8 <hmx_v73_convhhh1x1_stride1_unaligned_sparsity+0x218>
+  2fabc0:	16 e0 60 7e	7e60e016   	if (p3.new) r22 = #0x0 } 
+  2fabc4:	0a 54 0a f1	f10a540a { 	r10 = and(r10,r20)
+  2fabc8:	16 40 80 91	91804016   	r22 = memw(r0+#0x0)
+  2fabcc:	10 d9 f6 a6	a6f6d910   	cvt.uh = acc(r22):2x2 } 
+  2fabd0:	0a db d6 ef	efd6db0a { 	r10 |= or(r22,r27) } 
+  2fabd4:	1a cb ea a6	a6eacb1a { 	mxmem(r10,r11):2x2 = cvt } 
+  2fabd8:	18 41 18 b0	b0184118 { 	r24 = add(r24,#0x8)
+  2fabdc:	e0 c0 dd 91	91ddc0e0   	r1:0 = memd(r29+#0x38) } 
+  2fabe0:	01 4f 01 f3	f3014f01 { 	r1 = add(r1,r15)
+  2fabe4:	00 50 00 f3	f3005000   	r0 = add(r0,r16)
+  2fabe8:	00 58 4c f2	f24c5800   	p0 = cmp.gt(r12,r24)
+  2fabec:	70 e8 df 5c	5cdfe870   	if (p0.new) jump:nt 0x2faac0 <hmx_v73_convhhh1x1_stride1_unaligned_sparsity+0x100> } 
+  2fabf0:	01 40 6d 70	706d4001 { 	r1 = r13
+  2fabf4:	00 40 7a 70	707a4000   	r0 = r26
+  2fabf8:	fc 7f fc bf	bffc7ffc   	r28 = add(r28,#-0x1)
+  2fabfc:	03 c0 1b 75	751bc003   	p3 = cmp.eq(r27,#0x0) } 
+  2fac00:	02 40 68 70	70684002 { 	r2 = r8
+  2fac04:	1b c8 80 7b	7b80c81b   	r27 = mux(p3,#0x40,#0x0) } 
+  2fac08:	5c 7f 7c 61	617c7f5c { 	if (r28>=#0) jump:t 0x2faac0
+  2fac0c:	c3 48 13 8e	8e1348c3   	r3 += asl(r19,#0x8)
+  2fac10:	9a 40 7a 74	747a409a   	if (p3) r26 = add(r26,#0x4)
+  2fac14:	18 c1 00 78	7800c118   	r24 = #0x8 } 
+  2fac18:	de 40 dd 91	91dd40de { 	r31:30 = memd(r29+#0x30)
+  2fac1c:	11 c0 e0 a6	a6e0c011   	mxclracc } 
+  2fac20:	ba 40 dd 91	91dd40ba { 	r27:26 = memd(r29+#0x28)
+  2fac24:	98 c0 dd 91	91ddc098   	r25:24 = memd(r29+#0x20) } 
+  2fac28:	16 1e 1f 3e	3e1f1e16 { 	r23:22 = memd(r29+#0x18); 	r21:20 = memd(r29+#0x10) } 
+  2fac2c:	1d 48 1d b0	b01d481d { 	r29 = add(r29,#0x40)
+  2fac30:	00 40 9f 52	529f4000   	jumpr r31
+  2fac34:	04 1e 0d 3e	3e0d1e04   	r19:18 = memd(r29+#0x8); 	r17:16 = memd(r29+#0x0) } 
+		...
+
+002fac40 <hmx_v73_convhhh1x1_stride1_unaligned>:
+  2fac40:	1d 78 fd bf	bffd781d { 	r29 = add(r29,#-0x40)
+  2fac44:	00 40 00 7f	7f004000   	nop
+  2fac48:	26 40 c4 91	91c44026   	r7:6 = memd(r4+#0x8)
+  2fac4c:	0a c0 c4 91	91c4c00a   	r11:10 = memd(r4+#0x0) } 
+  2fac50:	c9 40 84 91	918440c9 { 	r9 = memw(r4+#0x18)
+  2fac54:	00 d0 dd a1	a1ddd000   	memd(r29+#0x0) = r17:16 } 
+  2fac58:	f4 77 03 78	780377f4 { 	r20 = #0x7bf
+  2fac5c:	f5 7f 03 78	78037ff5   	r21 = #0x7ff
+  2fac60:	16 0a 0d ea	ea0d0a16   	memd(r29+#0x8) = r19:18; 	memd(r29+#0x10) = r21:20 } 
+  2fac64:	12 40 65 70	70654012 { 	r18 = r5
+  2fac68:	00 40 00 7f	7f004000   	nop
+  2fac6c:	4f 40 81 91	9181404f   	r15 = memw(r1+#0x8)
+  2fac70:	65 c0 81 91	9181c065   	r5 = memw(r1+#0xc) } 
+  2fac74:	4f 42 0f 8c	8c0f424f { 	r15 = asl(r15,#0x2)
+  2fac78:	65 40 05 b0	b0054065   	r5 = add(r5,#0x3)
+  2fac7c:	8e 40 81 91	9181408e   	r14 = memw(r1+#0x10)
+  2fac80:	24 c0 81 91	9181c024   	r4 = memw(r1+#0x4) } 
+  2fac84:	25 42 05 8c	8c054225 { 	r5 = lsr(r5,#0x2)
+  2fac88:	18 41 00 78	78004118   	r24 = #0x8
+  2fac8c:	03 56 dd a1	a1dd5603   	memd(r29+#0x18) = r23:22
+  2fac90:	04 d8 dd a1	a1ddd804   	memd(r29+#0x20) = r25:24 } 
+  2fac94:	e4 7f e4 bf	bfe47fe4 { 	r4 = add(r4,#-0x1)
+  2fac98:	76 50 00 78	78005076   	r22 = #0x83
+  2fac9c:	01 40 81 91	91814001   	r1 = memw(r1+#0x0)
+  2faca0:	79 c0 80 91	9180c079   	r25 = memw(r0+#0xc) } 
+  2faca4:	02 56 8a c7	c78a5602 { 	p2 = bitsclr(r10,r22)
+  2faca8:	99 60 d9 74	74d96099   	if (!p2.new) r25 = add(r25,#0x4)
+  2facac:	09 01 08 02	02080109   	r16 = memw(r0+#0x8); 	r17 = memw(r0+#0x4) } 
+  2facb0:	0d 40 61 70	7061400d { 	r13 = r1
+  2facb4:	00 40 00 7f	7f004000   	nop
+  2facb8:	bc 40 80 91	918040bc   	r28 = memw(r0+#0x14)
+  2facbc:	8c c0 80 91	9180c08c   	r12 = memw(r0+#0x10) } 
+  2facc0:	59 42 05 8e	8e054259 { 	r25 -= asl(r5,#0x2)
+  2facc4:	fc 41 1c b0	b01c41fc   	r28 = add(r28,#0xf)
+  2facc8:	00 40 80 91	91804000   	r0 = memw(r0+#0x0)
+  2faccc:	05 da dd a1	a1ddda05   	memd(r29+#0x28) = r27:26 } 
+  2facd0:	1c 44 1c 8c	8c1c441c { 	r28 = asr(r28,#0x4)
+  2facd4:	1e 40 67 70	7067401e   	r30 = r7
+  2facd8:	33 40 92 9b	9b924033   	r19 = memw(r18++#0x4)
+  2facdc:	06 de dd a1	a1ddde06   	memd(r29+#0x30) = r31:30 } 
+  2face0:	06 54 e6 d3	d3e65406 { 	r7:6 = and(r7:6,r21:20)
+  2face4:	fc 7f fc bf	bffc7ffc   	r28 = add(r28,#-0x1)
+  2face8:	0c 41 0c b0	b00c410c   	r12 = add(r12,#0x8)
+  2facec:	ff ff 01 78	7801ffff   	r31 = #0x3ff } 
+  2facf0:	50 42 50 80	80504250 { 	r17:16 = vaslw(r17:16,#0x2)
+  2facf4:	1a 40 60 70	7060401a   	r26 = r0
+  2facf8:	1b 40 00 78	7800401b   	r27 = #0x0
+  2facfc:	00 c0 00 7f	7f00c000   	nop } 
+  2fad00:	00 42 25 60	60254200 { 	loop1(0x2fad20,r5)
+  2fad04:	17 40 00 78	78004017   	r23 = #0x0
+  2fad08:	76 50 00 78	78005076   	r22 = #0x83
+  2fad0c:	00 c0 00 7f	7f00c000   	nop } 
+  2fad10:	02 56 8a c7	c78a5602 { 	p2 = bitsclr(r10,r22)
+  2fad14:	00 40 44 75	75444000   	p0 = cmp.gt(r4,#0x0)
+  2fad18:	01 58 4e f2	f24e5801   	p1 = cmp.gt(r14,r24)
+  2fad1c:	07 c0 dd a1	a1ddc007   	memd(r29+#0x38) = r1:0 } 
+  2fad20:	00 42 04 60	60044200 { 	loop0(0x2fad40,r4)
+  2fad24:	07 4e 87 76	76874e07   	r7 = or(r7,#0x70)
+  2fad28:	36 40 81 9b	9b814036   	r22 = memw(r1++#0x4)
+  2fad2c:	37 cf 81 30	3081cf37   	if (p1) r23 = memw(r1+r15<<#0x0) } 
+  2fad30:	37 57 36 fb	fb365737 { 	if (p1) r23 = sub(r23,r22)
+  2fad34:	08 40 c2 bf	bfc24008   	r8 = add(r2,#-0x400)
+  2fad38:	07 40 9e 74	749e4007   	if (!p0) r7 = add(r30,#0x0)
+  2fad3c:	1a c0 20 5c	5c20c01a   	if (!p0) jump:nt 0x2fad64 <hmx_v73_convhhh1x1_stride1_unaligned+0x124> } 
+  2fad40:	46 56 e6 d3	d3e65646 { 	r7:6 = or(r7:6,r23:22)
+  2fad44:	08 40 48 b0	b0484008   	r8 = add(r8,#0x400)
+  2fad48:	36 40 81 9b	9b814036   	r22 = memw(r1++#0x4)
+  2fad4c:	37 cf 81 30	3081cf37   	if (p1) r23 = memw(r1+r15<<#0x0) } 
+  2fad50:	06 94 e6 d3	d3e69406 { 	r7:6 = and(r7:6,r21:20)
+  2fad54:	37 57 36 fb	fb365737   	if (p1) r23 = sub(r23,r22)
+  2fad58:	f0 47 06 92	920647f0   	activation.ub = mxmem(r6,r7):single
+  2fad5c:	e6 ff 08 92	9208ffe6   	weight.b = mxmem(r8,r31):single }  :endloop0
+  2fad60:	07 c0 7e 70	707ec007 { 	r7 = r30 } 
+  2fad64:	46 56 e6 d3	d3e65646 { 	r7:6 = or(r7:6,r23:22)
+  2fad68:	08 40 48 b0	b0484008   	r8 = add(r8,#0x400)
+  2fad6c:	0a 54 0a f1	f10a540a   	r10 = and(r10,r20)
+  2fad70:	17 c0 73 70	7073c017   	r23 = r19 } 
+  2fad74:	28 40 09 e2	e2094028 { 	r8 += add(r9,#0x1)
+  2fad78:	06 54 e6 d3	d3e65406   	r7:6 = and(r7:6,r21:20)
+  2fad7c:	f0 47 06 92	920647f0   	activation.ub = mxmem(r6,r7):single
+  2fad80:	e6 e9 08 92	9208e9e6   	weight.b = mxmem(r8,r9):single } 
+  2fad84:	03 60 03 b0	b0036003 { 	r3 = add(r3,#0x100)
+  2fad88:	f7 7f f7 bf	bff77ff7   	r23 = add(r23,#-0x1)
+  2fad8c:	36 40 92 9b	9b924036   	r22 = memw(r18++#0x4)
+  2fad90:	fe c3 03 92	9203c3fe   	bias = mxmem2(r3) } 
+  2fad94:	03 40 57 75	75574003 { 	p3 = cmp.gt(r23,#0x0)
+  2fad98:	f8 6b df 5c	5cdf6bf8   	if (p3.new) jump:nt 0x2fad84 <hmx_v73_convhhh1x1_stride1_unaligned+0x144>
+  2fad9c:	16 58 80 47	47805816   	if (!p3.new) r22 = memw(r0+#0x0)
+  2fada0:	10 d9 f6 a6	a6f6d910   	cvt.uh = acc(r22):2x2 } 
+  2fada4:	52 42 13 8e	8e134252 { 	r18 -= asl(r19,#0x2)
+  2fada8:	43 48 13 8e	8e134843   	r3 -= asl(r19,#0x8)
+  2fadac:	16 db 16 f3	f316db16   	r22 = add(r22,r27) } 
+  2fadb0:	0a 56 2a f1	f12a560a { 	r10 = or(r10,r22)
+  2fadb4:	06 c2 20 5c	5c20c206   	if (!p2) jump:nt 0x2fadbc <hmx_v73_convhhh1x1_stride1_unaligned+0x17c> } 
+  2fadb8:	1a cb ea a6	a6eacb1a { 	mxmem(r10,r11):2x2 = cvt } 
+  2fadbc:	02 42 e2 6b	6be24202 { 	p2 = or(p2,!p2)
+  2fadc0:	40 91 00 fb	fb009140   	if (p2) r0 = add(r0,r17)
+  2fadc4:	00 c0 00 7f	7f00c000   	nop }  :endloop1
+  2fadc8:	03 40 59 75	75594003 { 	p3 = cmp.gt(r25,#0x0)
+  2fadcc:	10 5b 20 5c	5c205b10   	if (!p3.new) jump:t 0x2fade8 <hmx_v73_convhhh1x1_stride1_unaligned+0x1a8>
+  2fadd0:	16 e0 60 7e	7e60e016   	if (p3.new) r22 = #0x0 } 
+  2fadd4:	0a 54 0a f1	f10a540a { 	r10 = and(r10,r20)
+  2fadd8:	16 40 80 91	91804016   	r22 = memw(r0+#0x0)
+  2faddc:	10 d9 f6 a6	a6f6d910   	cvt.uh = acc(r22):2x2 } 
+  2fade0:	0a db d6 ef	efd6db0a { 	r10 |= or(r22,r27) } 
+  2fade4:	1a cb ea a6	a6eacb1a { 	mxmem(r10,r11):2x2 = cvt } 
+  2fade8:	18 41 18 b0	b0184118 { 	r24 = add(r24,#0x8)
+  2fadec:	e0 c0 dd 91	91ddc0e0   	r1:0 = memd(r29+#0x38) } 
+  2fadf0:	01 4f 01 f3	f3014f01 { 	r1 = add(r1,r15)
+  2fadf4:	00 50 00 f3	f3005000   	r0 = add(r0,r16)
+  2fadf8:	00 58 4c f2	f24c5800   	p0 = cmp.gt(r12,r24)
+  2fadfc:	88 e8 df 5c	5cdfe888   	if (p0.new) jump:nt 0x2fad00 <hmx_v73_convhhh1x1_stride1_unaligned+0xc0> } 
+  2fae00:	01 40 6d 70	706d4001 { 	r1 = r13
+  2fae04:	00 40 7a 70	707a4000   	r0 = r26
+  2fae08:	fc 7f fc bf	bffc7ffc   	r28 = add(r28,#-0x1)
+  2fae0c:	03 c0 1b 75	751bc003   	p3 = cmp.eq(r27,#0x0) } 
+  2fae10:	02 40 68 70	70684002 { 	r2 = r8
+  2fae14:	1b c8 80 7b	7b80c81b   	r27 = mux(p3,#0x40,#0x0) } 
+  2fae18:	74 7f 7c 61	617c7f74 { 	if (r28>=#0) jump:t 0x2fad00
+  2fae1c:	c3 48 13 8e	8e1348c3   	r3 += asl(r19,#0x8)
+  2fae20:	9a 40 7a 74	747a409a   	if (p3) r26 = add(r26,#0x4)
+  2fae24:	18 c1 00 78	7800c118   	r24 = #0x8 } 
+  2fae28:	de 40 dd 91	91dd40de { 	r31:30 = memd(r29+#0x30)
+  2fae2c:	11 c0 e0 a6	a6e0c011   	mxclracc } 
+  2fae30:	ba 40 dd 91	91dd40ba { 	r27:26 = memd(r29+#0x28)
+  2fae34:	98 c0 dd 91	91ddc098   	r25:24 = memd(r29+#0x20) } 
+  2fae38:	16 1e 1f 3e	3e1f1e16 { 	r23:22 = memd(r29+#0x18); 	r21:20 = memd(r29+#0x10) } 
+  2fae3c:	1d 48 1d b0	b01d481d { 	r29 = add(r29,#0x40)
+  2fae40:	00 40 9f 52	529f4000   	jumpr r31
+  2fae44:	04 1e 0d 3e	3e0d1e04   	r19:18 = memd(r29+#0x8); 	r17:16 = memd(r29+#0x0) } 
