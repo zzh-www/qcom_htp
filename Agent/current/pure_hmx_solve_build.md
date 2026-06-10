@@ -92,7 +92,14 @@ cd example/gdn_native/pure_hmx_solve && cc -O2 w16a16_pack_test.c -o /tmp/w16pt 
       块指数表(16×int32)随 T 回传。设备 oc vs fp64 inv：‖A‖₂=0.75→**9.6e-3**、2.25→5.4e-3、3.74→4.1e-3
       （≈ 出货 GDNSolveHVX 1.22e-2 同级）。per-block oc 5e-3~1.5e-2。wall 60.2M/头（mm 53.2M，scalar 打包
       ~95% = Phase-4 攻HVX打包）。复跑：`uv run python scripts/run_w16a16_head_phase3.py --deploy --scale 0.05`（H=3 模式）。
-- [ ] Phase 4：4HVX producer 打包 ∥ 1 HMX consumer + carrier batching（同 k merge 批 act），消 scalar pack。
+- [~] Phase 4 进行中（2026-06-10 真设备实测链）：
+      1. 地板：carrier mm steady **42.3K cyc**(H=4 模式)；32-head 地板 = 1792 mm = **75.8M**。
+      2. 阶段成本(实测)：act64 19K / wt 56K / bias 10K / **depack 758K = 真凶**。
+      3. cv(crouton)域重构(H≥5)：全链 X/T/Z 留 crouton 码,depack=0；wall 187M/8头 → 单线程 23.4M/头。
+      4. **scalar VTCM = 4×慢于 DDR**(753M vs 187M, 8头) — prep 永远走 DDR(L2)。
+      5. P=4 producer ∥ 1 HMX consumer(nthreads≥2)：32-head wall **252.5M**, HMX busy 84M(33%), oc 9.7e-3 全 32 头不变。
+      复跑：`uv run python scripts/run_w16a16_head_phase4.py --deploy --threads 4 --heads 32 --scale 0.05`
+      ←下一杠杆 = HVX 向量化 prep(wt 4-pass/bias/lin LUT/act copy)→ HMX-bound ~76M。
 
 ### 关键提醒（避免重蹈我的错）
 - w16a16 matmul **已 byte-exact、可用**（CI-gated）；drain 是 **2 的幂**不是 fp16。任何"f16 drain 有损/blocker"

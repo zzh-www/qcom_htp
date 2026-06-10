@@ -182,14 +182,49 @@ static int ds_renorm(int32_t *acc, int16_t *dst) {  /* returns extra shift s so 
     return s;
 }
 
-/* one w16a16 matmul on codes: out = a@w, e_out = e_a + e_w (codes = prod/32767 by the drain). */
+/* one w16a16 matmul on codes: out = a@w, e_out = e_a + e_w (codes = prod/32767 by the drain).
+ * Only 64 act rows are live on the M=256 carrier: surface rows >=64 (slabs m32>=2) stay zp,
+ * prefilled once by ds_mm_prep(); per-call we pack/depack 64 rows only. */
 static uint64_t g_ds_mmcyc;
+static void ds_mm_prep(w16a16_mm_t *mm) {
+    uint16_t *s = (uint16_t *)mm->act;
+    for (int i = 0; i < 256 * 64; ++i) s[i] = 32768;
+}
 static void ds_mm(w16a16_mm_t *mm, const int16_t *a, const int16_t *w, int16_t *out) {
     for (int i = 0; i < 4096; ++i) g_dsAct[i] = (uint16_t)(32768 + a[i]);
-    for (int i = 4096; i < 256 * 64; ++i) g_dsAct[i] = 32768;
-    static uint16_t Y[256 * 64];
+    static uint16_t Y[4096];
     uint64_t c0 = phs_pcyc();
-    w16a16_mm(mm, g_dsAct, w, Y);
+    /* 64-row act pack into the prefilled M=256 surface (m32 0..1 slabs of each (row4,kt) block) */
+    {
+        uint16_t *s = (uint16_t *)mm->act;
+        for (int row4 = 0; row4 < 8; ++row4)
+            for (int kt = 0; kt < 2; ++kt) {
+                uint16_t *blk = s + (row4 * 2 + kt) * 1024;
+                for (int m32 = 0; m32 < 2; ++m32)
+                    for (int rp = 0; rp < 2; ++rp) {
+                        int r0 = m32 * 32 + row4 * 4 + rp * 2;
+                        const uint16_t *s0 = &g_dsAct[r0 * 64 + kt * 32], *s1 = s0 + 64;
+                        uint16_t *d = blk + (m32 * 2 + rp) * 64;
+                        for (int c = 0; c < 32; ++c) { d[c * 2] = s0[c]; d[c * 2 + 1] = s1[c]; }
+                    }
+            }
+        w16a16_pack_wt_kmajor(w, mm->wt, 64, 64);
+        w16a16_pack_bias(w, mm->bias, 64, 64);
+        w16a16_mm_run(mm);
+        /* 64-row depack (m32 0..1 of each (row4,nt) out block) */
+        const uint16_t *o = (const uint16_t *)mm->out;
+        for (int row4 = 0; row4 < 8; ++row4)
+            for (int nt = 0; nt < 2; ++nt) {
+                const uint16_t *blk = o + (row4 * 2 + nt) * 1024;
+                for (int m32 = 0; m32 < 2; ++m32)
+                    for (int rp = 0; rp < 2; ++rp) {
+                        int r0 = m32 * 32 + row4 * 4 + rp * 2;
+                        uint16_t *d0 = &Y[r0 * 64 + nt * 32], *d1 = d0 + 64;
+                        const uint16_t *sp = blk + (m32 * 2 + rp) * 64;
+                        for (int c = 0; c < 32; ++c) { d0[c] = sp[c * 2]; d1[c] = sp[c * 2 + 1]; }
+                    }
+            }
+    }
     g_ds_mmcyc += phs_pcyc() - c0;
     for (int i = 0; i < 4096; ++i) out[i] = (int16_t)((int)Y[i] - 32768);
 }
@@ -237,6 +272,7 @@ static int diag_solve(const uint8_t *A, int *stats, int statsLen, void *T, int T
     static uint8_t descs[256] __attribute__((aligned(64)));
     w16a16_mm_t mm; w16a16_mm_init(&mm, vbase, descs);
     memset(mm.out, 0, W16MM_OUT_BYTES);
+    ds_mm_prep(&mm);
 
     g_sat = 0; g_ds_mmcyc = 0;
     uint64_t us0 = HAP_perf_get_time_us(), t0 = phs_pcyc();
@@ -279,6 +315,7 @@ static int head_solve(const uint8_t *Ah, int *stats, int statsLen, void *T, int 
     static uint8_t descs[256] __attribute__((aligned(64)));
     w16a16_mm_t mm; w16a16_mm_init(&mm, vbase, descs);
     memset(mm.out, 0, W16MM_OUT_BYTES);
+    ds_mm_prep(&mm);
 
     const int16_t *Aq = (const int16_t *)Ah;
     for (int bi = 0; bi < 4; ++bi) for (int bj = 0; bj < 4; ++bj)
@@ -328,12 +365,363 @@ static int head_solve(const uint8_t *Ah, int *stats, int statsLen, void *T, int 
     return 0;
 }
 
+/* ---- Phase-4 crouton-domain head solve (H==5): same math as Phase-3, zero per-mm depack:
+ * X/T/Z/... all live as crouton16 codes (the kernel's act/out layout, 64 live rows of the M=256
+ * carrier = 16KB). act = 16KB copy; weight = LUT-driven 4-pass kmajor pack (colsum on the fly).
+ * Pointwise add/renorm are layout-agnostic. */
+static uint16_t g_p4lut[4096];   /* lut[r*64+c] = surface u16 idx (live rows 0..63) */
+static void p4_lut_init(void) {
+    for (int r = 0; r < 64; ++r) for (int c = 0; c < 64; ++c)
+        g_p4lut[r * 64 + c] = (uint16_t)(((((r >> 2) & 7) * 2 + (c >> 5)) * 1024) +
+            (((r >> 5) * 2 + ((r >> 1) & 1)) * 64) + ((c & 31) * 2) + (r & 1));
+}
+/* compact crouton vector cv[4096]: live 512B of each of the 16 surface blocks (slabs m32 0..1).
+ * cv idx = blk*256 + intra; surface u16 idx = blk*1024 + intra. */
+static void p4_lutc_init(void) {
+    for (int i = 0; i < 4096; ++i) {
+        int s = g_p4lut[i];
+        g_p4lut[i] = (uint16_t)(((s >> 10) << 8) + (s & 1023));   /* (s&1023) < 256 for live rows */
+    }
+}
+/* weight pack from cv: LUT linearize + proven kmajor/bias packers. */
+static void p4_pack_wt_bias(const int16_t *cv, uint8_t *wt, int32_t *bias, int16_t *lin) {
+    for (int i = 0; i < 4096; ++i) lin[i] = cv[g_p4lut[i]];
+    w16a16_pack_wt_kmajor(lin, wt, 64, 64);
+    w16a16_pack_bias(lin, bias, 64, 64);
+}
+/* one cv-domain matmul: out = a@w (codes prod/32767), zero depack; ~85K prep + 42K kernel. */
+static void p4_mm(w16a16_mm_t *mm, const int16_t *a_cv, const int16_t *w_cv, int16_t *out_cv, int16_t *lin) {
+    uint16_t *act = (uint16_t *)mm->act;
+    for (int b = 0; b < 16; ++b) {
+        const int16_t *s = a_cv + b * 256; uint16_t *d = act + b * 1024;
+        for (int i = 0; i < 256; ++i) d[i] = (uint16_t)(32768 + s[i]);
+    }
+    p4_pack_wt_bias(w_cv, mm->wt, mm->bias, lin);
+    uint64_t c0 = phs_pcyc();
+    w16a16_mm_run(mm);
+    g_ds_mmcyc += phs_pcyc() - c0;
+    const uint16_t *o = (const uint16_t *)mm->out;
+    for (int b = 0; b < 16; ++b) {
+        const uint16_t *s = o + b * 1024; int16_t *d = out_cv + b * 256;
+        for (int i = 0; i < 256; ++i) d[i] = (int16_t)((int)s[i] - 32768);
+    }
+}
+/* cv diag inverse: X=(I-A)^-1, 10 p4_mm, exponent tracking (same math as ds_diag). */
+static int p4_diag(w16a16_mm_t *mm, const int16_t *Acv, int16_t *Xcv, int16_t *scr /*4*4096*/, int16_t *lin, int32_t *acc) {
+    int16_t *AA = scr, *A3 = scr + 4096, *M = scr + 8192, *Z = scr + 12288;
+    p4_mm(mm, Acv, Acv, AA, lin);
+    p4_mm(mm, AA, Acv, A3, lin);
+    for (int i = 0; i < 4096; ++i) acc[i] = (int32_t)Acv[i] + AA[i] + A3[i];
+    for (int d = 0; d < 64; ++d) acc[g_p4lut[d * 65]] += 32767;
+    int eX = ds_renorm(acc, Xcv);
+    for (int i = 0; i < 4096; ++i) acc[i] = -(int32_t)Acv[i];
+    for (int d = 0; d < 64; ++d) acc[g_p4lut[d * 65]] += 32767;
+    int eM = ds_renorm(acc, M);
+    for (int it = 0; it < 4; ++it) {
+        p4_mm(mm, M, Xcv, Z, lin);                       /* MX */
+        int e = eM + eX;
+        for (int i = 0; i < 4096; ++i) acc[i] = -(int32_t)Z[i];
+        if (e < 31) for (int d = 0; d < 64; ++d) acc[g_p4lut[d * 65]] += (int32_t)(65534u >> e);
+        int eZ = e + ds_renorm(acc, Z);
+        p4_mm(mm, Xcv, Z, AA, lin);                      /* reuse AA as tmp */
+        for (int i = 0; i < 4096; ++i) acc[i] = AA[i];
+        eX = eX + eZ + ds_renorm(acc, Xcv);
+    }
+    return eX;
+}
+
+/* ---- Phase-4 head solve, cv-domain (H>=5): H heads, 56 mm/head, single-thread baseline.
+ * payload A: H x 256x256 q16 strictly lower (128KB/head). out T: per head 256x256 int16 + exps tail. */
+static int16_t g_p4A[16][4096], g_p4T[16][4096], g_p4scr[4 * 4096], g_p4lin[4096], g_p4prod[4096];
+static int32_t g_p4acc[4096];
+
+static int p4_head_solve(const uint8_t *Ah, int H, int *stats, int statsLen, void *T, int TLen) {
+    if (TLen < H * 131072) return -2;
+    static int pwr_client; void *pctx = &pwr_client;
+    HAP_power_set_core_corner(pctx, HAP_DCVS_VCORNER_TURBO, HAP_DCVS_VCORNER_TURBO, HAP_DCVS_VCORNER_MAX);
+    { HAP_power_request_t r; memset(&r, 0, sizeof(r)); r.type = HAP_power_set_HMX; r.hmx.power_up = TRUE; HAP_power_set(pctx, &r); }
+    compute_res_attr_t va; HAP_compute_res_attr_init(&va);
+    HAP_compute_res_attr_set_vtcm_param(&va, 0x100000u, 0);
+    unsigned int vctx = HAP_compute_res_acquire(&va, 2000000);
+    uint8_t *vbase = (uint8_t *)HAP_compute_res_attr_get_vtcm_ptr(&va);
+    compute_res_attr_t ha; HAP_compute_res_attr_init(&ha); HAP_compute_res_attr_set_hmx_param(&ha, 1);
+    unsigned int hctx = HAP_compute_res_acquire(&ha, 2000000);
+    int hl = HAP_compute_res_hmx_lock(hctx);
+    if (!vbase || hl != 0) { if (hl == 0) HAP_compute_res_hmx_unlock(hctx); if (hctx) HAP_compute_res_release(hctx);
+        if (vctx) HAP_compute_res_release(vctx); return -1; }
+    static uint8_t descs[256] __attribute__((aligned(64)));
+    w16a16_mm_t mm; w16a16_mm_init(&mm, vbase, descs);
+    memset(mm.out, 0, W16MM_OUT_BYTES);
+    { uint16_t *s = (uint16_t *)mm.act; for (int i = 0; i < 256 * 64; ++i) s[i] = 32768; }
+    p4_lut_init(); p4_lutc_init();
+    /* scratch stays in DDR BSS: scalar VTCM access measured 4x SLOWER (753M vs 187M / 8 heads). */
+    g_sat = 0; g_ds_mmcyc = 0;
+    uint64_t us0 = HAP_perf_get_time_us(), t0 = phs_pcyc();
+    for (int h = 0; h < H; ++h) {
+        const int16_t *Aq = (const int16_t *)(Ah + (size_t)h * 131072);
+        int eT[16];
+        for (int bi = 0; bi < 4; ++bi) for (int bj = 0; bj <= bi; ++bj) {
+            int16_t *dst = g_p4A[bi * 4 + bj];
+            for (int r = 0; r < 64; ++r) for (int c = 0; c < 64; ++c)
+                dst[g_p4lut[r * 64 + c]] = Aq[(bi * 64 + r) * 256 + bj * 64 + c];
+        }
+        for (int b = 0; b < 4; ++b) eT[b * 5] = p4_diag(&mm, g_p4A[b * 5], g_p4T[b * 5], g_p4scr, g_p4lin, g_p4acc);
+        for (int d = 1; d < 4; ++d)
+            for (int i = d; i < 4; ++i) {
+                int j = i - d, eAcc = 0;
+                for (int z = 0; z < 4096; ++z) g_p4acc[z] = 0;
+                for (int k = j; k < i; ++k) {
+                    p4_mm(&mm, g_p4A[i * 4 + k], g_p4T[k * 4 + j], g_p4prod, g_p4lin);
+                    int ep = eT[k * 4 + j];
+                    if (k == j) eAcc = ep;
+                    else if (ep > eAcc) { int sh = ep - eAcc; for (int z = 0; z < 4096; ++z) g_p4acc[z] >>= sh; eAcc = ep; }
+                    int sh = eAcc - ep;
+                    for (int z = 0; z < 4096; ++z) g_p4acc[z] += (sh < 31) ? (g_p4prod[z] >> sh) : 0;
+                }
+                int eS = eAcc + ds_renorm(g_p4acc, g_p4prod);
+                p4_mm(&mm, g_p4T[i * 4 + i], g_p4prod, g_p4T[i * 4 + j], g_p4lin);
+                for (int z = 0; z < 4096; ++z) g_p4acc[z] = g_p4T[i * 4 + j][z];
+                eT[i * 4 + j] = eT[i * 4 + i] + eS + ds_renorm(g_p4acc, g_p4T[i * 4 + j]);
+            }
+        int16_t *To = (int16_t *)T + (size_t)h * 65536;
+        memset(To, 0, 131072);
+        for (int bi = 0; bi < 4; ++bi) for (int bj = 0; bj <= bi; ++bj) {
+            const int16_t *src = g_p4T[bi * 4 + bj];
+            for (int r = 0; r < 64; ++r) for (int c = 0; c < 64; ++c)
+                To[(bi * 64 + r) * 256 + bj * 64 + c] = src[g_p4lut[r * 64 + c]];
+        }
+        memcpy((uint8_t *)To + 128, eT, 64);   /* exps in the unused upper triangle (row0,col64) */
+    }
+    uint64_t t1 = phs_pcyc(), us1 = HAP_perf_get_time_us();
+    if (hl == 0) HAP_compute_res_hmx_unlock(hctx); if (hctx) HAP_compute_res_release(hctx);
+    if (vctx) HAP_compute_res_release(vctx);
+    { HAP_power_request_t off; memset(&off, 0, sizeof(off)); off.type = HAP_power_set_HMX; off.hmx.power_up = FALSE; HAP_power_set(pctx, &off); }
+    if (statsLen > 0) stats[0] = (int)(t1 - t0);
+    if (statsLen > 3) stats[3] = (int)g_ds_mmcyc;
+    if (statsLen > 6) stats[6] = (int)(us1 - us0);
+    if (statsLen > 8) stats[8] = g_sat;
+    FARF(ALWAYS, "P4HEAD: H=%d wall=%llu mm=%llu sat=%d", H, (unsigned long long)(t1 - t0),
+         (unsigned long long)g_ds_mmcyc, g_sat);
+    return 0;
+}
+
+/* ---- Phase-4 threaded (H>=5 && P>=2): P producers chain whole heads (scalar prep in DDR),
+ * 1 main HMX consumer runs kernels on per-slot VTCM buffers. */
+struct p4_slot {
+    w16a16_mm_t mm; uint8_t descs[256] __attribute__((aligned(64)));
+    int16_t A[16][4096], T[16][4096], scr[4 * 4096], lin[4096], prod[4096];
+    int32_t acc[4096];
+};
+static p4_slot g_p4s[PHS_NT];
+static const uint8_t *g_p4Ah; static uint8_t *g_p4Th; static int g_p4H;
+
+static void p4_mm_thr(int slot, const int16_t *a_cv, const int16_t *w_cv, int16_t *out_cv) {
+    p4_slot *S = &g_p4s[slot];
+    uint16_t *act = (uint16_t *)S->mm.act;
+    uint64_t p0 = phs_pcyc();
+    for (int b = 0; b < 16; ++b) {
+        const int16_t *s = a_cv + b * 256; uint16_t *d = act + b * 1024;
+        for (int i = 0; i < 256; ++i) d[i] = (uint16_t)(32768 + s[i]);
+    }
+    p4_pack_wt_bias(w_cv, S->mm.wt, S->mm.bias, S->lin);
+    uint64_t p1 = phs_pcyc(); phs_tr((uint32_t)slot, PHS_S_PREP, p0, p1);
+    PHS_ARM(&g_job[slot]);
+    uint64_t s0 = phs_pcyc(); PHS_WAIT(&g_job[slot]); PHS_RESET(&g_job[slot]);
+    uint64_t s1 = phs_pcyc(); g_pspin[slot] += s1 - s0; phs_tr((uint32_t)slot, PHS_S_SPIN, s0, s1);
+    const uint16_t *o = (const uint16_t *)S->mm.out;
+    for (int b = 0; b < 16; ++b) {
+        const uint16_t *s = o + b * 1024; int16_t *d = out_cv + b * 256;
+        for (int i = 0; i < 256; ++i) d[i] = (int16_t)((int)s[i] - 32768);
+    }
+}
+static int p4_diag_thr(int slot, const int16_t *Acv, int16_t *Xcv) {
+    p4_slot *S = &g_p4s[slot];
+    int16_t *AA = S->scr, *A3 = S->scr + 4096, *M = S->scr + 8192, *Z = S->scr + 12288;
+    int32_t *acc = S->acc;
+    p4_mm_thr(slot, Acv, Acv, AA);
+    p4_mm_thr(slot, AA, Acv, A3);
+    for (int i = 0; i < 4096; ++i) acc[i] = (int32_t)Acv[i] + AA[i] + A3[i];
+    for (int d = 0; d < 64; ++d) acc[g_p4lut[d * 65]] += 32767;
+    int eX = ds_renorm(acc, Xcv);
+    for (int i = 0; i < 4096; ++i) acc[i] = -(int32_t)Acv[i];
+    for (int d = 0; d < 64; ++d) acc[g_p4lut[d * 65]] += 32767;
+    int eM = ds_renorm(acc, M);
+    for (int it = 0; it < 4; ++it) {
+        p4_mm_thr(slot, M, Xcv, Z);
+        int e = eM + eX;
+        for (int i = 0; i < 4096; ++i) acc[i] = -(int32_t)Z[i];
+        if (e < 31) for (int d = 0; d < 64; ++d) acc[g_p4lut[d * 65]] += (int32_t)(65534u >> e);
+        int eZ = e + ds_renorm(acc, Z);
+        p4_mm_thr(slot, Xcv, Z, AA);
+        for (int i = 0; i < 4096; ++i) acc[i] = AA[i];
+        eX = eX + eZ + ds_renorm(acc, Xcv);
+    }
+    return eX;
+}
+static void p4_producer(void *arg) {
+    int slot = (int)(intptr_t)arg;
+    p4_slot *S = &g_p4s[slot];
+    uint64_t life0 = phs_pcyc();
+    for (;;) {
+        int h = __atomic_fetch_add(&g_next_head, 1, __ATOMIC_RELAXED);
+        if (h >= g_p4H) break;
+        const int16_t *Aq = (const int16_t *)(g_p4Ah + (size_t)h * 131072);
+        int eT[16];
+        for (int bi = 0; bi < 4; ++bi) for (int bj = 0; bj <= bi; ++bj) {
+            int16_t *dst = S->A[bi * 4 + bj];
+            for (int r = 0; r < 64; ++r) for (int c = 0; c < 64; ++c)
+                dst[g_p4lut[r * 64 + c]] = Aq[(bi * 64 + r) * 256 + bj * 64 + c];
+        }
+        for (int b = 0; b < 4; ++b) eT[b * 5] = p4_diag_thr(slot, S->A[b * 5], S->T[b * 5]);
+        for (int d = 1; d < 4; ++d)
+            for (int i = d; i < 4; ++i) {
+                int j = i - d, eAcc = 0;
+                for (int z = 0; z < 4096; ++z) S->acc[z] = 0;
+                for (int k = j; k < i; ++k) {
+                    p4_mm_thr(slot, S->A[i * 4 + k], S->T[k * 4 + j], S->prod);
+                    int ep = eT[k * 4 + j];
+                    if (k == j) eAcc = ep;
+                    else if (ep > eAcc) { int sh = ep - eAcc; for (int z = 0; z < 4096; ++z) S->acc[z] >>= sh; eAcc = ep; }
+                    int sh = eAcc - ep;
+                    for (int z = 0; z < 4096; ++z) S->acc[z] += (sh < 31) ? (S->prod[z] >> sh) : 0;
+                }
+                int eS = eAcc + ds_renorm(S->acc, S->prod);
+                p4_mm_thr(slot, S->T[i * 4 + i], S->prod, S->T[i * 4 + j]);
+                for (int z = 0; z < 4096; ++z) S->acc[z] = S->T[i * 4 + j][z];
+                eT[i * 4 + j] = eT[i * 4 + i] + eS + ds_renorm(S->acc, S->T[i * 4 + j]);
+            }
+        int16_t *To = (int16_t *)(g_p4Th + (size_t)h * 131072);
+        memset(To, 0, 131072);
+        for (int bi = 0; bi < 4; ++bi) for (int bj = 0; bj <= bi; ++bj) {
+            const int16_t *src = S->T[bi * 4 + bj];
+            for (int r = 0; r < 64; ++r) for (int c = 0; c < 64; ++c)
+                To[(bi * 64 + r) * 256 + bj * 64 + c] = src[g_p4lut[r * 64 + c]];
+        }
+        memcpy((uint8_t *)To + 128, eT, 64);
+    }
+    g_plife[slot] = phs_pcyc() - life0;
+    __atomic_fetch_add(&g_pdone, 1, __ATOMIC_RELEASE);
+}
+
+static int p4_threads(const uint8_t *Ah, int P, int H, int *stats, int statsLen, void *T, int TLen) {
+    if (TLen < H * 131072) return -2;
+    if (P > PHS_NT) P = PHS_NT;
+    static int pwr_client; void *pctx = &pwr_client;
+    HAP_power_set_core_corner(pctx, HAP_DCVS_VCORNER_TURBO, HAP_DCVS_VCORNER_TURBO, HAP_DCVS_VCORNER_MAX);
+    { HAP_power_request_t r; memset(&r, 0, sizeof(r)); r.type = HAP_power_set_HMX; r.hmx.power_up = TRUE; HAP_power_set(pctx, &r); }
+    compute_res_attr_t va; HAP_compute_res_attr_init(&va);
+    HAP_compute_res_attr_set_vtcm_param(&va, 0x100000u, 0);
+    unsigned int vctx = HAP_compute_res_acquire(&va, 2000000);
+    uint8_t *vbase = (uint8_t *)HAP_compute_res_attr_get_vtcm_ptr(&va);
+    compute_res_attr_t ha; HAP_compute_res_attr_init(&ha); HAP_compute_res_attr_set_hmx_param(&ha, 1);
+    unsigned int hctx = HAP_compute_res_acquire(&ha, 2000000);
+    int hl = HAP_compute_res_hmx_lock(hctx);
+    if (!vbase || hl != 0) { if (hl == 0) HAP_compute_res_hmx_unlock(hctx); if (hctx) HAP_compute_res_release(hctx);
+        if (vctx) HAP_compute_res_release(vctx); return -1; }
+    p4_lut_init(); p4_lutc_init();
+    for (int t = 0; t < P; ++t) {
+        w16a16_mm_init(&g_p4s[t].mm, vbase + (size_t)t * 0x18000, g_p4s[t].descs);
+        memset(g_p4s[t].mm.out, 0, W16MM_OUT_BYTES);
+        uint16_t *s = (uint16_t *)g_p4s[t].mm.act;
+        for (int i = 0; i < 256 * 64; ++i) s[i] = 32768;
+        g_job[t].state = 0; g_pspin[t] = 0; g_plife[t] = 0;
+    }
+    g_p4Ah = Ah; g_p4Th = (uint8_t *)T; g_p4H = H; g_pdone = 0; g_next_head = 0;
+    g_sat = 0; g_tr_n = 0; g_cbusy = 0;
+    uint64_t us0 = HAP_perf_get_time_us(), t0 = phs_pcyc(); g_tr_base = t0;
+    qurt_thread_t tid[PHS_NT];
+    for (int t = 0; t < P; ++t) {
+        qurt_thread_attr_t a; qurt_thread_attr_init(&a); qurt_thread_attr_set_name(&a, (char *)"p4prod");
+        qurt_thread_attr_set_stack_addr(&a, g_stack[t]); qurt_thread_attr_set_stack_size(&a, sizeof(g_stack[t]));
+        if (qurt_thread_create(&tid[t], &a, p4_producer, (void *)(intptr_t)t) != QURT_EOK) tid[t] = 0;
+    }
+    while (g_pdone < P) {
+        for (int t = 0; t < P; ++t)
+            if (PHS_POLL(&g_job[t])) {
+                uint64_t k0 = phs_pcyc();
+                w16a16_mm_run(&g_p4s[t].mm);
+                uint64_t k1 = phs_pcyc(); g_cbusy += k1 - k0;
+                phs_tr((uint32_t)PHS_NT, PHS_S_MM, k0, k1);
+                PHS_DONE(&g_job[t]);
+            }
+    }
+    uint64_t t1 = phs_pcyc(), us1 = HAP_perf_get_time_us();
+    for (int t = 0; t < P; ++t) { int s; if (tid[t]) qurt_thread_join(tid[t], &s); }
+    if (hl == 0) HAP_compute_res_hmx_unlock(hctx); if (hctx) HAP_compute_res_release(hctx);
+    if (vctx) HAP_compute_res_release(vctx);
+    { HAP_power_request_t off; memset(&off, 0, sizeof(off)); off.type = HAP_power_set_HMX; off.hmx.power_up = FALSE; HAP_power_set(pctx, &off); }
+    uint64_t spin = 0; for (int t = 0; t < P; ++t) spin += g_pspin[t];
+    if (statsLen > 0) stats[0] = (int)(t1 - t0);
+    if (statsLen > 1) stats[1] = P;
+    if (statsLen > 2) stats[2] = H;
+    if (statsLen > 3) stats[3] = (int)g_cbusy;
+    if (statsLen > 4) stats[4] = (int)spin;
+    if (statsLen > 6) stats[6] = (int)(us1 - us0);
+    if (statsLen > 8) stats[8] = g_sat;
+    FARF(ALWAYS, "P4THR P=%d H=%d wall=%llu HMXbusy=%llu spin=%llu", P, H,
+         (unsigned long long)(t1 - t0), (unsigned long long)g_cbusy, (unsigned long long)spin);
+    return 0;
+}
+
+/* ---- Phase-4 floor bench (H==4): steady-state carrier mm + pack-stage costs.
+ * stats: [3]=cyc/mm steady (100 back-to-back) [4]=act64 pack [5]=wt pack [7]=bias pack [8]=depack */
+static int floor_bench(const uint8_t *A, int *stats, int statsLen, void *T, int TLen) {
+    (void)T; (void)TLen;
+    static int pwr_client; void *pctx = &pwr_client;
+    HAP_power_set_core_corner(pctx, HAP_DCVS_VCORNER_TURBO, HAP_DCVS_VCORNER_TURBO, HAP_DCVS_VCORNER_MAX);
+    { HAP_power_request_t r; memset(&r, 0, sizeof(r)); r.type = HAP_power_set_HMX; r.hmx.power_up = TRUE; HAP_power_set(pctx, &r); }
+    compute_res_attr_t va; HAP_compute_res_attr_init(&va);
+    HAP_compute_res_attr_set_vtcm_param(&va, 0x100000u, 0);
+    unsigned int vctx = HAP_compute_res_acquire(&va, 2000000);
+    uint8_t *vbase = (uint8_t *)HAP_compute_res_attr_get_vtcm_ptr(&va);
+    compute_res_attr_t ha; HAP_compute_res_attr_init(&ha); HAP_compute_res_attr_set_hmx_param(&ha, 1);
+    unsigned int hctx = HAP_compute_res_acquire(&ha, 2000000);
+    int hl = HAP_compute_res_hmx_lock(hctx);
+    if (!vbase || hl != 0) { if (hl == 0) HAP_compute_res_hmx_unlock(hctx); if (hctx) HAP_compute_res_release(hctx);
+        if (vctx) HAP_compute_res_release(vctx); return -1; }
+    static uint8_t descs[256] __attribute__((aligned(64)));
+    w16a16_mm_t mm; w16a16_mm_init(&mm, vbase, descs);
+    memset(mm.out, 0, W16MM_OUT_BYTES);
+    static uint16_t Au[256 * 64]; static int16_t Wq[4096]; static uint16_t Y[256 * 64];
+    memcpy(Au, A, sizeof(Au)); memcpy(Wq, A + sizeof(Au), sizeof(Wq));
+    w16a16_pack_act_crouton16(Au, (uint16_t *)mm.act, 256, 64);
+    w16a16_pack_wt_kmajor(Wq, mm.wt, 64, 64);
+    w16a16_pack_bias(Wq, mm.bias, 64, 64);
+    w16a16_mm_run(&mm);                                  /* warm */
+    uint64_t t0 = phs_pcyc();
+    for (int r = 0; r < 100; ++r) w16a16_mm_run(&mm);
+    uint64_t mmcyc = (phs_pcyc() - t0) / 100;
+    t0 = phs_pcyc(); for (int r = 0; r < 10; ++r) w16a16_pack_act_crouton16(Au, (uint16_t *)mm.act, 64, 64);
+    uint64_t actc = (phs_pcyc() - t0) / 10;              /* 64-row pack only */
+    t0 = phs_pcyc(); for (int r = 0; r < 10; ++r) w16a16_pack_wt_kmajor(Wq, mm.wt, 64, 64);
+    uint64_t wtc = (phs_pcyc() - t0) / 10;
+    t0 = phs_pcyc(); for (int r = 0; r < 10; ++r) w16a16_pack_bias(Wq, mm.bias, 64, 64);
+    uint64_t bic = (phs_pcyc() - t0) / 10;
+    t0 = phs_pcyc(); for (int r = 0; r < 10; ++r) w16a16_depack_crouton16((const uint16_t *)mm.out, Y, 256, 64);
+    uint64_t dpc = (phs_pcyc() - t0) / 10;
+    if (hl == 0) HAP_compute_res_hmx_unlock(hctx); if (hctx) HAP_compute_res_release(hctx);
+    if (vctx) HAP_compute_res_release(vctx);
+    { HAP_power_request_t off; memset(&off, 0, sizeof(off)); off.type = HAP_power_set_HMX; off.hmx.power_up = FALSE; HAP_power_set(pctx, &off); }
+    if (statsLen > 3) stats[3] = (int)mmcyc;
+    if (statsLen > 4) stats[4] = (int)actc;
+    if (statsLen > 5) stats[5] = (int)wtc;
+    if (statsLen > 7) stats[7] = (int)bic;
+    if (statsLen > 8) stats[8] = (int)dpc;
+    FARF(ALWAYS, "FLOOR: mm=%llu act64=%llu wt=%llu bias=%llu depack=%llu",
+         (unsigned long long)mmcyc, (unsigned long long)actc, (unsigned long long)wtc,
+         (unsigned long long)bic, (unsigned long long)dpc);
+    return 0;
+}
+
 /* entry: P producers + 1 main HMX consumer, all w16a16. stats[3]=HMX busy [4]=HVX busy(life-spin)
  * [5]=wall(domain) [6]=us. Tu (>=trace bytes) receives the timeline dump. */
 int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *Tu, int TLen) {
     if (H == 1) return mm_test(A, stats, statsLen, Tu, TLen);   /* Phase-1 primitive correctness mode */
     if (H == 2) return diag_solve(A, stats, statsLen, Tu, TLen); /* Phase-2 diagonal-block inverse */
     if (H == 3) return head_solve(A, stats, statsLen, Tu, TLen); /* Phase-3 full C=256 head */
+    if (H == 4) return floor_bench(A, stats, statsLen, Tu, TLen); /* Phase-4 stage-cost floor */
+    if (H >= 5) return (P >= 2) ? p4_threads(A, P, H, stats, statsLen, Tu, TLen)
+                                : p4_head_solve(A, H, stats, statsLen, Tu, TLen); /* Phase-4 */
     if (P > PHS_NT) P = PHS_NT; if (P < 1) P = 1;
     g_P = P; g_H = H; g_pdone = 0; g_next_head = 0; g_cbusy = 0; g_tr_n = 0;
     for (int t = 0; t < P; ++t) { g_job[t].state = 0; g_plife[t] = 0; g_pspin[t] = 0; }
