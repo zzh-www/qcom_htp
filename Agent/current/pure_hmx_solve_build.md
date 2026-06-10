@@ -99,10 +99,19 @@ cd example/gdn_native/pure_hmx_solve && cc -O2 w16a16_pack_test.c -o /tmp/w16pt 
       复跑:`uv run python scripts/run_w16a16_head_phase4.py --deploy --threads 4 --heads 32 --scale 0.05`(stats[9..11]=打包自检)。
       余下杠杆(未做,收益<1.3×):consumer 轮询间隙+尾部、K-stack 合并 merge、双缓冲 async dispatch。
 
+### 5.1 更正：64³ 单调用其实可用（用户质疑后复查）
+之前"64³ 描述符永不可用"**错**。真相 = QHPI 在 M=64 给的 **act/out 面都是 padded 2048B crouton 块
+（live 仅前 512B = m32 0..1 slabs），fixture 的 512B 紧凑 act 是 standalone 构建器自造的错布局**。
+正确组合（H==9 mm64-test 设备验证）：act/out 表偏移 stride 2048 + live-512B pack/depack +
+描述符 {N_t=2, y=64, n_tiles=64, m_total=1, k_total=64}、act y=128 → **byte-exact**
+（identity max diff=2，随机对配 [-1,1] max diff=3）。
+**P=4 全链切真 64³ 后：32-head wall 79.1M（之前 101.3M），HMX busy 21.8M=12.1K/mm，oc 9.7e-3 不变。**
+现瓶颈回到 producer prep（HMX 27% busy）；余下杠杆 = renorm/add 全 HVX、bias 向量化。
+
 ## 6. 终态结论
-w16a16 全 HMX 三角求逆 REAL 实现完成并到接近本实现 HMX 地板:32-head wall 101.3M cyc,HMX util 83%,
-oc≈9.7e-3(‖A‖₂≲4 全可用,≥5 爆炸=int16 数值真相)。w16a16 原语可用性 PROVEN(M=256 carrier);
-对比出货 GDNSolveHVXMixHMX 1.78M:慢 ~57×,本质 = 56×w16a16 mm/头的 HMX 算力成本,非实现缺陷(本项目目标为实现+学清,非比快)。
+w16a16 全 HMX 三角求逆 REAL 实现完成:**32-head wall 79.1M cyc(真 64³ 链),HMX 12.1K/mm,oc≈9.7e-3**
+(‖A‖₂≲4 全可用,≥5 爆炸=int16 数值真相)。w16a16 原语可用性 PROVEN(64³ 与 M=256 carrier 双 byte-exact);
+对比出货 GDNSolveHVXMixHMX 1.78M:慢 ~44×,本质 = 56×w16a16 mm/头的 HMX 算力成本,非实现缺陷(本项目目标为实现+学清,非比快)。
 
 ### 关键提醒（避免重蹈我的错）
 - w16a16 matmul **已 byte-exact、可用**（CI-gated）；drain 是 **2 的幂**不是 fp16。任何"f16 drain 有损/blocker"

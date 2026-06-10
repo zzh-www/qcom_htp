@@ -679,6 +679,10 @@ static int p4_threads(const uint8_t *Ah, int P, int H, int *stats, int statsLen,
     for (int t = 0; t < P; ++t) {
         g_p4stage[t] = (int16_t *)(vbase + (size_t)t * 0x1C000 + 0x16000);
         w16a16_mm_init(&g_p4s[t].mm, vbase + (size_t)t * 0x1C000, g_p4s[t].descs);
+        {   /* TRUE 64^3 descriptors (4x less HMX than the M=256 carrier; padded 2048B blocks, live 512B) */
+            hmx_conv_out_desc_t *od = (hmx_conv_out_desc_t *)g_p4s[t].mm.od;
+            od->out_y_stride_words = 64u; od->n_tiles_pow2 = 64u;
+        }
         memset(g_p4s[t].mm.out, 0, W16MM_OUT_BYTES);
         uint16_t *s = (uint16_t *)g_p4s[t].mm.act;
         for (int i = 0; i < 256 * 64; ++i) s[i] = 32768;
@@ -735,6 +739,83 @@ static int p4_threads(const uint8_t *Ah, int P, int H, int *stats, int statsLen,
     if (statsLen > 8) stats[8] = g_sat;
     FARF(ALWAYS, "P4THR P=%d H=%d wall=%llu HMXbusy=%llu spin=%llu", P, H,
          (unsigned long long)(t1 - t0), (unsigned long long)g_cbusy, (unsigned long long)spin);
+    return 0;
+}
+
+/* ---- mm64-test (H==9): TRUE 64^3 standalone — out blocks STRIDE 2048B(padded), live 512B (m32 0..1).
+ * payload A: [0..8K) act u16 64x64, [8K..16K) wt q16. out T: Y 8K + raw out surface 32K. */
+static int mm64_test(const uint8_t *A, int *stats, int statsLen, void *T, int TLen) {
+    if (TLen < 8192 + 0x8000) return -2;
+    static int pwr_client; void *pctx = &pwr_client;
+    HAP_power_set_core_corner(pctx, HAP_DCVS_VCORNER_TURBO, HAP_DCVS_VCORNER_TURBO, HAP_DCVS_VCORNER_MAX);
+    { HAP_power_request_t r; memset(&r, 0, sizeof(r)); r.type = HAP_power_set_HMX; r.hmx.power_up = TRUE; HAP_power_set(pctx, &r); }
+    compute_res_attr_t va; HAP_compute_res_attr_init(&va);
+    HAP_compute_res_attr_set_vtcm_param(&va, 0x100000u, 0);
+    unsigned int vctx = HAP_compute_res_acquire(&va, 2000000);
+    uint8_t *vbase = (uint8_t *)HAP_compute_res_attr_get_vtcm_ptr(&va);
+    compute_res_attr_t ha; HAP_compute_res_attr_init(&ha); HAP_compute_res_attr_set_hmx_param(&ha, 1);
+    unsigned int hctx = HAP_compute_res_acquire(&ha, 2000000);
+    int hl = HAP_compute_res_hmx_lock(hctx);
+    if (!vbase || hl != 0) { if (hl == 0) HAP_compute_res_hmx_unlock(hctx); if (hctx) HAP_compute_res_release(hctx);
+        if (vctx) HAP_compute_res_release(vctx); return -1; }
+    uint8_t *act = vbase; uint8_t *wt = vbase + 0x8000; int32_t *bias = (int32_t *)(vbase + 0xA000);
+    int32_t *atab = (int32_t *)(vbase + 0xA800), *otab = (int32_t *)(vbase + 0xA900);
+    uint32_t *ep = (uint32_t *)(vbase + 0xAA00), *mb = (uint32_t *)(vbase + 0xAA40);
+    uint8_t *out = vbase + 0xB000;
+    for (int rg = 0; rg < 16; ++rg) for (int t = 0; t < 2; ++t) {
+        atab[rg * 2 + t] = (int32_t)(uintptr_t)(act + ((rg & 7) * 2 + t) * 2048);   /* padded act blocks */
+        otab[rg * 2 + t] = (int32_t)(uintptr_t)(out + ((rg & 7) * 2 + t) * 2048);   /* stride 2048, live 512 */
+    }
+    static const uint32_t MASK[16] = { 0x0u,0x700u,0x0u,0x77cu,0x0u,0x0u,0x3ffu,0x0u,
+                                       0x0u,0x0u,0x0u,0x0u,0x80u,0x0u,0x0u,0x0u };
+    ep[0] = 1u; ep[1] = 1536u;
+    for (int i = 0; i < 16; ++i) mb[i] = MASK[i];
+    mb[14] = (uint32_t)(uintptr_t)ep;
+    static uint8_t descs[256] __attribute__((aligned(64)));
+    hmx_conv_out_desc_t *od = (hmx_conv_out_desc_t *)descs;
+    hmx_conv_act_desc_t *ad = (hmx_conv_act_desc_t *)(descs + 64);
+    od->out_tile_ptr_table = otab; od->out_table_stride_dwords = 2u; od->out_y_stride_words = 64u;
+    od->n_tiles_pow2 = 64u; od->m_total_minus_step = 1; od->k_total_bytes = 64u;   /* FORMULA: M=64 */
+    ad->act_ptr_pairs = atab; ad->n_act_pairs = 2u; ad->act_table_y_stride_words = 128u;
+    memset(act, 0, 0x8000u);
+    /* pack 64 live rows into PADDED 2048B act blocks (slabs m32 0..1 of each (row4,kt)) */
+    {
+        const uint16_t *Au = (const uint16_t *)A;
+        for (int r4 = 0; r4 < 8; ++r4) for (int kt = 0; kt < 2; ++kt) {
+            uint16_t *blk = (uint16_t *)(act + (r4 * 2 + kt) * 2048);
+            for (int m32 = 0; m32 < 2; ++m32) for (int rp = 0; rp < 2; ++rp) {
+                int r0 = m32 * 32 + r4 * 4 + rp * 2;
+                uint16_t *d = blk + (m32 * 2 + rp) * 64;
+                for (int c = 0; c < 32; ++c) { d[c * 2] = Au[r0 * 64 + kt * 32 + c]; d[c * 2 + 1] = Au[(r0 + 1) * 64 + kt * 32 + c]; }
+            }
+        }
+    }
+    if (0) w16a16_pack_act_crouton16((const uint16_t *)A, (uint16_t *)act, 64, 64);
+    w16a16_pack_wt_kmajor((const int16_t *)(A + 8192), wt, 64, 64);
+    w16a16_pack_bias((const int16_t *)(A + 8192), bias, 64, 64);
+    memset(out, 0, 0x8000u);
+    uint64_t k0 = phs_pcyc();
+    our_v73deep_kernel_i16(od, ad, wt, (const uint8_t *)bias, (const hmx_conv_mask_desc_t *)mb, ep);
+    uint64_t k1 = phs_pcyc();
+    /* deblock: 16 blocks stride 2048B, live = slabs m32 0..1 (512B) */
+    uint16_t *Y = (uint16_t *)T;
+    for (int r4 = 0; r4 < 8; ++r4) for (int nt = 0; nt < 2; ++nt) {
+        const uint16_t *blk = (const uint16_t *)(out + (r4 * 2 + nt) * 2048);
+        for (int m32 = 0; m32 < 2; ++m32) for (int rp = 0; rp < 2; ++rp) {
+            int r0 = m32 * 32 + r4 * 4 + rp * 2;
+            const uint16_t *sp = blk + (m32 * 2 + rp) * 64;
+            for (int c = 0; c < 32; ++c) {
+                Y[r0 * 64 + nt * 32 + c] = sp[c * 2];
+                Y[(r0 + 1) * 64 + nt * 32 + c] = sp[c * 2 + 1];
+            }
+        }
+    }
+    memcpy((uint8_t *)T + 8192, out, 0x8000u);
+    if (hl == 0) HAP_compute_res_hmx_unlock(hctx); if (hctx) HAP_compute_res_release(hctx);
+    if (vctx) HAP_compute_res_release(vctx);
+    { HAP_power_request_t off; memset(&off, 0, sizeof(off)); off.type = HAP_power_set_HMX; off.hmx.power_up = FALSE; HAP_power_set(pctx, &off); }
+    if (statsLen > 3) stats[3] = (int)(k1 - k0);
+    FARF(ALWAYS, "MM64 kernel=%llu cyc", (unsigned long long)(k1 - k0));
     return 0;
 }
 
@@ -795,6 +876,7 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *Tu, int 
     if (H == 2) return diag_solve(A, stats, statsLen, Tu, TLen); /* Phase-2 diagonal-block inverse */
     if (H == 3) return head_solve(A, stats, statsLen, Tu, TLen); /* Phase-3 full C=256 head */
     if (H == 4) return floor_bench(A, stats, statsLen, Tu, TLen); /* Phase-4 stage-cost floor */
+    if (H == 9) return mm64_test(A, stats, statsLen, Tu, TLen);   /* TRUE 64^3 (padded out blocks) */
     if (H >= 5) return (P >= 2) ? p4_threads(A, P, H, stats, statsLen, Tu, TLen)
                                 : p4_head_solve(A, H, stats, statsLen, Tu, TLen); /* Phase-4 */
     if (P > PHS_NT) P = PHS_NT; if (P < 1) P = 1;
