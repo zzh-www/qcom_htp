@@ -33,6 +33,8 @@ fused w16a16 64³(33×流量)、全 BP4 出货(producer 工作量)、双 gain �
 
 | 6 | act/Wq/final boost(逐源标定) | 否决(oracle) | — | 3.3e-2(clip) | Wq 实测已填 {126,97,97}、act 满 127,boost 即 clip;final 码 46-53 半满但 re-narrow 反噬(死路 F=2 同因),净增益 <1.1× |
 
+| 7 | wall: glue 批处理(N-job) | 否决(timeline) | — | — | SBOOST timeline: SIG+SPIN+POST 仅 ~0.12M wall,批处理上限 <0.1M(<5%) |
+
 ## 断点(进行中)
 
-无。**精度方向 cheap 区已清空**(全源 8-bit 码已填满,地板 all∞=4.4e-4 只能用 16-bit lane=BP4 部件=wall 换)。下一轮转 wall:① 冷态复验 1.69M;② u8i8+SBOOST timeline 重测,glue 批处理(相邻 j 的 kstack 独立 → N-job 一握手,pair-job 基建已在);③ requant/diag 域微优。
+无。**双向 cheap 区均已清空**。SBOOST timeline 分布(2026-06-11):DIAG 27% / MM 16% / REQ 7-13% / QUANT+PACK 14% / glue 4% / CONS 6%。再降 wall 需动 DIAG(串行 forward-subst)或 REQ(requant 16-bit 写)结构;再降 oc 需 16-bit lane(=BP4 部件,wall 换)。冷态 1.69M 复验两次失败(设备持续 1.92M 热),绝对 wall 待环境。**Loop 终态:连续 2 轮零增益,停。**
