@@ -505,34 +505,89 @@ static int p4_head_solve(const uint8_t *Ah, int H, int *stats, int statsLen, voi
     return 0;
 }
 
+/* ---- HVX helpers for the producer prep (vmem on cached DDR is fine; only vscatter needs VTCM). */
+#include "hexagon_types.h"
+#include "hvx_hexagon_protos.h"
+#define P4V ((int)sizeof(HVX_Vector))            /* 128B */
+/* dst_u16[i] = src_i16[i] + 32768 (= xor 0x8000), n multiple of 64 */
+static inline void p4v_i16_to_u16(uint16_t *dst, const int16_t *src, int n) {
+    const HVX_Vector K = Q6_Vh_vsplat_R(0x8000);
+    HVX_Vector *d = (HVX_Vector *)dst; const HVX_Vector *s = (const HVX_Vector *)src;
+    for (int i = 0; i < n / 64; ++i) d[i] = Q6_V_vxor_VV(s[i], K);
+}
+/* u16->i16 (xor 0x8000) — same op both directions. */
+#define p4v_u16_to_i16(dst, src, n) p4v_i16_to_u16((uint16_t *)(dst), (const int16_t *)(src), (n))
+
+/* HVX weight pack: gather q16 (stream order) from a VTCM staging copy of w_cv, then lo/hi split +
+ * 4lo|4hi interleave (vshuff 4B grains). g_p4hw[h] = byte offset (in staging) of stream halfword h. */
+static uint16_t *g_p4hw;          /* shared VTCM LUT, 4096 u16 */
+static void p4_hwlut_init(void) { /* stream order from the proven scalar packer loops */
+    int h = 0;
+    for (int nt = 0; nt < 2; ++nt)
+        for (int half = 0; half < 2; ++half)
+            for (int kt = 0; kt < 2; ++kt)
+                for (int grp = 0; grp < 8; ++grp)
+                    for (int idx = 0; idx < 64; idx += 8)
+                        for (int j = 0; j < 8; ++j) {
+                            int vi = idx + j, lane = vi / 16, off0 = (grp * 8 + half * 4 + lane) * 16;
+                            int off = off0 + (vi & 15);
+                            int rgrp = off / 128, rem = off % 128;
+                            int col = rem / 4, row = rgrp * 4 + rem % 4;
+                            g_p4hw[h++] = (uint16_t)(2 * g_p4lut[(kt * 32 + row) * 64 + (nt * 32 + col)]);
+                        }
+}
+static void p4v_pack_wt_bias(const int16_t *w_cv, int16_t *stage /*VTCM 8KB*/, uint8_t *wt, int32_t *bias) {
+    for (int i = 0; i < 4096 / 64; ++i) ((HVX_Vector *)stage)[i] = ((const HVX_Vector *)w_cv)[i];
+    HVX_Vector *gtmp = (HVX_Vector *)(stage + 4096);          /* 2 gather slots right after staging */
+    const HVX_Vector *ofs = (const HVX_Vector *)g_p4hw;
+    for (int v = 0; v < 64; v += 2) {
+        Q6_vgather_ARMVh((void *)&gtmp[0], (uint32_t)(uintptr_t)stage, 8191, ofs[v]);
+        Q6_vgather_ARMVh((void *)&gtmp[1], (uint32_t)(uintptr_t)stage, 8191, ofs[v + 1]);
+        HVX_Vector q0 = gtmp[0], q1 = gtmp[1];
+        HVX_Vector lo = Q6_Vb_vpacke_VhVh(q1, q0);                                  /* low bytes  */
+        const HVX_Vector K128 = Q6_Vh_vsplat_R(128);
+        HVX_Vector h0 = Q6_Vh_vasr_VhR(Q6_Vh_vadd_VhVh_sat(q0, K128), 8);
+        HVX_Vector h1 = Q6_Vh_vasr_VhR(Q6_Vh_vadd_VhVh_sat(q1, K128), 8);
+        HVX_Vector hi = Q6_Vb_vpack_VhVh_sat(h1, h0);
+        HVX_VectorPair il = Q6_W_vshuff_VVR(hi, lo, -4);                            /* 4lo|4hi grains */
+        ((HVX_Vector *)wt)[v] = Q6_V_lo_W(il); ((HVX_Vector *)wt)[v + 1] = Q6_V_hi_W(il);
+    }
+    /* bias: scalar colsum via LUT (12K cyc; HVX lane-fold attempt was wrong - keep simple) */
+    static const int32_t ctrl[2] = { 0x00404420, 0x40000000 };
+    for (int n = 0; n < 64; ++n) {
+        long cs = 0;
+        for (int k = 0; k < 64; ++k) cs += w_cv[g_p4lut[k * 64 + n]];
+        long v2 = -cs, eff = (v2 >= 0) ? (v2 / 2) : -(((-v2) + 1) / 2);
+        int g = n >> 4, idx = n & 15;
+        bias[g * 64 + 32 + idx * 2] = (int32_t)eff; bias[g * 64 + 32 + idx * 2 + 1] = 0;
+    }
+    for (int g = 0; g < 4; ++g) for (int i = 0; i < 32; ++i) bias[g * 64 + i] = ctrl[i & 1];
+}
+
 /* ---- Phase-4 threaded (H>=5 && P>=2): P producers chain whole heads (scalar prep in DDR),
  * 1 main HMX consumer runs kernels on per-slot VTCM buffers. */
 struct p4_slot {
     w16a16_mm_t mm; uint8_t descs[256] __attribute__((aligned(64)));
-    int16_t A[16][4096], T[16][4096], scr[4 * 4096], lin[4096], prod[4096];
-    int32_t acc[4096];
+    int16_t A[16][4096] __attribute__((aligned(128))), T[16][4096] __attribute__((aligned(128)));
+    int16_t scr[4 * 4096] __attribute__((aligned(128))), lin[4096], prod[4096] __attribute__((aligned(128)));
+    int32_t acc[4096] __attribute__((aligned(128)));
 };
 static p4_slot g_p4s[PHS_NT];
 static const uint8_t *g_p4Ah; static uint8_t *g_p4Th; static int g_p4H;
 
+static int16_t *g_p4stage[PHS_NT];   /* per-slot VTCM staging for the HVX weight gather */
 static void p4_mm_thr(int slot, const int16_t *a_cv, const int16_t *w_cv, int16_t *out_cv) {
     p4_slot *S = &g_p4s[slot];
     uint16_t *act = (uint16_t *)S->mm.act;
     uint64_t p0 = phs_pcyc();
-    for (int b = 0; b < 16; ++b) {
-        const int16_t *s = a_cv + b * 256; uint16_t *d = act + b * 1024;
-        for (int i = 0; i < 256; ++i) d[i] = (uint16_t)(32768 + s[i]);
-    }
-    p4_pack_wt_bias(w_cv, S->mm.wt, S->mm.bias, S->lin);
+    for (int b = 0; b < 16; ++b) p4v_i16_to_u16(act + b * 1024, a_cv + b * 256, 256);
+    p4v_pack_wt_bias(w_cv, g_p4stage[slot], S->mm.wt, S->mm.bias);
     uint64_t p1 = phs_pcyc(); phs_tr((uint32_t)slot, PHS_S_PREP, p0, p1);
     PHS_ARM(&g_job[slot]);
     uint64_t s0 = phs_pcyc(); PHS_WAIT(&g_job[slot]); PHS_RESET(&g_job[slot]);
     uint64_t s1 = phs_pcyc(); g_pspin[slot] += s1 - s0; phs_tr((uint32_t)slot, PHS_S_SPIN, s0, s1);
     const uint16_t *o = (const uint16_t *)S->mm.out;
-    for (int b = 0; b < 16; ++b) {
-        const uint16_t *s = o + b * 1024; int16_t *d = out_cv + b * 256;
-        for (int i = 0; i < 256; ++i) d[i] = (int16_t)((int)s[i] - 32768);
-    }
+    for (int b = 0; b < 16; ++b) p4v_u16_to_i16(out_cv + b * 256, o + b * 1024, 256);
 }
 static int p4_diag_thr(int slot, const int16_t *Acv, int16_t *Xcv) {
     p4_slot *S = &g_p4s[slot];
@@ -561,10 +616,9 @@ static int p4_diag_thr(int slot, const int16_t *Acv, int16_t *Xcv) {
 static void p4_producer(void *arg) {
     int slot = (int)(intptr_t)arg;
     p4_slot *S = &g_p4s[slot];
+    int hvx = qurt_hvx_lock(QURT_HVX_MODE_128B);
     uint64_t life0 = phs_pcyc();
-    for (;;) {
-        int h = __atomic_fetch_add(&g_next_head, 1, __ATOMIC_RELAXED);
-        if (h >= g_p4H) break;
+    for (int h = slot; h < g_p4H; h += g_P) {   /* static interleave (HVXMixHMX-proven) */
         const int16_t *Aq = (const int16_t *)(g_p4Ah + (size_t)h * 131072);
         int eT[16];
         for (int bi = 0; bi < 4; ++bi) for (int bj = 0; bj <= bi; ++bj) {
@@ -600,6 +654,7 @@ static void p4_producer(void *arg) {
         memcpy((uint8_t *)To + 128, eT, 64);
     }
     g_plife[slot] = phs_pcyc() - life0;
+    if (hvx == 0) qurt_hvx_unlock();
     __atomic_fetch_add(&g_pdone, 1, __ATOMIC_RELEASE);
 }
 
@@ -619,14 +674,34 @@ static int p4_threads(const uint8_t *Ah, int P, int H, int *stats, int statsLen,
     if (!vbase || hl != 0) { if (hl == 0) HAP_compute_res_hmx_unlock(hctx); if (hctx) HAP_compute_res_release(hctx);
         if (vctx) HAP_compute_res_release(vctx); return -1; }
     p4_lut_init(); p4_lutc_init();
+    g_p4hw = (uint16_t *)(vbase + 0x70000);
+    p4_hwlut_init();
     for (int t = 0; t < P; ++t) {
-        w16a16_mm_init(&g_p4s[t].mm, vbase + (size_t)t * 0x18000, g_p4s[t].descs);
+        g_p4stage[t] = (int16_t *)(vbase + (size_t)t * 0x1C000 + 0x16000);
+        w16a16_mm_init(&g_p4s[t].mm, vbase + (size_t)t * 0x1C000, g_p4s[t].descs);
         memset(g_p4s[t].mm.out, 0, W16MM_OUT_BYTES);
         uint16_t *s = (uint16_t *)g_p4s[t].mm.act;
         for (int i = 0; i < 256 * 64; ++i) s[i] = 32768;
         g_job[t].state = 0; g_pspin[t] = 0; g_plife[t] = 0;
     }
-    g_p4Ah = Ah; g_p4Th = (uint8_t *)T; g_p4H = H; g_pdone = 0; g_next_head = 0;
+    {   /* one-shot self-check: HVX pack vs scalar pack must be byte-exact */
+        static int16_t wcv[4096]; static uint8_t wA[8192], wB[8192];
+        static int32_t bA[256], bB[256]; static int16_t lin[4096];
+        for (int i = 0; i < 4096; ++i) wcv[i] = (int16_t)((i * 2654435761u >> 16) & 0xffff);
+        for (int i = 0; i < 4096; ++i) if (wcv[i] > 32639) wcv[i] = 32639; else if (wcv[i] < -32639) wcv[i] = -32639;
+        int hvx = qurt_hvx_lock(QURT_HVX_MODE_128B);
+        p4v_pack_wt_bias(wcv, g_p4stage[0], wA, bA);
+        if (hvx == 0) qurt_hvx_unlock();
+        p4_pack_wt_bias(wcv, wB, bB, lin);
+        int dw = 0, db = 0, fw = -1;
+        for (int i = 0; i < 8192; ++i) if (wA[i] != wB[i]) { if (fw < 0) fw = i; ++dw; }
+        for (int i = 0; i < 256; ++i) if (bA[i] != bB[i]) ++db;
+        FARF(ALWAYS, "P4 PACKCHK wt diff=%d first=%d bias diff=%d", dw, fw, db);
+        if (statsLen > 9) stats[9] = dw;
+        if (statsLen > 10) stats[10] = bA[32];
+        if (statsLen > 11) stats[11] = bB[32];
+    }
+    g_p4Ah = Ah; g_p4Th = (uint8_t *)T; g_p4H = H; g_P = P; g_pdone = 0; g_next_head = 0;
     g_sat = 0; g_tr_n = 0; g_cbusy = 0;
     uint64_t us0 = HAP_perf_get_time_us(), t0 = phs_pcyc(); g_tr_base = t0;
     qurt_thread_t tid[PHS_NT];
