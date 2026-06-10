@@ -11,7 +11,7 @@
 
 | 配置 | wall | oc | 备注 |
 |---|---|---|---|
-| **u8i8+SBOOST(新出货候选,`-DGDN_BR_SBOOST`)** | **=基线(同日 1.91M vs 1.91M,差 0)** | **5.01e-3(2.7×)** | Sacc drain gain ×4,零结构改动;2026-06-11 热态,冷态复测应回 ~1.69M |
+| **u8i8+SBOOST 逐d(`-DGDN_BR_SBOOST`,B(d)={5.5,12,20})** | **=基线(同日 1.88M vs 1.91M)** | **3.95e-3(3.5×)** | 逐 d 标定 boost,零结构改动;热态,冷态应回 ~1.69M |
 | u8i8 基线 | 1.69M(冷)/1.91M(2026-06-11 热) | 1.37e-2 | — |
 | BP4(`-DGDN_BR_BP4`) | 2.71M | 4.90e-3 | 精度备选档;SBOOST 以零代价拿到同级精度,BP4 仅余 ~2% 优势 |
 
@@ -20,11 +20,17 @@
 | # | 优化点 | 状态 | wall | oc | 结论 |
 |---|---|---|---|---|---|
 | 0 | BP4 byte-pass 全套(act+wt 拆字节, 3/2 pass) | 否决(wall) | 2.71M | 4.90e-3 | producer +8.4K/merge 是地板,HMX/glue 无关;部件可借 |
-| 1a | Sacc drain boost B=4(`-DGDN_BR_SBOOST`) | **通过** | =基线 | **5.01e-3** | Holder 界松 16×;maxSacc 码 87(32头),B=8 会 clip;oracle F=1 B=4 4.99e-3 兑现 |
+| 1a | Sacc drain boost B=4 | 通过(被 1c 取代) | =基线 | 5.01e-3 | Holder 界松 16× |
+| 1c | 逐 d boost B(d)={5.5,12,20}(`-DGDN_BR_SBOOST` 现值) | **通过** | =基线 | **3.95e-3** | 32头 max 码 {120,101,112},余量 6-20%;oracle 3.93e-3 兑现 |
 | 1b | d 分层 sTw(d)(F=2/4) | 否决(oracle) | — | 1.5e-2/4.7e-2 | re-narrow 取整误差盖过分层收益,比基线还差 |
-| 2 | final lo pass 仅 d≥2(pair-job 复用,~+0.1M) | 待试 | — | — | SBOOST 后边际收益需重扫 oracle |
-| 3 | drain dither(双发 ±0.5 LSB 均值,~+0.1M) | 待试 | — | — | drain 误差减半,地板收益,SBOOST 后边际需重扫 |
+| 2 | final lo pass 仅 d≥2 | 否决(oracle) | +~0.1M | 4.62e-3 | 仅 1.08× < 1.2× 门槛,不抵 wall |
+| 3 | drain dither | 否决(oracle 分解) | +~0.25M | — | 误差源无单主导(Sacc 1.3e-3/fin 0.8e-3),√2 收益 < 门槛 |
+| 5 | 误差源分解(B=4): act∞4.67/Ta∞4.97/Wq∞4.87/Sacc∞3.69/fin∞4.17/all∞4.4e-4 | 记录 | — | — | 全 exact 地板 4.4e-4=继续可挖;单源收益 ≤1.35× |
 
 ## 已证死路(勿重试)
 
-fused w16a16 64³(33×流量)、全 BP4 出货(producer 工作量)、双 gain 取高低 8 位(drain 饱和不回绕)、HVX consumer(5 on 4 thrash)、2-head pack 融合、d≥2 局部 BP4(+0.5M 仍穿门)。
+fused w16a16 64³(33×流量)、全 BP4 出货(producer 工作量)、双 gain 取高低 8 位(drain 饱和不回绕)、HVX consumer(5 on 4 thrash)、2-head pack 融合、d≥2 局部 BP4(+0.5M 仍穿门)、d 分层 sTw(d)存储码 F=2/4(re-narrow 取整反噬,B=4 下 1.4e-2/4.7e-2)、final lo pass(1.08×)、dither(<1.2×)。
+
+## 断点(进行中)
+
+无。下一轮候选思路:act/Wq/final 同时 boost(各源都有 ~10-30% 松界,联合 ≈1.3-1.4×);final force sTw 改 calibrated(T 码只填 ~0.16/sTw≈20 → final boost ×6 但 16-bit 存储即可,8-bit 出货线需衡量);1.69M wall 复验(冷态)。
