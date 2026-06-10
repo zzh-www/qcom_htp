@@ -174,6 +174,10 @@ static float g_cal_swS = 0.f;
 static __thread float g_ops_u8 = 0.f, g_ops_i8 = 0.f;   /* >0 => fixed output scale for u8/i8 quant */
 static __thread float g_force_sP = 0.f;   /* >0 => force gdn_merge_packed output to drain at this scale (e.g. sTw) */
 #endif
+/* K-stack n_act_pairs (= 2*d K-tiles): producer sets before a dispatch so the kernel runs a K=64d matmul
+ * (Sigma_k accumulated in the HMX accumulator, single drain).  Default 2 (= single 64-block, K=64).
+ * Per-thread; the pipe consumer reads it via jb->n_act_pairs (set on the producer in gdn_pipe_dispatch). */
+static __thread int g_kstack_nap = 2;
 
 /* VTCM scratch carved from the TCM_Only scratch tensor.  Buffers are spaced 0x10000 (64 KB) apart —
  * matching the proven M1 sim harness layout — so any HMX over-write/alignment slack can't clobber a
@@ -191,7 +195,32 @@ struct gdn_vtcm_t {
      * T-wt k-major   : wcache + key*0x1000  (key = gdn_blk_index(k,j)) */
     uint8_t *acache;  /* A-act + Tdiag-act crouton cache (base+0x41000 .. +0x4F000) */
     int8_t  *wcache;  /* T-wt k-major cache (base+0x4F000 .. +0x59000) */
+#if defined(GDN_BR_W16)
+    int16_t *stage;   /* W16: VTCM staging for the HVX vgather weight pack (8K codes + gather slots) */
+#endif
 };
+#if defined(GDN_BR_W16)
+/* W16 layout: every HMX surface u16/int16.  Act/out keep the PROVEN padded 2048B-block layout
+ * (mm64/H=9 byte-exact; compact 512B act REFUTED on device).  A 32K padded act is too big to cache
+ * -> A acts are use-once and packed TRANSIENT into 3 padded slots (acache + m*0x8000); Tdiag is cached
+ * as NATURAL u16 codes (8K) and re-packed per final merge.  wcache keeps the 8K 4-pass wt streams. */
+#define GDN_W16_BLK 0x2000
+#define GDN_W16_ACT_SLOT(vt, m)  ((vt)->acache + (size_t)(m) * 0x8000)
+#define GDN_W16_TDIAG_NAT(vt, i) ((uint16_t *)((vt)->acache + 0x18000 + (size_t)(i) * 0x2000))
+static gdn_vtcm_t gdn_vtcm_from(uint8_t *base) {
+    gdn_vtcm_t v;
+    v.act    = base + 0x00000;
+    v.wt     = (int8_t *)(base + 0x02000);         /* K-stack contiguous wt stream, up to 3*8K */
+    v.bias   = (int32_t *)(base + 0x08000);        /* 1K bias record */
+    v.acttab = (int32_t *)(base + 0x08800);        /* 16*2*d entries */
+    v.outtab = (int32_t *)(base + 0x08C00);        /* 32 entries */
+    v.stage  = (int16_t *)(base + 0x09000);        /* 8K staging + gather slots */
+    v.out    = base + 0x10000;                     /* 32K padded out surface */
+    v.acache = base + 0x18000;                     /* 3 transient padded acts (3x32K) + 4 Tdiag nat (4x8K) */
+    v.wcache = (int8_t *)(base + 0x40000);         /* 10 wt streams x 0x2000 -> 0x54000 */
+    return v;
+}
+#else
 static gdn_vtcm_t gdn_vtcm_from(uint8_t *base) {
     gdn_vtcm_t v;
     v.act    = base + 0x00000;
@@ -204,6 +233,7 @@ static gdn_vtcm_t gdn_vtcm_from(uint8_t *base) {
     v.wcache = (int8_t *)(base + 0x4F000);
     return v;
 }
+#endif
 
 /* ---- diagonal 64x64 forward-subst (ported from GdnSolveOp C=64 path) ---- */
 static inline void gdn_fold_MS(float sA, int *pM, int *pS) {
@@ -293,13 +323,39 @@ static void gdn_fold_block_raw(const uint16_t *Au, int row_stride, int32_t *Afx,
  *     idle issue slots) + overlapped with the merge HMX work.  So the inline-asm scalar-prefetch fix
  *     recovers the 3x SINGLE-THREAD but gives ~0% on the real 4-thread solve (and 4-thread wall has ~10%
  *     noise >> any fwdsubst gain).  NOT WORTH the intricate variable-trip asm -> kept the clean form. */
+#ifndef GDN_BR_FWD_ROWS
+#define GDN_BR_FWD_ROWS BL   /* cap-test: forward-subst only the first N rows (T garbage but mxmem timing data-
+                              * independent => valid wall-delta) -> measures how much fwdsubst work moves the wall. */
+#endif
 static void gdn_diag_fwdsubst(const int32_t *__restrict Afx, int16_t *__restrict Tc16, int16_t ei16) {
-    for (int i = 0; i < BL; ++i) {
+    for (int i = 0; i < GDN_BR_FWD_ROWS; ++i) {
+#if defined(GDN_BR_DIAG_MACC)
+        /* ❌ REFUTED (2026-06-08, A/B 3-round): 4 independent accumulators to break the acc-chain do NOT help
+         * (neutral-to-slightly-worse, bit-exact).  => fwdsubst is NOT vmpyacc-latency-bound; the 3.2x-over-lower-
+         * bound is SCALAR-LOAD-bound (Afx[i,k] per MAC).  Multi-acc adds combine + register pressure.  Don't retry
+         * latency-hiding on diag.  Kept flag-gated as the documented negative. */
+        HVX_VectorPair a0 = Q6_W_vzero(), a1 = Q6_W_vzero(), a2 = Q6_W_vzero(), a3 = Q6_W_vzero();
+        const int16_t *Tk = Tc16; const int32_t *Ar = Afx + i * BL; int k = 0;
+        for (; k + 4 <= i; k += 4) {
+            a0 = Q6_Ww_vmpyacc_WwVhRh(a0, ((const HVX_Vector *)(Tk + (k + 0) * BL))[0], Ar[k + 0]);
+            a1 = Q6_Ww_vmpyacc_WwVhRh(a1, ((const HVX_Vector *)(Tk + (k + 1) * BL))[0], Ar[k + 1]);
+            a2 = Q6_Ww_vmpyacc_WwVhRh(a2, ((const HVX_Vector *)(Tk + (k + 2) * BL))[0], Ar[k + 2]);
+            a3 = Q6_Ww_vmpyacc_WwVhRh(a3, ((const HVX_Vector *)(Tk + (k + 3) * BL))[0], Ar[k + 3]);
+        }
+        for (; k < i; ++k)
+            a0 = Q6_Ww_vmpyacc_WwVhRh(a0, ((const HVX_Vector *)(Tk + k * BL))[0], Ar[k]);
+        HVX_Vector lo = Q6_Vw_vadd_VwVw(Q6_Vw_vadd_VwVw(Q6_V_lo_W(a0), Q6_V_lo_W(a1)),
+                                        Q6_Vw_vadd_VwVw(Q6_V_lo_W(a2), Q6_V_lo_W(a3)));
+        HVX_Vector hi = Q6_Vw_vadd_VwVw(Q6_Vw_vadd_VwVw(Q6_V_hi_W(a0), Q6_V_hi_W(a1)),
+                                        Q6_Vw_vadd_VwVw(Q6_V_hi_W(a2), Q6_V_hi_W(a3)));
+        ((HVX_Vector *)(Tc16 + i * BL))[0] = Q6_Vh_vasr_VwVwR_rnd_sat(hi, lo, GDN_BR_F);
+#else
         HVX_VectorPair acc = Q6_W_vzero();
         for (int k = 0; k < i; ++k)
             acc = Q6_Ww_vmpyacc_WwVhRh(acc, ((const HVX_Vector *)(Tc16 + k * BL))[0], Afx[i * BL + k]);
         ((HVX_Vector *)(Tc16 + i * BL))[0] =
             Q6_Vh_vasr_VwVwR_rnd_sat(Q6_V_hi_W(acc), Q6_V_lo_W(acc), GDN_BR_F);  /* even/odd -> natural int16 */
+#endif
         Tc16[i * BL + i] += ei16;
     }
 }
@@ -340,6 +396,19 @@ static void gdn_solve_diag64(gdn_scr_t *sc, const uint16_t *Au, int row_stride, 
         *mx_out = lanes[0];
     }
 }
+
+#if defined(GDN_BR_DIAG_I16)
+/* int16-DIRECT diag: fold + fwdsubst write int16 codes STRAIGHT into the int16 store (Tblk16).  Skips the
+ * int32 widen (inside gdn_solve_diag64) AND the caller's int32->int16 narrow — that round-trip was pure
+ * redundant work since the merge consumes int16 (Tblk16).  fwdsubst is in-place (reads k<i already written),
+ * so writing directly to Tblk16 is safe & bit-exact vs widen->narrow. */
+static void gdn_solve_diag64_i16(gdn_scr_t *sc, const uint16_t *Au, int row_stride, int zpA, int M, int S,
+                                 int16_t *Tblk16_out) {
+    gdn_fold_block_hvx(Au, row_stride, sc->Afx, zpA, M, S);
+    const int16_t ei16 = (int16_t)(int)(1.0f / GDN_BR_TI + 0.5f);
+    gdn_diag_fwdsubst(sc->Afx, Tblk16_out, ei16);
+}
+#endif
 
 /* ---- HVX integer helpers for scale-estimation + int8 packing (replace the scalar float path) ---- */
 
@@ -440,6 +509,9 @@ static float gdn_quant_u8_from_codes(gdn_scr_t *sc, const int32_t *codes, float 
  * Mg) avoid the M*Mg overflow while skipping the int32 memory round-trip. */
 static void gdn_fold_quant_u8(gdn_scr_t *sc, const uint16_t *Au, int row_stride, uint8_t *out,
                               int zpA, int M, int S, float sQ) {
+#if defined(GDN_BR_CAP_QUANT)
+    return;   /* cap-test: skip A fold+quant (out stale; mxmem/depack timing data-independent => valid wall-delta) */
+#endif
     float g = (float)(1.0 / (1 << GDN_BR_F)) / sQ;
     int Q = 14;
     while (Q > 1  && g * (float)(1 << Q) >= 32768.0f) --Q;
@@ -580,6 +652,9 @@ static void gdn_requant_block_out(const int32_t *codes, float scale_in, float sT
  * 4 unaligned source-row loads via ror+mask (NO scalar VTCM stores — the old 256-scalar-uint64-store path
  * was the dominant glue cost, ~40K cyc/head). */
 static void gdn_pack_act_crouton8(const uint8_t *act_mk, uint8_t *out_buf) {
+#if defined(GDN_BR_CAP_PACK) || defined(GDN_BR_CAP_PACK_A)
+    return;   /* cap-test: skip crouton (activation) pack (valid wall-delta; mxmem timing data-independent) */
+#endif
     /* m = [0xFF x32, 0 x96]; m1/m2/m3 = same 32-wide window rotated into bytes [32,64)/[64,96)/[96,128). */
     const HVX_Vector m  = Q6_V_valign_VVR(Q6_V_vzero(), Q6_Vb_vsplat_R(-1), 96);
     const HVX_Vector m1 = Q6_V_vror_VR(m, 96);
@@ -613,6 +688,9 @@ static void gdn_pack_act_crouton8(const uint8_t *act_mk, uint8_t *out_buf) {
  * the 4 source rows (32 bytes each) into a 128-byte HVX vector via two vshuffs (4-way byte interleave)
  * then store the 128-byte result.  ~10x fewer ops than the per-byte scatter. */
 static void gdn_pack_w8_kmajor(const int8_t *w_kn, int8_t *packed) {
+#if defined(GDN_BR_CAP_PACK) || defined(GDN_BR_CAP_PACK_W)
+    return;   /* cap-test: skip kmajor (weight) pack (valid wall-delta) */
+#endif
     int out = 0;
     for (int kt = 0; kt < 2; ++kt) {
         int k_base = kt * 32;
@@ -906,7 +984,7 @@ static void gdn_hmx_run_only(const gdn_vtcm_t *vt, const int8_t *wt_kmajor, cons
         vt->outtab, GDN_BR_OUT_TABLE_STRIDE, GDN_BR_OUT_Y_STRIDE,
         GDN_BR_N_TILES_POW2, GDN_BR_M_TOTAL_MINUS_STEP, GDN_BR_K_TOTAL_BYTES };
     hmx_conv_act_desc_t act_desc __attribute__((aligned(64))) = {
-        vt->acttab, GDN_BR_N_ACT_PAIRS, GDN_BR_ACT_Y_STRIDE };
+        vt->acttab, (uint32_t)g_kstack_nap, GDN_BR_ACT_Y_STRIDE };   /* K-stack: 2*d K-tiles (default 2) */
     /* HMX critical section ONLY around the mxmem kernel (default no-op; the bare-metal HAP defines these to
      * HAP_compute_res_hmx_lock/unlock so the HVX glue runs unlocked -> threads parallelize, only mxmem serializes). */
     GDN_BR_HMX_ENTER();
@@ -931,6 +1009,12 @@ static const uint8_t *gdn_get_act_A(gdn_scr_t *sc, const gdn_vtcm_t *vt, const u
                                     int C_, int zpA, int M, int S, float *sa_out) {
     int key = gdn_blk_index(i, k);
     uint8_t *cr = vt->acache + (size_t)key * 0x1000;
+#if defined(GDN_BR_A_PRECROUTON)
+    /* ROUTE "A pre-crouton in DDR": activation arrives already u8-crouton (upstream HMX op or host) -> the
+     * on-device fold+quant+crouton vanishes; acttab points straight at the (DMA'd) crouton.  Timing make-or-break:
+     * skip all A-prep (cr holds whatever; mxmem timing data-independent => valid wall-delta upper bound). */
+    sc->sAa[key] = GDN_OPS_sAa; *sa_out = GDN_OPS_sAa; return cr;
+#endif
     if (!sc->vAa[key]) {
 #if defined(GDN_BR_TRACE)
         uint64_t _tq = gdn_trnow();
@@ -1089,12 +1173,12 @@ static const int8_t *gdn_get_wt_T(gdn_scr_t *sc, const gdn_vtcm_t *vt, int k, in
 
 /* gdn_merge_packed = the GDNSolveHVXMixHMX matmul impl (HVX-feed + HMX-matmul); gdn_merge_hvx (below) = the
  * GDNSolveHVX baseline's. (Naming: GDNSolveHVX pure-HVX baseline / GDNSolveHVXMixHMX HVX-feed+HMX-matmul /
- * GDNSolveHMX full-HMX, refuted — see Agent/current/gdn_solve_hvxmixhmx.md top.)
+ * GDNSolveHMX full-HMX, refuted — see Agent/current/gdn_solve.md top.)
  * INT-ONLY merge from PRE-PACKED VTCM surfaces: act crouton @ sa, wt k-major (+eff) @ sw; 2-pass scale,
  * returns int8 product codes + scale s_out.  Quant AND packing are hoisted to the cache getters. */
 /* ============================================================================================
  * GDNSolveHVXMixHMX OPTIMIZATION PLAN (device-measured 2026-06-05; baseline GDNSolveHVX = 135K cyc/head)
- * Full write-up + figures: Agent/current/gdn_solve_hvxmixhmx.md
+ * Full write-up + figures: Agent/current/gdn_solve.md
  *
  * THREE IMPLEMENTATIONS (per-head cycles, shorter = faster; #=~5K):
  *   GDNSolveHVX      (baseline/shipped, pure HVX)  135K  ███████████████████████████  1.00x
@@ -1123,7 +1207,7 @@ static const int8_t *gdn_get_wt_T(gdn_scr_t *sc, const gdn_vtcm_t *vt, int k, in
 /* One logical 64^3 HMX matmul with dynamic-quant output scaling. NB: this runs the HMX kernel 2-3x
  * (PASS 1 + optional PASS 2 + PASS 3) — a gain search to scale the int8 output to fill [-127,127].
  *
- * >>> #1 VTCM-TRAFFIC HOTSPOT of the whole GDNSolveHVXMixHMX path (see Agent/current/gdn_solve_hvxmixhmx.md).
+ * >>> #1 VTCM-TRAFFIC HOTSPOT of the whole GDNSolveHVXMixHMX path (see Agent/current/gdn_solve.md).
  *     PASS 1/2 are PURE scale-probing: run the matmul, read max|P| via gdn_surf_maxabs, THROW the output
  *     away. Per logical matmul the traffic is ~3 runs(12.5K each) + 2 maxabs-reads(4K) + 1 depack(4K) ≈ 50K,
  *     of which PASS1+2 ≈ 33K (~66%) is discarded. The bare-metal GDNSolveHVXMixHMX microbench measures ONLY PASS 3
@@ -1181,10 +1265,16 @@ static void gdn_merge_wait_depack(gdn_scr_t *sc, const gdn_vtcm_t *vt, int8_t *o
 static void gdn_merge_packed(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint8_t *act_crouton, float sa,
                              const int8_t *wt_kmajor, const int32_t *eff, float sw,
                              int wt_colabsmax, int8_t *out_codes, float *s_out) {
+#if defined(GDN_BR_TRACE)
+    uint64_t _tb0 = gdn_trnow();
+#endif
     vt->acttab[0] = (int32_t)(uintptr_t)(act_crouton + 0);
     vt->acttab[1] = (int32_t)(uintptr_t)(act_crouton + 64 * 32);
     vt->outtab[0] = (int32_t)(uintptr_t)(vt->out + 0);
     vt->outtab[1] = (int32_t)(uintptr_t)(vt->out + 64 * 32);
+#if defined(GDN_BR_TRACE)
+    gdn_tr_push((uint32_t)(sc - g_scr), 15, _tb0, gdn_trnow());   /* TABS = 4 scalar VTCM stores (acttab/outtab) */
+#endif
 #if defined(GDN_BR_PROBE_CYCLES)
     uint64_t es0; asm volatile("%0 = C15:14" : "=r"(es0));
 #endif
@@ -1256,6 +1346,42 @@ static void gdn_merge_packed(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint8_t 
 #endif
     *s_out = sP;
 }
+
+#if defined(GDN_BR_KSTACK)
+/* K-STACK merge: the d blocks A_i,(j+m) @ T_(j+m),j (m=0..d-1) folded into ONE K=64d matmul whose Sigma_k
+ * reduction happens IN the HMX int32 accumulator (single drain), replacing d separate dispatches + the HVX
+ * gdn_acc16.  act = pointer table over the d cached croutons' 2 K-tiles each (no repack); wt = contiguous
+ * gather of the d cached kmajor blocks into vt->wt; eff = sum of the d blocks' effective.  Under STATIC_FULL
+ * sa=GDN_OPS_sAa, sw=GDN_OPS_sTw and per-block colabsmax=GDN_OPS_COLABS are fixed -> combined Holder bound =
+ * d*GDN_OPS_COLABS.  Leaves the int8 product codes (= Sigma_k) in out_codes; returns the product scale sP. */
+static float gdn_merge_kstack(gdn_scr_t *sc, const gdn_vtcm_t *vt,
+                              const uint8_t *const act_cr[], const int8_t *const wt_km[],
+                              const int32_t *const eff_blk[], int d, float sa, float sw, int8_t *out_codes) {
+    int8_t *wcontig = (int8_t *)vt->wt;                          /* contiguous d*4096 gather (transient; final-merge reuses) */
+    for (int m = 0; m < d; ++m) {
+        const HVX_Vector *s = (const HVX_Vector *)wt_km[m];
+        HVX_Vector *dst = (HVX_Vector *)(wcontig + (size_t)m * (BL * BL));
+        for (int v = 0; v < (BL * BL) / 128; ++v) dst[v] = s[v];
+    }
+    for (int m = 0; m < d; ++m) {                               /* acttab: 2d K-tiles (each crouton = [kt0@0, kt1@2048]) */
+        vt->acttab[2*m + 0] = (int32_t)(uintptr_t)(act_cr[m] + 0);
+        vt->acttab[2*m + 1] = (int32_t)(uintptr_t)(act_cr[m] + 64 * 32);
+    }
+    vt->outtab[0] = (int32_t)(uintptr_t)(vt->out + 0);
+    vt->outtab[1] = (int32_t)(uintptr_t)(vt->out + 64 * 32);
+    int32_t effs[BL] __attribute__((aligned(128)));             /* summed effective (read synchronously in bias-pack) */
+    for (int n = 0; n < BL; ++n) { int32_t s = 0; for (int m = 0; m < d; ++m) s += eff_blk[m][n]; effs[n] = s; }
+    int   maxP_est = 128 * d * GDN_OPS_COLABS;                  /* Holder upper bound on max|Sigma_k P| */
+    float g1 = 127.0f / (float)maxP_est;
+    float sP = ((float)maxP_est * sa * sw) / 127.0f; if (sP <= 0.0f) sP = 1e-12f;
+    g_kstack_nap = 2 * d;                                       /* K=64d -> 2d K-tiles; consumer reads via jb->n_act_pairs */
+    if (g_hmx_dispatch) g_hmx_dispatch(sc, vt, wcontig, effs, g1 * 512.0f, 128 << 7, 1);
+    else                gdn_hmx_run_only(vt, wcontig, effs, g1 * 512.0f, 128 << 7, 1);
+    g_kstack_nap = 2;
+    gdn_depack_out_fast(sc, vt->out, 128, out_codes);
+    return sP;
+}
+#endif  /* GDN_BR_KSTACK */
 
 /* ============ int16-HVX merge = the GDNSolveHVX baseline matmul (NO HMX -> threads freely; HMX is process-serial, can't hit 4-thread) ============
  * Replaces the HMX matmul with a direct int16 HVX matmul, reusing the diagonal solve's Q6_Ww_vmpyacc_WwVhRh.

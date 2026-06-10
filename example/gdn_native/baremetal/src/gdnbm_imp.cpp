@@ -71,6 +71,12 @@
 #if defined(GDN_BR_I16) && !defined(GDN_BR_NO_DIAG_I16) && !defined(GDN_BR_DIAG_I16)
 #define GDN_BR_DIAG_I16 1
 #endif
+#if defined(GDN_BR_W16) && !defined(GDN_BR_I16)
+#error "GDN_BR_W16 requires the int16 pipe (GDNBM_HMX_PIPE + GDN_BR_STATIC_FULL -> GDN_BR_I16)"
+#endif
+#if defined(GDN_BR_W16)
+#include "../inc/v73deep_conv1x1_kernel_i16.h"   /* byte-proven w16a16 kernel (sha256 == device-exact op) */
+#endif
 #include "../../solve_br_op/src/GdnSolveBROp.cpp"
 #include "../../solve_br_op/src/GdnSolveBR16.cpp"   /* clean int16 static solve (GDN_BR_I16) */
 
@@ -382,7 +388,7 @@ static void gdn_pipe_dispatch(gdn_scr_t *sc, const gdn_vtcm_t *vt, const int8_t 
 #if defined(GDN_BR_TRACE)
     uint64_t _b0 = gdn_trnow();
 #endif
-#if defined(GDNBM_PIPE_PURE_HMX)
+#if defined(GDNBM_PIPE_PURE_HMX) && !defined(GDN_BR_W16)   /* W16: bias record built by gdn_w16_bias */
     { int rdelta = round ? (int)(256.0f / scale + 0.5f) : 0;
       gdn_pack_bias(eff, scale, baseline, (int32_t *)vt->bias, rdelta);
 #if defined(GDNBM_PIPE_OUTZERO)
@@ -417,7 +423,7 @@ static void gdn_pipe_dispatch(gdn_scr_t *sc, const gdn_vtcm_t *vt, const int8_t 
 static void gdn_pipe_dispatch_async(gdn_scr_t *sc, const gdn_vtcm_t *vt, const int8_t *wt, const int32_t *eff,
                                     float scale, int baseline, int round) {
     struct hmx_job *jb = &g_pjob[(int)(sc - g_scr)];
-#if defined(GDNBM_PIPE_PURE_HMX)
+#if defined(GDNBM_PIPE_PURE_HMX) && !defined(GDN_BR_W16)
     { int rdelta = round ? (int)(256.0f / scale + 0.5f) : 0;
       gdn_pack_bias(eff, scale, baseline, (int32_t *)vt->bias, rdelta); }
 #endif
@@ -445,6 +451,10 @@ static void pipe_producer(void *arg) {
     gdn_scr_t *sc = &g_scr[w->slot];
     uint8_t *vbase = w->vtcm_base + (size_t)w->slot * 0xA0000u;
     gdn_vtcm_t vt = gdn_vtcm_from(vbase);
+#if defined(GDN_BR_W16)
+    { HVX_Vector z = Q6_V_vzero(); HVX_Vector *op = (HVX_Vector *)vt.out;       /* padded out: zero pad rows once */
+      for (int i = 0; i < 0x8000 / 128; ++i) op[i] = z; }
+#endif
     const int CC = GDN_BR_C * GDN_BR_C;
     const uint32_t Abytes = (uint32_t)CC * 2u;
     uint16_t *Avt[2] = { (uint16_t *)(vbase + 0x60000), (uint16_t *)(vbase + 0x80000) };
@@ -1173,6 +1183,9 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
         g_pipe_cbusy = 0;
         g_pipe_pdone = 0;
         g_next_head = 0;                                                       /* dynamic head scheduler counter */
+#if defined(GDN_BR_W16)
+        gdn_w16_lut_init();                                                    /* 4-pass stream gather LUT (once) */
+#endif
         g_hmx_dispatch = gdn_pipe_dispatch;                                    /* matmuls now delegate to this consumer */
         g_hmx_dispatch_async = gdn_pipe_dispatch_async; g_hmx_wait = gdn_pipe_wait;   /* + async split for the SW pipeline */
         __sync_synchronize();
@@ -1190,7 +1203,14 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
         }
         /* consumer drain: run any armed job; exit when all producers finished.  A producer bumps g_pipe_pdone
          * only AFTER its last dispatch fully returned -> pdone==P implies no job is still armed. */
-#if defined(GDNBM_PIPE_PURE_HMX)
+#if defined(GDN_BR_W16)
+        /* i16 mask words = conv1x1_words(0x70b,0,0,0,0x80) GROUND TRUTH (mm64-proven); mb[14] -> ep. */
+        static const uint32_t W16_MASK[16] = { 0x0u,0x700u,0x0u,0x77cu,0x0u,0x0u,0x3ffu,0x0u,
+                                               0x0u,0x0u,0x0u,0x0u,0x80u,0x0u,0x0u,0x0u };
+        uint32_t pipe_ep[2] __attribute__((aligned(16))) = {1u, 1536u};
+        uint32_t pipe_mb[16] __attribute__((aligned(16))); for (int i = 0; i < 16; ++i) pipe_mb[i] = W16_MASK[i];
+        pipe_mb[14] = (uint32_t)(uintptr_t)pipe_ep;
+#elif defined(GDNBM_PIPE_PURE_HMX)
         uint32_t pipe_ep[2] __attribute__((aligned(16))) = {1u, 0u};                  /* PURE-HMX consumer: bias-pack */
         uint32_t pipe_mb[16] __attribute__((aligned(16))); for (int i = 0; i < 16; ++i) pipe_mb[i] = GDN_BR_MASK_WORDS[i];
 #endif
@@ -1199,7 +1219,15 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
                 if (GDN_JOB_POLL(&g_pjob[t])) {
                     struct hmx_job *jb = &g_pjob[t];
                     uint64_t k0 = pcyc();
-#if defined(GDNBM_PIPE_PURE_HMX)
+#if defined(GDN_BR_W16)
+                    /* w16a16 consumer: byte-proven i16 kernel, TRUE 64^3 padded descriptors (live 512B of
+                     * each 2048B block).  All HVX prep (act/wt/bias/atab) is producer-side; pure mxmem. */
+                    { const gdn_vtcm_t *cvt = jb->vt; uint32_t Kt = (uint32_t)jb->n_act_pairs;
+                      hmx_conv_out_desc_t od __attribute__((aligned(64))) = { cvt->outtab, 2u, 64u, 64u, 1, 64u };
+                      hmx_conv_act_desc_t ad __attribute__((aligned(64))) = { cvt->acttab, Kt, 64u * Kt };
+                      our_v73deep_kernel_i16(&od, &ad, (const uint8_t *)jb->wt, (const uint8_t *)cvt->bias,
+                                             (const hmx_conv_mask_desc_t *)pipe_mb, pipe_ep); }
+#elif defined(GDNBM_PIPE_PURE_HMX)
                     /* LEVER 1: PURE mxmem — bias-pack+out-zero already done producer-side; consumer never
                      * touches an HVX unit -> P=4 producers fit 4 HVX units without SMT starvation. */
                     { const gdn_vtcm_t *cvt = jb->vt;
