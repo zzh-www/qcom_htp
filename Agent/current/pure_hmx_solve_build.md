@@ -79,8 +79,7 @@ cd example/gdn_native/pure_hmx_solve && cc -O2 w16a16_pack_test.c -o /tmp/w16pt 
       4 seeds 全 PASS，max|code|≤3 = 量化舍入级）。kernel 48264 cyc/op（=12066 cyc/64³-equiv，turbo 首跑），
       wall 1.11M（scalar 打包占 ~95%，Phase-4 处理）。复跑：
       `uv run python scripts/run_w16a16_mm_phase1.py --deploy`（gdnbm GDNBM_PURE_HMX_SOLVE 构建，H=1 = mm-test 模式）。
-      **机理（实测钉死）：M=64 单独 64³ 描述符从不 byte-exact**（设备双射探针：只写 1/4 输出、全偶码；
-      8259 cyc 只是周期数）。**只能用 M=256 载体**（M=256×任意 K,N = byte-exact 包络）；out crouton 块 = M*4 B/(row4,nt)。
+      ~~M=64 不可用~~（旧论断，**已被 §5.1 推翻**：64³ 单调用 byte-exact，act/out 都是 padded 2048B 块）。
 - [x] Phase 2 ✅（2026-06-10 真设备）：单 64-块 X=(I−A)^-1 = **10 真 w16a16 mm**（A²,A³ + 4×Newton×2；
       X0=I+A+A²+A³），int16 码 + 软件 2-幂指数（`ds_renorm` 双向归一——**指数必须能回落**，
       只右移会让 Newton 每轮指数翻倍直接报废，实测教训）。设备 oc vs fp64：
