@@ -1385,8 +1385,16 @@ static float gdn_merge_kstack(gdn_scr_t *sc, const gdn_vtcm_t *vt,
     int32_t effs[BL] __attribute__((aligned(128)));             /* summed effective (read synchronously in bias-pack) */
     for (int n = 0; n < BL; ++n) { int32_t s = 0; for (int m = 0; m < d; ++m) s += eff_blk[m][n]; effs[n] = s; }
     int   maxP_est = 128 * d * GDN_OPS_COLABS;                  /* Holder upper bound on max|Sigma_k P| */
+#if defined(GDN_BR_SBOOST)
+    /* Sacc drain boost: the Holder bound is ~16x loose on real data (max realized Sacc code 87@B=4 over 32
+     * heads, oracle scripts/gdn_solve_bp2_oracle.py F=1 B=4) -> boost gain 4x = +2 bits Sacc precision free.
+     * oc 1.37e-2 -> 5.0e-3 oracle, zero wall. */
+    float g1 = 4.0f * 127.0f / (float)maxP_est;
+    float sP = ((float)maxP_est * sa * sw) / (127.0f * 4.0f); if (sP <= 0.0f) sP = 1e-12f;
+#else
     float g1 = 127.0f / (float)maxP_est;
     float sP = ((float)maxP_est * sa * sw) / 127.0f; if (sP <= 0.0f) sP = 1e-12f;
+#endif
     g_kstack_nap = 2 * d;                                       /* K=64d -> 2d K-tiles; consumer reads via jb->n_act_pairs */
     if (g_hmx_dispatch) g_hmx_dispatch(sc, vt, wcontig, effs, g1 * 512.0f, 128 << 7, 1);
     else                gdn_hmx_run_only(vt, wcontig, effs, g1 * 512.0f, 128 << 7, 1);

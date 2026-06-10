@@ -11,16 +11,18 @@
 
 | 配置 | wall | oc | 备注 |
 |---|---|---|---|
-| **u8i8 基线(出货线)** | **1.69M** | 1.37e-2 | producer SPIN 51% = 可吃增量的预算 |
-| BP4(`-DGDN_BR_BP4`) | 2.71M | **4.90e-3** | 精度备选档;wall 超门,勿整路复活 |
+| **u8i8+SBOOST(新出货候选,`-DGDN_BR_SBOOST`)** | **=基线(同日 1.91M vs 1.91M,差 0)** | **5.01e-3(2.7×)** | Sacc drain gain ×4,零结构改动;2026-06-11 热态,冷态复测应回 ~1.69M |
+| u8i8 基线 | 1.69M(冷)/1.91M(2026-06-11 热) | 1.37e-2 | — |
+| BP4(`-DGDN_BR_BP4`) | 2.71M | 4.90e-3 | 精度备选档;SBOOST 以零代价拿到同级精度,BP4 仅余 ~2% 优势 |
 
 ## 优化点台账
 
 | # | 优化点 | 状态 | wall | oc | 结论 |
 |---|---|---|---|---|---|
 | 0 | BP4 byte-pass 全套(act+wt 拆字节, 3/2 pass) | 否决(wall) | 2.71M | 4.90e-3 | producer +8.4K/merge 是地板,HMX/glue 无关;部件可借 |
-| 1 | d 分层静态标度 sTw(d)/g1(d)(零 wall) | 待试 | — | — | 真 \|T\| 随 d 衰减 4×/级,i8 码只填 ±30/±10;先 oracle 扫 clip |
-| 2 | final lo pass 仅 d≥2(pair-job 复用,~+0.1M) | 待试 | — | — | d≥2 共 8 merge,T 码 16-bit 化,操作数不拆 |
+| 1a | Sacc drain boost B=4(`-DGDN_BR_SBOOST`) | **通过** | =基线 | **5.01e-3** | Holder 界松 16×;maxSacc 码 87(32头),B=8 会 clip;oracle F=1 B=4 4.99e-3 兑现 |
+| 1b | d 分层 sTw(d)(F=2/4) | 否决(oracle) | — | 1.5e-2/4.7e-2 | re-narrow 取整误差盖过分层收益,比基线还差 |
+| 2 | final lo pass 仅 d≥2(pair-job 复用,~+0.1M) | 待试 | — | — | SBOOST 后边际收益需重扫 oracle |
 | 3 | drain dither(双发 ±0.5 LSB 均值,~+0.1M) | 待试 | — | — | drain 误差减半,地板收益,配 1/2 用 |
 | 4 | Sacc drain boost(B≤4,u8i8 路) | 待试 | — | — | Holder 界松 16×,码界数据见 gdn_solve.md §4 |
 
