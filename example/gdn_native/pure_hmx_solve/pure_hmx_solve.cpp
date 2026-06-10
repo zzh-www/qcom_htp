@@ -669,7 +669,7 @@ struct p4_slot {
     int32_t acc[4096] __attribute__((aligned(128)));
 };
 static p4_slot g_p4s[PHS_NT];
-static const uint8_t *g_p4Ah; static uint8_t *g_p4Th; static int g_p4H;
+static const uint8_t *g_p4Ah; static uint8_t *g_p4Th; static int g_p4H; static int g_p4trace;
 
 static int16_t *g_p4stage[PHS_NT];   /* per-slot VTCM staging for the HVX weight gather */
 
@@ -964,6 +964,16 @@ static int p4_threads(const uint8_t *Ah, int P, int H, int *stats, int statsLen,
     if (statsLen > 8) stats[8] = g_sat;
     FARF(ALWAYS, "P4THR P=%d H=%d wall=%llu HMXbusy=%llu spin=%llu", P, H,
          (unsigned long long)(t1 - t0), (unsigned long long)g_cbusy, (unsigned long long)spin);
+    if (g_p4trace && TLen >= 24) {   /* trace mode: overwrite T with the event stream (solve data discarded) */
+        int n = g_tr_n; if (n > PHS_TR_MAX) n = PHS_TR_MAX;
+        if ((int)(24 + (size_t)n * 24) > TLen) n = (TLen - 24) / 24;
+        uint32_t *hdr = (uint32_t *)T; hdr[0] = 0x47545203u; hdr[1] = (uint32_t)n;
+        ((uint64_t *)(hdr + 2))[0] = t1 - t0; ((uint64_t *)(hdr + 2))[1] = t0;
+        uint8_t *pp = (uint8_t *)T + 24;
+        for (int e2 = 0; e2 < n; ++e2) { uint32_t *q = (uint32_t *)(pp + (size_t)e2 * 24);
+            q[0] = g_tr[e2].tid; q[1] = g_tr[e2].stage;
+            ((uint64_t *)(q + 2))[0] = g_tr[e2].t0; ((uint64_t *)(q + 2))[1] = g_tr[e2].t1; }
+    }
     return 0;
 }
 
@@ -1102,6 +1112,7 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *Tu, int 
     if (H == 3) return head_solve(A, stats, statsLen, Tu, TLen); /* Phase-3 full C=256 head */
     if (H == 4) return floor_bench(A, stats, statsLen, Tu, TLen); /* Phase-4 stage-cost floor */
     if (H == 9) return mm64_test(A, stats, statsLen, Tu, TLen);   /* TRUE 64^3 (padded out blocks) */
+    g_p4trace = (H == 33); if (H == 33) H = 32;
     if (H >= 5) return (P >= 2) ? p4_threads(A, P, H, stats, statsLen, Tu, TLen)
                                 : p4_head_solve(A, H, stats, statsLen, Tu, TLen); /* Phase-4 */
     if (P > PHS_NT) P = PHS_NT; if (P < 1) P = 1;
