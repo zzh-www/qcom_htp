@@ -31,6 +31,8 @@
 
 fused w16a16 64³(33×流量)、全 BP4 出货(producer 工作量)、双 gain 取高低 8 位(drain 饱和不回绕)、HVX consumer(5 on 4 thrash)、2-head pack 融合、d≥2 局部 BP4(+0.5M 仍穿门)、d 分层 sTw(d)存储码 F=2/4(re-narrow 取整反噬,B=4 下 1.4e-2/4.7e-2)、final lo pass(1.08×)、dither(<1.2×)。
 
+| 6 | act/Wq/final boost(逐源标定) | 否决(oracle) | — | 3.3e-2(clip) | Wq 实测已填 {126,97,97}、act 满 127,boost 即 clip;final 码 46-53 半满但 re-narrow 反噬(死路 F=2 同因),净增益 <1.1× |
+
 ## 断点(进行中)
 
-无。下一轮候选思路:act/Wq/final 同时 boost(各源都有 ~10-30% 松界,联合 ≈1.3-1.4×);final force sTw 改 calibrated(T 码只填 ~0.16/sTw≈20 → final boost ×6 但 16-bit 存储即可,8-bit 出货线需衡量);1.69M wall 复验(冷态)。
+无。**精度方向 cheap 区已清空**(全源 8-bit 码已填满,地板 all∞=4.4e-4 只能用 16-bit lane=BP4 部件=wall 换)。下一轮转 wall:① 冷态复验 1.69M;② u8i8+SBOOST timeline 重测,glue 批处理(相邻 j 的 kstack 独立 → N-job 一握手,pair-job 基建已在);③ requant/diag 域微优。
