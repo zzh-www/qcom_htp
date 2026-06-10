@@ -664,6 +664,9 @@ static void p4_mm_thr(int slot, const int16_t *a_cv, const int16_t *w_cv, int16_
     const uint16_t *o = (const uint16_t *)S->mm.out;
     for (int b = 0; b < 16; ++b) p4v_u16_to_i16(out_cv + b * 256, o + b * 1024, 256);
 }
+#ifndef PHS_NEWTON
+#define PHS_NEWTON 2   /* device: 2 iters oc-equal both scales(9.66e-3/4.50e-3); 1 iter degrades 0.25-scale 27% */
+#endif
 static int p4_diag_thr(int slot, const int16_t *Acv, int16_t *Xcv) {
     p4_slot *S = &g_p4s[slot];
     int16_t *AA = S->scr, *A3 = S->scr + 4096, *M = S->scr + 8192, *Z = S->scr + 12288;
@@ -676,7 +679,7 @@ static int p4_diag_thr(int slot, const int16_t *Acv, int16_t *Xcv) {
     p4v_acc_negw(acc, Acv);
     p4v_acc_diag_add(acc, 32767);
     int eM = p4v_renorm(acc, M);
-    for (int it = 0; it < 4; ++it) {
+    for (int it = 0; it < PHS_NEWTON; ++it) {
         p4_mm_thr(slot, M, Xcv, Z);
         int e = eM + eX;
         p4v_acc_negw(acc, Z);
