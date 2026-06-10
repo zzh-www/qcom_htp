@@ -512,6 +512,41 @@ static void gdn_bp_get_wt(gdn_scr_t *sc, const gdn_vtcm_t *vt, int k, int j, int
     }
     *wh_km = whc; *wl_km = wlc; *effh = sc->effc[key]; *effl = sc->effl[key];
 }
+/* PAIR dispatch: kernel1 (act1/w1/eff1, K=64*d1, gain ga) + kernel2 (act2/w2/eff2, K=64*d2, gain gl)
+ * with ONE handshake; outputs land at vt->out (k1) and vt->out+0x1000 (k2). */
+static void gdn_bp_pass_pair(gdn_scr_t *sc, const gdn_vtcm_t *vt,
+                             const uint8_t *const a1[], const int8_t *w1, const int32_t *e1, int d1, float ga,
+                             const uint8_t *const a2[], const int8_t *w2, const int32_t *e2, int d2, float gl,
+                             int8_t *o1, int8_t *o2) {
+    for (int m = 0; m < d1; ++m) {
+        vt->acttab[2*m + 0] = (int32_t)(uintptr_t)(a1[m] + 0);
+        vt->acttab[2*m + 1] = (int32_t)(uintptr_t)(a1[m] + 64 * 32);
+    }
+    for (int m = 0; m < d2; ++m) {
+        vt->acttab[64 + 2*m + 0] = (int32_t)(uintptr_t)(a2[m] + 0);
+        vt->acttab[64 + 2*m + 1] = (int32_t)(uintptr_t)(a2[m] + 64 * 32);
+    }
+    vt->outtab[0] = (int32_t)(uintptr_t)(vt->out + 0);
+    vt->outtab[1] = (int32_t)(uintptr_t)(vt->out + 64 * 32);
+    vt->acttab[96] = (int32_t)(uintptr_t)(vt->out + 0x1000 + 0);
+    vt->acttab[97] = (int32_t)(uintptr_t)(vt->out + 0x1000 + 64 * 32);
+    { int rd = (int)(256.0f / (gl * 512.0f) + 0.5f);
+      gdn_pack_bias(e2, gl * 512.0f, 128 << 7, (int32_t *)vt->bias + 128, rd); }
+    g_kstack_nap = 2 * d1; g_bp_wt2 = w2; g_bp_nap2 = 2 * d2;
+    if (g_hmx_dispatch) g_hmx_dispatch(sc, vt, w1, e1, ga * 512.0f, 128 << 7, 1);
+    else {
+        gdn_hmx_run_only(vt, w1, e1, ga * 512.0f, 128 << 7, 1);
+        /* local fallback: redirect tables for kernel2 */
+        for (int m = 0; m < d2; ++m) { vt->acttab[2*m] = vt->acttab[64+2*m]; vt->acttab[2*m+1] = vt->acttab[64+2*m+1]; }
+        vt->outtab[0] = vt->acttab[96]; vt->outtab[1] = vt->acttab[97];
+        g_kstack_nap = 2 * d2;
+        gdn_hmx_run_only(vt, w2, e2, gl * 512.0f, 128 << 7, 1);
+        g_bp_wt2 = nullptr;
+    }
+    g_kstack_nap = 2;
+    gdn_depack_out_fast(sc, vt->out, 128, o1);
+    gdn_depack_out_fast(sc, vt->out + 0x1000, 128, o2);
+}
 /* one u8i8 K-stack pass at an explicit drain gain g (codes int8 in out8). */
 static void gdn_bp_pass(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint8_t *const act_cr[],
                         const int8_t *wcontig, const int32_t *effs, int d, float g, int8_t *out8) {
@@ -694,13 +729,14 @@ static void gdn_br_one_head16(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_
                 }
                 int32_t effs[BL] __attribute__((aligned(128)));
                 for (int n = 0; n < BL; ++n) effs[n] = effh[n] + effl[n];
-                gdn_bp_pass(sc, vt, ah_cr, whs, effh, d, gb, sc->termi);
-                if (d == 1) {                                   /* fused L: K=128 [Al|Ah] x [Wh|Wl2] */
+                if (d == 1) {                                   /* PAIR: HH + fused L (K=128 [Al|Ah]x[Wh|Wl2]) */
                     al_cr[1] = ah_cr[0];
-                    gdn_bp_pass(sc, vt, al_cr, wls, effs, 2, gb / 16.0f, (int8_t *)sc->wtbuf);
-                } else {                                        /* nap>8 unsupported -> 2 L passes + HVX add (sat) */
+                    gdn_bp_pass_pair(sc, vt, ah_cr, whs, effh, 1, gb,
+                                     al_cr, wls, effs, 2, gb / 16.0f, sc->termi, (int8_t *)sc->wtbuf);
+                } else {                                        /* nap>8 unsupported -> HH+LH pair, HL single */
                     const int8_t *wl2 = whs + (size_t)d * (BL * BL);
-                    gdn_bp_pass(sc, vt, al_cr, whs, effh, d, gb / 16.0f, (int8_t *)sc->wtbuf);
+                    gdn_bp_pass_pair(sc, vt, ah_cr, whs, effh, d, gb,
+                                     al_cr, whs, effh, d, gb / 16.0f, sc->termi, (int8_t *)sc->wtbuf);
                     gdn_bp_pass(sc, vt, ah_cr, wl2, effl, d, gb / 16.0f, (int8_t *)sc->actbuf);
                     HVX_Vector *a = (HVX_Vector *)sc->wtbuf; const HVX_Vector *b = (const HVX_Vector *)sc->actbuf;
                     for (int v = 0; v < (BL * BL) / 128; ++v) a[v] = Q6_Vb_vadd_VbVb_sat(a[v], b[v]);
@@ -817,8 +853,8 @@ static void gdn_br_one_head16(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_
 #endif
                 /* per-raw-code drain gain: raw * (256*TI)*(256*sSacc16) lands @sTw */
                 float gOH = 65536.0f * GDN_BR_TI * GDN_BP_sSacc16 / GDN_OPS_sTw;
-                gdn_bp_pass(sc, vt, ah1, vt->wt, effh, 1, gOH,          sc->termi);
-                gdn_bp_pass(sc, vt, al2, vt->wt, effs, 2, gOH / 32.0f, (int8_t *)sc->wtbuf);
+                gdn_bp_pass_pair(sc, vt, ah1, vt->wt, effh, 1, gOH,
+                                 al2, vt->wt, effs, 2, gOH / 32.0f, sc->termi, (int8_t *)sc->wtbuf);
                 gdn_bp_combine(sc->termi, (const int8_t *)sc->wtbuf, 5, effh, gOH, sc->Tblk16[bij]);
                 sij = GDN_BP_sTw16;
 #if defined(GDN_BR_TRACE)

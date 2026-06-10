@@ -108,7 +108,20 @@ dssh "cd $W && GDNBM_REPS=8 LD_LIBRARY_PATH=$W:/vendor/lib64:/system/lib64 \
 
 实现保留可复跑：`EXTRA_DEFS="-DGDNBM_HMX_PIPE -DGDN_BR_STATIC_GAIN -DGDN_BR_STATIC_FULL -DGDN_BR_W16"`；bisect 旗 `-DGDN_W16_NOSTACK`（K-stack→d 次 K=64+HVX acc）、`-DGDN_W16_DBG_S`（dump Sacc/操作数 vs numpy）。
 
-**下一步（supertile 思路自建，容忍精度损失）**：1167 地板的本质 = act-stream/byte-decompose/drain 不占 HMX。自建等价 = **拆成 u8i8 byte-pass、由 producer 喂、HMX 只跑 313/调用的 u8i8 kernel**：act/wt 各拆 hi/lo 字节 → 1 个 64³ = 4 次 u8i8 pass（≈1252/eq ≈ 地板），HVX 组合 `(Ah@Wh)·65536+(Ah@Wl+Al@Wh)·256+Al@Wl`；hi-pass int8 drain 误差 ×256 ⇒ 输出 ≈14–15 bit（vs fused 16 bit，损失可容忍）。半档 a16w8/w8a16 = 2 pass（626/eq，16eq×32 = 320K = HMX ~18%）。**Oracle 裁决（`scripts/gdn_solve_bp2_oracle.py`，32 头镜像静态链，2026-06-11）：u8i8 5.30e-2 / 2-pass 4.73e-2（仅 1.12×，不够）/ 4-pass B=4 **1.77e-2（3.0×）** → 直接做 4-pass**（inner HH+LH+HL 三 dispatch + final 三 dispatch ≈ 3× u8i8 HMX ≈ 400K ≈ 23% < 40% 门）。Oracle 调通的静态档（设备照抄，调错任何一档 oc 爆到 0.3）：hi-drain boost **B=4**（B=8 部分头 clip，max code 232）；LH 档 gain g·B/4（lo 字节近均匀，raw ~2× hi）；HL 档 g·B/8（colabs(Wl)~8×COLABS）；final lo 档 /32（实测 max code 2523 必 clip）；act +128 常数 = colsum 修正 **drain 后整数加回**（进累加器必 clip）。oc 比例映射设备 ≈4e-3，需设备验证。全部复用现有 u8i8 kernel + producer 基建,只加 hi/lo 打包与 HVX 组合。两个真坑（已修，勿回退）：① wt 栈序 = [nt][half][kt 0..2d-1]，d=1 缓存块按 16-vec quarter 重排；② act 块必须 2048B padded（compact 512B 设备否决，kernel 读越界），32K/act → A act 不缓存（use-once 临时槽×3），Tdiag 缓存 nat 8K 每用重打包。
+**下一步（supertile 思路自建，容忍精度损失）**：1167 地板的本质 = act-stream/byte-decompose/drain 不占 HMX。自建等价 = **拆成 u8i8 byte-pass、由 producer 喂、HMX 只跑 313/调用的 u8i8 kernel**：act/wt 各拆 hi/lo 字节 → 1 个 64³ = 4 次 u8i8 pass（≈1252/eq ≈ 地板），HVX 组合 `(Ah@Wh)·65536+(Ah@Wl+Al@Wh)·256+Al@Wl`；hi-pass int8 drain 误差 ×256 ⇒ 输出 ≈14–15 bit（vs fused 16 bit，损失可容忍）。半档 a16w8/w8a16 = 2 pass（626/eq，16eq×32 = 320K = HMX ~18%）。**Oracle 裁决（`scripts/gdn_solve_bp2_oracle.py`，32 头镜像静态链，2026-06-11）：u8i8 5.30e-2 / 2-pass 4.73e-2（仅 1.12×，不够）/ 4-pass B=4 **1.77e-2（3.0×）** → 直接做 4-pass**（inner HH+LH+HL 三 dispatch + final 三 dispatch ≈ 3× u8i8 HMX ≈ 400K ≈ 23% < 40% 门）。Oracle 调通的静态档（设备照抄，调错任何一档 oc 爆到 0.3）：hi-drain boost **B=4**（B=8 部分头 clip，max code 232）；LH 档 gain g·B/4（lo 字节近均匀，raw ~2× hi）；HL 档 g·B/8（colabs(Wl)~8×COLABS）；final lo 档 /32（实测 max code 2523 必 clip）；act +128 常数 = colsum 修正 **drain 后整数加回**（进累加器必 clip）。oc 比例映射设备 ≈4e-3，需设备验证。
+
+### 设备裁决（GDN_BR_BP4 已实现，2026-06-11）：精度门 PASS（2.9×），速度门 REFUTE（×1.6）
+
+| 指标 | u8i8（现行基线） | **GDN_BR_BP4** | 门 | 判 |
+|---|---|---|---|---|
+| oc vs fp64（A_u16_h32, 32头） | 1.37e-2 | **4.90e-3（2.9×）** | ≤1.05e-2 | ✅ |
+| 32-head TOTAL wall（reps2-4 中位） | 1.69M | **2.71M** | ≤1.87M | ❌ |
+| HMX busy | 8% | ~10% | ≤40% | ✅ |
+| producer busy | ~49%（SPIN 51%） | ~95%+（timeline busy 58%+PREP 留白≈40%，SPIN 仅 3%） | >85% | ✅* |
+
+死因 = **producer HVX 工作量本身**（非 glue、非 HMX）：byte-pass 每 merge 比 u8i8 多 ~8.4K cyc（双 surface depack ×2、Sacc/T 组合、wt 16-bit 拆+双 eff/pack、final wt 双发），32head/4producer ÷4 = +1.0M wall，无并行可借（u8i8 producer 51% SPIN 余量只折 ~0.86M）。已做的优化：全操作数 VTCM 缓存(slot 0xE0000)、L pass 融合(Al/Ah×Wh/Wl2 一次 K=2·64 dispatch)、pair-job(HH+L 单握手)、d>1 双 L pass sat-add——共 3.0M→2.71M，再深(组合直读 crouton、批 dispatch)只剩 ~0.2M 级，地板 ~2.5M ≫ 门。
+
+实现复跑：`EXTRA_DEFS="-DGDNBM_HMX_PIPE -DGDN_BR_STATIC_GAIN -DGDN_BR_STATIC_FULL -DGDN_BR_BP4"`；探针旗 `-DGDN_BP_DBG_S`(dump HH/Sacc(1,0))。已踩坑（写回 oracle 解释）：① `vshuffo/vshuffe` 拆字节 = 行对转置, 用 `vdeal -1`；② final 三 pass drain gain 含 ×65536(=256·256)；③ acttab+32 撞 outtab,pair-job 第二表用 acttab+64/+96；④ bpc 缓存区超 0x20000 踩邻槽 → slot 0xE0000。**用途定位：BP4 = oc <5e-3 的备选档,以 +60% wall 换 2.9× 精度,默认不出货,出货线维持 u8i8 1.69M/1.37e-2。**全部复用现有 u8i8 kernel + producer 基建,只加 hi/lo 打包与 HVX 组合。两个真坑（已修，勿回退）：① wt 栈序 = [nt][half][kt 0..2d-1]，d=1 缓存块按 16-vec quarter 重排；② act 块必须 2048B padded（compact 512B 设备否决，kernel 读越界），32K/act → A act 不缓存（use-once 临时槽×3），Tdiag 缓存 nat 8K 每用重打包。
 
 ### HVX vrmpy matmul ∝ N³（`scripts/gdn_mm_chunk_sweep.py`，sim）
 BL=32→1068, 64→7311, 128→52239, 256→402447。HMX 随 size 暴跌（setup 摊销）→ **HMX 比 HVX 便宜 17.5×(64³) → 32×(256³)**；HMX 最小块=64（M_t 必偶,32 要 pad）。

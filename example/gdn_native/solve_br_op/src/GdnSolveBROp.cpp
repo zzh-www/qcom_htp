@@ -182,6 +182,9 @@ static __thread float g_force_sP = 0.f;   /* >0 => force gdn_merge_packed output
  * (Sigma_k accumulated in the HMX accumulator, single drain).  Default 2 (= single 64-block, K=64).
  * Per-thread; the pipe consumer reads it via jb->n_act_pairs (set on the producer in gdn_pipe_dispatch). */
 static __thread int g_kstack_nap = 2;
+/* BP4 pair-job: producer publishes a 2nd kernel (wt2 + its K width) for the same signal; consumer runs
+ * both with one handshake. Tables at acttab+32/outtab+32, bias @+0x200, out @+0x1000. */
+static __thread const int8_t *g_bp_wt2 = nullptr; static __thread int g_bp_nap2 = 2;
 
 /* VTCM scratch carved from the TCM_Only scratch tensor.  Buffers are spaced 0x10000 (64 KB) apart —
  * matching the proven M1 sim harness layout — so any HMX over-write/alignment slack can't clobber a

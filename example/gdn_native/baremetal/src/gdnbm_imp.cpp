@@ -351,7 +351,8 @@ struct hmx_job {
     const gdn_vtcm_t *vt; const int8_t *wt; const int32_t *eff;
     float scale; int baseline; int round;
     int n_act_pairs;                    /* K-stack: 2*d K-tiles for a K=64d matmul (default 2 = single 64-block) */
-    int _pad[15];                       /* own cache/SMT line -> no false sharing between producer slots */
+    const int8_t *wt2; int n2_act_pairs; /* BP4 pair-job: 2nd kernel (acttab+32/outtab+32/bias+0x200/out+0x1000) */
+    int _pad[11];                       /* own cache/SMT line -> no false sharing between producer slots */
 } __attribute__((aligned(128)));
 static struct hmx_job g_pjob[GDN_BR_NT];
 /* hand-off sync: the full __sync_synchronize() barriers (SIG+POST) cost 28% of MM (604K cyc, trace-confirmed).
@@ -402,6 +403,7 @@ static void gdn_pipe_dispatch(gdn_scr_t *sc, const gdn_vtcm_t *vt, const int8_t 
 #endif
     jb->vt = vt; jb->wt = wt; jb->eff = eff; jb->scale = scale; jb->baseline = baseline; jb->round = round;
     jb->n_act_pairs = g_kstack_nap;     /* publish the K-stack width to the consumer (producer-thread read) */
+    jb->wt2 = g_bp_wt2; jb->n2_act_pairs = g_bp_nap2; g_bp_wt2 = nullptr;
     GDN_JOB_ARM(jb);                                          /* release-store: arm + publish job fields */
 #if defined(GDN_BR_TRACE)
     gdn_tr_push((uint32_t)slot, 13, _b1, gdn_trnow());   /* SIG = barrier1 + signal */
@@ -1247,7 +1249,15 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
                           GDN_BR_OUT_Y_STRIDE, GDN_BR_N_TILES_POW2, GDN_BR_M_TOTAL_MINUS_STEP, GDN_BR_K_TOTAL_BYTES };
                       hmx_conv_act_desc_t ad __attribute__((aligned(64))) = { cvt->acttab, (uint32_t)jb->n_act_pairs, GDN_BR_ACT_Y_STRIDE };
                       our_v73deep_kernel(&od, &ad, (const uint8_t *)jb->wt, (const uint8_t *)cvt->bias,
-                                         (const hmx_conv_mask_desc_t *)pipe_mb, pipe_ep); }
+                                         (const hmx_conv_mask_desc_t *)pipe_mb, pipe_ep);
+                      if (jb->wt2) {
+                          hmx_conv_out_desc_t od2 __attribute__((aligned(64))) = { cvt->acttab + 96, GDN_BR_OUT_TABLE_STRIDE,
+                              GDN_BR_OUT_Y_STRIDE, GDN_BR_N_TILES_POW2, GDN_BR_M_TOTAL_MINUS_STEP, GDN_BR_K_TOTAL_BYTES };
+                          hmx_conv_act_desc_t ad2 __attribute__((aligned(64))) = { cvt->acttab + 64, (uint32_t)jb->n2_act_pairs, GDN_BR_ACT_Y_STRIDE };
+                          our_v73deep_kernel(&od2, &ad2, (const uint8_t *)jb->wt2,
+                                             (const uint8_t *)cvt->bias + 0x200,
+                                             (const hmx_conv_mask_desc_t *)pipe_mb, pipe_ep);
+                      } }
 #else
                     gdn_hmx_run_only(jb->vt, jb->wt, jb->eff, jb->scale, jb->baseline, jb->round);
 #endif
