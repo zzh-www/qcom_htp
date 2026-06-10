@@ -23,8 +23,7 @@
 | 1a | Sacc drain boost B=4(`-DGDN_BR_SBOOST`) | **通过** | =基线 | **5.01e-3** | Holder 界松 16×;maxSacc 码 87(32头),B=8 会 clip;oracle F=1 B=4 4.99e-3 兑现 |
 | 1b | d 分层 sTw(d)(F=2/4) | 否决(oracle) | — | 1.5e-2/4.7e-2 | re-narrow 取整误差盖过分层收益,比基线还差 |
 | 2 | final lo pass 仅 d≥2(pair-job 复用,~+0.1M) | 待试 | — | — | SBOOST 后边际收益需重扫 oracle |
-| 3 | drain dither(双发 ±0.5 LSB 均值,~+0.1M) | 待试 | — | — | drain 误差减半,地板收益,配 1/2 用 |
-| 4 | Sacc drain boost(B≤4,u8i8 路) | 待试 | — | — | Holder 界松 16×,码界数据见 gdn_solve.md §4 |
+| 3 | drain dither(双发 ±0.5 LSB 均值,~+0.1M) | 待试 | — | — | drain 误差减半,地板收益,SBOOST 后边际需重扫 |
 
 ## 已证死路(勿重试)
 
