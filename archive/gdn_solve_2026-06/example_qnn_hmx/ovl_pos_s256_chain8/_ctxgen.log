@@ -1,0 +1,30 @@
+qnn-context-binary-generator pid:2994200
+ <W> Initializing HtpProvider
+Starting stage: Graph Preparation Initializing
+Completed stage: Graph Preparation Initializing (890 us)
+Starting stage: Graph Optimizations
+Completed stage: Graph Optimizations (5691 us)
+Starting stage: Post Graph Optimization
+Completed stage: Post Graph Optimization (1623 us)
+Starting stage: Graph Sequencing for Target
+Completed stage: Graph Sequencing for Target (6924 us)
+Starting stage: VTCM Allocation
+Completed stage: VTCM Allocation (439 us)
+Starting stage: Parallelization Optimization
+Completed stage: Parallelization Optimization (26 us)
+Starting stage: Finalizing Graph Sequence
+
+====== DDR bandwidth summary ======
+spill_bytes=0
+fill_bytes=0
+write_total_bytes=65536
+read_total_bytes=606208
+
+Completed stage: Finalizing Graph Sequence (270 us)
+Starting stage: Completion
+Completed stage: Completion (12 us)
+[1/4]	Processing Schematic Files: /home/zzh/work/qcom_htp/example/qnn_hmx_matmul_u8i8/standard_flow/native_baseline/ovl_pos_s256_chain8/model_encoded_schematic.bin / 1.40 ms
+[2/4]	Resolving tensor<->op dependencies - 0.31 ms
+[3/4]	Rendering Output JSON \ 2.95 ms
+[4/4]	Rendering Output JSON - Graph Before | 0.93 ms
+Complete!

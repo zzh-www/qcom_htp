@@ -1,0 +1,26 @@
+qnn_hvx_int16 — shipped GdnSolve QNN custom op (int16 forward-subst, QNN-tiled across 4 HVX threads)
+============================================================================
+device: ssh oneplus (v75), C=256, H=32, aligned PCYCLE (PCYCLE/us=1422 @TURBO)
+code:   example/gdn_native/solve_op/  (separate from solve_br_op)
+run:    H=32 CB=256 bash example/gdn_native/solve_op/standalone/gdn_shape.sh   # (or solve_op/standalone/bench.sh)
+
+This is the PRODUCTION baseline-to-beat.
+
+MEASURED (2026-06-04, CS=256 H=32 bash gdn_shape.sh; real optrace in chrometrace.json):
+  whole-graph WALL (QNN accelerator execute) = 4220 us = 4.22 ms   <- the time to beat
+  raw-T relerr vs np.linalg.inv = 4.77e-5  (int16 fwd-subst, very accurate)
+  tiles=25 (H=32 -> ~24-25 tile instances), cyc/head(mean-tile/8)=82,528  <-- TILER ARTIFACT, see below
+
+ALIGNED per-head (docs/cycle_metric_alignment.md; max-not-mean, the REAL per-head):
+  compute-busy/head = 146,963  (= ~3.31 ms / 32-head)
+  wall/head        = 190,356   (= ~4.28 ms / 32-head, matches the measured 4.22ms)
+  NOTE: the 82,528 "cyc/head" above is the mean(tile)/8 tiler artifact (~2x undercount) — do NOT use it.
+
+artifacts here: chrometrace.json (real QNN optrace), chrometrace_qnn_htp_analysis_summary.json.
+
+Threads via QNN's multithreaded tiler (multithreaded=true, QHPI_RESOURCE_HVX, self-slices H across
+HVX threads; H=32 -> 24 tile instances, ~6-serial per HVX thread). The ~30% gap between compute (3.3ms)
+and wall (4.3ms) is QNN per-tile dispatch overhead.
+
+optrace (regenerate when device free): the gdn_shape.sh / bench.sh run with --profiling_option optrace
+emits out_s/optrace/chrometrace.json (real QNN optrace). Copy it here as chrometrace.json.

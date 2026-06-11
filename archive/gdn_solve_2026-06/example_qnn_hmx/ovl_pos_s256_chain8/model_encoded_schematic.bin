@@ -1,0 +1,2258 @@
+# python_pprint_graph_summary, truegraph = 1, inorder=0
+graph_before_optimization = { # :::BEGIN:graph_before_optimization:::
+	0x0000000000000002: {
+		'operation':'q::Input',
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000000000000003: {
+		'operation':'q::Output',
+		'inputs' : [
+			(0x31,0),
+		],
+		'outputs' : [
+		],
+	},
+	0x0000000000000004: {
+		'operation':'$Shape',
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [0,0,0,0],
+			},
+		],
+	},
+	0x0000000000000010: {
+		'operation':'q::QNN_Reshape',
+		'inputs' : [
+			(0x2,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000000000000011: {
+		'operation':'$Const',
+# CONTENT HASH: 97441ebc
+		'datalen': 65536,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000000000000012: {
+		'operation':'q::QNN_FullyConnected',
+		'inputs' : [
+			(0x10,0),
+			(0x11,0),
+			(0x13,0),
+			(0x14,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000000000000013: {
+		'operation':'$Const',
+# CONTENT HASH: ad72c64b
+		'datalen': 1024,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QInt32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,1,1,256],
+			},
+		],
+	},
+	0x0000000000000014: {
+		'operation':'$Const',
+# VALUES: 0.000000, 
+# CONTENT HASH: 9efb862a
+		'data': "00",
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,1,1,1],
+			},
+		],
+	},
+	0x0000000000000015: {
+		'operation':'$Const',
+# CONTENT HASH: fee73df4
+		'datalen': 65536,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000000000000016: {
+		'operation':'q::QNN_FullyConnected',
+		'inputs' : [
+			(0x12,0),
+			(0x15,0),
+			(0x13,0),
+			(0x14,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000000000000019: {
+		'operation':'$Const',
+# CONTENT HASH: acf25a2c
+		'datalen': 65536,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x000000000000001a: {
+		'operation':'q::QNN_FullyConnected',
+		'inputs' : [
+			(0x16,0),
+			(0x19,0),
+			(0x13,0),
+			(0x14,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x000000000000001d: {
+		'operation':'$Const',
+# CONTENT HASH: 52d8b35e
+		'datalen': 65536,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x000000000000001e: {
+		'operation':'q::QNN_FullyConnected',
+		'inputs' : [
+			(0x1a,0),
+			(0x1d,0),
+			(0x13,0),
+			(0x14,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000000000000021: {
+		'operation':'$Const',
+# CONTENT HASH: 4f98c656
+		'datalen': 65536,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000000000000022: {
+		'operation':'q::QNN_FullyConnected',
+		'inputs' : [
+			(0x1e,0),
+			(0x21,0),
+			(0x13,0),
+			(0x14,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000000000000025: {
+		'operation':'$Const',
+# CONTENT HASH: 47df9a4e
+		'datalen': 65536,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000000000000026: {
+		'operation':'q::QNN_FullyConnected',
+		'inputs' : [
+			(0x22,0),
+			(0x25,0),
+			(0x13,0),
+			(0x14,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000000000000029: {
+		'operation':'$Const',
+# CONTENT HASH: f09e3546
+		'datalen': 65536,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x000000000000002a: {
+		'operation':'q::QNN_FullyConnected',
+		'inputs' : [
+			(0x26,0),
+			(0x29,0),
+			(0x13,0),
+			(0x14,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x000000000000002d: {
+		'operation':'$Const',
+# CONTENT HASH: 0f8bb4b8
+		'datalen': 65536,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x000000000000002e: {
+		'operation':'q::QNN_FullyConnected',
+		'inputs' : [
+			(0x2a,0),
+			(0x2d,0),
+			(0x13,0),
+			(0x14,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000000000000031: {
+		'operation':'q::QNN_Reshape',
+		'inputs' : [
+			(0x2e,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+}
+# :::END:graph_before_optimization:::
+# :::BEGIN:dead_nodes:graph_before_optimization
+# *** use '--setopt dead_nodes 1' to collect & report dead-node info
+graph_before_optimization_remapped_ids = {
+}
+graph_before_optimization_dead_nodes = {
+# 0 items
+# id map 14 items
+}
+# :::END:dead_nodes:graph_before_optimization
+
+tile_groups = {
+} # tile_groups 
+# python_pprint_graph_summary, truegraph = 1, inorder=0
+graph_after_optimization = { # :::BEGIN:graph_after_optimization:::
+	0x0000100200000008: {
+		'operation':'$Const',
+# VALUES: 8.000000, 
+# CONTENT HASH: 31427852
+		'data': "08000000",
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 0,
+				'zero_offset': 0, 'stepsize': 0.0,
+				'dims': [],
+			},
+		],
+	},
+	0x0000100382d28377: {
+		'operation':'$Shape',
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.0,
+				'dims': [0,0,0,0],
+			},
+		],
+	},
+	0x0000100399fb24bb: {
+		'operation':'$Shape',
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.0,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000111100000002: {
+		'operation':'q::*InputSlice',
+		'inputs' : [
+			(0x100382d28377,0),
+			(0x100382d28377,0),
+			(0x100399fb24bb,0),
+			(0x100382d28377,0),
+			(0x100399fb24bb,0),
+			(0x100399fb24bb,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x000011a400000012: {
+		'operation':'q::ConvLayer.opt.bias_to_vtcm',
+		'inputs' : [
+			(0x124c00000012,0),
+		],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,8,1,64],
+			},
+		],
+	},
+	0x000011a700000016: {
+		'operation':'q::ConvLayer.opt.bias_to_vtcm',
+		'inputs' : [
+			(0x124d00000016,0),
+		],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,8,1,64],
+			},
+		],
+	},
+	0x000011aa0000001a: {
+		'operation':'q::ConvLayer.opt.bias_to_vtcm',
+		'inputs' : [
+			(0x124e0000001a,0),
+		],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,8,1,64],
+			},
+		],
+	},
+	0x000011ad0000001e: {
+		'operation':'q::ConvLayer.opt.bias_to_vtcm',
+		'inputs' : [
+			(0x124f0000001e,0),
+		],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,8,1,64],
+			},
+		],
+	},
+	0x000011b000000022: {
+		'operation':'q::ConvLayer.opt.bias_to_vtcm',
+		'inputs' : [
+			(0x125000000022,0),
+		],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,8,1,64],
+			},
+		],
+	},
+	0x000011b300000026: {
+		'operation':'q::ConvLayer.opt.bias_to_vtcm',
+		'inputs' : [
+			(0x125100000026,0),
+		],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,8,1,64],
+			},
+		],
+	},
+	0x000011b60000002a: {
+		'operation':'q::ConvLayer.opt.bias_to_vtcm',
+		'inputs' : [
+			(0x12520000002a,0),
+		],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,8,1,64],
+			},
+		],
+	},
+	0x000011b90000002e: {
+		'operation':'q::ConvLayer.opt.bias_to_vtcm',
+		'inputs' : [
+			(0x12530000002e,0),
+		],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,8,1,64],
+			},
+		],
+	},
+	0x000011c300000012: {
+		'operation':'q::Reshape',
+		'inputs' : [
+			(0x111100000002,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x000011ed00000012: {
+		'operation':'q::ConvLayer_s1.opt',
+		'inputs' : [
+			(0x120300000012,0),
+			(0x121000000012,0),
+			(0x11a400000012,0),
+			(0x100200000008,0),
+			(0x123200000012,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x000011f000000016: {
+		'operation':'q::ConvLayer_s1.opt',
+		'inputs' : [
+			(0x11ed00000012,0),
+			(0x121100000016,0),
+			(0x11a700000016,0),
+			(0x100200000008,0),
+			(0x123200000012,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x000011f30000001a: {
+		'operation':'q::ConvLayer_s1.opt',
+		'inputs' : [
+			(0x11f000000016,0),
+			(0x12120000001a,0),
+			(0x11aa0000001a,0),
+			(0x100200000008,0),
+			(0x123200000012,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x000011f60000001e: {
+		'operation':'q::ConvLayer_s1.opt',
+		'inputs' : [
+			(0x11f30000001a,0),
+			(0x12130000001e,0),
+			(0x11ad0000001e,0),
+			(0x100200000008,0),
+			(0x123200000012,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x000011f900000022: {
+		'operation':'q::ConvLayer_s1.opt',
+		'inputs' : [
+			(0x11f60000001e,0),
+			(0x121400000022,0),
+			(0x11b000000022,0),
+			(0x100200000008,0),
+			(0x123200000012,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x000011fc00000026: {
+		'operation':'q::ConvLayer_s1.opt',
+		'inputs' : [
+			(0x11f900000022,0),
+			(0x121500000026,0),
+			(0x11b300000026,0),
+			(0x100200000008,0),
+			(0x123200000012,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x000011ff0000002a: {
+		'operation':'q::ConvLayer_s1.opt',
+		'inputs' : [
+			(0x11fc00000026,0),
+			(0x12160000002a,0),
+			(0x11b60000002a,0),
+			(0x100200000008,0),
+			(0x123200000012,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x000012020000002e: {
+		'operation':'q::ConvLayer_s1.opt',
+		'inputs' : [
+			(0x11ff0000002a,0),
+			(0x12170000002e,0),
+			(0x11b90000002e,0),
+			(0x100200000008,0),
+			(0x123200000012,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x0000120300000012: {
+		'operation':'q::ForceFormat_Crouton',
+		'inputs' : [
+			(0x11c300000012,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x0000120d00000003: {
+		'operation':'q::*OutputSlice',
+		'inputs' : [
+			(0x120f00000003,0),
+			(0x100399fb24bb,0),
+			(0x100382d28377,0),
+			(0x100382d28377,0),
+		],
+		'outputs' : [
+		],
+	},
+	0x0000120e00000003: {
+		'operation':'q::ForceFormat_Flat',
+		'inputs' : [
+			(0x12020000002e,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,8,32,256],
+			},
+		],
+	},
+	0x0000120f00000003: {
+		'operation':'q::Reshape',
+		'inputs' : [
+			(0x120e00000003,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QUInt8', 'rank': 4,
+				'zero_offset': 128, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000121000000012: {
+		'operation':'q::ConvLayer.opt.weights_to_vtcm',
+		'inputs' : [
+			(0x123300000012,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000121100000016: {
+		'operation':'q::ConvLayer.opt.weights_to_vtcm',
+		'inputs' : [
+			(0x123400000016,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x000012120000001a: {
+		'operation':'q::ConvLayer.opt.weights_to_vtcm',
+		'inputs' : [
+			(0x12350000001a,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x000012130000001e: {
+		'operation':'q::ConvLayer.opt.weights_to_vtcm',
+		'inputs' : [
+			(0x12360000001e,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000121400000022: {
+		'operation':'q::ConvLayer.opt.weights_to_vtcm',
+		'inputs' : [
+			(0x123700000022,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000121500000026: {
+		'operation':'q::ConvLayer.opt.weights_to_vtcm',
+		'inputs' : [
+			(0x123800000026,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x000012160000002a: {
+		'operation':'q::ConvLayer.opt.weights_to_vtcm',
+		'inputs' : [
+			(0x12390000002a,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x000012170000002e: {
+		'operation':'q::ConvLayer.opt.weights_to_vtcm',
+		'inputs' : [
+			(0x123a0000002e,0),
+		],
+		'outputs' : [	{
+			'dtype': 'QInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000123200000012: {
+		'operation':'$Const',
+# VALUES: 1.000000, 0.000000, 
+# CONTENT HASH: da7c17a0
+		'data': "0100000000000000",
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,1,1,2],
+			},
+		],
+	},
+	0x0000123300000012: {
+		'operation':'$Const',
+# CONTENT HASH: 5b61068c
+		'datalen': 65536,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000123400000016: {
+		'operation':'$Const',
+# CONTENT HASH: a0057cd4
+		'datalen': 65536,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x000012350000001a: {
+		'operation':'$Const',
+# CONTENT HASH: 32e9cb8b
+		'datalen': 65536,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x000012360000001e: {
+		'operation':'$Const',
+# CONTENT HASH: ed9203b8
+		'datalen': 65536,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000123700000022: {
+		'operation':'$Const',
+# CONTENT HASH: f9fcd18e
+		'datalen': 65536,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000123800000026: {
+		'operation':'$Const',
+# CONTENT HASH: 2336d086
+		'datalen': 65536,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x000012390000002a: {
+		'operation':'$Const',
+# CONTENT HASH: 5a5db9bc
+		'datalen': 65536,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000123a0000002e: {
+		'operation':'$Const',
+# CONTENT HASH: 93651131
+		'datalen': 65536,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'QInt8', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 0.00787401572,
+				'dims': [1,1,256,256],
+			},
+		],
+	},
+	0x0000124c00000012: {
+		'operation':'$Const',
+# CONTENT HASH: 6de49072
+		'datalen': 2048,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,8,1,64],
+			},
+		],
+	},
+	0x0000124d00000016: {
+		'operation':'$Const',
+# CONTENT HASH: 08b5b372
+		'datalen': 2048,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,8,1,64],
+			},
+		],
+	},
+	0x0000124e0000001a: {
+		'operation':'$Const',
+# CONTENT HASH: cb4cdd72
+		'datalen': 2048,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,8,1,64],
+			},
+		],
+	},
+	0x0000124f0000001e: {
+		'operation':'$Const',
+# CONTENT HASH: 07e27772
+		'datalen': 2048,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,8,1,64],
+			},
+		],
+	},
+	0x0000125000000022: {
+		'operation':'$Const',
+# CONTENT HASH: 573c2172
+		'datalen': 2048,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,8,1,64],
+			},
+		],
+	},
+	0x0000125100000026: {
+		'operation':'$Const',
+# CONTENT HASH: 0c7cfb72
+		'datalen': 2048,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,8,1,64],
+			},
+		],
+	},
+	0x000012520000002a: {
+		'operation':'$Const',
+# CONTENT HASH: 8c62caf2
+		'datalen': 2048,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,8,1,64],
+			},
+		],
+	},
+	0x000012530000002e: {
+		'operation':'$Const',
+# CONTENT HASH: 8ffe69f2
+		'datalen': 2048,
+		'inputs' : [],
+		'outputs' : [	{
+			'dtype': 'Int32', 'rank': 4,
+				'zero_offset': 0, 'stepsize': 1.0,
+				'dims': [1,8,1,64],
+			},
+		],
+	},
+}
+# :::END:graph_after_optimization:::
+# :::BEGIN:dead_nodes:graph_after_optimization
+# *** use '--setopt dead_nodes 1' to collect & report dead-node info
+graph_after_optimization_remapped_ids = {
+}
+graph_after_optimization_dead_nodes = {
+# 0 items
+# id map 0 items
+}
+# :::END:dead_nodes:graph_after_optimization
+
+
+# Note: values remapped to strings at end.
+
+concrete_ops_info = { # :::BEGIN:concrete_ops_info:::atomic
+	0x100200000008: 0,
+	0x100382d28377: 1,
+	0x100399fb24bb: 1,
+	0x111100000002: 2,
+	0x11a400000012: 3,
+	0x11a700000016: 3,
+	0x11aa0000001a: 3,
+	0x11ad0000001e: 3,
+	0x11b000000022: 3,
+	0x11b300000026: 3,
+	0x11b60000002a: 3,
+	0x11b90000002e: 3,
+	0x11c300000012: 4,
+	0x11ed00000012: 5,
+	0x11f000000016: 5,
+	0x11f30000001a: 5,
+	0x11f60000001e: 5,
+	0x11f900000022: 5,
+	0x11fc00000026: 5,
+	0x11ff0000002a: 5,
+	0x12020000002e: 5,
+	0x120300000012: 6,
+	0x120d00000003: 7,
+	0x120e00000003: 8,
+	0x120f00000003: 4,
+	0x121000000012: 9,
+	0x121100000016: 9,
+	0x12120000001a: 9,
+	0x12130000001e: 9,
+	0x121400000022: 9,
+	0x121500000026: 9,
+	0x12160000002a: 9,
+	0x12170000002e: 9,
+	0x123200000012: 0,
+	0x123300000012: 0,
+	0x123400000016: 0,
+	0x12350000001a: 0,
+	0x12360000001e: 0,
+	0x123700000022: 0,
+	0x123800000026: 0,
+	0x12390000002a: 0,
+	0x123a0000002e: 0,
+	0x124c00000012: 0,
+	0x124d00000016: 0,
+	0x124e0000001a: 0,
+	0x124f0000001e: 0,
+	0x125000000022: 0,
+	0x125100000026: 0,
+	0x12520000002a: 0,
+	0x12530000002e: 0,
+}
+
+concrete_ops_info_key = [ # key for concrete_ops_info
+	"N4hnnx14ConstWrapperOpE",
+	"N4hnnx14ShapeWrapperOpE",
+	"N4hnnx9TypicalOpIXadL_ZL25Input_ContiguousSlice_dmaI14ConcreteTensorIN5Tdefs14QuantUint8_TCMEES2_INS3_10QuantUint8EELj4EEiRT_RK11TensorShapeILj4EERKSA_IXT1_EESG_SD_SG_SD_N3gHN2gXEEEEE",
+	"N4hnnx9TypicalOpIXadL_ZL16data_prepare_dmaI14ConcreteTensorIN5Tdefs9Int32_TCMEES2_INS3_5Int32EELb1EEiRT_RKT0_N3gHN2gXEEEEE",
+	"11PlacementOpIN4hnnx9TypicalOpIXadL_Z15reshape_inplaceI14ConcreteTensorIN5Tdefs14QuantUint8_TCMEEE11GraphStatusRT_RKS8_EEEEXadL_Z21reshape_inplace_allocISC_ES7_R5GraphS9_EEE",
+  #[5]
+	"N4hnnx21TypicalOpWithCompilerIXadL_Z20conv_layer_quant_v73I14ConcreteTensorIN5Tdefs17QUint8Crouton_TCMEES2_INS3_16shflSWeights_TCMEES5_EiRT_RKT1_RKT0_RKS2_INS3_9Int32_TCMEERK6TensorRKS2_INS3_5Int32EEEE11conv_paramsEE",
+	"N4hnnx9TypicalOpIXadL_ZL12flat2croutonI14ConcreteTensorIN5Tdefs17QUint8Crouton_TCMEES2_INS3_14QuantUint8_TCMEEEiRT_RKT0_EEEE",
+	"N4hnnx9TypicalOpIXadL_Z25output_slice_via_dma_implI14ConcreteTensorIN5Tdefs14QuantUint8_TCMEEEiRKT_RK11TensorShapeILj4EESC_SC_N3gHN2gXEEEEE",
+	"N4hnnx9TypicalOpIXadL_ZL15crouton_flattenI14ConcreteTensorIN5Tdefs14QuantUint8_TCMEES2_INS3_17QUint8Crouton_TCMEEEiRT_RKT0_EEEE",
+	"N4hnnx9TypicalOpIXadL_ZL16data_prepare_dmaI14ConcreteTensorIN5Tdefs16shflSWeights_TCMEES2_INS3_12shflSWeightsEELb1EEiRT_RKT0_N3gHN2gXEEEEE",
+]
+
+for k,v in concrete_ops_info.items():
+    concrete_ops_info[k] = concrete_ops_info_key[v]
+
+# :::END:concrete_ops_info:::
+
+runlist1 = [
+]
+runlist = runlist1
+
+
+bandwidth_information = [
+{"opid" : 0x0000111100000002 , "dram_read": 65536 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 65536, "is_dma": 1},
+{"opid" : 0x000011a400000012 , "dram_read": 2048 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 2048, "is_dma": 1},
+{"opid" : 0x0000121000000012 , "dram_read": 65536 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 65536, "is_dma": 1},
+{"opid" : 0x000011a700000016 , "dram_read": 2048 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 2048, "is_dma": 1},
+{"opid" : 0x0000121100000016 , "dram_read": 65536 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 65536, "is_dma": 1},
+{"opid" : 0x000011aa0000001a , "dram_read": 2048 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 2048, "is_dma": 1},
+{"opid" : 0x000012120000001a , "dram_read": 65536 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 65536, "is_dma": 1},
+{"opid" : 0x000011ad0000001e , "dram_read": 2048 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 2048, "is_dma": 1},
+{"opid" : 0x000012130000001e , "dram_read": 65536 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 65536, "is_dma": 1},
+{"opid" : 0x000011b000000022 , "dram_read": 2048 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 2048, "is_dma": 1},
+{"opid" : 0x0000121400000022 , "dram_read": 65536 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 65536, "is_dma": 1},
+{"opid" : 0x000011b300000026 , "dram_read": 2048 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 2048, "is_dma": 1},
+{"opid" : 0x0000121500000026 , "dram_read": 65536 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 65536, "is_dma": 1},
+{"opid" : 0x000011b60000002a , "dram_read": 2048 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 2048, "is_dma": 1},
+{"opid" : 0x000012160000002a , "dram_read": 65536 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 65536, "is_dma": 1},
+{"opid" : 0x000011b90000002e , "dram_read": 2048 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 2048, "is_dma": 1},
+{"opid" : 0x000012170000002e , "dram_read": 65536 , "dram_write": 0 , "vtcm_read": 0 , "vtcm_write": 65536, "is_dma": 1},
+{"opid" : 0x0000120300000012 , "dram_read": 0 , "dram_write": 0 , "vtcm_read": 65536 , "vtcm_write": 65536, "is_dma": 0},
+{"opid" : 0x000011ed00000012 , "dram_read": 0 , "dram_write": 0 , "vtcm_read": 133120 , "vtcm_write": 65536, "is_dma": 0},
+{"opid" : 0x000011f000000016 , "dram_read": 0 , "dram_write": 0 , "vtcm_read": 133120 , "vtcm_write": 65536, "is_dma": 0},
+{"opid" : 0x000011f30000001a , "dram_read": 0 , "dram_write": 0 , "vtcm_read": 133120 , "vtcm_write": 65536, "is_dma": 0},
+{"opid" : 0x000011f60000001e , "dram_read": 0 , "dram_write": 0 , "vtcm_read": 133120 , "vtcm_write": 65536, "is_dma": 0},
+{"opid" : 0x000011f900000022 , "dram_read": 0 , "dram_write": 0 , "vtcm_read": 133120 , "vtcm_write": 65536, "is_dma": 0},
+{"opid" : 0x000011fc00000026 , "dram_read": 0 , "dram_write": 0 , "vtcm_read": 133120 , "vtcm_write": 65536, "is_dma": 0},
+{"opid" : 0x000011ff0000002a , "dram_read": 0 , "dram_write": 0 , "vtcm_read": 133120 , "vtcm_write": 65536, "is_dma": 0},
+{"opid" : 0x000012020000002e , "dram_read": 0 , "dram_write": 0 , "vtcm_read": 133120 , "vtcm_write": 65536, "is_dma": 0},
+{"opid" : 0x0000120e00000003 , "dram_read": 0 , "dram_write": 0 , "vtcm_read": 65536 , "vtcm_write": 65536, "is_dma": 0},
+{"opid" : 0x0000120d00000003 , "dram_read": 0 , "dram_write": 65536 , "vtcm_read": 65536 , "vtcm_write": 0, "is_dma": 1},
+]
+
+
+
+num_sfcd_words = {
+}
+
+graph_res_flags0 = { # :::BEGIN:graph_flag0:::
+	'graph': {
+		0x100200000008: {'flags' : ()},
+		0x100382d28377: {'flags' : ()},
+		0x100399fb24bb: {'flags' : ()},
+		0x111100000002: {
+			'flags': ('uses_dma',),
+		},
+		0x11a400000012: {
+			'flags': ('uses_dma',),
+		},
+		0x11a700000016: {
+			'flags': ('uses_dma',),
+		},
+		0x11aa0000001a: {
+			'flags': ('uses_dma',),
+		},
+		0x11ad0000001e: {
+			'flags': ('uses_dma',),
+		},
+		0x11b000000022: {
+			'flags': ('uses_dma',),
+		},
+		0x11b300000026: {
+			'flags': ('uses_dma',),
+		},
+		0x11b60000002a: {
+			'flags': ('uses_dma',),
+		},
+		0x11b90000002e: {
+			'flags': ('uses_dma',),
+		},
+		0x11c300000012: {
+			'flags': ('null_exec',),
+		},
+		0x11ed00000012: {
+			'flags': ('uses_hmx',),
+		},
+		0x11f000000016: {
+			'flags': ('uses_hmx',),
+		},
+		0x11f30000001a: {
+			'flags': ('uses_hmx',),
+		},
+		0x11f60000001e: {
+			'flags': ('uses_hmx',),
+		},
+		0x11f900000022: {
+			'flags': ('uses_hmx',),
+		},
+		0x11fc00000026: {
+			'flags': ('uses_hmx',),
+		},
+		0x11ff0000002a: {
+			'flags': ('uses_hmx',),
+		},
+		0x12020000002e: {
+			'flags': ('uses_hmx',),
+		},
+		0x120300000012: {
+			'flags': ('uses_hvx',),
+		},
+		0x120d00000003: {
+			'flags': ('uses_dma',),
+		},
+		0x120e00000003: {
+			'flags': ('uses_hvx',),
+		},
+		0x120f00000003: {
+			'flags': ('null_exec',),
+		},
+		0x121000000012: {
+			'flags': ('uses_dma',),
+		},
+		0x121100000016: {
+			'flags': ('uses_dma',),
+		},
+		0x12120000001a: {
+			'flags': ('uses_dma',),
+		},
+		0x12130000001e: {
+			'flags': ('uses_dma',),
+		},
+		0x121400000022: {
+			'flags': ('uses_dma',),
+		},
+		0x121500000026: {
+			'flags': ('uses_dma',),
+		},
+		0x12160000002a: {
+			'flags': ('uses_dma',),
+		},
+		0x12170000002e: {
+			'flags': ('uses_dma',),
+		},
+		0x123200000012: {'flags' : ()},
+		0x123300000012: {'flags' : ()},
+		0x123400000016: {'flags' : ()},
+		0x12350000001a: {'flags' : ()},
+		0x12360000001e: {'flags' : ()},
+		0x123700000022: {'flags' : ()},
+		0x123800000026: {'flags' : ()},
+		0x12390000002a: {'flags' : ()},
+		0x123a0000002e: {'flags' : ()},
+		0x124c00000012: {'flags' : ()},
+		0x124d00000016: {'flags' : ()},
+		0x124e0000001a: {'flags' : ()},
+		0x124f0000001e: {'flags' : ()},
+		0x125000000022: {'flags' : ()},
+		0x125100000026: {'flags' : ()},
+		0x12520000002a: {'flags' : ()},
+		0x12530000002e: {'flags' : ()},
+		0x125500000002: {'flags' : ()},
+		0x12590000001e: {'flags' : ()},
+		0x125d0000001e: {'flags' : ()},
+		0x126000000022: {'flags' : ()},
+		0x126200000026: {'flags' : ()},
+		0x12640000002a: {'flags' : ()},
+		0x12660000002e: {'flags' : ()},
+		0x126800000003: {'flags' : ()},
+		0x126900000000: {
+			'flags': ('sync',),
+		},
+		0x126a00000002: {'flags' : ()},
+		0x126b0000001e: {'flags' : ()},
+		0x126c0000001e: {'flags' : ()},
+		0x126d00000022: {'flags' : ()},
+		0x126e00000026: {'flags' : ()},
+		0x126f0000002a: {'flags' : ()},
+		0x12700000002e: {'flags' : ()},
+		0x127100000003: {'flags' : ()},
+	}
+}
+# :::END:graph_flag0:::
+
+# Note: values remapped to strings at end.
+
+op_docstrings = { # :::BEGIN:op_docstrings:::atomic
+	0x11a400000012: 0,
+	0x11a700000016: 0,
+	0x11aa0000001a: 0,
+	0x11ad0000001e: 0,
+	0x11b000000022: 0,
+	0x11b300000026: 0,
+	0x11b60000002a: 0,
+	0x11b90000002e: 0,
+	0x11ed00000012: 1,
+	0x11f000000016: 1,
+	0x11f30000001a: 1,
+	0x11f60000001e: 1,
+	0x11f900000022: 1,
+	0x11fc00000026: 1,
+	0x11ff0000002a: 1,
+	0x12020000002e: 1,
+	0x125500000002: 2,
+	0x12590000001e: 2,
+	0x125d0000001e: 2,
+	0x126000000022: 2,
+	0x126200000026: 2,
+	0x12640000002a: 2,
+	0x12660000002e: 2,
+	0x126800000003: 2,
+	0x126a00000002: 3,
+	0x126b0000001e: 3,
+	0x126c0000001e: 3,
+	0x126d00000022: 3,
+	0x126e00000026: 3,
+	0x126f0000002a: 3,
+	0x12700000002e: 3,
+	0x127100000003: 3,
+}
+op_docstrings_key = [ # key for op_docstrings
+	"Memory movement operation transfering a bias input for conv into VTCM memory",
+	"Conv2d with strides=(1,1) but there's an extra CTRL input that controls whether we do a depthwise/grouped conv or use the 4/8/16bit kernels.",
+	"Waits for a previously started DMA to complete before proceeding",
+	"Records a previous DMA operation's completion tag in a table, so that DmaCheckpointWait can wait for it. Some Ops, such as SpillOp and FillOp, can record their own tag, and don't need this.",
+]
+
+for k,v in op_docstrings.items():
+    op_docstrings[k] = op_docstrings_key[v]
+
+# :::END:op_docstrings:::
+
+runlist2 = [
+	0x100382d28377,
+	0x100399fb24bb,
+	0x111100000002,
+	0x126a00000002,
+	0x124c00000012,
+	0x11a400000012,
+	0x123300000012,
+	0x121000000012,
+	0x124d00000016,
+	0x11a700000016,
+	0x123400000016,
+	0x121100000016,
+	0x124e0000001a,
+	0x11aa0000001a,
+	0x12350000001a,
+	0x12120000001a,
+	0x124f0000001e,
+	0x11ad0000001e,
+	0x126b0000001e,
+	0x12360000001e,
+	0x12130000001e,
+	0x126c0000001e,
+	0x125000000022,
+	0x11b000000022,
+	0x123700000022,
+	0x121400000022,
+	0x126d00000022,
+	0x125100000026,
+	0x11b300000026,
+	0x123800000026,
+	0x121500000026,
+	0x126e00000026,
+	0x12520000002a,
+	0x11b60000002a,
+	0x12390000002a,
+	0x12160000002a,
+	0x126f0000002a,
+	0x12530000002e,
+	0x11b90000002e,
+	0x123a0000002e,
+	0x12170000002e,
+	0x12700000002e,
+	0x125500000002,
+	0x11c300000012,
+	0x12590000001e,
+	0x100200000008,
+	0x123200000012,
+	0x11ed00000012,
+	0x11f000000016,
+	0x11f30000001a,
+	0x125d0000001e,
+	0x11f60000001e,
+	0x126000000022,
+	0x11f900000022,
+	0x126200000026,
+	0x11fc00000026,
+	0x12640000002a,
+	0x11ff0000002a,
+	0x12660000002e,
+	0x12020000002e,
+	0x120f00000003,
+	0x120d00000003,
+	0x127100000003,
+	0x126800000003,
+	0x126900000000,
+]
+runlist_vec = [
+	0x120300000012,
+	0x120e00000003,
+]
+runlist_mtx = [
+]
+runlist_elt = [
+]
+
+checkpoints = []
+
+
+checkpoints.append({
+  0x100382d28377 : [ -1 , -1 ],	# Gate cnt = 0
+  0x100399fb24bb : [ -1 , -1 ],	# Gate cnt = 0
+  0x111100000002 : [ 0 , -1 ],	# Gate cnt = 0
+  0x126a00000002 : [ 0 , 0 ],	# Gate cnt = 0
+  0x124c00000012 : [ -1 , -1 ],	# Gate cnt = 0
+  0x11a400000012 : [ 0 , -1 ],	# Gate cnt = 0
+  0x123300000012 : [ -1 , -1 ],	# Gate cnt = 0
+  0x121000000012 : [ 0 , -1 ],	# Gate cnt = 0
+  0x124d00000016 : [ -1 , -1 ],	# Gate cnt = 0
+  0x11a700000016 : [ 0 , -1 ],	# Gate cnt = 0
+  0x123400000016 : [ -1 , -1 ],	# Gate cnt = 0
+  0x121100000016 : [ 0 , -1 ],	# Gate cnt = 0
+  0x124e0000001a : [ -1 , -1 ],	# Gate cnt = 0
+  0x11aa0000001a : [ 0 , -1 ],	# Gate cnt = 0
+  0x12350000001a : [ -1 , -1 ],	# Gate cnt = 0
+  0x12120000001a : [ 0 , -1 ],	# Gate cnt = 0
+  0x124f0000001e : [ -1 , -1 ],	# Gate cnt = 0
+  0x11ad0000001e : [ 0 , -1 ],	# Gate cnt = 0
+  0x126b0000001e : [ 0 , 0 ],	# Gate cnt = 0
+  0x12360000001e : [ -1 , -1 ],	# Gate cnt = 0
+  0x12130000001e : [ 0 , -1 ],	# Gate cnt = 0
+  0x126c0000001e : [ 0 , 0 ],	# Gate cnt = 0
+  0x125000000022 : [ -1 , -1 ],	# Gate cnt = 0
+  0x11b000000022 : [ 0 , -1 ],	# Gate cnt = 0
+  0x123700000022 : [ -1 , -1 ],	# Gate cnt = 0
+  0x121400000022 : [ 0 , -1 ],	# Gate cnt = 0
+  0x126d00000022 : [ 0 , 0 ],	# Gate cnt = 0
+  0x125100000026 : [ -1 , -1 ],	# Gate cnt = 0
+  0x11b300000026 : [ 0 , -1 ],	# Gate cnt = 0
+  0x123800000026 : [ -1 , -1 ],	# Gate cnt = 0
+  0x121500000026 : [ 0 , -1 ],	# Gate cnt = 0
+  0x126e00000026 : [ 0 , 0 ],	# Gate cnt = 0
+  0x12520000002a : [ -1 , -1 ],	# Gate cnt = 0
+  0x11b60000002a : [ 0 , -1 ],	# Gate cnt = 0
+  0x12390000002a : [ -1 , -1 ],	# Gate cnt = 0
+  0x12160000002a : [ 0 , -1 ],	# Gate cnt = 0
+  0x126f0000002a : [ 0 , 0 ],	# Gate cnt = 0
+  0x12530000002e : [ -1 , -1 ],	# Gate cnt = 0
+  0x11b90000002e : [ 0 , -1 ],	# Gate cnt = 0
+  0x123a0000002e : [ -1 , -1 ],	# Gate cnt = 0
+  0x12170000002e : [ 0 , -1 ],	# Gate cnt = 0
+  0x12700000002e : [ 0 , 0 ],	# Gate cnt = 0
+  0x125500000002 : [ 0 , 2 ],	# Gate cnt = 0
+  0x11c300000012 : [ -1 , -1 ],	# Gate cnt = 0
+  0x12590000001e : [ 0 , -1 ],	# Gate cnt = 0
+  0x100200000008 : [ -1 , -1 ],	# Gate cnt = 0
+  0x123200000012 : [ -1 , -1 ],	# Gate cnt = 0
+  0x11ed00000012 : [ 3 , -1 ],	# Gate cnt = 1
+  0x11f000000016 : [ 0 , -1 ],	# Gate cnt = 0
+  0x11f30000001a : [ 0 , -1 ],	# Gate cnt = 0
+  0x125d0000001e : [ 0 , -1 ],	# Gate cnt = 0
+  0x11f60000001e : [ 0 , -1 ],	# Gate cnt = 0
+  0x126000000022 : [ 0 , -1 ],	# Gate cnt = 0
+  0x11f900000022 : [ 0 , -1 ],	# Gate cnt = 0
+  0x126200000026 : [ 0 , -1 ],	# Gate cnt = 0
+  0x11fc00000026 : [ 0 , -1 ],	# Gate cnt = 0
+  0x12640000002a : [ 0 , -1 ],	# Gate cnt = 0
+  0x11ff0000002a : [ 0 , -1 ],	# Gate cnt = 0
+  0x12660000002e : [ 0 , -1 ],	# Gate cnt = 0
+  0x12020000002e : [ 0 , 4 ],	# Gate cnt = 0
+  0x120f00000003 : [ -1 , -1 ],	# Gate cnt = 0
+  0x120d00000003 : [ 5 , -1 ],	# Gate cnt = 1
+  0x127100000003 : [ 0 , 0 ],	# Gate cnt = 0
+  0x126800000003 : [ 0 , -1 ],	# Gate cnt = 0
+  0x126900000000 : [ 0 , -1 ],	# Gate cnt = 0
+  # vector list
+  0x120300000012 : [ 2 , 3 ],	# Gate cnt = 1
+  0x120e00000003 : [ 4 , 5 ],	# Gate cnt = 1
+  # matrix list
+  # eltwise list
+})
+
+
+special_mlp_features = { # :::BEGIN:special_mlp_features:::
+}
+# :::END:special_mlp_features:::
+qnn_name_translations = {
+0x0000000000000010: 'MatMul_0_pre_reshape',
+0x0000000000000012: 'MatMul_0',
+0x0000000000000016: 'MatMul_1',
+0x000000000000001a: 'MatMul_2',
+0x000000000000001e: 'MatMul_3',
+0x0000000000000022: 'MatMul_4',
+0x0000000000000026: 'MatMul_5',
+0x000000000000002a: 'MatMul_6',
+0x000000000000002e: 'MatMul_7',
+0x0000000000000031: 'MatMul_7_post_reshape',
+}
+qnn_graph_name = "model_encoded"
+##### Python dump of GraphDeps data
+try: opdesc
+except Exception: from opinfo_util import opdesc,memgroup,interval_set
+memgroup_map = { #Number of groups = 27
+ 'mg00001': memgroup(bytes=65536, is_tcm=True, gen_op = '#1',
+      connected_ops = ('#19','#31','#40',),
+          blocks = interval_set(1,[0x1E]),
+  ),
+ 'mg00002': memgroup(bytes=2048, is_tcm=True, gen_op = '#2',
+      connected_ops = ('#20','#32',),
+          blocks = interval_set(1,[0x1F]),
+  ),
+ 'mg00003': memgroup(bytes=2048, is_tcm=True, gen_op = '#3',
+      connected_ops = ('#21','#33',),
+          blocks = interval_set(1,[0x20]),
+  ),
+ 'mg00004': memgroup(bytes=2048, is_tcm=True, gen_op = '#4',
+      connected_ops = ('#22','#34',),
+          blocks = interval_set(1,[0x21]),
+  ),
+ 'mg00005': memgroup(bytes=2048, is_tcm=True, gen_op = '#5',
+      connected_ops = ('#23','#35',),
+          blocks = interval_set(1,[0x22]),
+  ),
+ 'mg00006': memgroup(bytes=2048, is_tcm=True, gen_op = '#6',
+      connected_ops = ('#24','#41',),
+          blocks = interval_set(1,[0x23]),
+  ),
+ 'mg00007': memgroup(bytes=2048, is_tcm=True, gen_op = '#7',
+      connected_ops = ('#25','#43',),
+          blocks = interval_set(1,[0x24]),
+  ),
+ 'mg00008': memgroup(bytes=2048, is_tcm=True, gen_op = '#8',
+      connected_ops = ('#26','#45',),
+          blocks = interval_set(1,[0x25]),
+  ),
+ 'mg00009': memgroup(bytes=2048, is_tcm=True, gen_op = '#9',
+      connected_ops = ('#27','#47',),
+          blocks = interval_set(1,[0x26]),
+  ),
+ 'mg00010': memgroup(bytes=65536, is_tcm=True, gen_op = '#10',
+      connected_ops = ('#20','#36',),
+          blocks = interval_set(1,[0x27]),
+  ),
+ 'mg00011': memgroup(bytes=65536, is_tcm=True, gen_op = '#11',
+      connected_ops = ('#21','#37',),
+          blocks = interval_set(1,[0x28]),
+  ),
+ 'mg00012': memgroup(bytes=65536, is_tcm=True, gen_op = '#12',
+      connected_ops = ('#22','#38',),
+          blocks = interval_set(1,[0x29]),
+  ),
+ 'mg00013': memgroup(bytes=65536, is_tcm=True, gen_op = '#13',
+      connected_ops = ('#23','#39',),
+          blocks = interval_set(1,[0x2A]),
+  ),
+ 'mg00014': memgroup(bytes=65536, is_tcm=True, gen_op = '#14',
+      connected_ops = ('#24','#42',),
+          blocks = interval_set(1,[0x2B]),
+  ),
+ 'mg00015': memgroup(bytes=65536, is_tcm=True, gen_op = '#15',
+      connected_ops = ('#25','#44',),
+          blocks = interval_set(1,[0x2C]),
+  ),
+ 'mg00016': memgroup(bytes=65536, is_tcm=True, gen_op = '#16',
+      connected_ops = ('#26','#46',),
+          blocks = interval_set(1,[0x2D]),
+  ),
+ 'mg00017': memgroup(bytes=65536, is_tcm=True, gen_op = '#17',
+      connected_ops = ('#27','#48',),
+          blocks = interval_set(1,[0x2E]),
+  ),
+ 'mg00018': memgroup(bytes=65536, is_tcm=True, gen_op = '#19',
+      connected_ops = ('#20','#40',),
+          blocks = interval_set(32,[(0x2F,0x4F)]),
+  ),
+ 'mg00019': memgroup(bytes=65536, is_tcm=True, gen_op = '#20',
+      connected_ops = ('#21',),
+          blocks = interval_set(32,[(0x4F,0x6F)]),
+  ),
+ 'mg00020': memgroup(bytes=65536, is_tcm=True, gen_op = '#21',
+      connected_ops = ('#22',),
+          blocks = interval_set(32,[(0x6F,0x8F)]),
+  ),
+ 'mg00021': memgroup(bytes=65536, is_tcm=True, gen_op = '#22',
+      connected_ops = ('#23',),
+          blocks = interval_set(32,[(0x8F,0xAF)]),
+  ),
+ 'mg00022': memgroup(bytes=65536, is_tcm=True, gen_op = '#23',
+      connected_ops = ('#24',),
+          blocks = interval_set(32,[(0xAF,0xCF)]),
+  ),
+ 'mg00023': memgroup(bytes=65536, is_tcm=True, gen_op = '#24',
+      connected_ops = ('#25',),
+          blocks = interval_set(32,[(0xCF,0xEF)]),
+  ),
+ 'mg00024': memgroup(bytes=65536, is_tcm=True, gen_op = '#25',
+      connected_ops = ('#26',),
+          blocks = interval_set(32,[(0xEF,0x10F)]),
+  ),
+ 'mg00025': memgroup(bytes=65536, is_tcm=True, gen_op = '#26',
+      connected_ops = ('#27',),
+          blocks = interval_set(32,[(0x10F,0x12F)]),
+  ),
+ 'mg00026': memgroup(bytes=65536, is_tcm=True, gen_op = '#27',
+      connected_ops = ('#28','#49',),
+          blocks = interval_set(32,[(0x12F,0x14F)]),
+  ),
+ 'mg00027': memgroup(bytes=65536, is_tcm=True, gen_op = '#28',
+      connected_ops = ('#30','#49','#50',),
+          blocks = interval_set(1,[0x14F]),
+  ),
+}
+# ---- > total 1261568 bytes in 306 blocks, in 27 groups
+
+#Number of OpDesc = 51
+#Length of runlist = 49
+
+#Total of 51 OpDesc slots
+opdesc_map ={
+  # @[0]:
+  '#1': opdesc( 0x111100000002, "q::*InputSlice", ptr=0x59d50a2d9330, runlist_pos = 0,
+      flags=('any_tcm','is_volatile','is_fork',), op_flags=('FOR_DMA','MOVE_EARLY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 16, # slack = 0
+      csts_out = ('#31',),
+      memgrps_out = ('mg00001',),
+      dma_checkpoint=7,
+  ),
+  # @[1]:
+  '#2': opdesc( 0x11a400000012, "q::ConvLayer.opt.bias_to_vtcm", ptr=0x59d50a2d2330, runlist_pos = 1,
+      flags=('any_tcm','is_fork','const_fill_eligible',), op_flags=('INHIBIT_CONST_PROP','FOR_DMA','MOVE_EARLY','IS_COPY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 14, # slack = 2
+      csts_out = ('#32',),
+      memgrps_out = ('mg00002',),
+  ),
+  # @[2]:
+  '#10': opdesc( 0x121000000012, "q::ConvLayer.opt.weights_to_vtcm", ptr=0x59d50a20f320, runlist_pos = 2,
+      flags=('any_tcm','is_fork','const_fill_eligible',), op_flags=('INHIBIT_CONST_PROP','FOR_DMA','MOVE_EARLY','IS_COPY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 14, # slack = 2
+      csts_out = ('#36',),
+      memgrps_out = ('mg00010',),
+  ),
+  # @[3]:
+  '#3': opdesc( 0x11a700000016, "q::ConvLayer.opt.bias_to_vtcm", ptr=0x59d50a277930, runlist_pos = 3,
+      flags=('any_tcm','is_fork','const_fill_eligible',), op_flags=('INHIBIT_CONST_PROP','FOR_DMA','MOVE_EARLY','IS_COPY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 13, # slack = 3
+      csts_out = ('#33',),
+      memgrps_out = ('mg00003',),
+  ),
+  # @[4]:
+  '#11': opdesc( 0x121100000016, "q::ConvLayer.opt.weights_to_vtcm", ptr=0x59d50a2dea20, runlist_pos = 4,
+      flags=('any_tcm','is_fork','const_fill_eligible',), op_flags=('INHIBIT_CONST_PROP','FOR_DMA','MOVE_EARLY','IS_COPY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 13, # slack = 3
+      csts_out = ('#37',),
+      memgrps_out = ('mg00011',),
+  ),
+  # @[5]:
+  '#4': opdesc( 0x11aa0000001a, "q::ConvLayer.opt.bias_to_vtcm", ptr=0x59d50a230f70, runlist_pos = 5,
+      flags=('any_tcm','is_fork','const_fill_eligible',), op_flags=('INHIBIT_CONST_PROP','FOR_DMA','MOVE_EARLY','IS_COPY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 12, # slack = 4
+      csts_out = ('#34',),
+      memgrps_out = ('mg00004',),
+  ),
+  # @[6]:
+  '#12': opdesc( 0x12120000001a, "q::ConvLayer.opt.weights_to_vtcm", ptr=0x59d50a20ccd0, runlist_pos = 6,
+      flags=('any_tcm','is_fork','const_fill_eligible',), op_flags=('INHIBIT_CONST_PROP','FOR_DMA','MOVE_EARLY','IS_COPY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 12, # slack = 4
+      csts_out = ('#38',),
+      memgrps_out = ('mg00012',),
+  ),
+  # @[7]:
+  '#5': opdesc( 0x11ad0000001e, "q::ConvLayer.opt.bias_to_vtcm", ptr=0x59d50a2cf330, runlist_pos = 7,
+      flags=('any_tcm','is_fork','const_fill_eligible',), op_flags=('INHIBIT_CONST_PROP','FOR_DMA','MOVE_EARLY','IS_COPY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 11, # slack = 5
+      csts_out = ('#35',),
+      memgrps_out = ('mg00005',),
+      dma_checkpoint=6,
+  ),
+  # @[8]:
+  '#13': opdesc( 0x12130000001e, "q::ConvLayer.opt.weights_to_vtcm", ptr=0x59d50a2b6b20, runlist_pos = 8,
+      flags=('any_tcm','is_fork','const_fill_eligible',), op_flags=('INHIBIT_CONST_PROP','FOR_DMA','MOVE_EARLY','IS_COPY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 11, # slack = 5
+      csts_out = ('#39',),
+      memgrps_out = ('mg00013',),
+      dma_checkpoint=5,
+  ),
+  # @[9]:
+  '#6': opdesc( 0x11b000000022, "q::ConvLayer.opt.bias_to_vtcm", ptr=0x59d50a2abc30, runlist_pos = 9,
+      flags=('any_tcm','is_fork','const_fill_eligible',), op_flags=('INHIBIT_CONST_PROP','FOR_DMA','MOVE_EARLY','IS_COPY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 10, # slack = 6
+      csts_out = ('#41',),
+      memgrps_out = ('mg00006',),
+  ),
+  # @[10]:
+  '#14': opdesc( 0x121400000022, "q::ConvLayer.opt.weights_to_vtcm", ptr=0x59d50a2adf60, runlist_pos = 10,
+      flags=('any_tcm','is_fork','const_fill_eligible',), op_flags=('INHIBIT_CONST_PROP','FOR_DMA','MOVE_EARLY','IS_COPY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 10, # slack = 6
+      csts_out = ('#42',),
+      memgrps_out = ('mg00014',),
+      dma_checkpoint=4,
+  ),
+  # @[11]:
+  '#7': opdesc( 0x11b300000026, "q::ConvLayer.opt.bias_to_vtcm", ptr=0x59d50a265db0, runlist_pos = 11,
+      flags=('any_tcm','is_fork','const_fill_eligible',), op_flags=('INHIBIT_CONST_PROP','FOR_DMA','MOVE_EARLY','IS_COPY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 9, # slack = 7
+      csts_out = ('#43',),
+      memgrps_out = ('mg00007',),
+  ),
+  # @[12]:
+  '#15': opdesc( 0x121500000026, "q::ConvLayer.opt.weights_to_vtcm", ptr=0x59d50a2d0190, runlist_pos = 12,
+      flags=('any_tcm','is_fork','const_fill_eligible',), op_flags=('INHIBIT_CONST_PROP','FOR_DMA','MOVE_EARLY','IS_COPY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 9, # slack = 7
+      csts_out = ('#44',),
+      memgrps_out = ('mg00015',),
+      dma_checkpoint=3,
+  ),
+  # @[13]:
+  '#8': opdesc( 0x11b60000002a, "q::ConvLayer.opt.bias_to_vtcm", ptr=0x59d50a20db40, runlist_pos = 13,
+      flags=('any_tcm','is_fork','const_fill_eligible',), op_flags=('INHIBIT_CONST_PROP','FOR_DMA','MOVE_EARLY','IS_COPY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 8, # slack = 8
+      csts_out = ('#45',),
+      memgrps_out = ('mg00008',),
+  ),
+  # @[14]:
+  '#16': opdesc( 0x12160000002a, "q::ConvLayer.opt.weights_to_vtcm", ptr=0x59d50a232610, runlist_pos = 14,
+      flags=('any_tcm','is_fork','const_fill_eligible',), op_flags=('INHIBIT_CONST_PROP','FOR_DMA','MOVE_EARLY','IS_COPY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 8, # slack = 8
+      csts_out = ('#46',),
+      memgrps_out = ('mg00016',),
+      dma_checkpoint=2,
+  ),
+  # @[15]:
+  '#9': opdesc( 0x11b90000002e, "q::ConvLayer.opt.bias_to_vtcm", ptr=0x59d50a2d2d30, runlist_pos = 15,
+      flags=('any_tcm','is_fork','const_fill_eligible',), op_flags=('INHIBIT_CONST_PROP','FOR_DMA','MOVE_EARLY','IS_COPY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 7, # slack = 9
+      csts_out = ('#47',),
+      memgrps_out = ('mg00009',),
+  ),
+  # @[16]:
+  '#17': opdesc( 0x12170000002e, "q::ConvLayer.opt.weights_to_vtcm", ptr=0x59d50a243a20, runlist_pos = 16,
+      flags=('any_tcm','is_fork','const_fill_eligible',), op_flags=('INHIBIT_CONST_PROP','FOR_DMA','MOVE_EARLY','IS_COPY',), has_const_in=True,  n_out=1,
+      in_dist = 1, out_dist = 7, # slack = 9
+      csts_out = ('#48',),
+      memgrps_out = ('mg00017',),
+      dma_checkpoint=1,
+  ),
+  # @[17]:
+  '#31': opdesc( 0x125500000002, "q::*InputSlice", ptr=0x59d50a3041a0, runlist_pos = 17,
+      category='join', flags=('any_tcm',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 15, # slack = 0
+      csts_in = ('#1',),
+      csts_out = ('#19',),
+      memgrps_in = ('mg00001',),
+  ),
+  # @[18]:
+  '#19': opdesc( 0x120300000012, "q::ForceFormat_Crouton", ptr=0x59d50a2ce7d0, runlist_pos = 18,
+      flags=('any_tcm','is_fork',), op_flags=('FOR_HVX','MOVE_EARLY',), n_out=1,
+      in_dist = 3, out_dist = 14, # slack = 0
+      csts_in = ('#31',),
+      csts_out = ('#40',),
+      memgrps_in = ('mg00001',),
+      memgrps_out = ('mg00018',),
+  ),
+  # @[19]:
+  '#32': opdesc( 0x125600000012, "q::ConvLayer.opt.bias_to_vtcm", ptr=0x0, runlist_pos = 19,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 13, # slack = 2
+      csts_in = ('#2',),
+      csts_out = ('#20',),
+      memgrps_in = ('mg00002',),
+  ),
+  # @[20]:
+  '#36': opdesc( 0x125a00000012, "q::ConvLayer.opt.weights_to_vtcm", ptr=0x0, runlist_pos = 20,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 13, # slack = 2
+      csts_in = ('#10',),
+      csts_out = ('#20',),
+      memgrps_in = ('mg00010',),
+  ),
+  # @[21]:
+  '#33': opdesc( 0x125700000016, "q::ConvLayer.opt.bias_to_vtcm", ptr=0x0, runlist_pos = 21,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 12, # slack = 3
+      csts_in = ('#3',),
+      csts_out = ('#21',),
+      memgrps_in = ('mg00003',),
+  ),
+  # @[22]:
+  '#37': opdesc( 0x125b00000016, "q::ConvLayer.opt.weights_to_vtcm", ptr=0x0, runlist_pos = 22,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 12, # slack = 3
+      csts_in = ('#11',),
+      csts_out = ('#21',),
+      memgrps_in = ('mg00011',),
+  ),
+  # @[23]:
+  '#34': opdesc( 0x12580000001a, "q::ConvLayer.opt.bias_to_vtcm", ptr=0x0, runlist_pos = 23,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 11, # slack = 4
+      csts_in = ('#4',),
+      csts_out = ('#22',),
+      memgrps_in = ('mg00004',),
+  ),
+  # @[24]:
+  '#38': opdesc( 0x125c0000001a, "q::ConvLayer.opt.weights_to_vtcm", ptr=0x0, runlist_pos = 24,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 11, # slack = 4
+      csts_in = ('#12',),
+      csts_out = ('#22',),
+      memgrps_in = ('mg00012',),
+  ),
+  # @[25]:
+  '#35': opdesc( 0x12590000001e, "q::ConvLayer.opt.bias_to_vtcm", ptr=0x59d50a309550, runlist_pos = 25,
+      category='join', flags=('any_tcm',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 10, # slack = 5
+      csts_in = ('#5',),
+      csts_out = ('#23',),
+      memgrps_in = ('mg00005',),
+  ),
+  # @[26]:
+  '#40': opdesc( 0x125e00000012, "q::ForceFormat_Crouton", ptr=0x0, runlist_pos = 26,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_HVX','MOVE_LATE',), n_out=0,
+      in_dist = 4, out_dist = 13, # slack = 0
+      csts_in = ('#19',),
+      csts_out = ('#20',),
+      memgrps_in = ('mg00001','mg00018',),
+  ),
+  # @[27]:
+  '#20': opdesc( 0x11ed00000012, "q::ConvLayer_s1.opt", ptr=0x59d50a1771f0, runlist_pos = 27,
+      flags=('any_tcm',), op_flags=('RESOURCE_HMX',), has_const_in=True,  n_out=1,
+      in_dist = 5, out_dist = 12, # slack = 0
+      csts_in = ('#32','#36','#40',),
+      csts_out = ('#21',),
+      memgrps_in = ('mg00002','mg00010','mg00018',),
+      memgrps_out = ('mg00019',),
+  ),
+  # @[28]:
+  '#21': opdesc( 0x11f000000016, "q::ConvLayer_s1.opt", ptr=0x59d50a2e24d0, runlist_pos = 28,
+      flags=('any_tcm',), op_flags=('RESOURCE_HMX',), has_const_in=True,  n_out=1,
+      in_dist = 6, out_dist = 11, # slack = 0
+      csts_in = ('#20','#33','#37',),
+      csts_out = ('#22',),
+      memgrps_in = ('mg00003','mg00011','mg00019',),
+      memgrps_out = ('mg00020',),
+  ),
+  # @[29]:
+  '#22': opdesc( 0x11f30000001a, "q::ConvLayer_s1.opt", ptr=0x59d50a2d1b90, runlist_pos = 29,
+      flags=('any_tcm',), op_flags=('RESOURCE_HMX',), has_const_in=True,  n_out=1,
+      in_dist = 7, out_dist = 10, # slack = 0
+      csts_in = ('#21','#34','#38',),
+      csts_out = ('#23',),
+      memgrps_in = ('mg00004','mg00012','mg00020',),
+      memgrps_out = ('mg00021',),
+  ),
+  # @[30]:
+  '#39': opdesc( 0x125d0000001e, "q::ConvLayer.opt.weights_to_vtcm", ptr=0x59d50a2fd220, runlist_pos = 30,
+      category='join', flags=('any_tcm',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 10, # slack = 5
+      csts_in = ('#13',),
+      csts_out = ('#23',),
+      memgrps_in = ('mg00013',),
+  ),
+  # @[31]:
+  '#23': opdesc( 0x11f60000001e, "q::ConvLayer_s1.opt", ptr=0x59d50a2b81c0, runlist_pos = 31,
+      flags=('any_tcm',), op_flags=('RESOURCE_HMX',), has_const_in=True,  n_out=1,
+      in_dist = 8, out_dist = 9, # slack = 0
+      csts_in = ('#22','#35','#39',),
+      csts_out = ('#24',),
+      memgrps_in = ('mg00005','mg00013','mg00021',),
+      memgrps_out = ('mg00022',),
+  ),
+  # @[32]:
+  '#41': opdesc( 0x125f00000022, "q::ConvLayer.opt.bias_to_vtcm", ptr=0x0, runlist_pos = 32,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 9, # slack = 6
+      csts_in = ('#6',),
+      csts_out = ('#24',),
+      memgrps_in = ('mg00006',),
+  ),
+  # @[33]:
+  '#42': opdesc( 0x126000000022, "q::ConvLayer.opt.weights_to_vtcm", ptr=0x59d50a2ff590, runlist_pos = 33,
+      category='join', flags=('any_tcm',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 9, # slack = 6
+      csts_in = ('#14',),
+      csts_out = ('#24',),
+      memgrps_in = ('mg00014',),
+  ),
+  # @[34]:
+  '#24': opdesc( 0x11f900000022, "q::ConvLayer_s1.opt", ptr=0x59d50a2d12e0, runlist_pos = 34,
+      flags=('any_tcm',), op_flags=('RESOURCE_HMX',), has_const_in=True,  n_out=1,
+      in_dist = 9, out_dist = 8, # slack = 0
+      csts_in = ('#23','#41','#42',),
+      csts_out = ('#25',),
+      memgrps_in = ('mg00006','mg00014','mg00022',),
+      memgrps_out = ('mg00023',),
+  ),
+  # @[35]:
+  '#43': opdesc( 0x126100000026, "q::ConvLayer.opt.bias_to_vtcm", ptr=0x0, runlist_pos = 35,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 8, # slack = 7
+      csts_in = ('#7',),
+      csts_out = ('#25',),
+      memgrps_in = ('mg00007',),
+  ),
+  # @[36]:
+  '#44': opdesc( 0x126200000026, "q::ConvLayer.opt.weights_to_vtcm", ptr=0x59d50a30aaf0, runlist_pos = 36,
+      category='join', flags=('any_tcm',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 8, # slack = 7
+      csts_in = ('#15',),
+      csts_out = ('#25',),
+      memgrps_in = ('mg00015',),
+  ),
+  # @[37]:
+  '#25': opdesc( 0x11fc00000026, "q::ConvLayer_s1.opt", ptr=0x59d50a2d0a30, runlist_pos = 37,
+      flags=('any_tcm',), op_flags=('RESOURCE_HMX',), has_const_in=True,  n_out=1,
+      in_dist = 10, out_dist = 7, # slack = 0
+      csts_in = ('#24','#43','#44',),
+      csts_out = ('#26',),
+      memgrps_in = ('mg00007','mg00015','mg00023',),
+      memgrps_out = ('mg00024',),
+  ),
+  # @[38]:
+  '#45': opdesc( 0x12630000002a, "q::ConvLayer.opt.bias_to_vtcm", ptr=0x0, runlist_pos = 38,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 7, # slack = 8
+      csts_in = ('#8',),
+      csts_out = ('#26',),
+      memgrps_in = ('mg00008',),
+  ),
+  # @[39]:
+  '#46': opdesc( 0x12640000002a, "q::ConvLayer.opt.weights_to_vtcm", ptr=0x59d50a231de0, runlist_pos = 39,
+      category='join', flags=('any_tcm',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 7, # slack = 8
+      csts_in = ('#16',),
+      csts_out = ('#26',),
+      memgrps_in = ('mg00016',),
+  ),
+  # @[40]:
+  '#26': opdesc( 0x11ff0000002a, "q::ConvLayer_s1.opt", ptr=0x59d50a2d1110, runlist_pos = 40,
+      flags=('any_tcm',), op_flags=('RESOURCE_HMX',), has_const_in=True,  n_out=1,
+      in_dist = 11, out_dist = 6, # slack = 0
+      csts_in = ('#25','#45','#46',),
+      csts_out = ('#27',),
+      memgrps_in = ('mg00008','mg00016','mg00024',),
+      memgrps_out = ('mg00025',),
+  ),
+  # @[41]:
+  '#47': opdesc( 0x12650000002e, "q::ConvLayer.opt.bias_to_vtcm", ptr=0x0, runlist_pos = 41,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 6, # slack = 9
+      csts_in = ('#9',),
+      csts_out = ('#27',),
+      memgrps_in = ('mg00009',),
+  ),
+  # @[42]:
+  '#48': opdesc( 0x12660000002e, "q::ConvLayer.opt.weights_to_vtcm", ptr=0x59d50a2ff2d0, runlist_pos = 42,
+      category='join', flags=('any_tcm',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 2, out_dist = 6, # slack = 9
+      csts_in = ('#17',),
+      csts_out = ('#27',),
+      memgrps_in = ('mg00017',),
+  ),
+  # @[43]:
+  '#27': opdesc( 0x12020000002e, "q::ConvLayer_s1.opt", ptr=0x59d50a2d7630, runlist_pos = 43,
+      flags=('any_tcm',), op_flags=('RESOURCE_HMX',), has_const_in=True,  n_out=1,
+      in_dist = 12, out_dist = 5, # slack = 0
+      csts_in = ('#26','#47','#48',),
+      csts_out = ('#28',),
+      memgrps_in = ('mg00009','mg00017','mg00025',),
+      memgrps_out = ('mg00026',),
+  ),
+  # @[44]:
+  '#28': opdesc( 0x120e00000003, "q::ForceFormat_Flat", ptr=0x59d50a2dae40, runlist_pos = 44,
+      flags=('any_tcm','is_fork',), op_flags=('FOR_HVX','MOVE_EARLY',), n_out=1,
+      in_dist = 13, out_dist = 4, # slack = 0
+      csts_in = ('#27',),
+      csts_out = ('#49',),
+      memgrps_in = ('mg00026',),
+      memgrps_out = ('mg00027',),
+  ),
+  # @[45]:
+  '#49': opdesc( 0x126700000003, "q::ForceFormat_Flat", ptr=0x0, runlist_pos = 45,
+      category='join', flags=('is_proto_op','any_tcm','is_dropped',), op_flags=('FOR_HVX','MOVE_LATE',), n_out=0,
+      in_dist = 14, out_dist = 3, # slack = 0
+      csts_in = ('#28',),
+      csts_out = ('#30',),
+      memgrps_in = ('mg00026','mg00027',),
+  ),
+  # @[46]:
+  '#30': opdesc( 0x120d00000003, "q::*OutputSlice", ptr=0x59d50a2b4e40, runlist_pos = 46,
+      flags=('any_tcm','is_volatile','is_fork',), op_flags=('FOR_DMA','MOVE_EARLY',), has_const_in=True,  n_out=0,
+      in_dist = 15, out_dist = 2, # slack = 0
+      csts_in = ('#49',),
+      csts_out = ('#50',),
+      memgrps_in = ('mg00027',),
+      dma_checkpoint=1,
+  ),
+  # @[47]:
+  '#50': opdesc( 0x126800000003, "q::*OutputSlice", ptr=0x59d50a30b500, runlist_pos = 47,
+      category='join', flags=('any_tcm',), op_flags=('FOR_DMA','MOVE_LATE',), n_out=0,
+      in_dist = 16, out_dist = 1, # slack = 0
+      csts_in = ('#30',),
+      memgrps_in = ('mg00027',),
+  ),
+  # @[48]:
+  '#51': opdesc( 0x126900000000, "@Sync", ptr=0x59d50a30c230, runlist_pos = 48,
+      flags=(), n_out=0,
+      in_dist = 1, out_dist = 1, # slack = 15
+  ),
+
+  #--- ops not in runlist ---
+  '#18': opdesc( 0x11c300000012, "q::Reshape", ptr=0x59d50a2ae010,
+      category='dummy', flags=('is_dummy_op',), op_flags=('NULL_EXEC',), n_out=1,
+      in_dist = 1, out_dist = 1, # slack = 15
+  ),
+  '#29': opdesc( 0x120f00000003, "q::Reshape", ptr=0x59d50a2fa210,
+      category='dummy', flags=('is_dummy_op',), op_flags=('NULL_EXEC',), n_out=1,
+      in_dist = 1, out_dist = 1, # slack = 15
+  ),
+} # end of opdesc
+metrics_state='exact'
+max_dist=16
+tcm_block_info = {
+    30: (0x124000, 0x10000),
+    31: (0x103800, 0x800),
+    32: (0xe3000, 0x800),
+    33: (0xc2800, 0x800),
+    34: (0xa2000, 0x800),
+    35: (0x81800, 0x800),
+    36: (0x61000, 0x800),
+    37: (0x40800, 0x800),
+    38: (0x20000, 0x800),
+    39: (0x104000, 0x10000),
+    40: (0xe3800, 0x10000),
+    41: (0xc3000, 0x10000),
+    42: (0xa2800, 0x10000),
+    43: (0x82000, 0x10000),
+    44: (0x61800, 0x10000),
+    45: (0x41000, 0x10000),
+    46: (0x20800, 0x10000),
+    47: (0x114000, 0x800),
+    48: (0x114800, 0x800),
+    49: (0x115000, 0x800),
+    50: (0x115800, 0x800),
+    51: (0x116000, 0x800),
+    52: (0x116800, 0x800),
+    53: (0x117000, 0x800),
+    54: (0x117800, 0x800),
+    55: (0x118000, 0x800),
+    56: (0x118800, 0x800),
+    57: (0x119000, 0x800),
+    58: (0x119800, 0x800),
+    59: (0x11a000, 0x800),
+    60: (0x11a800, 0x800),
+    61: (0x11b000, 0x800),
+    62: (0x11b800, 0x800),
+    63: (0x11c000, 0x800),
+    64: (0x11c800, 0x800),
+    65: (0x11d000, 0x800),
+    66: (0x11d800, 0x800),
+    67: (0x11e000, 0x800),
+    68: (0x11e800, 0x800),
+    69: (0x11f000, 0x800),
+    70: (0x11f800, 0x800),
+    71: (0x120000, 0x800),
+    72: (0x120800, 0x800),
+    73: (0x121000, 0x800),
+    74: (0x121800, 0x800),
+    75: (0x122000, 0x800),
+    76: (0x122800, 0x800),
+    77: (0x123000, 0x800),
+    78: (0x123800, 0x800),
+    79: (0xf3800, 0x800),
+    80: (0xf4000, 0x800),
+    81: (0xf4800, 0x800),
+    82: (0xf5000, 0x800),
+    83: (0xf5800, 0x800),
+    84: (0xf6000, 0x800),
+    85: (0xf6800, 0x800),
+    86: (0xf7000, 0x800),
+    87: (0xf7800, 0x800),
+    88: (0xf8000, 0x800),
+    89: (0xf8800, 0x800),
+    90: (0xf9000, 0x800),
+    91: (0xf9800, 0x800),
+    92: (0xfa000, 0x800),
+    93: (0xfa800, 0x800),
+    94: (0xfb000, 0x800),
+    95: (0xfb800, 0x800),
+    96: (0xfc000, 0x800),
+    97: (0xfc800, 0x800),
+    98: (0xfd000, 0x800),
+    99: (0xfd800, 0x800),
+    100: (0xfe000, 0x800),
+    101: (0xfe800, 0x800),
+    102: (0xff000, 0x800),
+    103: (0xff800, 0x800),
+    104: (0x100000, 0x800),
+    105: (0x100800, 0x800),
+    106: (0x101000, 0x800),
+    107: (0x101800, 0x800),
+    108: (0x102000, 0x800),
+    109: (0x102800, 0x800),
+    110: (0x103000, 0x800),
+    111: (0xd3000, 0x800),
+    112: (0xd3800, 0x800),
+    113: (0xd4000, 0x800),
+    114: (0xd4800, 0x800),
+    115: (0xd5000, 0x800),
+    116: (0xd5800, 0x800),
+    117: (0xd6000, 0x800),
+    118: (0xd6800, 0x800),
+    119: (0xd7000, 0x800),
+    120: (0xd7800, 0x800),
+    121: (0xd8000, 0x800),
+    122: (0xd8800, 0x800),
+    123: (0xd9000, 0x800),
+    124: (0xd9800, 0x800),
+    125: (0xda000, 0x800),
+    126: (0xda800, 0x800),
+    127: (0xdb000, 0x800),
+    128: (0xdb800, 0x800),
+    129: (0xdc000, 0x800),
+    130: (0xdc800, 0x800),
+    131: (0xdd000, 0x800),
+    132: (0xdd800, 0x800),
+    133: (0xde000, 0x800),
+    134: (0xde800, 0x800),
+    135: (0xdf000, 0x800),
+    136: (0xdf800, 0x800),
+    137: (0xe0000, 0x800),
+    138: (0xe0800, 0x800),
+    139: (0xe1000, 0x800),
+    140: (0xe1800, 0x800),
+    141: (0xe2000, 0x800),
+    142: (0xe2800, 0x800),
+    143: (0xb2800, 0x800),
+    144: (0xb3000, 0x800),
+    145: (0xb3800, 0x800),
+    146: (0xb4000, 0x800),
+    147: (0xb4800, 0x800),
+    148: (0xb5000, 0x800),
+    149: (0xb5800, 0x800),
+    150: (0xb6000, 0x800),
+    151: (0xb6800, 0x800),
+    152: (0xb7000, 0x800),
+    153: (0xb7800, 0x800),
+    154: (0xb8000, 0x800),
+    155: (0xb8800, 0x800),
+    156: (0xb9000, 0x800),
+    157: (0xb9800, 0x800),
+    158: (0xba000, 0x800),
+    159: (0xba800, 0x800),
+    160: (0xbb000, 0x800),
+    161: (0xbb800, 0x800),
+    162: (0xbc000, 0x800),
+    163: (0xbc800, 0x800),
+    164: (0xbd000, 0x800),
+    165: (0xbd800, 0x800),
+    166: (0xbe000, 0x800),
+    167: (0xbe800, 0x800),
+    168: (0xbf000, 0x800),
+    169: (0xbf800, 0x800),
+    170: (0xc0000, 0x800),
+    171: (0xc0800, 0x800),
+    172: (0xc1000, 0x800),
+    173: (0xc1800, 0x800),
+    174: (0xc2000, 0x800),
+    175: (0x92000, 0x800),
+    176: (0x92800, 0x800),
+    177: (0x93000, 0x800),
+    178: (0x93800, 0x800),
+    179: (0x94000, 0x800),
+    180: (0x94800, 0x800),
+    181: (0x95000, 0x800),
+    182: (0x95800, 0x800),
+    183: (0x96000, 0x800),
+    184: (0x96800, 0x800),
+    185: (0x97000, 0x800),
+    186: (0x97800, 0x800),
+    187: (0x98000, 0x800),
+    188: (0x98800, 0x800),
+    189: (0x99000, 0x800),
+    190: (0x99800, 0x800),
+    191: (0x9a000, 0x800),
+    192: (0x9a800, 0x800),
+    193: (0x9b000, 0x800),
+    194: (0x9b800, 0x800),
+    195: (0x9c000, 0x800),
+    196: (0x9c800, 0x800),
+    197: (0x9d000, 0x800),
+    198: (0x9d800, 0x800),
+    199: (0x9e000, 0x800),
+    200: (0x9e800, 0x800),
+    201: (0x9f000, 0x800),
+    202: (0x9f800, 0x800),
+    203: (0xa0000, 0x800),
+    204: (0xa0800, 0x800),
+    205: (0xa1000, 0x800),
+    206: (0xa1800, 0x800),
+    207: (0x71800, 0x800),
+    208: (0x72000, 0x800),
+    209: (0x72800, 0x800),
+    210: (0x73000, 0x800),
+    211: (0x73800, 0x800),
+    212: (0x74000, 0x800),
+    213: (0x74800, 0x800),
+    214: (0x75000, 0x800),
+    215: (0x75800, 0x800),
+    216: (0x76000, 0x800),
+    217: (0x76800, 0x800),
+    218: (0x77000, 0x800),
+    219: (0x77800, 0x800),
+    220: (0x78000, 0x800),
+    221: (0x78800, 0x800),
+    222: (0x79000, 0x800),
+    223: (0x79800, 0x800),
+    224: (0x7a000, 0x800),
+    225: (0x7a800, 0x800),
+    226: (0x7b000, 0x800),
+    227: (0x7b800, 0x800),
+    228: (0x7c000, 0x800),
+    229: (0x7c800, 0x800),
+    230: (0x7d000, 0x800),
+    231: (0x7d800, 0x800),
+    232: (0x7e000, 0x800),
+    233: (0x7e800, 0x800),
+    234: (0x7f000, 0x800),
+    235: (0x7f800, 0x800),
+    236: (0x80000, 0x800),
+    237: (0x80800, 0x800),
+    238: (0x81000, 0x800),
+    239: (0x51000, 0x800),
+    240: (0x51800, 0x800),
+    241: (0x52000, 0x800),
+    242: (0x52800, 0x800),
+    243: (0x53000, 0x800),
+    244: (0x53800, 0x800),
+    245: (0x54000, 0x800),
+    246: (0x54800, 0x800),
+    247: (0x55000, 0x800),
+    248: (0x55800, 0x800),
+    249: (0x56000, 0x800),
+    250: (0x56800, 0x800),
+    251: (0x57000, 0x800),
+    252: (0x57800, 0x800),
+    253: (0x58000, 0x800),
+    254: (0x58800, 0x800),
+    255: (0x59000, 0x800),
+    256: (0x59800, 0x800),
+    257: (0x5a000, 0x800),
+    258: (0x5a800, 0x800),
+    259: (0x5b000, 0x800),
+    260: (0x5b800, 0x800),
+    261: (0x5c000, 0x800),
+    262: (0x5c800, 0x800),
+    263: (0x5d000, 0x800),
+    264: (0x5d800, 0x800),
+    265: (0x5e000, 0x800),
+    266: (0x5e800, 0x800),
+    267: (0x5f000, 0x800),
+    268: (0x5f800, 0x800),
+    269: (0x60000, 0x800),
+    270: (0x60800, 0x800),
+    271: (0x30800, 0x800),
+    272: (0x31000, 0x800),
+    273: (0x31800, 0x800),
+    274: (0x32000, 0x800),
+    275: (0x32800, 0x800),
+    276: (0x33000, 0x800),
+    277: (0x33800, 0x800),
+    278: (0x34000, 0x800),
+    279: (0x34800, 0x800),
+    280: (0x35000, 0x800),
+    281: (0x35800, 0x800),
+    282: (0x36000, 0x800),
+    283: (0x36800, 0x800),
+    284: (0x37000, 0x800),
+    285: (0x37800, 0x800),
+    286: (0x38000, 0x800),
+    287: (0x38800, 0x800),
+    288: (0x39000, 0x800),
+    289: (0x39800, 0x800),
+    290: (0x3a000, 0x800),
+    291: (0x3a800, 0x800),
+    292: (0x3b000, 0x800),
+    293: (0x3b800, 0x800),
+    294: (0x3c000, 0x800),
+    295: (0x3c800, 0x800),
+    296: (0x3d000, 0x800),
+    297: (0x3d800, 0x800),
+    298: (0x3e000, 0x800),
+    299: (0x3e800, 0x800),
+    300: (0x3f000, 0x800),
+    301: (0x3f800, 0x800),
+    302: (0x40000, 0x800),
+    303: (0x10000, 0x800),
+    304: (0x10800, 0x800),
+    305: (0x11000, 0x800),
+    306: (0x11800, 0x800),
+    307: (0x12000, 0x800),
+    308: (0x12800, 0x800),
+    309: (0x13000, 0x800),
+    310: (0x13800, 0x800),
+    311: (0x14000, 0x800),
+    312: (0x14800, 0x800),
+    313: (0x15000, 0x800),
+    314: (0x15800, 0x800),
+    315: (0x16000, 0x800),
+    316: (0x16800, 0x800),
+    317: (0x17000, 0x800),
+    318: (0x17800, 0x800),
+    319: (0x18000, 0x800),
+    320: (0x18800, 0x800),
+    321: (0x19000, 0x800),
+    322: (0x19800, 0x800),
+    323: (0x1a000, 0x800),
+    324: (0x1a800, 0x800),
+    325: (0x1b000, 0x800),
+    326: (0x1b800, 0x800),
+    327: (0x1c000, 0x800),
+    328: (0x1c800, 0x800),
+    329: (0x1d000, 0x800),
+    330: (0x1d800, 0x800),
+    331: (0x1e000, 0x800),
+    332: (0x1e800, 0x800),
+    333: (0x1f000, 0x800),
+    334: (0x1f800, 0x800),
+    335: (0x0, 0x10000),
+} # end of block_info
+
+#####  End of OpInfoRegisry dump
+

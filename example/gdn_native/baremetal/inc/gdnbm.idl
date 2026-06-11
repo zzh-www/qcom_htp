@@ -1,0 +1,14 @@
+#include "AEEStdDef.idl"
+#include "remote.idl"
+
+/* Bare-metal FastRPC GDN block-recursive solve (escape QNN; self-managed HVX/HMX/VTCM/threads). */
+interface gdnbm : remote_handle64 {
+   /* HMX-on-worker feasibility probe (kept). results: [marker, then per-worker {acquire_ctx, sentinel}] */
+   long hmx_probe(in long nworkers, rout sequence<long> results);
+
+   /* T = (I-A)^-1 block-recursive, threaded.  A/T are uint16 codes [H,C,C] (row-major), passed as bytes.
+    * sA_bits/sT_bits = float scale reinterpreted as int32.  stats: [wall_cycles, nthreads, heads]. */
+   long solve(in sequence<uint8> A, in long H, in long C, in long zpA, in long zpT,
+              in long sA_bits, in long sT_bits, in long nthreads,
+              rout sequence<uint8> T, rout sequence<long> stats);
+};

@@ -99,12 +99,20 @@ def main():
     ap.add_argument("--remote-dir", default="w16a16_standalone_device")
     ap.add_argument("--native-raw", type=Path)
     ap.add_argument("--json-out", type=Path)
+    ap.add_argument("--time-reps", type=int, default=0,
+                    help="if >0, FARF-log pcycles for the full MxKxN w16a16 dispatch (warmup+median over reps)")
+    ap.add_argument("--shape", type=str, help="M,K,N override (default = 256^3 oracle). For N<128 uses single-call dispatch.")
+    ap.add_argument("--inner-matmuls", type=int, default=1,
+                    help="back-to-back matmuls per timed rep (e.g. 1920 = 60 mm/head x 32 heads = pure-HMX solve HMX floor)")
     args = ap.parse_args()
 
     artifact = args.artifact.resolve()
     prepared = artifact / "prepared_state"
     oracle = json.loads((ROOT / "example/handwritten_hmx_matmul/oracles.json").read_text())["families"]["w16a16"]
-    m, k, n = (int(v) for v in oracle["shape_mkn"])
+    if args.shape:
+        m, k, n = (int(v) for v in args.shape.split(","))
+    else:
+        m, k, n = (int(v) for v in oracle["shape_mkn"])
     native_raw_path = args.native_raw.resolve() if args.native_raw else ROOT / oracle["raw_output"]["path"]
 
     activation = (prepared / "activation.raw").read_bytes()
@@ -123,9 +131,28 @@ def main():
     split_wbytes = k_t*KSPLIT*BLOCK
     split_bbytes = KSPLIT*512
 
+    # maybe_split_n128: split into 128-N groups when N_t>=4 and N_t%4==0, else single full-N call.
+    if n_t >= KSPLIT and n_t % KSPLIT == 0:
+        dispatch_lines = [
+            "  #define W16_DISPATCH() do{ \\",
+            f"    for(uint32_t s=0;s<{n_t//KSPLIT}u;++s){{ \\",
+            f"      for(uint32_t rg=0;rg<{mt_groups}u;++rg)for(uint32_t nt=0;nt<{KSPLIT}u;++nt) \\",
+            f"        stab[rg*{KSPLIT}u+nt]=otab[rg*{n_t}u+s*{KSPLIT}u+nt]; \\",
+            f"      HmW16A16OutDesc od={{stab,{KSPLIT}u,{m}u,{m}u,1,{KSPLIT*32}u}}; \\",
+            f"      hm_w16a16_v73_kernel(&od,&ad,wt+s*{split_wbytes}u,bias+s*{split_bbytes}u,(const HmW16A16MaskDesc*)mask,extra); \\",
+            "    } }while(0)",
+        ]
+    else:
+        dispatch_lines = [
+            "  #define W16_DISPATCH() do{ \\",
+            f"    HmW16A16OutDesc od={{otab,{n_t}u,{m}u,{m}u,1,{n_t*32}u}}; \\",
+            "    hm_w16a16_v73_kernel(&od,&ad,wt,bias,(const HmW16A16MaskDesc*)mask,extra); \\",
+            "  }while(0)",
+        ]
+
     src = "\n".join([
         "#include <stdint.h>", "#include <string.h>",
-        '#include "HAP_compute_res.h"', '#include "HAP_farf.h"', '#include "HAP_power.h"',
+        '#include "HAP_compute_res.h"', '#include "HAP_farf.h"', '#include "HAP_power.h"', '#include "HAP_perf.h"',
         '#include "handwritten_hmx_w16a16_kernel.h"',
         '#define TAG "[HM_DEVICE]"',
         c_array("k_act", activation), c_array("k_wt", packed_weight),
@@ -163,12 +190,17 @@ def main():
         "  uint32_t mask[16] __attribute__((aligned(16)));cb((uint8_t*)mask,k_mask,64u);",
         "  uint32_t extra[2] __attribute__((aligned(16)))={1u,1536u};mask[14]=(uint32_t)(uintptr_t)extra;",
         "  HmW16A16ActDesc ad={atab," + f"{k_t}u,{k_t*64}u}};",
-        f"  for(uint32_t s=0;s<{n_t//KSPLIT}u;++s){{",
-        f"    for(uint32_t rg=0;rg<{mt_groups}u;++rg)for(uint32_t nt=0;nt<{KSPLIT}u;++nt)"
-        f"stab[rg*{KSPLIT}u+nt]=otab[rg*{n_t}u+s*{KSPLIT}u+nt];",
-        f"    HmW16A16OutDesc od={{stab,{KSPLIT}u,{m}u,{m}u,1,{KSPLIT*32}u}};",
-        f"    hm_w16a16_v73_kernel(&od,&ad,wt+s*{split_wbytes}u,bias+s*{split_bbytes}u,(const HmW16A16MaskDesc*)mask,extra);",
-        "  }",
+        *dispatch_lines,
+        "  W16_DISPATCH();",
+        *([] if args.time_reps <= 0 else [
+            f"  W16_DISPATCH(); W16_DISPATCH();  /* warmup */",
+            f"  for(uint32_t rep=0;rep<{args.time_reps}u;++rep){{",
+            "    uint64_t t0=HAP_perf_get_pcycles();",
+            f"    for(uint32_t mm=0;mm<{args.inner_matmuls}u;++mm){{ W16_DISPATCH(); }}",
+            "    uint64_t t1=HAP_perf_get_pcycles();",
+            f'    FARF(ALWAYS,TAG" w16time rep=%u shape={m}x{k}x{n} inner={args.inner_matmuls} cyc=%llu per_mm=%llu",rep,(unsigned long long)(t1-t0),(unsigned long long)((t1-t0)/{args.inner_matmuls}u));',
+            "  }",
+        ]),
         f"  uint32_t rawhash=0;for(uint32_t i=0;i<{out_bytes}u;++i)rawhash=rawhash*31u+out[i];",
         "  deblock_row4(pub,out);  uint32_t d_row4=diffcount(pub,k_native," + f"{out_bytes}u);",
         "  deblock_col16(pub2,out); uint32_t d_col16=diffcount(pub2,k_native," + f"{out_bytes}u);",
@@ -206,6 +238,20 @@ def main():
     print(log)
 
     import re
+    if args.time_reps > 0:
+        tmatches = re.findall(r"w16time rep=(\d+) shape=(\S+) inner=(\d+) cyc=(\d+) per_mm=(\d+)", out + "\n" + log)
+        if tmatches:
+            cycs = sorted(int(t[3]) for t in tmatches)
+            per = sorted(int(t[4]) for t in tmatches)
+            mid = len(cycs)//2
+            shape = tmatches[0][1]; inner = int(tmatches[0][2])
+            print(f"\n=== w16a16 DEVICE TIMING (shape {shape}, inner={inner} back-to-back mm, reps={len(cycs)}) ===")
+            print(f"  total cyc/rep: min={cycs[0]} median={cycs[mid]} max={cycs[-1]}")
+            print(f"  per-matmul:    min={per[0]} median={per[mid]} max={per[-1]}  (threshold to beat HVXMixHMX 1.78M @ 60mm/head x32 = 927)")
+            if inner >= 1920:
+                print(f"  => 32-head pure-HMX HMX-floor (this total) vs HVXMixHMX 1.78M = {cycs[mid]/1.78e6:.2f}x")
+        else:
+            print("w16a16 DEVICE TIMING: NO timing lines parsed")
     mm = re.search(r"w16dev rawhash=(0x[0-9a-fA-F]+) row4=(\d+) col16=(\d+) halves=(\d+) total=(\d+)", out + "\n" + log)
     if not mm:
         print("w16a16 standalone DEVICE: NO RESULT (device/log parse failed)")

@@ -1,0 +1,120 @@
+Input Log File Location: /home/zzh/work/qcom_htp/example/qnn_hmx_matmul_u8i8/standard_flow/native_baseline/ovl_pos_s256_chain8/device_out/qnn-profiling-data_0.log
+Log File Created: Wed Jun  3 02:01:35 2026
+Time Scale: 1e-06
+Epoch Timestamp: 1780423295833671 Steady Clock Timestamp: 1615942927823
+Generated using: 
+qnn-profile-viewer: v2.45.0.260326154327
+qnn-net-run: v2.45.0.260326154327
+Backend: v2.45.0.260326154327
+
+Qnn Init/Prepare/Finalize/De-Init/Execute/Lib-Load Statistics:
+------------------------------------------------------------
+Init Stats:
+-----------
+    NetRun: 24900 us
+    Backend (RPC (load binary) time): 11969 us
+    Backend (QNN accelerator (load binary) time): 11694 us
+    Backend (Accelerator (load binary) time): 11390 us
+    Backend (QNN (load binary) time): 24883 us
+
+Compose Graphs Stats:
+--------------
+    NetRun: 0 us
+
+De-Init Stats:
+--------------
+    NetRun: 3449 us
+    Backend (RPC (deinit) time): 910 us
+    Backend (QNN Accelerator (deinit) time): 796 us
+    Backend (Accelerator (deinit) time): 775 us
+    Backend (QNN (deinit) time): 3441 us
+
+
+Printing All Data Received From Back End
+
+Create From Binary Stats:
+RPC (load binary) time : 11969  us
+QNN accelerator (load binary) time : 11694  us
+Accelerator (load binary) time : 11390  us
+QNN (load binary) time : 24883  us
+
+
+Execute Stats: 
+
+Execute Stat 1
+
+Number of HVX threads used : 4  count
+RPC (execute) time : 3770  us
+QNN accelerator (execute) time : 1297  us
+Num times yield occured : 0  count
+Time for initial VTCM acquire : 964  us
+Time for HVX + HMX power on and acquire : 11947  us
+Accelerator (execute) time (cycles) : 68365  cycles
+    Input OpId_2 (cycles) : 7818  cycles
+    MatMul_0_pre_reshape:OpId_16 (cycles) : 0  cycles
+    MatMul_0:OpId_18 (cycles) : 32707  cycles
+    MatMul_1:OpId_22 (cycles) : 1504  cycles
+    MatMul_2:OpId_26 (cycles) : 1473  cycles
+    MatMul_3:OpId_30 (cycles) : 7235  cycles
+    MatMul_4:OpId_34 (cycles) : 1606  cycles
+    MatMul_5:OpId_38 (cycles) : 1614  cycles
+    MatMul_6:OpId_42 (cycles) : 1608  cycles
+    MatMul_7:OpId_46 (cycles) : 1592  cycles
+    MatMul_7_post_reshape:OpId_49 (cycles) : 0  cycles
+    Output OpId_3 (cycles) : 11208  cycles
+Accelerator (execute) time : 832  us
+Accelerator (execute excluding wait) time : 86  us
+Unknown event type :   object
+QNN (execute) time : 3907  us
+
+Execute Stat 2
+
+Number of HVX threads used : 4  count
+RPC (execute) time : 2348  us
+QNN accelerator (execute) time : 157  us
+Num times yield occured : 0  count
+Time for initial VTCM acquire : 194  us
+Time for HVX + HMX power on and acquire : 33  us
+Accelerator (execute) time (cycles) : 47827  cycles
+    Input OpId_2 (cycles) : 1162  cycles
+    MatMul_0_pre_reshape:OpId_16 (cycles) : 0  cycles
+    MatMul_0:OpId_18 (cycles) : 20603  cycles
+    MatMul_1:OpId_22 (cycles) : 1527  cycles
+    MatMul_2:OpId_26 (cycles) : 1223  cycles
+    MatMul_3:OpId_30 (cycles) : 11536  cycles
+    MatMul_4:OpId_34 (cycles) : 1489  cycles
+    MatMul_5:OpId_38 (cycles) : 1503  cycles
+    MatMul_6:OpId_42 (cycles) : 1504  cycles
+    MatMul_7:OpId_46 (cycles) : 1440  cycles
+    MatMul_7_post_reshape:OpId_49 (cycles) : 0  cycles
+    Output OpId_3 (cycles) : 5840  cycles
+Accelerator (execute) time : 46  us
+Accelerator (execute excluding wait) time : 22  us
+Unknown event type :   object
+QNN (execute) time : 2467  us
+
+Execute Stat 3
+
+Number of HVX threads used : 4  count
+RPC (execute) time : 2308  us
+QNN accelerator (execute) time : 123  us
+Num times yield occured : 0  count
+Time for initial VTCM acquire : 76  us
+Time for HVX + HMX power on and acquire : 9  us
+Accelerator (execute) time (cycles) : 32837  cycles
+    Input OpId_2 (cycles) : 971  cycles
+    MatMul_0_pre_reshape:OpId_16 (cycles) : 0  cycles
+    MatMul_0:OpId_18 (cycles) : 7171  cycles
+    MatMul_1:OpId_22 (cycles) : 1711  cycles
+    MatMul_2:OpId_26 (cycles) : 1288  cycles
+    MatMul_3:OpId_30 (cycles) : 8871  cycles
+    MatMul_4:OpId_34 (cycles) : 1430  cycles
+    MatMul_5:OpId_38 (cycles) : 1446  cycles
+    MatMul_6:OpId_42 (cycles) : 2273  cycles
+    MatMul_7:OpId_46 (cycles) : 2510  cycles
+    MatMul_7_post_reshape:OpId_49 (cycles) : 0  cycles
+    Output OpId_3 (cycles) : 5166  cycles
+Accelerator (execute) time : 25  us
+Accelerator (execute excluding wait) time : 15  us
+Unknown event type :   object
+QNN (execute) time : 2412  us

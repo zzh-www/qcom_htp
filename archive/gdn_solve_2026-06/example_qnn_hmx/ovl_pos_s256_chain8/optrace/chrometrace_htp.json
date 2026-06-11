@@ -1,0 +1,2140 @@
+{
+ "header": {
+      "header_version": {
+          "major": 1,
+         "minor": 0,
+          "patch": 0
+      },
+       "version": {
+           "major": 1,
+           "minor": 0,
+           "patch": 0
+       },
+      "artifact_type": "HTP_GRAPH"
+   },
+  "model.cpp": "htp_graph",
+  "graph": {
+    "tensors": {
+      "0x0000100200000008": {
+        "id": 0,
+        "type": 4,
+        "data_type": 50,
+        "dims": [1]
+
+      },
+      "0x0000100382d28377": {
+        "id": 1,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          0,
+          0,
+          0,
+          0
+        ]
+
+      },
+      "0x0000100399fb24bb": {
+        "id": 2,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000111100000002": {
+        "id": 3,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x000011a400000012": {
+        "id": 4,
+        "type": 3,
+        "data_type": 50,
+        "dims": [
+          1,
+          8,
+          1,
+          64
+        ]
+
+      },
+      "0x000011a700000016": {
+        "id": 5,
+        "type": 3,
+        "data_type": 50,
+        "dims": [
+          1,
+          8,
+          1,
+          64
+        ]
+
+      },
+      "0x000011aa0000001a": {
+        "id": 6,
+        "type": 3,
+        "data_type": 50,
+        "dims": [
+          1,
+          8,
+          1,
+          64
+        ]
+
+      },
+      "0x000011ad0000001e": {
+        "id": 7,
+        "type": 3,
+        "data_type": 50,
+        "dims": [
+          1,
+          8,
+          1,
+          64
+        ]
+
+      },
+      "0x000011b000000022": {
+        "id": 8,
+        "type": 3,
+        "data_type": 50,
+        "dims": [
+          1,
+          8,
+          1,
+          64
+        ]
+
+      },
+      "0x000011b300000026": {
+        "id": 9,
+        "type": 3,
+        "data_type": 50,
+        "dims": [
+          1,
+          8,
+          1,
+          64
+        ]
+
+      },
+      "0x000011b60000002a": {
+        "id": 10,
+        "type": 3,
+        "data_type": 50,
+        "dims": [
+          1,
+          8,
+          1,
+          64
+        ]
+
+      },
+      "0x000011b90000002e": {
+        "id": 11,
+        "type": 3,
+        "data_type": 50,
+        "dims": [
+          1,
+          8,
+          1,
+          64
+        ]
+
+      },
+      "0x000011c300000012": {
+        "id": 12,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x000011ed00000012": {
+        "id": 13,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x000011f000000016": {
+        "id": 14,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x000011f30000001a": {
+        "id": 15,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x000011f60000001e": {
+        "id": 16,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x000011f900000022": {
+        "id": 17,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x000011fc00000026": {
+        "id": 18,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x000011ff0000002a": {
+        "id": 19,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x000012020000002e": {
+        "id": 20,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x0000120300000012": {
+        "id": 21,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x0000120e00000003": {
+        "id": 22,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          8,
+          32,
+          256
+        ]
+
+      },
+      "0x0000120f00000003": {
+        "id": 23,
+        "type": 3,
+        "data_type": 1032,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000121000000012": {
+        "id": 24,
+        "type": 3,
+        "data_type": 776,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000121100000016": {
+        "id": 25,
+        "type": 3,
+        "data_type": 776,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x000012120000001a": {
+        "id": 26,
+        "type": 3,
+        "data_type": 776,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x000012130000001e": {
+        "id": 27,
+        "type": 3,
+        "data_type": 776,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000121400000022": {
+        "id": 28,
+        "type": 3,
+        "data_type": 776,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000121500000026": {
+        "id": 29,
+        "type": 3,
+        "data_type": 776,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x000012160000002a": {
+        "id": 30,
+        "type": 3,
+        "data_type": 776,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x000012170000002e": {
+        "id": 31,
+        "type": 3,
+        "data_type": 776,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000123200000012": {
+        "id": 32,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          1,
+          1,
+          1,
+          2
+        ]
+
+      },
+      "0x0000123300000012": {
+        "id": 33,
+        "type": 4,
+        "data_type": 776,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000123400000016": {
+        "id": 34,
+        "type": 4,
+        "data_type": 776,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x000012350000001a": {
+        "id": 35,
+        "type": 4,
+        "data_type": 776,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x000012360000001e": {
+        "id": 36,
+        "type": 4,
+        "data_type": 776,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000123700000022": {
+        "id": 37,
+        "type": 4,
+        "data_type": 776,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000123800000026": {
+        "id": 38,
+        "type": 4,
+        "data_type": 776,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x000012390000002a": {
+        "id": 39,
+        "type": 4,
+        "data_type": 776,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000123a0000002e": {
+        "id": 40,
+        "type": 4,
+        "data_type": 776,
+        "dims": [
+          1,
+          1,
+          256,
+          256
+        ]
+
+      },
+      "0x0000124c00000012": {
+        "id": 41,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          1,
+          8,
+          1,
+          64
+        ]
+
+      },
+      "0x0000124d00000016": {
+        "id": 42,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          1,
+          8,
+          1,
+          64
+        ]
+
+      },
+      "0x0000124e0000001a": {
+        "id": 43,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          1,
+          8,
+          1,
+          64
+        ]
+
+      },
+      "0x0000124f0000001e": {
+        "id": 44,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          1,
+          8,
+          1,
+          64
+        ]
+
+      },
+      "0x0000125000000022": {
+        "id": 45,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          1,
+          8,
+          1,
+          64
+        ]
+
+      },
+      "0x0000125100000026": {
+        "id": 46,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          1,
+          8,
+          1,
+          64
+        ]
+
+      },
+      "0x000012520000002a": {
+        "id": 47,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          1,
+          8,
+          1,
+          64
+        ]
+
+      },
+      "0x000012530000002e": {
+        "id": 48,
+        "type": 4,
+        "data_type": 50,
+        "dims": [
+          1,
+          8,
+          1,
+          64
+        ]
+
+      }
+    },
+    "nodes": {
+      "0x0000111100000002": {
+        "type": "q::*InputSlice", 
+        "grouping": "Input", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "Input"
+             },
+            "qnn_op_name": {
+              "1544": "Input"
+             },
+            "mem_dram_read": {
+              "100": 65536
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "cycles_start": {
+              "100": 7997466066676
+             },
+            "cycles_duration": {
+              "100": 3267
+             },
+            "cycles_dominant": {
+              "100": 3267
+             },
+            "cycles_per_packet": {
+              "100": 62.8269
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x0000100382d28377",
+          "0x0000100382d28377",
+          "0x0000100399fb24bb",
+          "0x0000100382d28377",
+          "0x0000100399fb24bb",
+          "0x0000100399fb24bb"
+        ],
+        "output_names": ["0x0000111100000002"]
+      },
+      "0x000011a400000012": {
+        "type": "q::ConvLayer.opt.bias_to_vtcm", 
+        "grouping": "MatMul_0", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 1
+             },
+            "output_zero_offset": {
+              "50": 0
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_0"
+             },
+            "mem_dram_read": {
+              "100": 2048
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 2048
+             },
+            "cycles_start": {
+              "100": 7997466071165
+             },
+            "cycles_duration": {
+              "100": 3225
+             },
+            "cycles_dominant": {
+              "100": 3225
+             },
+            "cycles_per_packet": {
+              "100": 73.2955
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x0000124c00000012"
+        ],
+        "output_names": ["0x000011a400000012"]
+      },
+      "0x000011a700000016": {
+        "type": "q::ConvLayer.opt.bias_to_vtcm", 
+        "grouping": "MatMul_1", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 1
+             },
+            "output_zero_offset": {
+              "50": 0
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_1"
+             },
+            "mem_dram_read": {
+              "100": 2048
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 2048
+             },
+            "cycles_start": {
+              "100": 7997466075758
+             },
+            "cycles_duration": {
+              "100": 157
+             },
+            "cycles_dominant": {
+              "100": 157
+             },
+            "cycles_per_packet": {
+              "100": 3.56818
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x0000124d00000016"
+        ],
+        "output_names": ["0x000011a700000016"]
+      },
+      "0x000011aa0000001a": {
+        "type": "q::ConvLayer.opt.bias_to_vtcm", 
+        "grouping": "MatMul_2", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 1
+             },
+            "output_zero_offset": {
+              "50": 0
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_2"
+             },
+            "mem_dram_read": {
+              "100": 2048
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 2048
+             },
+            "cycles_start": {
+              "100": 7997466076353
+             },
+            "cycles_duration": {
+              "100": 145
+             },
+            "cycles_dominant": {
+              "100": 145
+             },
+            "cycles_per_packet": {
+              "100": 3.29545
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x0000124e0000001a"
+        ],
+        "output_names": ["0x000011aa0000001a"]
+      },
+      "0x000011ad0000001e": {
+        "type": "q::ConvLayer.opt.bias_to_vtcm", 
+        "grouping": "MatMul_3", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 1
+             },
+            "output_zero_offset": {
+              "50": 0
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_3"
+             },
+            "mem_dram_read": {
+              "100": 2048
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 2048
+             },
+            "cycles_start": {
+              "100": 7997466076685
+             },
+            "cycles_duration": {
+              "100": 127
+             },
+            "cycles_dominant": {
+              "100": 127
+             },
+            "cycles_per_packet": {
+              "100": 2.88636
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x0000124f0000001e"
+        ],
+        "output_names": ["0x000011ad0000001e"]
+      },
+      "0x000011b000000022": {
+        "type": "q::ConvLayer.opt.bias_to_vtcm", 
+        "grouping": "MatMul_4", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 1
+             },
+            "output_zero_offset": {
+              "50": 0
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_4"
+             },
+            "mem_dram_read": {
+              "100": 2048
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 2048
+             },
+            "cycles_start": {
+              "100": 7997466077101
+             },
+            "cycles_duration": {
+              "100": 148
+             },
+            "cycles_dominant": {
+              "100": 148
+             },
+            "cycles_per_packet": {
+              "100": 3.36364
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x0000125000000022"
+        ],
+        "output_names": ["0x000011b000000022"]
+      },
+      "0x000011b300000026": {
+        "type": "q::ConvLayer.opt.bias_to_vtcm", 
+        "grouping": "MatMul_5", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 1
+             },
+            "output_zero_offset": {
+              "50": 0
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_5"
+             },
+            "mem_dram_read": {
+              "100": 2048
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 2048
+             },
+            "cycles_start": {
+              "100": 7997466077712
+             },
+            "cycles_duration": {
+              "100": 146
+             },
+            "cycles_dominant": {
+              "100": 146
+             },
+            "cycles_per_packet": {
+              "100": 3.31818
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x0000125100000026"
+        ],
+        "output_names": ["0x000011b300000026"]
+      },
+      "0x000011b60000002a": {
+        "type": "q::ConvLayer.opt.bias_to_vtcm", 
+        "grouping": "MatMul_6", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 1
+             },
+            "output_zero_offset": {
+              "50": 0
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_6"
+             },
+            "mem_dram_read": {
+              "100": 2048
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 2048
+             },
+            "cycles_start": {
+              "100": 7997466078116
+             },
+            "cycles_duration": {
+              "100": 151
+             },
+            "cycles_dominant": {
+              "100": 151
+             },
+            "cycles_per_packet": {
+              "100": 3.43182
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x000012520000002a"
+        ],
+        "output_names": ["0x000011b60000002a"]
+      },
+      "0x000011b90000002e": {
+        "type": "q::ConvLayer.opt.bias_to_vtcm", 
+        "grouping": "MatMul_7", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 1
+             },
+            "output_zero_offset": {
+              "50": 0
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_7"
+             },
+            "mem_dram_read": {
+              "100": 2048
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 2048
+             },
+            "cycles_start": {
+              "100": 7997466078771
+             },
+            "cycles_duration": {
+              "100": 141
+             },
+            "cycles_dominant": {
+              "100": 141
+             },
+            "cycles_per_packet": {
+              "100": 3.20455
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x000012530000002e"
+        ],
+        "output_names": ["0x000011b90000002e"]
+      },
+      "0x000011c300000012": {
+        "type": "q::Reshape", 
+        "grouping": "MatMul_0", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_0"
+             },
+            "op_flags": {
+              "1544": "null_exec"
+             }
+        },
+        "input_names": [
+          "0x0000111100000002"
+        ],
+        "output_names": ["0x000011c300000012"]
+      },
+      "0x000011ed00000012": {
+        "type": "q::ConvLayer_s1.opt", 
+        "grouping": "MatMul_0", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_0"
+             },
+            "mem_dram_read": {
+              "100": 0
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 133120
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "cycles_start": {
+              "100": 7997466106711
+             },
+            "cycles_duration": {
+              "100": 4095
+             },
+            "cycles_dominant": {
+              "100": 4095
+             },
+            "cycles_per_packet": {
+              "100": 11.8353
+             },
+            "op_flags": {
+              "1544": "uses_hmx"
+             }
+        },
+        "input_names": [
+          "0x0000120300000012",
+          "0x0000121000000012",
+          "0x000011a400000012",
+          "0x0000100200000008",
+          "0x0000123200000012"
+        ],
+        "output_names": ["0x000011ed00000012"]
+      },
+      "0x000011f000000016": {
+        "type": "q::ConvLayer_s1.opt", 
+        "grouping": "MatMul_1", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_1"
+             },
+            "mem_dram_read": {
+              "100": 0
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 133120
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "cycles_start": {
+              "100": 7997466110842
+             },
+            "cycles_duration": {
+              "100": 1181
+             },
+            "cycles_dominant": {
+              "100": 1181
+             },
+            "cycles_per_packet": {
+              "100": 3.41329
+             },
+            "op_flags": {
+              "1544": "uses_hmx"
+             }
+        },
+        "input_names": [
+          "0x000011ed00000012",
+          "0x0000121100000016",
+          "0x000011a700000016",
+          "0x0000100200000008",
+          "0x0000123200000012"
+        ],
+        "output_names": ["0x000011f000000016"]
+      },
+      "0x000011f30000001a": {
+        "type": "q::ConvLayer_s1.opt", 
+        "grouping": "MatMul_2", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_2"
+             },
+            "mem_dram_read": {
+              "100": 0
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 133120
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "cycles_start": {
+              "100": 7997466112041
+             },
+            "cycles_duration": {
+              "100": 1178
+             },
+            "cycles_dominant": {
+              "100": 1178
+             },
+            "cycles_per_packet": {
+              "100": 3.40462
+             },
+            "op_flags": {
+              "1544": "uses_hmx"
+             }
+        },
+        "input_names": [
+          "0x000011f000000016",
+          "0x000012120000001a",
+          "0x000011aa0000001a",
+          "0x0000100200000008",
+          "0x0000123200000012"
+        ],
+        "output_names": ["0x000011f30000001a"]
+      },
+      "0x000011f60000001e": {
+        "type": "q::ConvLayer_s1.opt", 
+        "grouping": "MatMul_3", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_3"
+             },
+            "mem_dram_read": {
+              "100": 0
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 133120
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "cycles_start": {
+              "100": 7997466113391
+             },
+            "cycles_duration": {
+              "100": 1170
+             },
+            "cycles_dominant": {
+              "100": 1170
+             },
+            "cycles_per_packet": {
+              "100": 3.3815
+             },
+            "op_flags": {
+              "1544": "uses_hmx"
+             }
+        },
+        "input_names": [
+          "0x000011f30000001a",
+          "0x000012130000001e",
+          "0x000011ad0000001e",
+          "0x0000100200000008",
+          "0x0000123200000012"
+        ],
+        "output_names": ["0x000011f60000001e"]
+      },
+      "0x000011f900000022": {
+        "type": "q::ConvLayer_s1.opt", 
+        "grouping": "MatMul_4", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_4"
+             },
+            "mem_dram_read": {
+              "100": 0
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 133120
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "cycles_start": {
+              "100": 7997466114709
+             },
+            "cycles_duration": {
+              "100": 1172
+             },
+            "cycles_dominant": {
+              "100": 1172
+             },
+            "cycles_per_packet": {
+              "100": 3.38728
+             },
+            "op_flags": {
+              "1544": "uses_hmx"
+             }
+        },
+        "input_names": [
+          "0x000011f60000001e",
+          "0x0000121400000022",
+          "0x000011b000000022",
+          "0x0000100200000008",
+          "0x0000123200000012"
+        ],
+        "output_names": ["0x000011f900000022"]
+      },
+      "0x000011fc00000026": {
+        "type": "q::ConvLayer_s1.opt", 
+        "grouping": "MatMul_5", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_5"
+             },
+            "mem_dram_read": {
+              "100": 0
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 133120
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "cycles_start": {
+              "100": 7997466116033
+             },
+            "cycles_duration": {
+              "100": 1179
+             },
+            "cycles_dominant": {
+              "100": 1179
+             },
+            "cycles_per_packet": {
+              "100": 3.40751
+             },
+            "op_flags": {
+              "1544": "uses_hmx"
+             }
+        },
+        "input_names": [
+          "0x000011f900000022",
+          "0x0000121500000026",
+          "0x000011b300000026",
+          "0x0000100200000008",
+          "0x0000123200000012"
+        ],
+        "output_names": ["0x000011fc00000026"]
+      },
+      "0x000011ff0000002a": {
+        "type": "q::ConvLayer_s1.opt", 
+        "grouping": "MatMul_6", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_6"
+             },
+            "mem_dram_read": {
+              "100": 0
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 133120
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "cycles_start": {
+              "100": 7997466117351
+             },
+            "cycles_duration": {
+              "100": 1168
+             },
+            "cycles_dominant": {
+              "100": 1168
+             },
+            "cycles_per_packet": {
+              "100": 3.37572
+             },
+            "op_flags": {
+              "1544": "uses_hmx"
+             }
+        },
+        "input_names": [
+          "0x000011fc00000026",
+          "0x000012160000002a",
+          "0x000011b60000002a",
+          "0x0000100200000008",
+          "0x0000123200000012"
+        ],
+        "output_names": ["0x000011ff0000002a"]
+      },
+      "0x000012020000002e": {
+        "type": "q::ConvLayer_s1.opt", 
+        "grouping": "MatMul_7", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_7"
+             },
+            "mem_dram_read": {
+              "100": 0
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 133120
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "cycles_start": {
+              "100": 7997466118663
+             },
+            "cycles_duration": {
+              "100": 1169
+             },
+            "cycles_dominant": {
+              "100": 1169
+             },
+            "cycles_per_packet": {
+              "100": 3.37861
+             },
+            "op_flags": {
+              "1544": "uses_hmx"
+             }
+        },
+        "input_names": [
+          "0x000011ff0000002a",
+          "0x000012170000002e",
+          "0x000011b90000002e",
+          "0x0000100200000008",
+          "0x0000123200000012"
+        ],
+        "output_names": ["0x000012020000002e"]
+      },
+      "0x0000120300000012": {
+        "type": "q::ForceFormat_Crouton", 
+        "grouping": "MatMul_0", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_0"
+             },
+            "mem_dram_read": {
+              "100": 0
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 65536
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "cycles_start": {
+              "100": 7997466082609
+             },
+            "cycles_duration": {
+              "100": 24061
+             },
+            "cycles_dominant": {
+              "100": 24061
+             },
+            "cycles_per_packet": {
+              "100": 10.5024
+             },
+            "op_flags": {
+              "1544": "uses_hvx"
+             }
+        },
+        "input_names": [
+          "0x000011c300000012"
+        ],
+        "output_names": ["0x0000120300000012"]
+      },
+      "0x0000120e00000003": {
+        "type": "q::ForceFormat_Flat", 
+        "grouping": "Output", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "Output"
+             },
+            "qnn_op_name": {
+              "1544": "Output"
+             },
+            "mem_dram_read": {
+              "100": 0
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 65536
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "cycles_start": {
+              "100": 7997466119898
+             },
+            "cycles_duration": {
+              "100": 5801
+             },
+            "cycles_dominant": {
+              "100": 5801
+             },
+            "cycles_per_packet": {
+              "100": 0
+             },
+            "op_flags": {
+              "1544": "uses_hvx"
+             }
+        },
+        "input_names": [
+          "0x000012020000002e"
+        ],
+        "output_names": ["0x0000120e00000003"]
+      },
+      "0x0000120f00000003": {
+        "type": "q::Reshape", 
+        "grouping": "Output", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 128
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "Output"
+             },
+            "qnn_op_name": {
+              "1544": "Output"
+             },
+            "op_flags": {
+              "1544": "null_exec"
+             }
+        },
+        "input_names": [
+          "0x0000120e00000003"
+        ],
+        "output_names": ["0x0000120f00000003"]
+      },
+      "0x0000121000000012": {
+        "type": "q::ConvLayer.opt.weights_to_vtcm", 
+        "grouping": "MatMul_0", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 0
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_0"
+             },
+            "mem_dram_read": {
+              "100": 65536
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "cycles_start": {
+              "100": 7997466074411
+             },
+            "cycles_duration": {
+              "100": 1326
+             },
+            "cycles_dominant": {
+              "100": 1326
+             },
+            "cycles_per_packet": {
+              "100": 23.2632
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x0000123300000012"
+        ],
+        "output_names": ["0x0000121000000012"]
+      },
+      "0x0000121100000016": {
+        "type": "q::ConvLayer.opt.weights_to_vtcm", 
+        "grouping": "MatMul_1", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 0
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_1"
+             },
+            "mem_dram_read": {
+              "100": 65536
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "cycles_start": {
+              "100": 7997466076166
+             },
+            "cycles_duration": {
+              "100": 166
+             },
+            "cycles_dominant": {
+              "100": 166
+             },
+            "cycles_per_packet": {
+              "100": 2.91228
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x0000123400000016"
+        ],
+        "output_names": ["0x0000121100000016"]
+      },
+      "0x000012120000001a": {
+        "type": "q::ConvLayer.opt.weights_to_vtcm", 
+        "grouping": "MatMul_2", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 0
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_2"
+             },
+            "mem_dram_read": {
+              "100": 65536
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "cycles_start": {
+              "100": 7997466076516
+             },
+            "cycles_duration": {
+              "100": 150
+             },
+            "cycles_dominant": {
+              "100": 150
+             },
+            "cycles_per_packet": {
+              "100": 2.63158
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x000012350000001a"
+        ],
+        "output_names": ["0x000012120000001a"]
+      },
+      "0x000012130000001e": {
+        "type": "q::ConvLayer.opt.weights_to_vtcm", 
+        "grouping": "MatMul_3", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 0
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_3"
+             },
+            "mem_dram_read": {
+              "100": 65536
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "cycles_start": {
+              "100": 7997466076884
+             },
+            "cycles_duration": {
+              "100": 146
+             },
+            "cycles_dominant": {
+              "100": 146
+             },
+            "cycles_per_packet": {
+              "100": 2.5614
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x000012360000001e"
+        ],
+        "output_names": ["0x000012130000001e"]
+      },
+      "0x0000121400000022": {
+        "type": "q::ConvLayer.opt.weights_to_vtcm", 
+        "grouping": "MatMul_4", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 0
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_4"
+             },
+            "mem_dram_read": {
+              "100": 65536
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "cycles_start": {
+              "100": 7997466077501
+             },
+            "cycles_duration": {
+              "100": 152
+             },
+            "cycles_dominant": {
+              "100": 152
+             },
+            "cycles_per_packet": {
+              "100": 2.66667
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x0000123700000022"
+        ],
+        "output_names": ["0x0000121400000022"]
+      },
+      "0x0000121500000026": {
+        "type": "q::ConvLayer.opt.weights_to_vtcm", 
+        "grouping": "MatMul_5", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 0
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_5"
+             },
+            "mem_dram_read": {
+              "100": 65536
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "cycles_start": {
+              "100": 7997466077876
+             },
+            "cycles_duration": {
+              "100": 165
+             },
+            "cycles_dominant": {
+              "100": 165
+             },
+            "cycles_per_packet": {
+              "100": 2.89474
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x0000123800000026"
+        ],
+        "output_names": ["0x0000121500000026"]
+      },
+      "0x000012160000002a": {
+        "type": "q::ConvLayer.opt.weights_to_vtcm", 
+        "grouping": "MatMul_6", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 0
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_6"
+             },
+            "mem_dram_read": {
+              "100": 65536
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "cycles_start": {
+              "100": 7997466078288
+             },
+            "cycles_duration": {
+              "100": 162
+             },
+            "cycles_dominant": {
+              "100": 162
+             },
+            "cycles_per_packet": {
+              "100": 2.84211
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x000012390000002a"
+        ],
+        "output_names": ["0x000012160000002a"]
+      },
+      "0x000012170000002e": {
+        "type": "q::ConvLayer.opt.weights_to_vtcm", 
+        "grouping": "MatMul_7", 
+        "tensor_params": {},
+        "scalar_params": {
+            "output_step_size": {
+              "562": 0.00787402
+             },
+            "output_zero_offset": {
+              "50": 0
+             },
+            "output_rank": {
+              "50": 4
+             },
+            "qnn_op_type": {
+              "1544": "FullyConnected"
+             },
+            "qnn_op_name": {
+              "1544": "MatMul_7"
+             },
+            "mem_dram_read": {
+              "100": 65536
+             },
+            "mem_dram_write": {
+              "100": 0
+             },
+            "mem_vtcm_read": {
+              "100": 0
+             },
+            "mem_vtcm_write": {
+              "100": 65536
+             },
+            "cycles_start": {
+              "100": 7997466078931
+             },
+            "cycles_duration": {
+              "100": 164
+             },
+            "cycles_dominant": {
+              "100": 164
+             },
+            "cycles_per_packet": {
+              "100": 2.87719
+             },
+            "op_flags": {
+              "1544": "dma"
+             }
+        },
+        "input_names": [
+          "0x0000123a0000002e"
+        ],
+        "output_names": ["0x000012170000002e"]
+      }
+    }
+  },
+  "op_types": [
+    "q::*InputSlice",
+    "q::ConvLayer.opt.bias_to_vtcm",
+    "q::ConvLayer.opt.weights_to_vtcm",
+    "q::ConvLayer_s1.opt",
+    "q::ForceFormat_Crouton",
+    "q::ForceFormat_Flat",
+    "q::Reshape"
+  ]
+}

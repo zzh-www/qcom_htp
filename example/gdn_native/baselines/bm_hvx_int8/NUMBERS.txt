@@ -1,0 +1,20 @@
+bm_hvx_int8 — bare-metal block-recursive solve, int8 vrmpy matmul + fold-free A-quant
+============================================================================
+device: ssh oneplus (v75, 8 Gen 3), C=256, H=32, aligned PCYCLE (PCYCLE/us=1422 @TURBO)
+build:  cd example/gdn_native/baremetal
+        EXTRA_DEFS="-DGDNBM_VTCM_RESIDENT -DGDN_BR_MM_I8" bash build.sh
+run:    ./gdnbm 4 A_u16_h32.raw T.raw 32 256 32768 32768 2.770166930875267e-05 6.103701895199438e-05
+
+SPEED (32-head workload):
+  1-thread:  ~10.12M cyc  = ~7.12 ms
+  4-thread:  ~2.84M cyc   = ~2.00 ms   (best of N; device noise to ~2.4ms)   <- the win
+  vs shipped qnn_hvx_int16 (~4.3ms wall): ~2.1x faster
+
+ACCURACY (verified on the HVX path, -DGDN_BR_HVX_MERGE -DGDN_BR_MM_I8):
+  end-to-end GDN oc relerr (hard golden p29_L00): 2.816e-3   (gate <= 2.4e-2, ~8.5x margin)
+  raw-T relerr vs np.linalg.inv (golden):         1.011e-3
+  raw-T relerr on baremetal A_u16_h32 (easy):     1.2e-3 mean / 2.8e-3 max
+  matmul bit-exact vs int16 (GDNBM_MM_I8_TEST):   maxdiff=0
+
+trace: chrometrace.json (QNN-optrace schema; ui.perfetto.dev). parallelism ~3.88x, per-head
+       work inflates ~25% at 4-thread (bandwidth/L2-bound).

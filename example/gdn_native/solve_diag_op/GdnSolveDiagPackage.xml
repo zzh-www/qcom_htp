@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OpDefCollection
+        PackageName="GdnSolveDiagPackage"
+        Domain="gdn"
+        Version="1.0">
+    <OpDefList>
+        <OpDef>
+            <Name>GdnSolveDiag</Name>
+            <Description>
+                <Content>GDN triangular solve T=(I-A)^-1 for a strictly-lower A, C=128, via 2-block (BL=64) block recursion: HVX int16 forward-substitution for the two 64x64 diagonal inverses + two HMX u8i8 64^3 merges driven from inside the op. A and T are per-tensor uint16; same shape [B,H,128,128].</Content>
+            </Description>
+            <Input>
+                <Name>A</Name>
+                <Mandatory>true</Mandatory>
+                <Datatype>QNN_DATATYPE_FLOAT_32</Datatype>
+                <Datatype>QNN_DATATYPE_UINT_16</Datatype>
+                <Datatype>QNN_DATATYPE_UFIXED_POINT_16</Datatype>
+                <Shape>
+                    <Rank>4D</Rank>
+                    <Layout>NONTRIVIAL</Layout>
+                    <Text>[B, H, C, C]</Text>
+                </Shape>
+            </Input>
+            <Output>
+                <Name>T</Name>
+                <Mandatory>true</Mandatory>
+                <Datatype>QNN_DATATYPE_FLOAT_32</Datatype>
+                <Datatype>QNN_DATATYPE_UINT_16</Datatype>
+                <Datatype>QNN_DATATYPE_UFIXED_POINT_16</Datatype>
+                <Shape>
+                    <Rank>4D</Rank>
+                    <Layout>NONTRIVIAL</Layout>
+                    <Text>[B, H, C, C]</Text>
+                </Shape>
+            </Output>
+            <Output>
+                <Name>Hd</Name>
+                <Mandatory>true</Mandatory>
+                <Datatype>QNN_DATATYPE_UINT_8</Datatype>
+                <Datatype>QNN_DATATYPE_UFIXED_POINT_8</Datatype>
+                <Shape>
+                    <Rank>4D</Rank>
+                    <Layout>NONTRIVIAL</Layout>
+                    <Text>[B, H, C, C]</Text>
+                </Shape>
+            </Output>
+            <SupportedBackend>HTP</SupportedBackend>
+        </OpDef>
+    </OpDefList>
+</OpDefCollection>

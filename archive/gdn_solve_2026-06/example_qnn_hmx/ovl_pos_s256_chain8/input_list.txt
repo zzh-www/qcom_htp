@@ -1,0 +1,2 @@
+A:=inputs_fp32/A.raw
+A:=inputs_fp32/input_1.raw

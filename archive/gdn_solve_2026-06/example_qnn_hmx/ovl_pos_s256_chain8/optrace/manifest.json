@@ -1,0 +1,31 @@
+{
+  "out_dir": "/home/zzh/work/qcom_htp/example/qnn_hmx_matmul_u8i8/standard_flow/native_baseline/ovl_pos_s256_chain8",
+  "profile_log": "/home/zzh/work/qcom_htp/example/qnn_hmx_matmul_u8i8/standard_flow/native_baseline/ovl_pos_s256_chain8/device_out/qnn-profiling-data_0.log",
+  "schematic": "/home/zzh/work/qcom_htp/example/qnn_hmx_matmul_u8i8/standard_flow/native_baseline/ovl_pos_s256_chain8/model_encoded_schematic.bin",
+  "viewer_log": "/home/zzh/work/qcom_htp/example/qnn_hmx_matmul_u8i8/standard_flow/native_baseline/ovl_pos_s256_chain8/optrace/_viewer.log",
+  "profile_txt": "/home/zzh/work/qcom_htp/example/qnn_hmx_matmul_u8i8/standard_flow/native_baseline/ovl_pos_s256_chain8/optrace/profile.txt",
+  "command": [
+    "/home/zzh/work/qcom_htp/tools/qnn-sdk/bin/x86_64-linux-clang/qnn-profile-viewer",
+    "--config",
+    "/home/zzh/work/qcom_htp/example/qnn_hmx_matmul_u8i8/standard_flow/native_baseline/ovl_pos_s256_chain8/optrace/_optrace_config.json",
+    "--reader",
+    "/home/zzh/work/qcom_htp/tools/qnn-sdk/lib/x86_64-linux-clang/libQnnHtpOptraceProfilingReader.so",
+    "--input_log",
+    "/home/zzh/work/qcom_htp/example/qnn_hmx_matmul_u8i8/standard_flow/native_baseline/ovl_pos_s256_chain8/device_out/qnn-profiling-data_0.log",
+    "--schematic",
+    "/home/zzh/work/qcom_htp/example/qnn_hmx_matmul_u8i8/standard_flow/native_baseline/ovl_pos_s256_chain8/model_encoded_schematic.bin",
+    "--output",
+    "/home/zzh/work/qcom_htp/example/qnn_hmx_matmul_u8i8/standard_flow/native_baseline/ovl_pos_s256_chain8/optrace/chrometrace.json"
+  ],
+  "artifacts": [
+    "/home/zzh/work/qcom_htp/example/qnn_hmx_matmul_u8i8/standard_flow/native_baseline/ovl_pos_s256_chain8/optrace/_optrace_config.json",
+    "/home/zzh/work/qcom_htp/example/qnn_hmx_matmul_u8i8/standard_flow/native_baseline/ovl_pos_s256_chain8/optrace/_viewer.log",
+    "/home/zzh/work/qcom_htp/example/qnn_hmx_matmul_u8i8/standard_flow/native_baseline/ovl_pos_s256_chain8/optrace/chrometrace.json",
+    "/home/zzh/work/qcom_htp/example/qnn_hmx_matmul_u8i8/standard_flow/native_baseline/ovl_pos_s256_chain8/optrace/chrometrace_htp.json",
+    "/home/zzh/work/qcom_htp/example/qnn_hmx_matmul_u8i8/standard_flow/native_baseline/ovl_pos_s256_chain8/optrace/chrometrace_htp_graph_before.json",
+    "/home/zzh/work/qcom_htp/example/qnn_hmx_matmul_u8i8/standard_flow/native_baseline/ovl_pos_s256_chain8/optrace/chrometrace_qnn_htp_analysis_summary.html",
+    "/home/zzh/work/qcom_htp/example/qnn_hmx_matmul_u8i8/standard_flow/native_baseline/ovl_pos_s256_chain8/optrace/chrometrace_qnn_htp_analysis_summary.json",
+    "/home/zzh/work/qcom_htp/example/qnn_hmx_matmul_u8i8/standard_flow/native_baseline/ovl_pos_s256_chain8/optrace/chrometrace_runtrace.json",
+    "/home/zzh/work/qcom_htp/example/qnn_hmx_matmul_u8i8/standard_flow/native_baseline/ovl_pos_s256_chain8/optrace/profile.txt"
+  ]
+}

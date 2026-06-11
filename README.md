@@ -3,6 +3,13 @@
 Qualcomm HTP / HMX MatMul kernel experiments, QNN Native reference flows, custom
 op alignment work, and device-backed E2E CI evidence.
 
+## ⭐ Highlight — GDN triangular inverse on HTP
+
+The flagship kernel: a per-head **T = (I − A)⁻¹** solve for GDN / KDA linear-attention,
+running HVX-feed + HMX-compute on the v75 HTP. **oc 3.10×10⁻³ (4.4× better than the int8
+baseline) at ~2.2× the speed of the pure-HVX route.** Visual writeup — architecture, algorithm,
+performance, and reproduce steps — in **[docs/gdn_inverse.md](docs/gdn_inverse.md)**.
+
 Agent-managed project knowledge lives under [Agent/](Agent/README.md).  The
 kernel CI source of truth is
 [Agent/current/qnn_kernel_e2e_ci.md](Agent/current/qnn_kernel_e2e_ci.md) — it
@@ -26,6 +33,7 @@ sidecar.
 | W4A16 per-channel | `correctness/test_w4a16_per_channel_native_match_e2e.sh` | 7/7 cases exact, sidecar `4096/4096` |
 | W4A8 LPBQ | `correctness/test_w4a8_lpbq_native_match_e2e.sh` | 7/7 cases exact, sidecar `2048/2048` |
 | W4A16 LPBQ | `correctness/test_w4a16_lpbq_native_match_e2e.sh` | 7/7 cases exact, sidecar `4096/4096` |
+| **GDN inverse** | `correctness/test_gdn_solve_e2e.sh` | device `oc 3.10e-3 ≤ 1.05e-2` vs fp64 inv(I−A), C=256, 32 heads ([docs/gdn_inverse.md](docs/gdn_inverse.md)) |
 
 The native/Python integer and dequant-float columns in the full matrix are
 oracle tolerance checks (dequant uses `(q + qnn_offset) * output_scale`); the

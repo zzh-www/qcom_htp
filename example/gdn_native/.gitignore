@@ -1,0 +1,33 @@
+# generated artifacts (DLCs, context binaries, device outputs, calib/test raws)
+gdn_chunk.onnx
+gdn_chunk_q.onnx
+*.dlc
+*.raw
+ctx/
+device_out/
+output/
+calib/
+quant_w*/
+quant_v*/
+quant_sq*/
+ctxcheck_w*/
+# rebuildable per-experiment work/probe output dirs (regenerate via the run_*/probe_* scripts)
+probe_chain/
+probe_htp/
+hvx_probe/
+mm_probe/*/
+solve_op/standalone/ctx*/
+solve_op/standalone/out*/
+solve_op/standalone/mm_*/
+solve_op/standalone/ov_*/
+solve_op/standalone/*.onnx
+solve_op/standalone/*.ovr.json
+_*.log
+*_encoding.json
+sym_overrides.json
+quant_overrides.json
+input_list.txt
+native_io.json
+_config_host.json
+_htp_ext.json
+gdn_baremetal_*.json

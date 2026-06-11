@@ -1,0 +1,6 @@
+{
+ "activation_encodings": {
+  "B": [{"bitwidth": 8, "dtype": "int", "is_symmetric": "True", "min": -5.0, "max": 5.0, "offset": -128, "scale": 0.03937007874}]
+ },
+ "param_encodings": {}
+}

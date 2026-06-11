@@ -1,0 +1,3 @@
+2026-06-03 02:01:34,172 - 283 - WARNING - Quantization is disabled as --enable_float_fallback flag is provided Some Ops may fallback to float datatype
+2026-06-03 02:01:34,172 - 278 - INFO - Skipping Float Fallback. Float Fallback is already applied to the provided DLC.
+2026-06-03 02:01:34,173 - 278 - INFO - Quantized Model saved at: model.dlc 

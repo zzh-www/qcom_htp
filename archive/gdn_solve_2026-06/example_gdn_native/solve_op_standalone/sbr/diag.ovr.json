@@ -1,0 +1,1 @@
+{"version": "2.0.0", "encodings": [{"name": "Adiag", "output_dtype": "uint16", "y_scale": 1.8972696687397596e-05, "y_zero_point": 32768}, {"name": "Tdiag", "output_dtype": "uint16", "y_scale": 6.103701895199438e-05, "y_zero_point": 32768}]}

@@ -34,3 +34,6 @@ echo "=== qnn correctness ci: w16a16 == two w8a16 (byte decomposition gate) ==="
 
 echo "=== handwritten hmx matmul correctness ci ==="
 "$ROOT_DIR/tests/qnn_kernel_e2e/correctness/test_handwritten_hmx_matmul_e2e.sh"
+
+echo "=== gdn triangular-inverse (GDNSolveHVXMixHMX) precision gate ==="
+"$ROOT_DIR/tests/qnn_kernel_e2e/correctness/test_gdn_solve_e2e.sh"

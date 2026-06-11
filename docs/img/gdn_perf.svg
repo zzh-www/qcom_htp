@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="430" viewBox="0 0 860 430" font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif">
+  <defs>
+    <style>
+      .ti{fill:#1f2933;font-size:19px;font-weight:600}
+      .pt{fill:#1f2933;font-size:15px;font-weight:600}
+      .s{fill:#52606d;font-size:13px} .m{fill:#7b8794;font-size:11.5px}
+      .axis{stroke:#cbd2d9;stroke-width:1}
+      .lbl{fill:#3e4c59;font-size:12.5px} .val{fill:#1f2933;font-size:13px;font-weight:600}
+      .win{fill:#2e7d57;font-size:14px;font-weight:700}
+    </style>
+  </defs>
+
+  <text x="30" y="34" class="ti">Current best: GDNSolveHVXMixHMX (shipping default)</text>
+  <text x="30" y="55" class="s">C=256, 32 heads · precision = oc vs fp64 inv(I−A) · speed = 32-head TOTAL wall (domain cyc)</text>
+
+  <!-- ============ Panel A: precision ============ -->
+  <text x="30" y="96" class="pt">Precision — oc (lower is better)</text>
+  <g transform="translate(170,112)">
+    <line class="axis" x1="0" y1="0" x2="0" y2="150"/>
+    <!-- scale: 14e-3 -> 380px -->
+    <!-- baseline 13.7 -->
+    <rect x="0" y="8"  width="372" height="30" rx="4" fill="#cdd6df"/>
+    <text x="-12" y="28" text-anchor="end" class="lbl">u8i8 baseline</text>
+    <text x="380" y="28" class="val">1.37e-2</text>
+    <!-- +SBOOST 5.0 -->
+    <rect x="0" y="58" width="136" height="30" rx="4" fill="#8fb8de"/>
+    <text x="-12" y="78" text-anchor="end" class="lbl">+ SBOOST</text>
+    <text x="144" y="78" class="val">~5.0e-3</text>
+    <!-- +FBOOST 3.10 (shipping) -->
+    <rect x="0" y="108" width="84" height="30" rx="4" fill="#3f7fbf"/>
+    <text x="-12" y="128" text-anchor="end" class="lbl">+ FBOOST (ship)</text>
+    <text x="92" y="128" class="val">3.10e-3</text>
+  </g>
+  <text x="560" y="158" class="win">4.4× better</text>
+  <text x="560" y="178" class="m">vs the int8-drain baseline,</text>
+  <text x="560" y="194" class="m">at zero / +1.3% wall cost</text>
+
+  <!-- ============ Panel B: speed ============ -->
+  <text x="30" y="276" class="pt">Speed — 32-head wall (lower is better)</text>
+  <g transform="translate(170,292)">
+    <line class="axis" x1="0" y1="0" x2="0" y2="100"/>
+    <!-- scale: 4.0M -> 380px -->
+    <!-- HVX baseline 3.97 -->
+    <rect x="0" y="8"  width="377" height="30" rx="4" fill="#cdd6df"/>
+    <text x="-12" y="28" text-anchor="end" class="lbl">pure-HVX baseline</text>
+    <text x="385" y="28" class="val">~3.97M</text>
+    <!-- HVXMixHMX 1.79 -->
+    <rect x="0" y="58" width="170" height="30" rx="4" fill="#3f7fbf"/>
+    <text x="-12" y="78" text-anchor="end" class="lbl">HVXMixHMX (ship)</text>
+    <text x="178" y="78" class="val">~1.79M (cold)</text>
+  </g>
+  <text x="600" y="330" class="win">2.2× faster</text>
+  <text x="600" y="350" class="m">producer-bound; HMX consumer</text>
+  <text x="600" y="366" class="m">only ~5% busy (headroom)</text>
+</svg>
