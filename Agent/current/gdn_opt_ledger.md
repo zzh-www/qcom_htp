@@ -12,8 +12,8 @@
 
 | 配置 | wall | oc | 备注 |
 |---|---|---|---|
-| **+SKIPFIN_D3(`… -DGDN_BR_FBOOST -DGDN_BR_SKIPFIN_D3`)** | **−2.73%(交织median)** | **9.56e-3(<1e-2底线)** | d=3块跳final merge;精度换wall |
-| +FBOOST | 基准 | 3.10e-3 | final drain @sTw/2 |
+| **出货=全精度(`-DGDN_BR_SBOOST -DGDN_BR_DIAG_I16 -DGDN_BR_REQ_FUSE -DGDN_BR_FBOOST`)** | 基准 | **3.10e-3** | 平衡点裁决:SKIPFIN_D3 兑换比差(噪带边缘2.73%换满预算)→ 不取,守全精度 |
+| (SKIPFIN_D3 旗存可选) | −2.73%(噪带边缘) | 9.56e-3 | 极致 min-wall 才用 |
 | u8i8+SBOOST+DIAG_I16+REQ_FUSE | 基准 | 3.95e-3 | — |
 | u8i8+SBOOST | 1.906M(同日) | 3.95e-3 | — |
 | u8i8 基线 | 1.69M(冷)/1.91M(2026-06-11 热) | 1.37e-2 | — |
@@ -62,10 +62,10 @@
 **进行中:无。** 出货旗追加 `-DGDN_BR_REQ_FUSE`。教训(#12):折叠 SMT-隐藏 pass 进热阶段 ≠ 赢,只有删"真冗余 VTCM 读/写"才赢(REQ_FUSE)。下一候选应锁定真冗余内存往返,非隐藏 compute。**教训累积(#12/#15):** 跳"隐藏内存op"(widen/gather-copy)一律 SMT 吸收=不赢甚至更慢;CAP_PACK_W 的 8.4% = pack 的 **vshuff compute** 才是真 wall,但那是 kernel k-major 要求的不可约重排。**结论:pack 真 wall 难降**(除非 quant 直写 k-major 序消掉整个 final-pack pass=quant+pack 融合,但 quant 自然序 vs k-major byte-interleave 序对不齐,高难高险)。**下一轮换轴:** 不再碰隐藏 op;候选=① quant+pack 融合(真攻 8.4%,高难,先 host 验证字节序可行性再写设备)② oc 侧:误差源分解(SBOOST B(d))= fin∞ 2.70e-3 主导(removal 1.46×)、act∞ 3.40e-3、Sacc∞ 3.69e-3,all∞ 4.4e-4 仍是 16bit-lane 地板。FBOOST(#16)兑现 fin 杠杆 oc 1.27× 但 wall +2.5% park。FBOOST 已纳(#16,+1.29%≤门)。**oc 侧免费杠杆已尽(#17 确认):** act 主导 1.29× 但锁在 int16-act wall 代价后;Wq/Sacc/Ta <1.2×;all∞ 4.4e-4 需全 16bit-lane。**oc 与 wall 已锁死,只能花 wall 买 oc(a16w8-inner,比 BP4 轻=仅 act 拆不拆 wt)或攻 wall 真冗余腾空间。** **wall 近地板(#18):** pack vshuff 8.4% 不可约(kmajor 要求)、DIAG/内存往返 SMT 隐藏、consumer-rebalance=HVX thrash 死。剩余唯一非地板路 = 减 merge 数(算法)或 kernel 读 row-major wt(描述符 RE,高难)。**oc/wall 双锁,系统近 Pareto 前沿。**
 
 ## 压 wall loop(精度底线 oc≤3e-3=保住当前,2026-06-11)
-> **口径(用户定稿):精度底线 = oc < 1e-2。** 当前 3.10e-3 有 3× 余量可换 wall。精度换 wall 重开但算法数值紧:zero块/截项 overshoot(3.9e-2),唯一落 [3e-3,1e-2] 内的 = 跳 d=3 块 final(W4,oc 9.56e-3,−2.73%已采纳)。注:W4 后 oc 9.56e-3 ≈ 顶满 1e-2,无更多精度换 wall 空间。
+> **口径(用户定稿):精度底线 = oc < 1e-2。** 当前 3.10e-3 有 3× 余量可换 wall。精度换 wall 重开但算法数值紧:zero块/截项 overshoot(3.9e-2),唯一落 [3e-3,1e-2] 内的 = 跳 d=3 块 final(W4,oc 9.56e-3,−2.73%已采纳)。**Pareto 测绘结论(2点二元,无中间档):** 全精度 3.10e-3 / SKIPFIN_D3 9.56e-3(−2.73%)。d=3 无廉价中间档——T_ii=inv(I−A_ii) 是单位下三角(对角恒1),贡献全在 off-diag,只能全 matmul 或全 skip;diag 近似=skip。**最优平衡点=全精度**:2.73% 贴噪带(±4%)、且 skip 顶满预算零余量,兑换比差不取。SKIPFIN_D3 旗留作极致 min-wall 备选。
 | # | 方向 | 状态 | wall | 结论 |
 |---|---|---|---|---|
-| W4 | SKIPFIN_D3(d=3块跳final merge=T_ij≈Sacc) | **采纳** | **−2.73%(交织8×8 median)** | 精度换 wall(底线1e-2):oc 3.10e-3→9.56e-3(<1e-2 ✓);(3,0)块|T|~0.017,跳整个 final(quant/eff/pack/dispatch/depack/widen),(3,0)非下游wt无副作用;oracle 9.32e-3 兑现 |
+| W4 | SKIPFIN_D3(d=3块跳final merge=T_ij≈Sacc) | **回退(平衡裁决)** | −2.73%(噪带边缘) | 精度换 wall(底线1e-2):oc 3.10e-3→9.56e-3(<1e-2 ✓);(3,0)块|T|~0.017,跳整个 final(quant/eff/pack/dispatch/depack/widen),(3,0)非下游wt无副作用;oracle 9.32e-3 兑现 |
 | W1 | drop FBOOST | 空(否决) | −0.46%(交织8×8 median,sub-noise) | FBOOST 实为 wall-中性(±1%噪带);之前"−1.29%"是 round-8 反向噪声数误读;dropping 省不到可靠 wall 还丢 oc1.27× → **keep FBOOST** |
 | W2 | kernel 读 row-major wt | **侦察=大概率死** | — | RE 发现:HMX 权重载入 `weight.b = mxmem(r8,r9):deep`,kmajor 布局是 **`:deep` 硬件流式顺序硬性决定**非软件可选;`:deep` 正是 64ch matmul 对模式,替代模式(non-deep/异stride)很可能更慢或不存在;quant 直写 kmajor 只省隐藏 round-trip 非 vshuff(round10)→ **8.4% pack vshuff HW 锁死** |
 | W3 | 更少 merge 分解 | 待启(唯一剩,数值难) | — | W-zero/截项已证现 6 块每块必需;减 merge 须换非 block-recursive 分解,数值重验,收益不确定 |
