@@ -6,17 +6,30 @@ GDN/KDA linear-attention 在 v75 HTP 上的核心难点 = 每 head 对 C×C 下�
 
 ---
 
-## 0. 当前最佳（权威数）
+## 0. 当前最佳（权威数，2026-06-11 定稿）
 
-**GDNSolveHVXMixHMX，`GdnSolveBR16.cpp` int16 静态 solve，producer-consumer pipeline（P=4 HVX 生产者 + 1 主线程 PURE-HMX 消费者）。**
+**GDNSolveHVXMixHMX，`GdnSolveBR16.cpp` int16 静态 solve，producer-consumer pipeline（P=4 HVX 生产者 + 1 主线程 PURE-HMX 消费者）。出货旗组 7 个（见 §3）。**
 
 | 指标 | 值 |
 |---|---|
-| **32-head TOTAL wall** | **~1.78M domain cyc**（≈ 1.12 ms @1.594 GHz；crouton 图集成 ~10% → ~1.63M，记为待图集成的未来收益，不计入 standalone） |
+| **精度 oc**（设备 T vs host fp64 `inv(I−A)`，32 头） | **3.10e-3**（vs 旧 u8i8 int8-drain 基线 1.37e-2 = **4.4×**；由 SBOOST+FBOOST 达成,见 §1.1） |
+| **32-head TOTAL wall** | 冷态 ~1.79M domain cyc（≈1.12ms @1.594GHz）；**绝对值随设备态漂(冷~1.7-1.8M/热~1.9-2.1M),只作参考** |
 | vs GDNSolveHVX 4-thread 基线 | **~2.2×**（基线 ~3.97M） |
-| 正确性 | 全程 bit-exact（精度 relerr ~1.4% = int8-drain 代价；merge 换 w16a16 可到 oc 1.16e-3 但 wall ×2.55 否决，见 §4 GDN_BR_W16） |
+| 正确性 | 对角块 bit-exact；DIAG_I16/REQ_FUSE/SBOOST 全 bit-exact 验证，FBOOST oc 兑现 oracle |
 
-> **口径铁律：唯一权威终指标 = C=256, 32-head TOTAL wall（domain cyc）。** per-head（tiler 低估 artifact 88K）、min-of-reps（抓快异常值）、per-stage PROBE（C15:14 嵌套求和 3.5× wall）**全禁**。
+> **对外展示文档 = `docs/gdn_inverse.md`（图为主：架构/算法/性能）。本文 = 工程权威源。优化全台账 = `gdn_opt_ledger.md`。**
+> **口径铁律：唯一权威终指标 = C=256, 32-head TOTAL wall（domain cyc）。** per-head（tiler 88K artifact）、min-of-reps、per-stage PROBE **全禁**。**wall 比对用交替全交织 A/B（ACAC… median）消热漂,不与固定常数比。**
+
+### 1.1 本轮采纳的 4 项优化（出货默认开）
+
+| 旗 | 作用 | 增量 |
+|---|---|---|
+| `GDN_BR_SBOOST` | Sacc drain gain 逐 d 标定 {5.5,12,20}（Hölder 界松 16×） | oc 1.37e-2→~5e-3，**零 wall** |
+| `GDN_BR_FBOOST` | final drain @sTw/2（主导误差源）+ 下游 bit-exact ÷2 re-narrow | oc→**3.10e-3**(1.27×)，wall +1.3% |
+| `GDN_BR_DIAG_I16` | 对角 forward-subst int16 直写,省 int32 widen/narrow round-trip | wall **−6.2%**，bit-exact |
+| `GDN_BR_REQ_FUSE` | final-merge widen+requant 融合一遍读,省冗余 VTCM 读 | wall **−0.9%**，bit-exact |
+
+可选 min-wall 档 `GDN_BR_SKIPFIN_D3`:跳 d=3 块 final merge,wall 再 −2.7%,oc 9.56e-3(贴 1e-2);非默认。
 
 ---
 
@@ -56,20 +69,23 @@ C=256 切成 4×4 个 64-块下三角。`L=I-A`：
 - `baremetal/src/gdnbm_imp.cpp` — FastRPC 驱动 + pipeline（`pipe_producer`×P + 主线程 PURE-HMX consumer，`g_hmx_dispatch` 钩子）。
 - `solve_br_op/src/GdnSolveBROp.cpp` — 共享 helper（pack/effective/merge_packed/diag/HMX kernel）+ 旧 int32 solve。
 
-**构建 / 运行**（默认即最佳）：
+**构建 / 运行**（默认即最佳，7 旗）：
 ```bash
 cd example/gdn_native/baremetal
-EXTRA_DEFS="-DGDNBM_HMX_PIPE -DGDN_BR_STATIC_GAIN -DGDN_BR_STATIC_FULL" bash build.sh
-# 设备（dssh = ControlMaster 复用,见 scripts/dssh.sh）
-source scripts/dssh.sh; dssh_open oneplus; W=$(dssh 'echo $HOME/gdnbm_run')
+EXTRA_DEFS="-DGDNBM_HMX_PIPE -DGDN_BR_STATIC_GAIN -DGDN_BR_STATIC_FULL \
+  -DGDN_BR_SBOOST -DGDN_BR_DIAG_I16 -DGDN_BR_REQ_FUSE -DGDN_BR_FBOOST" bash build.sh
+# 设备（dssh = ControlMaster 复用,见 scripts/dssh.sh；DSSH_HOST 覆盖设备名）
+source scripts/dssh.sh; dssh_open "${DSSH_HOST:-<your-v75-device>}"; W=$(dssh 'echo $HOME/gdnbm_run')
 dssh "cat > $W/libgdnbm_skel.so" < build/libgdnbm_skel.so
 dssh "cat > $W/gdnbm" < build/gdnbm; dssh "chmod +x $W/gdnbm"
 dssh "cd $W && GDNBM_REPS=8 LD_LIBRARY_PATH=$W:/vendor/lib64:/system/lib64 \
   ADSP_LIBRARY_PATH='$W;/vendor/lib/rfsa/adsp;/vendor/dsp/cdsp;/dsp/cdsp' \
   ./gdnbm 4 A_u16_h32.raw T.raw 32 256 32768 32768 2.770166930875267e-05 6.103701895199438e-05"
+# 签名: <nthreads> <A.raw> <T.raw> <H> <C> <zpA> <zpT> <sA> <sT>
 ```
-- 数据：`A_u16_h32.raw`(u16,zpA=32768) / `T_ref_h32.raw`(fp32 golden) / `/tmp/T_avtcm.raw`(bit-exact 基准)。
+- 数据：`A_u16_h32.raw`(u16,zpA=32768) / `T_ref_h32.raw`(fp32 golden,源自 Qwen3.5-4B GDN 层,`scripts/gdn_extract_golden.py` 重生成) / `/tmp/T_avtcm.raw`(bit-exact 基准)。
 - 取数：warmup 一次丢弃 + 一个 FastRPC session 跑 `GDNBM_REPS=8`，**取 reps 2–4 median**（rep1 冷,rep≥5 节流）。**绝不取 min。**
+- 精度校验(设备实测 oc 3.097e-3,2026-06-11)：拉回 `T.raw`,host `oc=‖T_dev−inv(I−A)‖/‖inv(I−A)‖`(numpy 片段见 `docs/gdn_inverse.md §5`)。
 
 ---
 

@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="520" viewBox="0 0 860 520" font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif">
+  <defs>
+    <marker id="ar" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 z" fill="#5b6b7a"/>
+    </marker>
+    <style>
+      .t{fill:#1f2933;font-size:15px} .ti{fill:#1f2933;font-size:19px;font-weight:600}
+      .s{fill:#52606d;font-size:12.5px} .m{fill:#7b8794;font-size:11.5px}
+      .box{fill:#fff;stroke:#cbd2d9;stroke-width:1.5;rx:10}
+      .hvx{fill:#eef6ff;stroke:#5a9bd4;stroke-width:1.5}
+      .hmx{fill:#fff4ec;stroke:#e08a52;stroke-width:1.5}
+      .ddr{fill:#f0f4f8;stroke:#9aa5b1;stroke-width:1.5}
+      .lab{fill:#3e4c59;font-size:13px;font-weight:600}
+    </style>
+  </defs>
+
+  <text x="30" y="36" class="ti">GDNSolveHVXMixHMX — producer / consumer pipeline</text>
+  <text x="30" y="58" class="s">4 HVX producers feed one main-thread PURE-HMX consumer · per-head triangular inverse T = (I − A)⁻¹</text>
+
+  <!-- DDR top -->
+  <rect class="ddr" x="320" y="80" width="220" height="44" rx="10"/>
+  <text x="430" y="100" text-anchor="middle" class="t">DDR — A (u16, 32 heads)</text>
+  <text x="430" y="116" text-anchor="middle" class="m">DMA double-buffered (load hidden under compute)</text>
+  <line x1="430" y1="124" x2="430" y2="156" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#ar)"/>
+
+  <!-- producers -->
+  <text x="30" y="178" class="lab">PRODUCERS · 4 HVX threads (own all 4 HVX units)</text>
+  <g>
+    <rect class="hvx" x="30" y="190" width="190" height="150" rx="10"/>
+    <rect class="hvx" x="232" y="190" width="190" height="150" rx="10"/>
+    <rect class="hvx" x="434" y="190" width="190" height="150" rx="10"/>
+    <rect class="hvx" x="636" y="190" width="190" height="150" rx="10"/>
+  </g>
+  <!-- detail inside first producer -->
+  <text x="125" y="212" text-anchor="middle" class="t">HVX producer 0</text>
+  <text x="125" y="234" text-anchor="middle" class="s">fold + quant (u8 act)</text>
+  <text x="125" y="252" text-anchor="middle" class="s">pack crouton / k-major</text>
+  <text x="125" y="270" text-anchor="middle" class="s">effective bias</text>
+  <text x="125" y="294" text-anchor="middle" class="m">diagonal forward-subst</text>
+  <text x="125" y="310" text-anchor="middle" class="m">(int16, SMT-hidden)</text>
+  <text x="125" y="330" text-anchor="middle" class="m">— heads striped 8/8/8/8 —</text>
+  <text x="327" y="265" text-anchor="middle" class="t">HVX 1</text>
+  <text x="529" y="265" text-anchor="middle" class="t">HVX 2</text>
+  <text x="731" y="265" text-anchor="middle" class="t">HVX 3</text>
+
+  <!-- dispatch hook -->
+  <line x1="430" y1="340" x2="430" y2="372" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#ar)"/>
+  <rect x="300" y="372" width="260" height="34" rx="8" fill="#fbfbe9" stroke="#d8c84a" stroke-width="1.4"/>
+  <text x="430" y="394" text-anchor="middle" class="t">g_hmx_dispatch — job handoff (release/acquire)</text>
+  <line x1="430" y1="406" x2="430" y2="436" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#ar)"/>
+
+  <!-- consumer -->
+  <rect class="hmx" x="230" y="436" width="400" height="58" rx="10"/>
+  <text x="430" y="460" text-anchor="middle" class="t">CONSUMER · 1 main thread — PURE HMX (mxmem)</text>
+  <text x="430" y="480" text-anchor="middle" class="s">u8i8 64³ matmul · no HVX → no SMT contention with the 4 producers</text>
+
+  <!-- output -->
+  <line x1="636" y1="465" x2="700" y2="465" stroke="#5b6b7a" stroke-width="1.6" marker-end="url(#ar)"/>
+  <rect class="ddr" x="700" y="442" width="135" height="46" rx="10"/>
+  <text x="767" y="462" text-anchor="middle" class="t">T (u16)</text>
+  <text x="767" y="479" text-anchor="middle" class="m">depack → DDR</text>
+</svg>

@@ -81,7 +81,7 @@ DDR→VTCM    →     反量化/重排    →   mxmem matmul  →   反交织/�
 > 改正后(真机 H=32,int16-HVX,VTCM 常驻 A,4 HVX 线程):**~151K cyc/head 4-thread,2.92× 扩展,
 > oc 0.28%**。这是调度问题(流程编排),不是换 kernel/dtype。⚠️ **151K 是裸机 wall,出货版 70–83K 是 QNN
 > domain cycles,口径未对齐前不下倍数结论**(见 `docs/cycle_metric_alignment.md`)。当前状态详见
-> `Agent/current/gdn_solve_handwritten_route.md` 的 CURRENT STATE。
+> `Agent/current/gdn_solve.md`。
 >
 > 注:HVX∥HMX overlap 对这条 solve 不是杠杆 —— mxmem(真 HMX)只占 ~6%,solve 是 HVX-bound;
 > overlap 只在有大块 HMX 工作可藏时才划算,用前先 profile HMX 占比。

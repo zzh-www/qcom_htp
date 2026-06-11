@@ -1,7 +1,7 @@
 # GOAL — pure-handwritten GDN triangular inverse (2–3× over the shipped HVX op)
 
 Self-contained goal spec for goal-mode execution. Full context + per-head op decomposition + measured
-per-op costs: `Agent/current/gdn_solve_handwritten_route.md`. Device = `ssh oneplus`.
+per-op costs: `Agent/current/gdn_solve.md`. Device = `ssh oneplus`.
 
 ## North star
 Rewrite the fused glue of the device-correct `example/gdn_native/solve_br_op/` so its **steady compute at

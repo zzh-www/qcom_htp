@@ -261,7 +261,7 @@ Probe artifacts: `example/gdn_native/solve_op/standalone/gdn_concurrency_probe.s
 - RE evidence + the full measurement table: memory
   `project_gdn_hvx_hmx_overlap_impossible_2026-06-03`.
 - GDN solve context (where this limit kills the block‑recursive HMX route):
-  `Agent/current/gdn_solve_prefill_128_256.md`.
+  `Agent/current/gdn_solve.md`.
 - Public interfaces: `tools/qnn-sdk/include/QNN/HTP/core/qhpi.h`,
   `tools/qnn-sdk/include/QNN/HTP/QnnHtpGraph.h`.
 - Custom‑op authoring SOP: `docs/qnn_custom_op_sop.md`.
