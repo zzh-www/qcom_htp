@@ -12,7 +12,7 @@
 
 | 配置 | wall | oc | 备注 |
 |---|---|---|---|
-| **u8i8+SBOOST+DIAG_I16(`-DGDN_BR_SBOOST -DGDN_BR_DIAG_I16`)** | **1.787M(同日 SBOOST 1.906M,−6.2%)** | **3.95e-3(bit 级同 SBOOST)** | DIAG int16 直写省 int32 widen/narrow;timeline DIAG 2.62M→1.93M、REQ 0.86M→0.48M |
+| **u8i8+SBOOST+DIAG_I16+REQ_FUSE(`-DGDN_BR_SBOOST -DGDN_BR_DIAG_I16 -DGDN_BR_REQ_FUSE`)** | **环比 −0.9%(配对中位,4/4负)叠 DIAG_I16** | **3.95e-3(bit级同)** | final-merge widen+requant 融合一遍读 termi 同写 Tblk16+Th |
 | u8i8+SBOOST | 1.906M(同日) | 3.95e-3 | — |
 | u8i8 基线 | 1.69M(冷)/1.91M(2026-06-11 热) | 1.37e-2 | — |
 | BP4(`-DGDN_BR_BP4`) | 2.71M | 4.90e-3 | 精度备选档;SBOOST 以零代价拿到同级精度,BP4 仅余 ~2% 优势 |
@@ -38,7 +38,7 @@ fused w16a16 64³(33×流量)、全 BP4 出货(producer 工作量)、双 gain �
 | 7 | wall: glue 批处理(N-job) | 否决(timeline) | — | — | SBOOST timeline: SIG+SPIN+POST 仅 ~0.12M wall,批处理上限 <0.1M(<5%) |
 | 8 | DIAG_I16 直写(现成旗,未启用) | **通过** | **−6.2%(1.787M)** | bit 级同 | 省对角 int32 round-trip;timeline DIAG −26%/REQ −44% |
 | 10 | 线程优先级旗 PROD/CONS_PRIO | 不适用 | — | — | 在 feed_producer 路;出货 KSTACK pipe(pipe_producer)不经过 → 非候选 |
-| 11 | REQ-fuse(widen+requant 一遍读 termi 同写 Tblk16+Th) | 进行中(bug) | — | oc 0.131 坏 | vsxt_Vb 输出 lo=偶/hi=奇字节(去交织),漏 vshuff -2 还原自然序(见 gdn_widen_i8_to_i16);已 git revert,libA 不受影响 |
+| 11 | REQ-fuse(`-DGDN_BR_REQ_FUSE`) | **通过** | **配对 −0.9%(中位,4/4负)** | bit级同 | v1 漏 vshuff(-2)oc坏;v2 修正后采纳;省 requant 二次读;timeline REQ aggregate 数不可信(SMT-span) |
 | 9 | int16-lane fold+quant(`-DGDN_BR_I16_FOLD -DGDN_BR_I16_FOLD_QUANT`) | 中性(配对重测) | 配对差中位 −0.3%(干净对 −0.3/+1.0/−0.8%) | bit 级同 | 交替配对(无终止口径)重confirm wall 中性非 −1.6%(那是热漂单点);bit-exact 但无明确收益,不采纳,旗留可选 |
 
 ## 终态(2026-06-11,环比口径)
@@ -48,4 +48,4 @@ fused w16a16 64³(33×流量)、全 BP4 出货(producer 工作量)、双 gain �
 - wall:SBOOST 仅改 2 个 float drain-gain 常数,指令路径与基准逐字节相同 → **wall 环比差额按构造 = 0**;交替配对 A/B 实测(6 轮,两腿均含 DIAG_I16,隔离 SBOOST)配对差中位 **+0.8%**(范围 −0.8%…+4.0%,全噪带内,A 先跑承热残留正偏)= wall 中性确认;DIAG_I16(bit-exact)再让出货档比纯 u8i8 基准 **−6.2%**(同窗 A/B)。出货档 wall ≤ 基准、oc 3.5×,双门成立。
 - 绝对数仅参考:冷 1.787M / 热 ~1.9-2.1M,随设备态漂,不作判据。
 
-**进行中断点(#11 REQ-fuse):** 重做 gdn_requant_from_i8——读 128B(2行)termi→Q6_Wh_vsxt_Vb→**Q6_W_vshuff_VVR(hi,lo,-2)** 得自然序 rows[0/1]=lo/hi(s)→存 Tblk16+requant;旗 -DGDN_BR_REQ_FUSE;预期省 requant 二次读(REQ 6% 的一部分,ceiling ~2%,bit-exact)。**伪探针 c496385b 已退。** candidate 池空(DIAG=SMT隐藏/QUANT·PACK=噪带内/精度地板需16bit-lane换wall),Loop 收口。出货旗:`-DGDN_BR_SBOOST -DGDN_BR_DIAG_I16`(叠在 PIPE+STATIC_GAIN+STATIC_FULL 上)。
+**进行中:无。** 出货旗追加 `-DGDN_BR_REQ_FUSE`。下一候选构思:PACK crouton 是否有冗余重打包;EFF 与 PACK 同一行 sweep 融合;merge final 的 quant_i8_i16w+eff+pack 链精简。**伪探针 c496385b 已退。** candidate 池空(DIAG=SMT隐藏/QUANT·PACK=噪带内/精度地板需16bit-lane换wall),Loop 收口。出货旗:`-DGDN_BR_SBOOST -DGDN_BR_DIAG_I16 -DGDN_BR_REQ_FUSE`(叠在 PIPE+STATIC_GAIN+STATIC_FULL 上)。

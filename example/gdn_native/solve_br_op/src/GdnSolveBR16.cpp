@@ -121,6 +121,40 @@ static void gdn_requant_i16(const int16_t *codes, float scale_in, float sT, int 
     }
 }
 
+#if defined(GDN_BR_REQ_FUSE)
+/* FUSED widen+requant: read termi(i8) ONCE, emit BOTH Tblk16(i16@scale_in, downstream wt reuse) and
+ * Th(u16@sT,zpT) — saves requant's re-read of Tblk16.  Bit-exact: widen exactly as gdn_widen_i8_to_i16
+ * (vsxt gives lo=even/hi=odd bytes -> vshuff -2 restores natural rows), then identical requant math. */
+static void gdn_requant_from_i8(const int8_t *termi, float scale_in, float sT, int zpT, uint16_t *Th,
+                                int roff, int coff, int row_stride, int16_t *Tblk16_out) {
+    float g = scale_in / sT; int Q = 14;
+    while (Q > 1  && g * (float)(1 << Q) >= 32768.0f) --Q;
+    while (Q < 28 && g * (float)(1 << (Q + 1)) < 16384.0f) ++Q;
+    int Mg16 = (int)(g * (float)(1 << Q) + 0.5f) & 0xFFFF; int Rh = Mg16 | (Mg16 << 16);
+    const HVX_Vector vrnd = Q6_V_vsplat_R(1 << (Q - 1)), vzpT = Q6_V_vsplat_R(zpT);
+    const HVX_Vector vlim = Q6_V_vsplat_R(32767), vnlim = Q6_V_vsplat_R(-32767);
+    for (int b = 0; b < (BL * BL) / 128; ++b) {                                   /* 128B termi = 2 rows */
+        HVX_VectorPair w = Q6_Wh_vsxt_Vb(*(const HVX_Vector *)(termi + b * 128));  /* lo=even, hi=odd bytes */
+        HVX_VectorPair s = Q6_W_vshuff_VVR(Q6_V_hi_W(w), Q6_V_lo_W(w), -2);        /* -> natural rows */
+        HVX_Vector rows[2] = { Q6_V_lo_W(s), Q6_V_hi_W(s) };                       /* row 2b, 2b+1 */
+        ((HVX_Vector *)Tblk16_out)[2*b]     = rows[0];                             /* store i16 for wt reuse */
+        ((HVX_Vector *)Tblk16_out)[2*b + 1] = rows[1];
+        for (int rr = 0; rr < 2; ++rr) {
+            int r = 2*b + rr;
+            HVX_VectorPair pr = Q6_Ww_vmpy_VhRh(rows[rr], Rh);
+            HVX_VectorPair sh = Q6_W_vshuff_VVR(Q6_V_hi_W(pr), Q6_V_lo_W(pr), -4);
+            HVX_Vector pp[2] = { Q6_V_lo_W(sh), Q6_V_hi_W(sh) }, q[2];
+            for (int h = 0; h < 2; ++h) {
+                HVX_Vector qq = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(pp[h], vrnd), Q);
+                qq = Q6_Vw_vmax_VwVw(Q6_Vw_vmin_VwVw(qq, vlim), vnlim);
+                q[h] = Q6_Vw_vadd_VwVw(qq, vzpT);
+            }
+            *(HVX_UVector *)(Th + (roff + r) * row_stride + coff) = Q6_Vuh_vpack_VwVw_sat(q[1], q[0]);
+        }
+    }
+}
+#endif
+
 /* ---- int16-reading operand getters (reuse pack/effective; quant via widen-then-proven-int32) ---- */
 /* T_kj weight: off-diag drained@sTw -> pure i16->i8 narrow (clean); diag(k==j) -> widen+quant. */
 static const int8_t *gdn_get_wt_T16(gdn_scr_t *sc, const gdn_vtcm_t *vt, int k, int j,
@@ -910,10 +944,17 @@ static void gdn_br_one_head16(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_
 #if defined(GDN_BR_TRACE)
             uint64_t _f2 = gdn_trnow(); gdn_tr_push(_tid, 3, _f1, _f2);   /* MM (final) */
 #endif
+#if defined(GDN_BR_REQ_FUSE)
+            gdn_requant_from_i8(sc->termi, sij, sT, zpT, Th, i * BL, j * BL, C, sc->Tblk16[bij]);
+            sc->Tscl[bij] = sij;
+#else
             gdn_widen_i8_to_i16(sc->termi, sc->Tblk16[bij]);    /* store result i16 */
             sc->Tscl[bij] = sij;
+#endif
 #endif  /* GDN_BR_W16 */
+#if !defined(GDN_BR_REQ_FUSE) || defined(GDN_BR_W16) || defined(GDN_BR_BP4)
             gdn_requant_i16(sc->Tblk16[bij], sij, sT, zpT, Th, i * BL, j * BL, C);   /* int16-lane requant */
+#endif
 #if defined(GDN_BR_TRACE)
             gdn_tr_push(_tid, 7, _f2, gdn_trnow());   /* REQ (widen+requant) */
 #endif
