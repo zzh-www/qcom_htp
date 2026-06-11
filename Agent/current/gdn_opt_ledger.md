@@ -38,6 +38,7 @@ fused w16a16 64³(33×流量)、全 BP4 出货(producer 工作量)、双 gain �
 | 7 | wall: glue 批处理(N-job) | 否决(timeline) | — | — | SBOOST timeline: SIG+SPIN+POST 仅 ~0.12M wall,批处理上限 <0.1M(<5%) |
 | 8 | DIAG_I16 直写(现成旗,未启用) | **通过** | **−6.2%(1.787M)** | bit 级同 | 省对角 int32 round-trip;timeline DIAG −26%/REQ −44% |
 | 10 | 线程优先级旗 PROD/CONS_PRIO | 不适用 | — | — | 在 feed_producer 路;出货 KSTACK pipe(pipe_producer)不经过 → 非候选 |
+| 13 | 诊断 CAP_PACK_W(量 pack 真实 wall) | 记录 | **−8.4%(配对中位,5/5负)** | — | 跳过全 kmajor pack 省 8.4% → **PACK 是真临界路径非 SMT 隐藏**;final-merge 的 16 pack/head 是主体(inner 已缓存摊销),值得攻 |
 | 12 | SACC_I8(final quant 直读 termi i8 省 inner widen) | 否决(配对) | +1.15%(中位,4/6正) | bit级同 | 816 widen 本被 SMT 隐藏删它不省,fromi8 把 vsxt+vshuff inline 进热 quant 净劣;对比 REQ_FUSE=删真冗余读才赢 |
 | 11 | REQ-fuse(`-DGDN_BR_REQ_FUSE`) | **通过** | **配对 −0.9%(中位,4/4负)** | bit级同 | v1 漏 vshuff(-2)oc坏;v2 修正后采纳;省 requant 二次读;timeline REQ aggregate 数不可信(SMT-span) |
 | 9 | int16-lane fold+quant(`-DGDN_BR_I16_FOLD -DGDN_BR_I16_FOLD_QUANT`) | 中性(配对重测) | 配对差中位 −0.3%(干净对 −0.3/+1.0/−0.8%) | bit 级同 | 交替配对(无终止口径)重confirm wall 中性非 −1.6%(那是热漂单点);bit-exact 但无明确收益,不采纳,旗留可选 |
@@ -49,4 +50,4 @@ fused w16a16 64³(33×流量)、全 BP4 出货(producer 工作量)、双 gain �
 - wall:SBOOST 仅改 2 个 float drain-gain 常数,指令路径与基准逐字节相同 → **wall 环比差额按构造 = 0**;交替配对 A/B 实测(6 轮,两腿均含 DIAG_I16,隔离 SBOOST)配对差中位 **+0.8%**(范围 −0.8%…+4.0%,全噪带内,A 先跑承热残留正偏)= wall 中性确认;DIAG_I16(bit-exact)再让出货档比纯 u8i8 基准 **−6.2%**(同窗 A/B)。出货档 wall ≤ 基准、oc 3.5×,双门成立。
 - 绝对数仅参考:冷 1.787M / 热 ~1.9-2.1M,随设备态漂,不作判据。
 
-**进行中:无。** 出货旗追加 `-DGDN_BR_REQ_FUSE`。教训(#12):折叠 SMT-隐藏 pass 进热阶段 ≠ 赢,只有删"真冗余 VTCM 读/写"才赢(REQ_FUSE)。下一候选应锁定真冗余内存往返,非隐藏 compute。候选构思:final 的 eff+pack 都扫 wtbuf 两遍→可否一遍;inner gather wt 到 contiguous 的拷贝是否可省(直接给 acttab 指向 cache)。**伪探针 c496385b 已退。** candidate 池空(DIAG=SMT隐藏/QUANT·PACK=噪带内/精度地板需16bit-lane换wall),Loop 收口。出货旗:`-DGDN_BR_SBOOST -DGDN_BR_DIAG_I16 -DGDN_BR_REQ_FUSE`(叠在 PIPE+STATIC_GAIN+STATIC_FULL 上)。
+**进行中:无。** 出货旗追加 `-DGDN_BR_REQ_FUSE`。教训(#12):折叠 SMT-隐藏 pass 进热阶段 ≠ 赢,只有删"真冗余 VTCM 读/写"才赢(REQ_FUSE)。下一候选应锁定真冗余内存往返,非隐藏 compute。**进行中断点(#14 quant+eff+pack 三遍合并):** 诊断证 PACK 真实(8.4%)。final-merge 现 quant→wtbuf、eff 读 wtbuf、pack 读 wtbuf = 3 遍。先做最稳的 eff+pack 融合(pack 那遍读 wtbuf 时顺带累 colsum,省 eff 的 4KB 读;eff 末尾 *-128 照旧);旗 -DGDN_BR_EFFPACK_FUSE。注意 pack 的 (kt,nt,r4) tile 序:nt 分 col 0-31/32-63,kt 分 row 0-31/32-63,两 kt 累全行、两 nt 覆全 col → colsum 可在 tile 循环内累。难点=eff 的 even/odd 半字向量化与 pack 的 byte-shuffle 序不同,需在读入的 4 源行上单独累加。**伪探针 c496385b 已退。** candidate 池空(DIAG=SMT隐藏/QUANT·PACK=噪带内/精度地板需16bit-lane换wall),Loop 收口。出货旗:`-DGDN_BR_SBOOST -DGDN_BR_DIAG_I16 -DGDN_BR_REQ_FUSE`(叠在 PIPE+STATIC_GAIN+STATIC_FULL 上)。
