@@ -39,6 +39,7 @@ fused w16a16 64³(33×流量)、全 BP4 出货(producer 工作量)、双 gain �
 | 7 | wall: glue 批处理(N-job) | 否决(timeline) | — | — | SBOOST timeline: SIG+SPIN+POST 仅 ~0.12M wall,批处理上限 <0.1M(<5%) |
 | 8 | DIAG_I16 直写(现成旗,未启用) | **通过** | **−6.2%(1.787M)** | bit 级同 | 省对角 int32 round-trip;timeline DIAG −26%/REQ −44% |
 | 10 | 线程优先级旗 PROD/CONS_PRIO | 不适用 | — | — | 在 feed_producer 路;出货 KSTACK pipe(pipe_producer)不经过 → 非候选 |
+| 20 | Wq per-d boost(sSacc/WB[d]) | 否决(oracle) | 零 | 1.3e-2(clip) | maxWq 已 126/97/97 几乎满,boost 立 clip 127→oc 爆;Wq 已最优(=Wq∞ 仅 1.08×)|
 | 19 | a16w8-inner(act 16-bit 2-pass) | **否决(oracle)** | — | **仅 1.11×<门** | oracle 终跑通(csum 加 int16 非 clip drain):oc 2.75e-3 仅 1.11×。**死因=final Wq 是 int8**,act 细化的 16-bit Sacc 在 Sacc→Wq 量化处被截断;分解 1.29× 误导(假设 exact act 全程传播,int8 Wq 卡住)。要全 1.29× 须 Wq 也 16-bit=更多 pass 不值。**廉价 host 否决,省 BP4 外科手术多轮投入** |
 | 18 | 诊断:wall 临界路径剖析(pack 8.4% 能否消) | 记录 | — | — | ① consumer-rebalance(挪 pack 到闲 consumer)=死路:consumer 故意 pure-mxmem 不碰 HVX,加 pack=5HVX-on-4=thrash(死路表已记) ② quant+pack 融合只省隐藏 wtbuf round-trip 非 8.4% vshuff(=SACC_I8 陷阱) → **8.4% pack vshuff = kmajor 不可约 producer 工作,wall 近地板** |
 | 17 | 诊断:FBOOST 后误差分解 + sAa 扫 | 记录 | — | act∞1.29×/Wq1.08/Sacc1.06/Ta1.00 | **act 成新主导但锁死**:A off-diag max0.622=clip点0.622→sAa 已最优(finer 立增 clip,oc 暴涨),act 是纯 8-bit 粒度误差,只能 int16-act(BP4 a16w8 wall代价)解锁;**FBOOST 吃掉最后免费 oc 杠杆** |
