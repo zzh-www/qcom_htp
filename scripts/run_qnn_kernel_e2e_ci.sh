@@ -11,6 +11,11 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
+# Harden device ssh: multiplex all `ssh "$DEVICE"` calls in the run scripts over one ControlMaster
+# (termux sshd hangs ~10% of fresh per-connection ssh; a long multi-ssh gate would otherwise hang).
+# shellcheck source=scripts/ci_ssh_mux.sh
+. "$ROOT_DIR/scripts/ci_ssh_mux.sh"
+
 usage() {
     cat <<'EOF'
 Usage:
