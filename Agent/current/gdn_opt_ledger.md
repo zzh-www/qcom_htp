@@ -39,7 +39,7 @@ fused w16a16 64³(33×流量)、全 BP4 出货(producer 工作量)、双 gain �
 | 7 | wall: glue 批处理(N-job) | 否决(timeline) | — | — | SBOOST timeline: SIG+SPIN+POST 仅 ~0.12M wall,批处理上限 <0.1M(<5%) |
 | 8 | DIAG_I16 直写(现成旗,未启用) | **通过** | **−6.2%(1.787M)** | bit 级同 | 省对角 int32 round-trip;timeline DIAG −26%/REQ −44% |
 | 10 | 线程优先级旗 PROD/CONS_PRIO | 不适用 | — | — | 在 feed_producer 路;出货 KSTACK pipe(pipe_producer)不经过 → 非候选 |
-| 19 | a16w8-inner oracle 标度链探 | 进行中 | — | oc 上限 1.29×(分解,#17) | act 16-bit 拆 hi/lo 2-pass,wt 保持 u8;oc 上限由分解确立非需 oracle;标度链(256·Ph+Pl+128·colsum,逐 pass int8 drain,sP/(256·boost))易错=BP4 act-path 难点;**唯一剩杠杆但多轮高风险** |
+| 19 | a16w8-inner(act 16-bit 2-pass) | **否决(oracle)** | — | **仅 1.11×<门** | oracle 终跑通(csum 加 int16 非 clip drain):oc 2.75e-3 仅 1.11×。**死因=final Wq 是 int8**,act 细化的 16-bit Sacc 在 Sacc→Wq 量化处被截断;分解 1.29× 误导(假设 exact act 全程传播,int8 Wq 卡住)。要全 1.29× 须 Wq 也 16-bit=更多 pass 不值。**廉价 host 否决,省 BP4 外科手术多轮投入** |
 | 18 | 诊断:wall 临界路径剖析(pack 8.4% 能否消) | 记录 | — | — | ① consumer-rebalance(挪 pack 到闲 consumer)=死路:consumer 故意 pure-mxmem 不碰 HVX,加 pack=5HVX-on-4=thrash(死路表已记) ② quant+pack 融合只省隐藏 wtbuf round-trip 非 8.4% vshuff(=SACC_I8 陷阱) → **8.4% pack vshuff = kmajor 不可约 producer 工作,wall 近地板** |
 | 17 | 诊断:FBOOST 后误差分解 + sAa 扫 | 记录 | — | act∞1.29×/Wq1.08/Sacc1.06/Ta1.00 | **act 成新主导但锁死**:A off-diag max0.622=clip点0.622→sAa 已最优(finer 立增 clip,oc 暴涨),act 是纯 8-bit 粒度误差,只能 int16-act(BP4 a16w8 wall代价)解锁;**FBOOST 吃掉最后免费 oc 杠杆** |
 | 16 | FBOOST final-drain boost Bf=2 + half re-narrow(`-DGDN_BR_FBOOST`) | **通过** | **+1.29%(全交织8×8 median,≤2%门)** | **3.10e-3(1.27×)** | fin∞=主导源;codes 53→107 装 int8 clipfrac0;下游 half 路 ÷2 re-narrow bit-exact(=Q15 g0.5 的 (code+1)>>1);之前 park 的 +2.5% 是序偏置污染,交织重测 +1.29% 入门 |
@@ -58,9 +58,14 @@ fused w16a16 64³(33×流量)、全 BP4 出货(producer 工作量)、双 gain �
 
 **进行中:无。** 出货旗追加 `-DGDN_BR_REQ_FUSE`。教训(#12):折叠 SMT-隐藏 pass 进热阶段 ≠ 赢,只有删"真冗余 VTCM 读/写"才赢(REQ_FUSE)。下一候选应锁定真冗余内存往返,非隐藏 compute。**教训累积(#12/#15):** 跳"隐藏内存op"(widen/gather-copy)一律 SMT 吸收=不赢甚至更慢;CAP_PACK_W 的 8.4% = pack 的 **vshuff compute** 才是真 wall,但那是 kernel k-major 要求的不可约重排。**结论:pack 真 wall 难降**(除非 quant 直写 k-major 序消掉整个 final-pack pass=quant+pack 融合,但 quant 自然序 vs k-major byte-interleave 序对不齐,高难高险)。**下一轮换轴:** 不再碰隐藏 op;候选=① quant+pack 融合(真攻 8.4%,高难,先 host 验证字节序可行性再写设备)② oc 侧:误差源分解(SBOOST B(d))= fin∞ 2.70e-3 主导(removal 1.46×)、act∞ 3.40e-3、Sacc∞ 3.69e-3,all∞ 4.4e-4 仍是 16bit-lane 地板。FBOOST(#16)兑现 fin 杠杆 oc 1.27× 但 wall +2.5% park。FBOOST 已纳(#16,+1.29%≤门)。**oc 侧免费杠杆已尽(#17 确认):** act 主导 1.29× 但锁在 int16-act wall 代价后;Wq/Sacc/Ta <1.2×;all∞ 4.4e-4 需全 16bit-lane。**oc 与 wall 已锁死,只能花 wall 买 oc(a16w8-inner,比 BP4 轻=仅 act 拆不拆 wt)或攻 wall 真冗余腾空间。** **wall 近地板(#18):** pack vshuff 8.4% 不可约(kmajor 要求)、DIAG/内存往返 SMT 隐藏、consumer-rebalance=HVX thrash 死。剩余唯一非地板路 = 减 merge 数(算法)或 kernel 读 row-major wt(描述符 RE,高难)。**oc/wall 双锁,系统近 Pareto 前沿。**
 
-## 进行中(a16w8-inner,#19)
-- **目标:** 内层 K-stack merge 把 act 升 16-bit(只拆 act,wt 保持 u8),capture act 1.29× oc。
-- **方案:** 复用 BP4 act-path(gdn_bp_split_u16/gdn_bp_pass_pair/gdn_bp_combine),关掉 wt-split(单 wt 块,不拆 Wl)。Sacc=256·drain(Ah@W,gb)+drain(Al@W,gb/4)+round(128·colsum(W)·gb),gb 按 act-hi-lane=2·sAa 标定(参 SBOOST 的 boost）。sP=(maxP·sAa·sTw/127)/(256·gb_factor)。
-- **断点状态(2 轮 oracle 均失败):** 标度链核心难点 = q15=256·hi_s+lo_s+128 的 **+128·colsum_W 修正项 ~697 远超 int8**,必须由 kernel bias(per-pass effective)吸收而非 post-drain 加;手推 oracle 反复在此 bias 记账出错(oc 1.0e-2/4.2e-2 反更差)。**不再手推**——必须复用已验证 BP4 inner(gdn_bp_* 已正确处理 csum/eff），令 wt-split Wl=0(单 W8 pass=只 HH+LH 两 pass)+ 保留 FBOOST final。这是 BP4 代码外科手术,多轮。
-- **验收:** oc≥1.2×(预期 1.29×)且 wall ≤2%。**风险预判:** BP4 全档曾 +60% wall(producer 工作量死因);a16w8 轻(仅 act 拆 2-pass 非 3-4)但 producer 仍加 act-split+extra-depack+combine,**wall 大概率 >2% 触门**=即便 oc 达标也可能否决。这是花 wall 买 oc 的边界赌注。
-- **当前态:系统在 oc/wall Pareto 前沿。** 廉价/中等候选空间已尽(11 轮:3 采纳+8 否决/诊断,死路表完备)。a16w8 是仅存非地板杠杆但=大工程+wall 大概率超门。继续推进需用户裁定是否值得多轮投入(或放宽 wall 门接受 oc-for-wall 交易)。出货旗:`-DGDN_BR_SBOOST -DGDN_BR_DIAG_I16 -DGDN_BR_REQ_FUSE -DGDN_BR_FBOOST`。**伪探针 c496385b 已退。** candidate 池空(DIAG=SMT隐藏/QUANT·PACK=噪带内/精度地板需16bit-lane换wall),Loop 收口。出货旗:`-DGDN_BR_SBOOST -DGDN_BR_DIAG_I16 -DGDN_BR_REQ_FUSE`(叠在 PIPE+STATIC_GAIN+STATIC_FULL 上)。
+## 结论:Pareto 前沿(13 轮,2026-06-11)
+
+**所有 bounded 候选已尽,均带机理裁决入账。** 最后杠杆 a16w8-inner 经 oracle 否决(1.11×<门,int8 Wq 截断 act 细化)。
+
+**剩余理论路径全部超出 bounded 范围:**
+- oc 再降:需 Wq 也升 16-bit(=full w16a16 lane,wall 翻倍已否决 #0/w16)或接受 wall>2% 的 a16w8+Wq16 大改;
+- wall 再降:8.4% pack vshuff 是 kmajor 不可约 producer 工作(#18);DIAG/内存往返 SMT 隐藏;consumer-rebalance=HVX thrash 死;只剩减 merge 数(算法重构)或 kernel 读 row-major(描述符 RE)——皆大工程。
+
+**本 session 净成果(出货 `-DGDN_BR_SBOOST -DGDN_BR_DIAG_I16 -DGDN_BR_REQ_FUSE -DGDN_BR_FBOOST`):oc 1.37e-2→3.10e-3(4.4×),wall 环比 ≤ 基准(DIAG_I16 −6.2% / REQ_FUSE −0.9% / FBOOST +1.29%,SBOOST 中性)。** 3 真采纳 + 10 机理否决/诊断。
+
+**Loop 状态:bounded 空间穷尽。继续推进需用户裁定(放宽 wall 门 / 批准大工程 RE / 收口)。** 无新 bounded 候选前,后续 cron 轮将只复confirm此前沿。
