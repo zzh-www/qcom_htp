@@ -11,7 +11,8 @@
 
 | 配置 | wall | oc | 备注 |
 |---|---|---|---|
-| **u8i8+SBOOST 逐d(`-DGDN_BR_SBOOST`,B(d)={5.5,12,20})** | **=基线(同日 1.88M vs 1.91M)** | **3.95e-3(3.5×)** | 逐 d 标定 boost,零结构改动;热态,冷态应回 ~1.69M |
+| **u8i8+SBOOST+DIAG_I16(`-DGDN_BR_SBOOST -DGDN_BR_DIAG_I16`)** | **1.787M(同日 SBOOST 1.906M,−6.2%)** | **3.95e-3(bit 级同 SBOOST)** | DIAG int16 直写省 int32 widen/narrow;timeline DIAG 2.62M→1.93M、REQ 0.86M→0.48M |
+| u8i8+SBOOST | 1.906M(同日) | 3.95e-3 | — |
 | u8i8 基线 | 1.69M(冷)/1.91M(2026-06-11 热) | 1.37e-2 | — |
 | BP4(`-DGDN_BR_BP4`) | 2.71M | 4.90e-3 | 精度备选档;SBOOST 以零代价拿到同级精度,BP4 仅余 ~2% 优势 |
 
@@ -34,7 +35,8 @@ fused w16a16 64³(33×流量)、全 BP4 出货(producer 工作量)、双 gain �
 | 6 | act/Wq/final boost(逐源标定) | 否决(oracle) | — | 3.3e-2(clip) | Wq 实测已填 {126,97,97}、act 满 127,boost 即 clip;final 码 46-53 半满但 re-narrow 反噬(死路 F=2 同因),净增益 <1.1× |
 
 | 7 | wall: glue 批处理(N-job) | 否决(timeline) | — | — | SBOOST timeline: SIG+SPIN+POST 仅 ~0.12M wall,批处理上限 <0.1M(<5%) |
+| 8 | DIAG_I16 直写(现成旗,未启用) | **通过** | **−6.2%(1.787M)** | bit 级同 | 省对角 int32 round-trip;timeline DIAG −26%/REQ −44% |
 
 ## 断点(进行中)
 
-无。**双向 cheap 区均已清空**。SBOOST timeline 分布(2026-06-11):DIAG 27% / MM 16% / REQ 7-13% / QUANT+PACK 14% / glue 4% / CONS 6%。再降 wall 需动 DIAG(串行 forward-subst)或 REQ(requant 16-bit 写)结构;再降 oc 需 16-bit lane(=BP4 部件,wall 换)。冷态 1.69M 复验三次失败(1.92→1.92→2.34M,设备节流上行,2026-06-11 凌晨连续测试热积累)。**断点:代码侧 oc 3.95e-3 ✓、wall 同日基线零差;唯一缺口=绝对 wall ≤1.70M。30min 充分冷却后复测仍 1.906M(同日 u8i8 基线同 1.91M):今日设备稳定平台 ~1.9M,绝对 1.70M 在该平台不可达。代码侧双门事实满足(oc 3.95e-3 + 相对 wall=基线差0);差异是设备态(电池/室温/DCVS),非代码量。**
+无。**双向 cheap 区均已清空**。SBOOST timeline 分布(2026-06-11):DIAG 27% / MM 16% / REQ 7-13% / QUANT+PACK 14% / glue 4% / CONS 6%。再降 wall 需动 DIAG(串行 forward-subst)或 REQ(requant 16-bit 写)结构;再降 oc 需 16-bit lane(=BP4 部件,wall 换)。冷态 1.69M 复验三次失败(1.92→1.92→2.34M,设备节流上行,2026-06-11 凌晨连续测试热积累)。**断点:代码侧 oc 3.95e-3 ✓、wall 同日基线零差;唯一缺口=绝对 wall ≤1.70M。30min 充分冷却后复测仍 1.906M(同日 u8i8 基线同 1.91M):今日设备稳定平台 ~1.9M,绝对 1.70M 在该平台不可达。代码侧双门事实满足;DIAG_I16 后 wall 1.787M(今日热平台),距 1.70M 还差 ~5%,冷态平台日应稳过。探针 cron 每小时 :23 在跑。下一候选:REQ/QUANT 域(0.48M/0.61M)、DIAG 1.93M 串行链。**
