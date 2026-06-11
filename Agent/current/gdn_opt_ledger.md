@@ -64,8 +64,10 @@
 | # | 方向 | 状态 | wall | 结论 |
 |---|---|---|---|---|
 | W1 | drop FBOOST | 空(否决) | −0.46%(交织8×8 median,sub-noise) | FBOOST 实为 wall-中性(±1%噪带);之前"−1.29%"是 round-8 反向噪声数误读;dropping 省不到可靠 wall 还丢 oc1.27× → **keep FBOOST** |
-| W2 | kernel 读 row-major wt(消 8.4% pack) | 待启(RE 多轮) | 目标 −8.4% | 精度无损,最高价值;啃 Agent/qnn_re + objdump HMX 描述符 |
-| W3 | 更少 merge 分解 | 待启(数值需重验) | — | 但 W-zero/截项已证现 6 块必需 |
+| W2 | kernel 读 row-major wt | **侦察=大概率死** | — | RE 发现:HMX 权重载入 `weight.b = mxmem(r8,r9):deep`,kmajor 布局是 **`:deep` 硬件流式顺序硬性决定**非软件可选;`:deep` 正是 64ch matmul 对模式,替代模式(non-deep/异stride)很可能更慢或不存在;quant 直写 kmajor 只省隐藏 round-trip 非 vshuff(round10)→ **8.4% pack vshuff HW 锁死** |
+| W3 | 更少 merge 分解 | 待启(唯一剩,数值难) | — | W-zero/截项已证现 6 块每块必需;减 merge 须换非 block-recursive 分解,数值重验,收益不确定 |
+
+> **wall 现状结论:近硬件/算法地板。** W1 空(FBOOST中性)、W2 侦察=8.4% HW锁死、W3=唯一剩但大改+不确定。producer-bound 的真成本(pack vshuff）是 HMX :deep 流式顺序的不可约重排。
 
 ## 精度换 wall 探查(2026-06-11,精度够用前提)
 **结论:精度余量不解锁廉价 wall。** ① 丢计算(zero 远块/截 K 项)oc 立爆 3.9e-2>基线——block-recursive 数值紧,每块每项实质贡献。② 真 wall 成本(8.4% pack vshuff)是 kmajor 布局重排,**与量化精度无关**,粗量化省不掉。→ 精度换 wall 这条路在本算法上死。剩余 wall 真路仍是:**kernel 读 row-major wt(−8.4%,描述符 RE,精度无关,最高价值)** / 算法换更少 merge 的分解 / drop FBOOST(−1.29% 免费小赢,oc→3.95e-3 仍 3.5×)。
