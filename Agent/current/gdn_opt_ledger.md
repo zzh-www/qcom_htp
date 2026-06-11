@@ -36,7 +36,8 @@ fused w16a16 64³(33×流量)、全 BP4 出货(producer 工作量)、双 gain �
 
 | 7 | wall: glue 批处理(N-job) | 否决(timeline) | — | — | SBOOST timeline: SIG+SPIN+POST 仅 ~0.12M wall,批处理上限 <0.1M(<5%) |
 | 8 | DIAG_I16 直写(现成旗,未启用) | **通过** | **−6.2%(1.787M)** | bit 级同 | 省对角 int32 round-trip;timeline DIAG −26%/REQ −44% |
+| 9 | int16-lane fold+quant(`-DGDN_BR_I16_FOLD -DGDN_BR_I16_FOLD_QUANT`) | 边际(噪带内) | −1.6%(同窗 1.907 vs 1.937M) | bit 级同 | QUANT 仅 8% wall,半 lane 上限 ~4%;不达 5% 门,旗留可选不采纳 |
 
 ## 断点(进行中)
 
-无。**双向 cheap 区均已清空**。SBOOST timeline 分布(2026-06-11):DIAG 27% / MM 16% / REQ 7-13% / QUANT+PACK 14% / glue 4% / CONS 6%。再降 wall 需动 DIAG(串行 forward-subst)或 REQ(requant 16-bit 写)结构;再降 oc 需 16-bit lane(=BP4 部件,wall 换)。冷态 1.69M 复验三次失败(1.92→1.92→2.34M,设备节流上行,2026-06-11 凌晨连续测试热积累)。**断点:代码侧 oc 3.95e-3 ✓、wall 同日基线零差;唯一缺口=绝对 wall ≤1.70M。30min 充分冷却后复测仍 1.906M(同日 u8i8 基线同 1.91M):今日设备稳定平台 ~1.9M,绝对 1.70M 在该平台不可达。代码侧双门事实满足;DIAG_I16 后 wall 1.787M(今日热平台),距 1.70M 还差 ~5%,冷态平台日应稳过。探针 cron 每小时 :23 在跑。〔探针 11:23 reps2-4 中位 1.977M 热未达〕下一候选:REQ/QUANT 域(0.48M/0.61M)、DIAG 1.93M 串行链。**
+无。**双向 cheap 区均已清空**。SBOOST timeline 分布(2026-06-11):DIAG 27% / MM 16% / REQ 7-13% / QUANT+PACK 14% / glue 4% / CONS 6%。再降 wall 需动 DIAG(串行 forward-subst)或 REQ(requant 16-bit 写)结构;再降 oc 需 16-bit lane(=BP4 部件,wall 换)。冷态 1.69M 复验三次失败(1.92→1.92→2.34M,设备节流上行,2026-06-11 凌晨连续测试热积累)。**断点:代码侧 oc 3.95e-3 ✓、wall 同日基线零差;唯一缺口=绝对 wall ≤1.70M。30min 充分冷却后复测仍 1.906M(同日 u8i8 基线同 1.91M):今日设备稳定平台 ~1.9M,绝对 1.70M 在该平台不可达。代码侧双门事实满足;DIAG_I16 后 wall 1.787M(今日热平台),距 1.70M 还差 ~5%,冷态平台日应稳过。探针 cron 每小时 :23 在跑。〔探针 11:23 reps2-4 中位 1.977M 热未达〕REQ/QUANT 域已探(#9 边际);下一候选=DIAG 1.93M 串行 forward-subst(结构改,多轮);或 PACK 0.59M crouton。零增益计数:1(#9)。**〔探针 11:23 reps2-4 中位 1.977M 热未达〕
