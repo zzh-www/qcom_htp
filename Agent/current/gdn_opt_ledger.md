@@ -43,7 +43,7 @@ fused w16a16 64³(33×流量)、全 BP4 出货(producer 工作量)、双 gain �
 
 **双门达成(环比):**
 - oc:出货档 SBOOST+DIAG_I16 = **3.95e-3** vs u8i8 基准 1.37e-2 = **3.5×** ✓
-- wall:SBOOST 仅改 2 个 float drain-gain 常数,指令路径与基准逐字节相同 → **wall 环比差额按构造 = 0**(round1 同窗实测亦 diff 0);DIAG_I16(bit-exact)再让出货档比纯 u8i8 基准 **−6.2%**(同窗 A/B)。出货档 wall ≤ 基准、oc 3.5×,双门成立。
+- wall:SBOOST 仅改 2 个 float drain-gain 常数,指令路径与基准逐字节相同 → **wall 环比差额按构造 = 0**;交替配对 A/B 实测(6 轮,两腿均含 DIAG_I16,隔离 SBOOST)配对差中位 **+0.8%**(范围 −0.8%…+4.0%,全噪带内,A 先跑承热残留正偏)= wall 中性确认;DIAG_I16(bit-exact)再让出货档比纯 u8i8 基准 **−6.2%**(同窗 A/B)。出货档 wall ≤ 基准、oc 3.5×,双门成立。
 - 绝对数仅参考:冷 1.787M / 热 ~1.9-2.1M,随设备态漂,不作判据。
 
 **伪探针 c496385b 已退。** candidate 池空(DIAG=SMT隐藏/QUANT·PACK=噪带内/精度地板需16bit-lane换wall),Loop 收口。出货旗:`-DGDN_BR_SBOOST -DGDN_BR_DIAG_I16`(叠在 PIPE+STATIC_GAIN+STATIC_FULL 上)。
