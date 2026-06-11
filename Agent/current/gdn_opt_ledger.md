@@ -12,7 +12,8 @@
 
 | 配置 | wall | oc | 备注 |
 |---|---|---|---|
-| **u8i8+SBOOST+DIAG_I16+REQ_FUSE(`-DGDN_BR_SBOOST -DGDN_BR_DIAG_I16 -DGDN_BR_REQ_FUSE`)** | **环比 −0.9%(配对中位,4/4负)叠 DIAG_I16** | **3.95e-3(bit级同)** | final-merge widen+requant 融合一遍读 termi 同写 Tblk16+Th |
+| **+FBOOST(`… -DGDN_BR_REQ_FUSE -DGDN_BR_FBOOST`)** | **+1.29%(全交织8×8 median,≤2%门)** | **3.10e-3(1.27×)** | final drain @sTw/2(主导误差源),下游 half 路 bit-exact ÷2 re-narrow |
+| u8i8+SBOOST+DIAG_I16+REQ_FUSE | 基准 | 3.95e-3 | — |
 | u8i8+SBOOST | 1.906M(同日) | 3.95e-3 | — |
 | u8i8 基线 | 1.69M(冷)/1.91M(2026-06-11 热) | 1.37e-2 | — |
 | BP4(`-DGDN_BR_BP4`) | 2.71M | 4.90e-3 | 精度备选档;SBOOST 以零代价拿到同级精度,BP4 仅余 ~2% 优势 |
@@ -38,7 +39,7 @@ fused w16a16 64³(33×流量)、全 BP4 出货(producer 工作量)、双 gain �
 | 7 | wall: glue 批处理(N-job) | 否决(timeline) | — | — | SBOOST timeline: SIG+SPIN+POST 仅 ~0.12M wall,批处理上限 <0.1M(<5%) |
 | 8 | DIAG_I16 直写(现成旗,未启用) | **通过** | **−6.2%(1.787M)** | bit 级同 | 省对角 int32 round-trip;timeline DIAG −26%/REQ −44% |
 | 10 | 线程优先级旗 PROD/CONS_PRIO | 不适用 | — | — | 在 feed_producer 路;出货 KSTACK pipe(pipe_producer)不经过 → 非候选 |
-| 16 | FBOOST final-drain boost Bf=2(`-DGDN_BR_FBOOST`,g_force_sP=sTw/2) | **park(边界)** | +2.5%(配对中位,9对,噪±4%) | **3.10e-3 设备(1.27× vs 3.95e-3)** | fin∞ 分解=主导源;Bf=2 codes 53→107 装 int8 clipfrac0;oc 兑现 oracle;但下游 off-diag T_kj re-narrow 走 quant 路 → wall +2.5% 触 2% 门 → 严格 REFUSE,**park 为最强 oc 杠杆待裁定/降 wall 腾空间** |
+| 16 | FBOOST final-drain boost Bf=2 + half re-narrow(`-DGDN_BR_FBOOST`) | **通过** | **+1.29%(全交织8×8 median,≤2%门)** | **3.10e-3(1.27×)** | fin∞=主导源;codes 53→107 装 int8 clipfrac0;下游 half 路 ÷2 re-narrow bit-exact(=Q15 g0.5 的 (code+1)>>1);之前 park 的 +2.5% 是序偏置污染,交织重测 +1.29% 入门 |
 | 15 | GATHER_SKIP1(d=1 inner 跳 wt 拷贝直传缓存指针) | 否决(配对) | +1.9%(中位,4/5正) | bit级同 | gather-copy 被 SMT 隐藏(同 widen),直读 wcache 局部性略差;3/head 太小 | 
 | 13 | 诊断 CAP_PACK_W(量 pack 真实 wall) | 记录 | **−8.4%(配对中位,5/5负)** | — | 跳过全 kmajor pack 省 8.4% → **PACK 是真临界路径非 SMT 隐藏**;final-merge 的 16 pack/head 是主体(inner 已缓存摊销),值得攻 |
 | 12 | SACC_I8(final quant 直读 termi i8 省 inner widen) | 否决(配对) | +1.15%(中位,4/6正) | bit级同 | 816 widen 本被 SMT 隐藏删它不省,fromi8 把 vsxt+vshuff inline 进热 quant 净劣;对比 REQ_FUSE=删真冗余读才赢 |
@@ -52,4 +53,4 @@ fused w16a16 64³(33×流量)、全 BP4 出货(producer 工作量)、双 gain �
 - wall:SBOOST 仅改 2 个 float drain-gain 常数,指令路径与基准逐字节相同 → **wall 环比差额按构造 = 0**;交替配对 A/B 实测(6 轮,两腿均含 DIAG_I16,隔离 SBOOST)配对差中位 **+0.8%**(范围 −0.8%…+4.0%,全噪带内,A 先跑承热残留正偏)= wall 中性确认;DIAG_I16(bit-exact)再让出货档比纯 u8i8 基准 **−6.2%**(同窗 A/B)。出货档 wall ≤ 基准、oc 3.5×,双门成立。
 - 绝对数仅参考:冷 1.787M / 热 ~1.9-2.1M,随设备态漂,不作判据。
 
-**进行中:无。** 出货旗追加 `-DGDN_BR_REQ_FUSE`。教训(#12):折叠 SMT-隐藏 pass 进热阶段 ≠ 赢,只有删"真冗余 VTCM 读/写"才赢(REQ_FUSE)。下一候选应锁定真冗余内存往返,非隐藏 compute。**教训累积(#12/#15):** 跳"隐藏内存op"(widen/gather-copy)一律 SMT 吸收=不赢甚至更慢;CAP_PACK_W 的 8.4% = pack 的 **vshuff compute** 才是真 wall,但那是 kernel k-major 要求的不可约重排。**结论:pack 真 wall 难降**(除非 quant 直写 k-major 序消掉整个 final-pack pass=quant+pack 融合,但 quant 自然序 vs k-major byte-interleave 序对不齐,高难高险)。**下一轮换轴:** 不再碰隐藏 op;候选=① quant+pack 融合(真攻 8.4%,高难,先 host 验证字节序可行性再写设备)② oc 侧:误差源分解(SBOOST B(d))= fin∞ 2.70e-3 主导(removal 1.46×)、act∞ 3.40e-3、Sacc∞ 3.69e-3,all∞ 4.4e-4 仍是 16bit-lane 地板。FBOOST(#16)兑现 fin 杠杆 oc 1.27× 但 wall +2.5% park。**降 wall 腾出 2% 空间即可纳入 FBOOST**(故 wall 与 oc 互锁:先攻 wall 真冗余=quant+pack 融合)。**伪探针 c496385b 已退。** candidate 池空(DIAG=SMT隐藏/QUANT·PACK=噪带内/精度地板需16bit-lane换wall),Loop 收口。出货旗:`-DGDN_BR_SBOOST -DGDN_BR_DIAG_I16 -DGDN_BR_REQ_FUSE`(叠在 PIPE+STATIC_GAIN+STATIC_FULL 上)。
+**进行中:无。** 出货旗追加 `-DGDN_BR_REQ_FUSE`。教训(#12):折叠 SMT-隐藏 pass 进热阶段 ≠ 赢,只有删"真冗余 VTCM 读/写"才赢(REQ_FUSE)。下一候选应锁定真冗余内存往返,非隐藏 compute。**教训累积(#12/#15):** 跳"隐藏内存op"(widen/gather-copy)一律 SMT 吸收=不赢甚至更慢;CAP_PACK_W 的 8.4% = pack 的 **vshuff compute** 才是真 wall,但那是 kernel k-major 要求的不可约重排。**结论:pack 真 wall 难降**(除非 quant 直写 k-major 序消掉整个 final-pack pass=quant+pack 融合,但 quant 自然序 vs k-major byte-interleave 序对不齐,高难高险)。**下一轮换轴:** 不再碰隐藏 op;候选=① quant+pack 融合(真攻 8.4%,高难,先 host 验证字节序可行性再写设备)② oc 侧:误差源分解(SBOOST B(d))= fin∞ 2.70e-3 主导(removal 1.46×)、act∞ 3.40e-3、Sacc∞ 3.69e-3,all∞ 4.4e-4 仍是 16bit-lane 地板。FBOOST(#16)兑现 fin 杠杆 oc 1.27× 但 wall +2.5% park。FBOOST 已纳(#16,+1.29%≤门)。**下一 oc 候选:** all∞ 地板 4.4e-4 需 16bit-lane(=BP4 部件换 wall);act∞/Sacc∞ 次级源(removal 仅 1.13×/1.06×,<1.2× 单独不够)。**下一 wall 候选:** quant+pack 融合(真攻 8.4% pack,高难需 host 验字节序)。出货旗:`-DGDN_BR_SBOOST -DGDN_BR_DIAG_I16 -DGDN_BR_REQ_FUSE -DGDN_BR_FBOOST`。**伪探针 c496385b 已退。** candidate 池空(DIAG=SMT隐藏/QUANT·PACK=噪带内/精度地板需16bit-lane换wall),Loop 收口。出货旗:`-DGDN_BR_SBOOST -DGDN_BR_DIAG_I16 -DGDN_BR_REQ_FUSE`(叠在 PIPE+STATIC_GAIN+STATIC_FULL 上)。

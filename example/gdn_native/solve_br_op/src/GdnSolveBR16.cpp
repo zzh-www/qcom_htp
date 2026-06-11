@@ -37,6 +37,20 @@ static void gdn_narrow_i16_to_i8(const int16_t *codes, int8_t *out) {
     for (int v = 0; v < (BL * BL) / 128; ++v) op[v] = Q6_Vb_vpack_VhVh_sat(p[2*v+1], p[2*v]);
 }
 
+#if defined(GDN_BR_FBOOST)
+/* round(code/2) -> i8 (sat): BIT-EXACT with gdn_quant_i8_q15(g=0.5) [(code*32768+32768)>>16 == (code+1)>>1],
+ * but a cheap add+asr+pack instead of the Q15 mult.  Re-narrows FBOOST off-diag Tblk16(@sTw/2) to int8@sTw. */
+static void gdn_narrow_i16_to_i8_half(const int16_t *codes, int8_t *out) {
+    const HVX_Vector v1 = Q6_Vh_vsplat_R(1);
+    const HVX_Vector *p = (const HVX_Vector *)codes; HVX_Vector *op = (HVX_Vector *)out;
+    for (int v = 0; v < (BL * BL) / 128; ++v) {
+        HVX_Vector h0 = Q6_Vh_vasr_VhR(Q6_Vh_vadd_VhVh(p[2*v],   v1), 1);
+        HVX_Vector h1 = Q6_Vh_vasr_VhR(Q6_Vh_vadd_VhVh(p[2*v+1], v1), 1);
+        op[v] = Q6_Vb_vpack_VhVh_sat(h1, h0);
+    }
+}
+#endif
+
 /* PURE-ADD accumulate one i8 term into the int16 Sacc16 (static scales -> g=1, no rescale). */
 static void gdn_acc16(gdn_scr_t *sc, const int8_t *term, int first) {
     if (first) { gdn_widen_i8_to_i16(term, sc->Sacc16); return; }
@@ -167,6 +181,10 @@ static const int8_t *gdn_get_wt_T16(gdn_scr_t *sc, const gdn_vtcm_t *vt, int k, 
 #endif
         if (k != j && sc->Tscl[key] == GDN_OPS_sTw) {                       /* clean i16->i8 narrow */
             gdn_narrow_i16_to_i8(sc->Tblk16[key], sc->wtbuf); sc->sTw[key] = GDN_OPS_sTw;
+#if defined(GDN_BR_FBOOST)
+        } else if (k != j && sc->Tscl[key] == GDN_OPS_sTw * 0.5f) {         /* FBOOST off-diag @sTw/2: cheap round÷2 narrow */
+            gdn_narrow_i16_to_i8_half(sc->Tblk16[key], sc->wtbuf); sc->sTw[key] = GDN_OPS_sTw;
+#endif
         } else {                                                            /* diag block: int16-native Q15 quant (g≈0.008<1) */
             gdn_quant_i8_q15(sc->Tblk16[key], sc->Tscl[key], GDN_OPS_sTw, sc->wtbuf); sc->sTw[key] = GDN_OPS_sTw;
         }
@@ -938,7 +956,14 @@ static void gdn_br_one_head16(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_
 #if defined(GDN_BR_TRACE)
             uint64_t _f1 = gdn_trnow(); gdn_tr_push(_tid, 5, _f0, _f1);   /* PREP (final) */
 #endif
+#if defined(GDN_BR_FBOOST)
+            /* final-drain boost: drain T_ij at sTw/2 (codes 53->107, fits int8, clipfrac 0) -> finer Th out.
+             * sij=sTw/2 -> downstream gdn_get_wt_T16 re-narrows ÷2 (bit-exact half path) to int8@sTw.
+             * oracle/device: oc 3.95e-3 -> 3.10e-3 (1.27x).  fin drain was the dominant error source. */
+            g_force_sP = GDN_OPS_sTw * 0.5f;
+#else
             g_force_sP = GDN_OPS_sTw;
+#endif
             gdn_merge_packed(sc, vt, a_ii, sa_ii, vt->wt, sc->eff, sw_S, scolabs, sc->termi, &sij);
             g_force_sP = 0.f;
 #if defined(GDN_BR_TRACE)
