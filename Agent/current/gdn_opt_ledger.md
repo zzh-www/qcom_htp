@@ -60,6 +60,13 @@
 
 **进行中:无。** 出货旗追加 `-DGDN_BR_REQ_FUSE`。教训(#12):折叠 SMT-隐藏 pass 进热阶段 ≠ 赢,只有删"真冗余 VTCM 读/写"才赢(REQ_FUSE)。下一候选应锁定真冗余内存往返,非隐藏 compute。**教训累积(#12/#15):** 跳"隐藏内存op"(widen/gather-copy)一律 SMT 吸收=不赢甚至更慢;CAP_PACK_W 的 8.4% = pack 的 **vshuff compute** 才是真 wall,但那是 kernel k-major 要求的不可约重排。**结论:pack 真 wall 难降**(除非 quant 直写 k-major 序消掉整个 final-pack pass=quant+pack 融合,但 quant 自然序 vs k-major byte-interleave 序对不齐,高难高险)。**下一轮换轴:** 不再碰隐藏 op;候选=① quant+pack 融合(真攻 8.4%,高难,先 host 验证字节序可行性再写设备)② oc 侧:误差源分解(SBOOST B(d))= fin∞ 2.70e-3 主导(removal 1.46×)、act∞ 3.40e-3、Sacc∞ 3.69e-3,all∞ 4.4e-4 仍是 16bit-lane 地板。FBOOST(#16)兑现 fin 杠杆 oc 1.27× 但 wall +2.5% park。FBOOST 已纳(#16,+1.29%≤门)。**oc 侧免费杠杆已尽(#17 确认):** act 主导 1.29× 但锁在 int16-act wall 代价后;Wq/Sacc/Ta <1.2×;all∞ 4.4e-4 需全 16bit-lane。**oc 与 wall 已锁死,只能花 wall 买 oc(a16w8-inner,比 BP4 轻=仅 act 拆不拆 wt)或攻 wall 真冗余腾空间。** **wall 近地板(#18):** pack vshuff 8.4% 不可约(kmajor 要求)、DIAG/内存往返 SMT 隐藏、consumer-rebalance=HVX thrash 死。剩余唯一非地板路 = 减 merge 数(算法)或 kernel 读 row-major wt(描述符 RE,高难)。**oc/wall 双锁,系统近 Pareto 前沿。**
 
+## 压 wall loop(精度够用,2026-06-11 起,cron a714ead7)
+| # | 方向 | 状态 | wall | 结论 |
+|---|---|---|---|---|
+| W1 | drop FBOOST | 空(否决) | −0.46%(交织8×8 median,sub-noise) | FBOOST 实为 wall-中性(±1%噪带);之前"−1.29%"是 round-8 反向噪声数误读;dropping 省不到可靠 wall 还丢 oc1.27× → **keep FBOOST** |
+| W2 | kernel 读 row-major wt(消 8.4% pack) | 待启(RE 多轮) | 目标 −8.4% | 精度无损,最高价值;啃 Agent/qnn_re + objdump HMX 描述符 |
+| W3 | 更少 merge 分解 | 待启(数值需重验) | — | 但 W-zero/截项已证现 6 块必需 |
+
 ## 精度换 wall 探查(2026-06-11,精度够用前提)
 **结论:精度余量不解锁廉价 wall。** ① 丢计算(zero 远块/截 K 项)oc 立爆 3.9e-2>基线——block-recursive 数值紧,每块每项实质贡献。② 真 wall 成本(8.4% pack vshuff)是 kmajor 布局重排,**与量化精度无关**,粗量化省不掉。→ 精度换 wall 这条路在本算法上死。剩余 wall 真路仍是:**kernel 读 row-major wt(−8.4%,描述符 RE,精度无关,最高价值)** / 算法换更少 merge 的分解 / drop FBOOST(−1.29% 免费小赢,oc→3.95e-3 仍 3.5×)。
 
