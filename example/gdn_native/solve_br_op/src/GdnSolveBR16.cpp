@@ -945,6 +945,15 @@ static void gdn_br_one_head16(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_
 #endif
 #else
             float sa_ii, sw_S, sij; int scolabs;
+#if defined(GDN_BR_SKIPFIN_D3)
+            /* precision-for-wall (oc budget 1e-2): the farthest block (d=3, |T|~0.017) -> T_ij ≈ Sacc,
+             * skip the final T_ii@Sacc merge entirely (no quant/eff/pack/dispatch/depack/widen).  (3,0) is
+             * never reused as a downstream weight (no i>3) so no narrow needed.  oracle oc 3.10e-3->9.32e-3. */
+            if (d == 3) {
+                gdn_requant_i16(sc->Sacc16, s_S, sT, zpT, Th, i * BL, j * BL, C);
+                continue;
+            }
+#endif
 #if defined(GDN_BR_TRACE)
             uint64_t _f0 = gdn_trnow();
 #endif
