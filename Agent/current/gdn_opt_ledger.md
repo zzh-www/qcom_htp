@@ -39,6 +39,7 @@ fused w16a16 64³(33×流量)、全 BP4 出货(producer 工作量)、双 gain �
 | 7 | wall: glue 批处理(N-job) | 否决(timeline) | — | — | SBOOST timeline: SIG+SPIN+POST 仅 ~0.12M wall,批处理上限 <0.1M(<5%) |
 | 8 | DIAG_I16 直写(现成旗,未启用) | **通过** | **−6.2%(1.787M)** | bit 级同 | 省对角 int32 round-trip;timeline DIAG −26%/REQ −44% |
 | 10 | 线程优先级旗 PROD/CONS_PRIO | 不适用 | — | — | 在 feed_producer 路;出货 KSTACK pipe(pipe_producer)不经过 → 非候选 |
+| 21 | 尽调:剩余旗扫(T_DDR/SWPIPE/HMX_SHARED/MAIN_HMX_REL) | 记录 | — | — | T 回写已默认 VTCM+DMA 最优(DDR-direct 是 legacy);余皆 bench/dead → 无遗漏 bounded 杠杆 |
 | 20 | Wq per-d boost(sSacc/WB[d]) | 否决(oracle) | 零 | 1.3e-2(clip) | maxWq 已 126/97/97 几乎满,boost 立 clip 127→oc 爆;Wq 已最优(=Wq∞ 仅 1.08×)|
 | 19 | a16w8-inner(act 16-bit 2-pass) | **否决(oracle)** | — | **仅 1.11×<门** | oracle 终跑通(csum 加 int16 非 clip drain):oc 2.75e-3 仅 1.11×。**死因=final Wq 是 int8**,act 细化的 16-bit Sacc 在 Sacc→Wq 量化处被截断;分解 1.29× 误导(假设 exact act 全程传播,int8 Wq 卡住)。要全 1.29× 须 Wq 也 16-bit=更多 pass 不值。**廉价 host 否决,省 BP4 外科手术多轮投入** |
 | 18 | 诊断:wall 临界路径剖析(pack 8.4% 能否消) | 记录 | — | — | ① consumer-rebalance(挪 pack 到闲 consumer)=死路:consumer 故意 pure-mxmem 不碰 HVX,加 pack=5HVX-on-4=thrash(死路表已记) ② quant+pack 融合只省隐藏 wtbuf round-trip 非 8.4% vshuff(=SACC_I8 陷阱) → **8.4% pack vshuff = kmajor 不可约 producer 工作,wall 近地板** |
@@ -69,4 +70,9 @@ fused w16a16 64³(33×流量)、全 BP4 出货(producer 工作量)、双 gain �
 
 **本 session 净成果(出货 `-DGDN_BR_SBOOST -DGDN_BR_DIAG_I16 -DGDN_BR_REQ_FUSE -DGDN_BR_FBOOST`):oc 1.37e-2→3.10e-3(4.4×),wall 环比 ≤ 基准(DIAG_I16 −6.2% / REQ_FUSE −0.9% / FBOOST +1.29%,SBOOST 中性)。** 3 真采纳 + 10 机理否决/诊断。
 
-**Loop 状态:bounded 空间穷尽。继续推进需用户裁定(放宽 wall 门 / 批准大工程 RE / 收口)。** 无新 bounded 候选前,后续 cron 轮将只复confirm此前沿。
+**Loop 收口(15 轮,cron 08a01ccc 已停)。** bounded 空间经 5 个角度+尽调确认为空:静态标度全最优(sAa/SBOOST/FBOOST/Wq)、内存-skip 全 SMT 隐藏(SACC_I8/GATHER)、pack vshuff 不可约、act 被 int8-Wq 卡(a16w8 仅 1.11×)、consumer-rebalance=HVX thrash、剩余旗默认/dead。
+
+**重启路径(用户选向后):**
+- 放宽 wall 门→纳 FBOOST 已做;若允许 +5% 换 oc,试 a16w8+Wq16 双 16-bit(需 BP4 外科手术,oc 上限 ~1.5×=act+Wq 联合)。
+- 大工程 RE:kernel 读 row-major wt(消 8.4% pack)或算法减 merge 数。
+- 命令:重新 `/loop 10m <同 prompt>` 或 CronCreate。
