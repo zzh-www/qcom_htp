@@ -7,14 +7,14 @@
 > loop 只在 **wall 触 roofline 地板(~1.0M) 或 LEDGER A/B 全 DONE/REFUTED** 时到头——那时也是**写新 NEXT**,而非判"闭环"。
 
 > **每个 turn 的唯一入口。** 读 `STATE` 知道在哪 → 读 `NEXT` 知道这轮干什么 → 干完按 `LOOP` 更新本文。
-> 改任何东西前必读 `INVARIANTS` + `LEDGER`:**别重试 R(永久死),别改 INVARIANTS(除非新设备证据)。**
+> 改任何东西前必读 `INVARIANTS` + `LEDGER`:**别重试 R 的 2 条死路,别改 INVARIANTS(除非新设备证据)。其余(A/B/D)都是活。**
 
 ## OBJECTIVE
 
 **最小化 32-head TOTAL wall,硬约束 `oc < 4e-2`(每轮重测)。**
 - 任何让 `oc ≥ 4e-2` 的改动**否决**。oc 不随热漂 → **绝对门**。oc = device 输出 vs fp64 真值 inv,32-head aggregate(由 `run_w16a16_head_phase4.py` 输出)。
 - wall 口径 = skill `htp-cycle-metric`(**32-head TOTAL wall domain cyc**;per-head/min-of-reps/PROBE 全禁)。
-- **wall 判定一律环比(同 HVXMixHMX,`gdn_solve.md:184` + `gdn_opt_ledger.md` 终态):新旧 A/B 同热窗 ACAC 交替,看配对差中位,绝不跟记忆里的固定常数比。** 绝对 18.7M 随热漂(冷~1.7M/热~2.1M)= 参考,非门。
+- **wall 判定一律环比:新旧 A/B 同热窗 ACAC 交替,看配对差中位,绝不跟固定常数比**(协议见 LOOP 步骤 2)。绝对 18.7M 随设备热态漂(±~10%)= 参考,非门。
 - 不以"比其它实现快"为目标(用户定义);目标 = 本实现做到**设备极限** + 学清 w16a16 怎么用。
 - 真代码 / 真设备 / 真数据;预估、garbage-data 计时不算结论。
 
@@ -22,12 +22,12 @@
 
 | 项 | 值 | 备注 |
 |---|---|---|
-| **best wall** | **18.7M cyc（11.8ms）** | 参考值,随热漂;判定看**环比**非此常数。HMX busy 15.4M=82%,2026-06-11 |
+| **当前 wall** | **18.7M cyc（11.8ms）** | **起点,要继续降**;随热漂,判定看**环比**非此常数。HMX busy 15.4M=82% |
 | **oc** | **9.66e-3** @scale0.05(4.5e-3 @scale0.25) | 离门 4e-2 有 **~4× 余量** ← 可换 wall |
-| 配置 | Newton=2,**40 mm/head**(24 对角 + 16 merge)= 1280 mm/32head | scale = 精度旋钮(甜点 ~0.25,见 CEILING) |
-| 极致地板 | ~1.49M(全 w16a16)→ ~1.0M(merge u8i8)→ ~0.7M(+Newton1) | roofline,**留 ≥12× 在桌上,全系统侧** |
-| 架构现状 | per-mm dispatch + 中间 repack 疑似串在 consumer | HVX 58% 闲 = 欠流水(repack 线程归属待 NEXT 起手确认) |
-| 数值锁 | 对角 = w16a16(预条件 R1 证伪);merge 可 u8i8+SBOOST | |
+| 配置 | Newton=2,**40 mm/head**(24 对角 + 16 merge)= 1280 mm/32head | scale = 精度旋钮(甜点 ~0.25) |
+| 极致地板 | ~1.49M(全 w16a16)→ ~1.0M(merge u8i8)→ ~0.7M(+Newton1) | roofline,**留 ≥12× 在桌上,全系统侧 = 都还没做** |
+| 架构现状 | per-mm dispatch + 中间 repack 疑似串在 consumer | HVX 58% 闲 = **欠流水(主战场)**;repack 线程归属待 NEXT 起手确认 |
+| 精度 | oc 余量 ~4×;对角 dtype = w16a16,merge 可 u8i8+SBOOST | |
 
 ## NEXT（这轮单一最高优先）
 
@@ -66,8 +66,8 @@
 | P4 对角 dtype 直接降(非预条件) | OPEN-评估 | w8a16 对角?per-block 差但 **aggregate 4e-2 可能过**;待测(probe 现测 per-block 1e-2,需加 aggregate-oc@4e-2) |
 | (旧) merge K-stack | **可重评** | 旧否决=stack prep 串行加厚 > HMX 省;**A1+A2 把 prep 流水化后该理由可能不成立** → A 后重测 |
 
-### R. REFUTED 永久（math/numerics,任何架构都死,别重试）
-| 杠杆 | 为何永久死 |
+### R. 跳过这 2 条（已证死路,别重试;**不影响 A/B/D 的活,A1+A2 照做**）
+| 杠杆 | 为何死 |
 |---|---|
 | **R1 对角预条件换便宜 dtype** | **math 必然**:任意对角 D,`inv(L̃)_ij` 与 `Ã^k_ij` 同因子 `d_j/d_i`;压迭代上溢 = 把远次对角 inv 压到廉价 dtype 分辨率下 **下溢成 0**,还原救不回。scalar/per-row 都逃不掉。`scripts/gdn_solve_precond_probe.py`(1344 块,best-s 中位=1.0,PC maxErr ~0.17)。**注:P4(直接降 dtype,不预条件)是另一回事,仍 OPEN。** |
 | 三角 mask | 64³ mm 仅 8.6K;拆分省 ≤2.1K < 新增 dispatch ≥3K(算术) |
@@ -86,19 +86,18 @@ Newton 4→2 · bias HVX colsum(vsxt 序 lo+hi)· A/T 装出 vgather perm · ren
 7. **64³ 单调用可用**(旧"永不可用"错):QHPI 在 M=64 给 act/out **padded 2048B crouton 块**(live 前 512B);正确描述符 {N_t=2,y=64,n_tiles=64,m_total=1,k_total=64}、act y=128 → byte-exact(H==9 设备验)。
 8. **HVX lane 硬经验**(踩过,别回退):① **`vsxt+vasr` 必须配对**(`Q6_Ww_vunpack` 偶/奇 vs `Q6_Vh_vasr_VwVwR` block 序不配,自检抓出 3968/4096 错);② diag 标量补丁交织索引 `(i>>6)*64 + (off&1)*32 + (off>>1)`;③ **scalar 访 VTCM ≈4× 慢于 DDR-L2**(753M vs 187M),prep 一律走 DDR,VTCM 只给 HMX 面/gather;④ HVX bias lane-fold 两次都错,scalar LUT colsum(12K/mm)更划算;⑤ dense pack = `vadd128 + vasr8 + vpack_sat`。
 
-## NUMERICAL CEILING（独立于速度,深入理解）
+## 精度预算（当前不是约束,别当 blocker）
 
-对角 all-matmul Newton 即便 w16a16,真实分布也只 **~55-74% 块** relerr<1e-2;高-‖A‖尾巴(‖A‖₂≥4,~25% 块)是 **fixed-point Newton 固有墙**(`A^k` 瞬态 ~1e13 上溢;预条件只换成下溢=R1 死因)。**精度旋钮 = A 缩放(scale,甜点 ~0.25 给 oc 4.5e-3)+ Newton 步数,与速度杠杆正交。** 当前 aggregate oc 9.66e-3 ≪ 门 4e-2,余量大 → B 组精度-换-wall 有空间。probe:`uv run python scripts/gdn_solve_precond_probe.py`。
+aggregate oc **9.66e-3 ≪ 门 4e-2 = ~4× 余量**,精度宽松 → B 组可放心拿精度换 wall。精度旋钮(与速度正交,需要时再用):A-scale(甜点 ~0.25 → oc 4.5e-3)+ Newton 步数。对角 dtype 固定 w16a16(更便宜的预条件路 = R1,LEDGER 里);余量这么大,**精度不是停下来的理由**。probe:`scripts/gdn_solve_precond_probe.py`。
 
-## PROGRESS（实测历史里程碑;✅ = 已验证的过去,**不等于优化到头** — 当前活在 NEXT/LEDGER A）
+## 地基（已验证可复用的件 = NEXT 的起点,不是终点）
 
-- **Phase 0** ✅ C 打包器/depack byte-exact vs Python:act 64³+256³、wt、bias、depack 全 `diff=0`。
-  `cd example/gdn_native/pure_hmx_solve && cc -O2 w16a16_pack_test.c -o /tmp/w16pt && /tmp/w16pt`
-- **Phase 1** ✅(真设备)w16a16 64³ 原语 `pure_hmx_solve/w16a16_mm.h`,对配量化 [-1,1] **max|code diff|=3、oc=1.4e-5**。`run_w16a16_mm_phase1.py --deploy`(H=1)。
-- **Phase 2** ✅ 单 64-块 X=(I−A)⁻¹,Newton=4 时 = 10 mm(X0=I+A+A²+A³ 需 A²,A³ = 2 mm + 4×Newton×2 = 8);**指数必须双向归一**(只右移会让指数每轮翻倍报废)。oc:‖A‖=0.71→1.0e-2 / 2.18→3.0e-3 / 3.60→2.6e-2;≥5 爆。`run_w16a16_diag_phase2.py --deploy --scale 0.3`(H=2)。
-- **Phase 3** ✅ 全 C=256(Newton=4)= 4×diag(10) + 16 merge = 56 mm/头。oc vs fp64 inv:0.75→9.6e-3 / 2.25→5.4e-3 / 3.74→4.1e-3。`run_w16a16_head_phase3.py --deploy --scale 0.05`(H=3)。
-- **Phase 4** ✅ 4HVX∥1HMX 并行。优化链(每步设备实测):60.2M/头(Phase3 scalar)→ 23.4M(64-row pack/depack)→ 7.9M(P=4∥HMX 静态 head 交织)→ 3.2M/头(HVX vgather wt-pack,byte-exact 自检 stats 门)。`run_w16a16_head_phase4.py --deploy --threads 4 --heads 32 --scale 0.05`。
-- **全 32-head TOTAL wall 收敛**:101.3M → 79.1M(全切真 64³)→ **36.5M**(renorm/add 全 HVX,HMX 59%)→ **18.7M**(微杠杆收敛轮:**Newton4→2**(→40 mm/head)+ bias HVX colsum + A/T vgather,HMX 82%,oc 9.662e-3 / 0.25-scale 4.50e-3)= **当前 STATE 起点**。注:此轮只试尽了**旧架构内的微杠杆**;**系统级 A1+A2(= 当前 NEXT,见 LEDGER A)从未做** = 主战场仍开,~12× headroom 在此。
+下面都跑通过、A1+A2 直接复用;**18.7M 是从这里继续往下降的起点,不是终态**。
+- **w16a16 64³ 原语** `pure_hmx_solve/w16a16_mm.h`(C 打包 + convhhh + depack),对配量化 byte-exact、oc 1.4e-5。打包器 `w16a16_pack.h` 也 byte-exact(host `w16a16_pack_test.c`)。`run_w16a16_mm_phase1.py --deploy`(H=1)。
+- **对角 Newton** 单块 = 6 mm(Newton=2)/ 10 mm(Newton=4),X0=I+A+A²+A³;**指数双向归一必须**(只右移翻倍报废)。`run_w16a16_diag_phase2.py`(H=2)。
+- **全 head 组装** 4×diag + 16 merge,块指数表随 T 回传。`run_w16a16_head_phase3.py`(H=3)。
+- **4HVX∥1HMX 管线** = 当前基线骨架。⚠️ **它的 consumer 是旧 per-mm-dispatch 设计 = A1+A2 要替换的对象,本身不是终态**。`run_w16a16_head_phase4.py --deploy --threads 4 --heads 32 --scale 0.05`。
+- **18.7M 怎么来的**:101.3M → 36.5M → **18.7M**,全是**旧架构内的微杠杆**(Newton4→2→40 mm/head、bias HVX colsum、A/T vgather、renorm 全 HVX)。**系统级 A1+A2 从未做** = 当前主战场,~12× headroom 就在这里。
 
 ## REPRODUCE（当前态 + 探针）
 
