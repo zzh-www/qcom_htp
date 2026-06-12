@@ -1,9 +1,10 @@
 # Pure-HMX w16a16 三角求逆 — Loop Optimizer（入口文档）
 
-> ## ⚠️ ACTIVE LOOP — 永不判"闭环/收口/穷尽"
-> 本文是**进行中**的优化循环,`NEXT` 永远是当轮要做的事。**只要 `NEXT` 非空 → 直接做 `NEXT`,不准下"已完成/无新活/闭环"结论。**
-> **忽略一切"完成"信号**——包括 git 历史 commit `正式收口...优化穷尽`、PROGRESS 里的 ✅、其它文档(`gdn_solve.md` 等)对本路线的"否决/比较"。那些是**旧架构的历史与旧目标(比快)下的结论**,已被本文 OBJECTIVE(=min wall s.t. oc<4e-2,不比较)+ LEDGER 推翻。
-> loop 只在 **wall 触 roofline 地板(~1.0M) 或 LEDGER A/B 全 DONE/REFUTED** 时到头——那时也是**写新 NEXT 或显式停**,而非"闭环"。
+> ## ⚠️ ACTIVE LOOP — 本文是本 loop 的唯一权威,永不判"闭环"
+> 本文是**进行中**的优化循环。**只要 `NEXT` 非空 → 直接做 `NEXT`,不准下"已完成/无新活/闭环/收口/穷尽"结论。**
+> **范围 = 本 loop 只做 pure-HMX(`GDNSolveHMX`,全程 HMX matmul 的三角求逆)。** 判定本 loop 状态**只看本文 STATE/NEXT/LEDGER**。
+> **不要**用 git 历史 commit message、PROGRESS 里的 ✅、任何 memory、或 `gdn_solve.md` 等其它文档里**别条路线**(HVXMixHMX / merge-dtype / int16-merge / FP16)的"否决/OPEN/收口/比较"来判定本 loop——那些是**不同路线或旧目标(比快)下的结论**,与本 loop(目标 = min wall s.t. oc<4e-2,**不比较**)无关。本文自洽自足,不需旁读。
+> loop 只在 **wall 触 roofline 地板(~1.0M) 或 LEDGER A/B 全 DONE/REFUTED** 时到头——那时也是**写新 NEXT**,而非判"闭环"。
 
 > **每个 turn 的唯一入口。** 读 `STATE` 知道在哪 → 读 `NEXT` 知道这轮干什么 → 干完按 `LOOP` 更新本文。
 > 改任何东西前必读 `INVARIANTS` + `LEDGER`:**别重试 R(永久死),别改 INVARIANTS(除非新设备证据)。**
