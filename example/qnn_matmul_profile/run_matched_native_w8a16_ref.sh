@@ -12,6 +12,8 @@ SCRIPT_DIR="$ROOT_DIR/example/qnn_matmul_profile"
 source "$ROOT_DIR/scripts/env.sh" >/dev/null
 # shellcheck disable=SC1091
 source "$ROOT_DIR/scripts/qairt_quant_flow.sh"
+# shellcheck disable=SC1091
+source "$ROOT_DIR/scripts/dssh.sh"
 
 DEVICE="${DEVICE:-oneplus}"
 ARCH="${ARCH:-v75}"

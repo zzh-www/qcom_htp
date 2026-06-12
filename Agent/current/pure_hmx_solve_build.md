@@ -39,15 +39,19 @@
 - **起手:读 `gdnbm_imp.cpp` 的 `pipe_producer`/consumer + `g_hmx_dispatch` 钩子,定位中间结果 repack 当前在哪个线程**(证实/证伪上面的假设,再动手)。
 → 过门后 NEXT = P1(merge u8i8 + SBOOST)→ ~1.0M;之后 = P2/P3 精度换 wall(4e-2 预算大)。
 
-## LOOP（每轮协议）
+## LOOP（每轮协议 + git 分支模型）
 
-1. 读 `STATE` + `NEXT`。
-2. 实现 `NEXT`(B)→ **wall 环比验证(同 HVXMixHMX)**:保留当前 best(A,= 原 EXTRA_DEFS 构建),B = 新构建;**同热窗 ACAC… 交替**,每腿 `GDNBM_REPS=8` 取 **reps 2–4 median**(rep1 冷 / rep≥5 节流,**绝不取 min**),跑 ~6 个配对轮,记 **(B−A)/A 配对差中位**(消热漂)。oc 用 B 的绝对值(不漂)。
-3. 对门(**环比 wall 配对差 < 0** **且** `oc < 4e-2`):
-   - **过** → 更新 `STATE`(新 best=B,wall 记环比 Δ% + 当时绝对参考值,oc)+ `LEDGER`(该杠杆 → DONE + 环比数)+ 写新 `NEXT`。
-   - **不过**(oc≥4e-2,或配对差中位 ≥0 / 落噪带内)→ **查实现,不臆测**(热循环分支 / 寄存器溢出 / 次优 intrinsic)+ `LEDGER` 记一行,迭代或 REFUTE。**单点降不算数**(可能是热漂),只认配对中位。
-4. 留可复跑命令。每轮只动 `STATE`/`NEXT`/`LEDGER`;`INVARIANTS` 只在新设备证据下改。
-5. 守则:**HMX = 1 单元绝不 thread**(多 worker→SSR;先读 skill `htp-hardware-scheduling`);基线 `GDNSolveHVX` 只测不改;公平 harness(同线程/同 scale)前不下快慢结论;`pkill -9 gdnbm` between runs。
+**基线分支 = `pure-hmx-opt`**(本 loop 的"主分支",= 当前态快照;repo 的 `main` 不被 loop 改动)。
+每轮从基线切独立 feature 分支推进,按成败合回 —— "每轮从最新基线切"天然避开 stale-sandbox。
+
+1. **切分支**:`git checkout pure-hmx-opt && git checkout -b loop/<lever>-<seq>`(从最新基线)。读 `STATE`+`NEXT`。
+2. **推进**:在 feature 分支实现 `NEXT`(改代码)。
+3. **验证(wall 环比,同 HVXMixHMX)**:A = 基线 best 构建,B = 新构建;**同热窗 ACAC… 交替**,每腿 `GDNBM_REPS=8` 取 **reps 2–4 median**(rep1 冷 / rep≥5 节流,**绝不取 min**),~6 个配对轮,记 **(B−A)/A 配对差中位**(消热漂)。oc 取 B 绝对值(不漂)。
+4. **判 + 合回**(门 = 环比 wall 配对差 **< 0** 且 `oc` **< 4e-2**;**单点降不算数**,只认配对中位):
+   - **成功** → feature 上更新 `STATE`/`NEXT`/`LEDGER`(结论 = DONE + 环比 Δ%)**+ 保留代码** → `git checkout pure-hmx-opt && git merge --no-ff loop/<lever>-<seq>`(**码 + 文档一起进基线**)→ `git branch -d loop/<lever>-<seq>`。新 best = 下轮基线。
+   - **失败** → feature 上**只把结论写进 `LEDGER`**(该杠杆 → REFUTED/数 + 为何)→ `git checkout pure-hmx-opt && git checkout loop/<lever>-<seq> -- Agent/current/pure_hmx_solve_build.md`(**只取文档,丢代码**)→ `git commit` → `git branch -D loop/<lever>-<seq>`。**码不进基线**。
+5. 基线 `pure-hmx-opt` 始终 = 最优码 + 全部结论(成功档 + 失败教训)。回 1。
+6. 守则:**HMX = 1 单元绝不 thread**(SSR;先读 skill `htp-hardware-scheduling`);基线 `GDNSolveHVX` 只测不改;不过先查实现不臆测(热循环 / 寄存器溢出 / 次优 intrinsic);`pkill -9 gdnbm` between runs;`INVARIANTS` 只在新设备证据下改。
 
 ## LEVER LEDGER
 

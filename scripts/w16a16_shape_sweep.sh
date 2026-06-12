@@ -14,6 +14,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 source scripts/env.sh >/dev/null 2>&1 || true
+source "$ROOT/scripts/dssh.sh"
 EX="$ROOT/example/qnn_hmx_matmul_w16a16"
 PROF="$ROOT/example/qnn_matmul_profile"
 CHAIN_DIR="$EX/standard_flow/custom_w16a16"

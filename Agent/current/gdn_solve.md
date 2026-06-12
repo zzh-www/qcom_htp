@@ -35,11 +35,11 @@ GDN/KDA linear-attention 在 v75 HTP 上的核心难点 = 每 head 对 C×C 下�
 
 ## 1. 三种路线（命名权威，全仓库统一）
 
-| 标准名 | 定义 | 矩阵乘在哪 | 对角块求逆在哪 | 裁决 |
+| 标准名 | 定义 | 矩阵乘在哪 | 对角块求逆在哪 | 现状/角色 |
 |---|---|---|---|---|
-| **GDNSolveHVX** | 纯 HVX | HVX vrmpy(int8)/`gdn_matmul_i16`(int16) | HVX forward-subst | **基线 ~3.97M，只测不改** |
-| **GDNSolveHVXMixHMX** | HVX 喂数 + HMX 算 matmul | **HMX**（u8i8 mxmem） | **HVX forward-subst（并行 4 单元）** | **当前最佳 ~1.78M ✓，优化目标** |
-| **GDNSolveHMX** | 全程 HMX（连对角求逆都 matmul） | HMX | HMX（Taylor+Newton 矩阵乘） | **否决（~3.6× 慢，下§4）** |
+| **GDNSolveHVX** | 纯 HVX | HVX vrmpy(int8)/`gdn_matmul_i16`(int16) | HVX forward-subst | 基线 ~3.97M，只测不改 |
+| **GDNSolveHVXMixHMX** | HVX 喂数 + HMX 算 matmul | **HMX**（u8i8 mxmem） | **HVX forward-subst（并行 4 单元）** | 当前出货 ~1.78M |
+| **GDNSolveHMX** | 全程 HMX（连对角求逆都 matmul） | HMX | HMX（Taylor+Newton 矩阵乘） | 全 HMX matmul 路线；极致设计与极限 = `pure_hmx_solve_build.md` §6 |
 
 代码标识符不变：`gdn_merge_hvx`(`GDN_BR_HVX_MERGE`)、`gdn_merge_packed`、`our_v73deep_kernel` 等。
 
@@ -99,6 +99,9 @@ dssh "cd $W && GDNBM_REPS=8 LD_LIBRARY_PATH=$W:/vendor/lib64:/system/lib64 \
 | **w16a16 = 2× w8a16** | — | **~626 只是 MAC 折算;真实单 64³ 调用 ~10.4K(固定开销主导,设备实测 2026-06-11,下节)** |
 
 > **HMX matmul 只占 HVXMixHMX wall 的 7%**：512 个 merge matmul 真实 mxmem = 160K / 1.78M。每 matmul 握手 glue ≈ 2950 cyc = **9.4× 浪费**。**瓶颈是 glue，不是 matmul。**
+>
+> **（2026-06-13 复核 → 修正，权威 = `int16_matmul_cycle_model.md`）** 口径厘清:**纯 kernel 时间(latency=dominant-path) native int16 64³ = 256,u8i8 = 176,只 1.45×**——不是 6×。本节下文的 "1167/6×" 是 `HmxU16I16ToU16MatMul`(2×w8a16 软件分解)按 **HMX-busy 吞吐** 测的,不是 native 单 convhhh 的 latency(4 个 byte-pass 流水,latency≪throughput)。
+> **裁决修正:int16-HMX 求逆"不重开"是 KILL 早了**——那 roofline 用了吞吐口径(6×/1365)。inverse 是 **producer-bound(HMX 仅 7% busy,大半空闲)→ merge 该用 latency 口径**;512 merge u8i8(176)→int16(256) 只给 HMX 关键路加 ~41K。决定成本是 **producer 的 weight-pack**:ledger #13/#18 实测 = **8.4%(~150K),在 wall 临界路(kmajor vshuff,非 SMT 隐藏,HW 不可约)**;int16 权重 2 字节 → pack ~翻倍 → **+~150K**(diag forward-subst 是 SMT 隐藏,不涨 wall)。**修正 roofline ≈ 1.78M + 150K + 41K ≈ ~1.97M(+11%),oc 1.16e-3** —— 不是 2.32M(KILL 用了吞吐,错),也不是免费的 1.78M。**这是 precision-Pareto 点,且优于现有 BP4 精度档(2.71M/4.90e-3)双指标**。手写 `GDN_BR_W16`=4.31M 之所以更差,是手写 int16 **没流水**(HMX-busy→92% 吞吐 bound),非核慢(同一 byte-identical convhhh,native 跑 256)。**待 S1**:手写 int16 流水到 native 的 256 latency + 实测 pack delta。下文"1167 地板→两端都输"按吞吐口径成立,但**对 producer-bound 的 merge 不适用**,见 cycle 模型 Decision 段。
 
 ### merge mm 换 w16a16（GDN_BR_W16，2026-06-11）— 精度 12× 兑现，速度否决
 
@@ -144,33 +147,31 @@ dssh "cd $W && GDNBM_REPS=8 LD_LIBRARY_PATH=$W:/vendor/lib64:/system/lib64 \
 ### HVX vrmpy matmul ∝ N³（`scripts/gdn_mm_chunk_sweep.py`，sim）
 BL=32→1068, 64→7311, 128→52239, 256→402447。HMX 随 size 暴跌（setup 摊销）→ **HMX 比 HVX 便宜 17.5×(64³) → 32×(256³)**；HMX 最小块=64（M_t 必偶,32 要 pad）。
 
-### 纯 HMX vs HVXMixHMX（只看速度，2026-06-09 QNN 原生 optrace + 2026-06-10 设备实测）
-对角 Newton 迭代会放大误差 → **纯 HMX 路对角必须 w16a16 精度**（u8i8 不够）。
-> **独立第二否决（数值）**：对角块 `A_ii` 是严格下三角 nilpotent（`A^64=0`），Neumann 级数 `I+A+…+A^63` 虽有限精确，但 `A∈[-1,1]` 下 `‖A‖₂` 中位 2.36 / p90 8.14 / max 31（`gdn_solve_taylor_newton_probe.py`），中间幂 `A^k` 爆掉 int16（实测 peak 1.9e13，仅 81% 收敛）。**forward-subst（HVX 路）从不形成 `A^k`，所以 HVX 对角不只是省时间，是数值上的必需。**
+### 纯 HMX 路线的算力地板与数值约束（极致设计与极限 = `pure_hmx_solve_build.md` §6）
 
-**权威数 = QNN 原生 256³ matmul 的 HMX-compute cycle**（`example/qnn_matmul_profile/output_*_*_256/optrace/summary.json`，`by_htp_type_cycles`）：
+纯 HMX 把对角块求逆也做成 matmul（Taylor+Newton），全程 **60 matmul/head**（44 对角 + 16 merge）。
+本节只钉**算力地板 + 数值约束**这两个不变量;完整的极致设计（4 杠杆 + roofline 阶梯 + 落地路径）在 `pure_hmx_solve_build.md` §6。
 
-| family | 原生 256³ HMX 算力 | per-64³(MAC 折算 ÷64) | vs u8i8 |
-|---|---|---|---|
-| u8i8（`ConvLayer_s1.opt`） | 12,435 | 194 | 1× |
-| w8a16（`ConvLayer_s1.opt`） | 30,182 | 472 | 2.4× |
-| **w16a16（`HmxU16I16ToU16MatMul`）** | **74,670** | **1167** | **6.0×** |
+**HMX 算力地板（QNN 原生 256³ matmul `by_htp_type_cycles`，`example/qnn_matmul_profile/output_*_*_256/optrace/summary.json`）：**
 
-w16a16 ≈ 2.5× w8a16（74670 ≈ 2×30182 + drain 开销），证实"w16a16 = 2×w8a16 + 排空"原理；**原生最优 per-64³ = 1167**（= 像原生那样把 64 个子块摊进一个大 op 的理论地板）。
+| family | 原生 256³ HMX 算力 | per-64³(÷64) |
+|---|---|---|
+| u8i8（`ConvLayer_s1.opt`） | 12,435 | **194** |
+| w8a16（`ConvLayer_s1.opt`） | 30,182 | **472** |
+| w16a16（`HmxU16I16ToU16MatMul`） | 74,670 | **1167** |
 
-纯 HMX C=256 = **60 matmul/head**（44 对角 Newton + 16 merge），门槛 = `1.78M/(60×32) = 927 cyc/matmul`：
+w16a16 ≈ 2×w8a16 + drain（证实"w16a16 = 2×w8a16 + 排空"）。**全 int16×int16 的 HMX-busy 地板 = 1167/64³**；
+非迭代的 merge 可降 w8a16/u8i8（§6 杠杆 3）。1167 是**像原生那样把子块摊进大 op**的吞吐地板（不是单调用 latency——
+那是 256，见 `int16_matmul_cycle_model.md`）。
 
-| 纯 HMX w16a16 per-64³ | 来源 | 总 = 60×_×32 | vs HVXMixHMX 1.78M |
-|---|---|---|---|
-| **1167**（HMX-compute-only 理论地板） | QNN 原生 256³ optrace `by_htp_type_cycles`（HMX 单元忙周期，act-stream/drain 被 supertiling 叠到别的单元） | **2.24M** | **输 1.26×** |
-| **5844**（单线程真实 wall，最佳摊销） | **我们刚提交的 w16a16 kernel，真设备 256³（64 个 64³-MAC 摊一个大 op）实测 374024 PCYCLE，8 reps 374–376K 极稳，`run_w16a16_standalone_device.py --time-reps 8`** | **11.2M** | **输 6.3×** |
+**数值约束（对角 dtype 的根因 = §6 杠杆 4 要攻的）：**
+对角块 `A_ii` 严格下三角 nilpotent（`A^64=0`），Neumann `I+A+…+A^63` 有限精确；但 `A∈[-1,1]` 下 `‖A‖₂`
+中位 2.36 / p90 8.14 / max 31（`gdn_solve_taylor_newton_probe.py`），中间幂 `A^k` **瞬态**爆掉 int16
+（peak 1.9e13）→ **未预条件时对角必须 w16a16**。注意这是**非正规瞬态**（谱 ρ=0，不是真发散）：对角均衡
+`D⁻¹AD`（D=diag(sⁱ)）把 ‖Ã‖<1 即可令 `Ã^k` 有界 → 换 u8i8/w8a16 对角。这是 §6 杠杆 4 的数值前提，待 probe 验。
 
-> 5844 vs 1167 的 5× 差 = **wall 含 convhhh kernel 内部的 HVX act-stream + 2-pass byte-decompose + cvt-drain，全部串在调用线程上**。这部分**无法甩给 4 个生产者**——w16a16 是单次 fused kernel call（≠ 可拆的 HVX/HMX 双 op）。要拆得重写 kernel 成「HVX 喂 + HMX 算」两 op，且**即便完美重叠也只能逼近 1167 地板 → 仍 2.24M > 1.78M**。
-
-**裁定：两端都输（设备实测确认，非投影）。** 连 QNN 原生 supertiling 的最高 HMX 效率（1167/64³）都已超门槛（927）；我们能真在设备上跑的最佳摊销形态（256³ 大 op）= 5844/64³，输 6.3×。
-- 瓶颈 = **HMX 算力本身**，不是胶水。HVXMixHMX 是 **HVX-bound**：HMX 只扛 12 个便宜 u8i8 merge（占 wall 7%），对角甩给 **4 路并行 HVX forward-subst**。纯 HMX 把对角搬到**唯一串行 HMX** 做 w16a16（每个贵 6×、数量 5×）。
-- 「4×HVX ∥ HMX、胶水被 HMX 掩盖」**能满足但无关**——光 HMX 算力地板(2.24M)就已超过整个 HVXMixHMX wall(1.78M)。
-- 唯一能让纯 HMX 翻盘的是 u8i8（60×194×32≈0.37M），但 u8i8 精度撑不住迭代对角——不可调和的取舍。
+**当前实测**：GDNSolveHMX 18.7M（real device）。据 head/块独立性分析这是**欠流水**（per-mm glue + feed 串 consumer，
+HVX 58% 闲），非地板；全 w16a16 的 HMX-busy 地板 ~2.24M，混精 + 对角预条件可更低 —— 极限阶梯见 §6。
 
 ---
 

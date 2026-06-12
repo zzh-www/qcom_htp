@@ -7,6 +7,7 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 source "$ROOT_DIR/scripts/env.sh" >/dev/null
 source "$ROOT_DIR/scripts/qairt_quant_flow.sh"
 source "$ROOT_DIR/.venv/bin/activate"
+source "$ROOT_DIR/scripts/dssh.sh"
 export PYTHONPATH=$QNN_SDK_ROOT/lib/python
 export PATH=$ANDROID_NDK_ROOT:$PATH
 export LD_LIBRARY_PATH=$QNN_SDK_ROOT/lib/x86_64-linux-clang:${LD_LIBRARY_PATH:-}

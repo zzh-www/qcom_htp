@@ -15,6 +15,8 @@ source "$ROOT_DIR/scripts/env.sh" >/dev/null
 source "$ROOT_DIR/scripts/qairt_quant_flow.sh"
 # shellcheck disable=SC1091
 source "$ROOT_DIR/.venv/bin/activate"
+# shellcheck disable=SC1091
+source "$ROOT_DIR/scripts/dssh.sh"
 
 export PYTHONPATH="$QNN_SDK_ROOT/lib/python"
 export PATH="$ANDROID_NDK_ROOT:$PATH"

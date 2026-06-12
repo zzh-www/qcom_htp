@@ -11,6 +11,7 @@ source "$ROOT_DIR/scripts/env.sh" >/dev/null 2>&1
 export PATH="$QNN_SDK_ROOT/bin/x86_64-linux-clang:$PATH"
 export PYTHONPATH="$QNN_SDK_ROOT/lib/python${PYTHONPATH:+:$PYTHONPATH}"
 export LD_LIBRARY_PATH="$QNN_SDK_ROOT/lib/x86_64-linux-clang${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+source "$ROOT_DIR/scripts/dssh.sh"
 PY="$ROOT_DIR/.venv/bin/python"
 T=/Add_32_output_0; W=/MatMul_71_output_0       # W lives transposed as Wᵀ=/MatMul_71
 

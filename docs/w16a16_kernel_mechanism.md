@@ -107,12 +107,17 @@ prologue（`0x2fa740`–`0x2fa800`）读全部 descriptor、算循环次数
 
 **关键结论（反编译证实）**：这 390 **不是**可消的"多 drain 浪费"——
 QNN 内核**已经是单累加器 + 单 drain 最优解**（§2–3）。所谓 "把 1167 压到 777" 的前提
-（消掉多余 drain）**在硅片上不存在**：HMX 做 int16×int16 只有 `dilate`+`2x2`+`cvt.uh` 这一条通路，
-1167/64³ 就是它的真实地板。**777 是个朴素 byte-count 伪地板，硬件做不到。**
+（消掉多余 drain）**在硅片上不存在**：HMX 做 int16×int16 只有 `dilate`+`2x2`+`cvt.uh` 这一条通路。
 
-> 推论（GDN 纯-HMX 求逆裁定）：纯 HMX w16a16 对角 matmul 的 per-64³ 卡死在 1167，
-> 即便 merge 走 u8i8，32-head 总量 ≈ 1.74M ≈ **打平** HVXMixHMX(1.78M)，无净胜空间。
-> 详见 `Agent/current/gdn_solve.md` §4。
+> ⚠️ **口径修正（2026-06-13，权威 `Agent/current/int16_matmul_cycle_model.md`）**：这里的 **1167 是 `by_htp_type`
+> 吞吐口径（HMX-busy 总周期 / 64）**，反映 4 byte-pass 的总 MAC 工作量。但 native 单 `q::ConvLayer_s1.opt`
+> 的 **latency（dominant-path）只有 256/64³（u8i8 176，仅 1.45×）**——4 个 byte-pass **流水**,关键路 ≪ 吞吐。
+> 两个都对、口径不同:**算力占满(throughput-bound)时用 1167;关键路/低占用(latency-bound)时用 256。**
+> 所以"1167 是真实地板"只在 throughput 口径成立;**777 朴素 byte-count 仍是伪地板**,但真正的 latency 地板是 256。
+
+> 推论修正（GDN 求逆）：旧推论"纯 HMX w16a16 对角卡在 1167 → 打平无净胜"**用了吞吐口径**。GDN 求逆
+> **HMX 仅 7% 占用(producer-bound)→ merge 该按 latency 1.45× 算,不是吞吐 6×**。详见 `gdn_solve.md` §4 顶部
+> 2026-06-13 修正脚注 + `int16_matmul_cycle_model.md` Decision 段:**int16 merge 求逆未否决,待 S1 测 producer pack delta。**
 
 ---
 

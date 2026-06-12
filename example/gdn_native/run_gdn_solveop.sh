@@ -20,6 +20,7 @@ source "$ROOT_DIR/scripts/env.sh" >/dev/null 2>&1
 export PATH="$QNN_SDK_ROOT/bin/x86_64-linux-clang:$PATH"
 export PYTHONPATH="$QNN_SDK_ROOT/lib/python${PYTHONPATH:+:$PYTHONPATH}"
 export LD_LIBRARY_PATH="$QNN_SDK_ROOT/lib/x86_64-linux-clang${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+source "$ROOT_DIR/scripts/dssh.sh"
 PY="$ROOT_DIR/.venv/bin/python"; K="$ROOT_DIR/scripts/gdn_onnx_kernel.py"
 mkdir -p "$WORK"; cd "$WORK"
 export GDN_NO_VSCALE=1

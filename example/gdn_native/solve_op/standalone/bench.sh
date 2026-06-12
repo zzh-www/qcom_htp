@@ -11,6 +11,7 @@ OPDIR="$(cd .. && pwd)"
 PKG="GdnSolvePackage"; PROV="${PKG}InterfaceProvider"
 ARCH="${ARCH:-v75}"; DEVICE="${DEVICE:-oneplus}"
 source "$ROOT_DIR/scripts/env.sh" >/dev/null 2>&1
+source "$ROOT_DIR/scripts/dssh.sh"
 export PATH="$QNN_SDK_ROOT/bin/x86_64-linux-clang:$PATH"
 export LD_LIBRARY_PATH="$QNN_SDK_ROOT/lib/x86_64-linux-clang${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 PY="$ROOT_DIR/.venv/bin/python"

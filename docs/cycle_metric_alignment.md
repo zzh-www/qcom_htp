@@ -59,6 +59,29 @@ Decoded from `out_s/optrace/chrometrace_qnn_htp_analysis_summary.json` (QHAS) an
   **1422 cyc/µs ≈ 1.42 GHz** (v75 TURBO). NOTE the `chrometrace_runtrace.json` phase counters use a
   *different* (higher, ~1.78 GHz) reference — do not mix them with QHAS/PCYCLE.
 
+### Per-op: latency (dominant-path) vs throughput (busy) — the trap that flipped an int16 verdict
+
+One op has **two** legitimate cycle numbers; they answer different questions and can differ several-fold:
+
+- **`htp_op_instances[].num_dominant_path_cycles`** = the op's **latency** = critical-path PCYCLEs for that op
+  instance (data resident). This is "how long this op takes." Use it for **dependency chains** and when the
+  unit is **idle-mostly** (the op's latency, not its occupancy, sets the wall).
+- **`by_htp_type` cycle sum / per-unit `cycles_used`** = **throughput / occupancy** = total cycles the unit is
+  busy across the op's internal work. Use it only when the unit is **saturated** (back-to-back, the bottleneck).
+
+They diverge when an op **pipelines internal passes**. Device example (native int16 64³ MatMul vs u8i8):
+
+| | u8i8 | int16 (4 byte-pass) | ratio |
+|---|---|---|---|
+| latency (dominant-path) | 176 | **256** | **1.45×** |
+| throughput (HMX-busy / by_htp_type) | ~194 | ~1167 | **6.0×** |
+
+The 4 int16 byte-passes pipeline, so latency (256) ≪ throughput (1167). **Picking the wrong one flips verdicts:**
+reading the **6× throughput** as "the int16 kernel cost" wrongly killed the int16 GDN-inverse merge; the inverse
+is producer-bound (HMX ~7% busy = idle-mostly), so the merge's relevant cost is its **1.45× latency**, not its
+throughput. **Rule: pick latency vs throughput by whether that unit is the saturated bottleneck.** Full worked
+case: `Agent/current/int16_matmul_cycle_model.md`.
+
 ### Bare-metal solve — `C15:14`
 
 `gdnbm_solve` (`example/gdn_native/baremetal/src/gdnbm_imp.cpp`) reads `pcyc()` = `C15:14` (PCYCLE)

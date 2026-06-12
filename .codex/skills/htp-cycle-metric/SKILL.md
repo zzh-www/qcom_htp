@@ -1,6 +1,6 @@
 ---
 name: htp-cycle-metric
-description: Measure HTP op cycles so the number is IDENTICAL in unit to QNN optrace — for comparing a hand-written/bare-metal Hexagon op against a QNN op (or against the shipped GdnSolve). Use whenever you need an apples-to-apples cycle comparison, a "my op vs QNN is Nx" claim, or you read a cyc/head number and aren't sure it's wall vs aggregate vs domain. Pins the proven fact (QNN QHAS per-op `cycles` == the C15:14 PCYCLE register, no conversion), the per-head metric definitions QHAS uses, and the three traps that produce ~2× wrong numbers (tiler tile-count, counter mixing, mean-tile/head). Full manual: docs/cycle_metric_alignment.md.
+description: The single home for how to COUNT and REPORT HTP cycles so a number is unambiguous and IDENTICAL in unit to QNN optrace — for comparing a hand-written/bare-metal Hexagon op against a QNN op (or the shipped GdnSolve), or any time you read/report a cyc number and aren't sure it's latency vs throughput vs wall vs aggregate vs domain. Use whenever you make a cycle/perf claim, an "my op vs QNN is Nx" comparison, or need the right way to report a kernel/op/graph cycle figure. Pins: QNN QHAS per-op `cycles` == the C15:14 PCYCLE register (no conversion); the four口径 (op latency = `num_dominant_path_cycles` / unit throughput = busy / per-call feed-inclusive / graph wall) and which to pick (by whether the unit is the saturated bottleneck); the value+口径+context report template; a "一看就懂" timeline; and the four traps that produce 2–6× wrong numbers (tiler tile-count, counter mixing, mean-tile/head, per-op latency-vs-throughput). Full manual: docs/cycle_metric_alignment.md.
 ---
 
 # HTP Cycle Metric (optrace-consistent)
@@ -30,7 +30,43 @@ For a bare-metal op: read `C15:14` (`pcyc()`) around the whole spawn→join; `(t
 H-sweep linear fit) for the compute-only figure. To get an op-internal total directly, use the
 `-DGDN_BR_PROBE_TOTAL` pattern (read `C15:14` inside the op, write it to output head 0).
 
-## Three traps that give ~2× wrong numbers (do NOT)
+## Which number? The four口径 — ALWAYS say which (+ report template)
+
+A cycle figure is meaningless without its口径. Two axes: KIND (latency vs throughput) × GRANULARITY (op / call / graph).
+
+| 口径 | read from | answers | use when |
+|---|---|---|---|
+| **op latency** | `num_dominant_path_cycles` | one op's critical-path time (data resident) | dependency chain / unit **idle-mostly** |
+| **unit throughput (busy)** | `by_htp_type` Σ, or `max(htp_resources.cycles_used)`=DOMAIN | how long the unit is **occupied** | that unit is the **saturated bottleneck** |
+| **per-call feed-inclusive** | single-call wall (kernel + load/format) | implementation quality | comparing impls; **= op latency only if feed hidden** |
+| **graph wall (/head)** | `(max end_cycle − min start_cycle)/H` | end-to-end latency | the **final verdict** |
+
+**Pick latency vs throughput by whether that unit is the saturated bottleneck.** Device gotcha: native int16 64³
+= **256 latency vs 1167 throughput (6×)** — the 4 byte-passes pipeline, so latency ≪ throughput. (This trap once
+flipped a GDN verdict — see trap #4.)
+
+**Report template = value + 口径 + context:**
+- ✅ `int16 64³ kernel latency = 256 PCYCLE (dominant-path, data resident)`
+- ✅ `compute-busy/head = 146,963 (max HVX cycles_used / H)`  ·  `wall/head = 190,356`
+- ❌ `int16 matmul = 10.4K` (no口径)  ·  ❌ `int16 = 6× u8i8` (that's throughput; irrelevant to an idle unit)
+
+## Timeline (口径 一看就懂)
+
+`■`=compute(kernel)　`▓`=feed/load (or producer)　time → (schematic, not to scale; numbers are the truth)
+```
+A. 同一个核, 数据在不在 VTCM 决定你看到哪个数:
+     数据已就位:  ■264■                            = op latency (纯 kernel)
+     还得先搬:    ▓▓ feed ~8K ▓▓ ■264■             = per-call feed-inclusive (核仅占 3%)
+B. feed 藏不藏住 = matmul 之间有没有依赖:
+     可批量/独立:  HVX ▓pack▓▓pack▓▓pack▓          ← 提前喂, 并行
+                  HMX ■176■■176■■176■  → 连跑 ≈ latency+握手 (≈313/eq)
+     依赖链:       ▓feed 8K▓■264■▓feed 8K▓■264■ … → 串行 = feed-inclusive (8.6K/eq)
+C. 同一个核, latency vs throughput (int16 4 byte-pass 流水):
+     ■■p1■■  ■■p2■■  ■■p3■■  ■■p4■■  (重叠)
+     └ 关键路 latency 256 = 1.45× u8i8 ┘   总 MAC 吞吐(HMX-busy) ≈ 1167 = 6×  ← 别拿吞吐当核成本
+```
+
+## Four traps that give 2–6× wrong numbers (do NOT)
 
 1. **mean-tile / heads.** The old shipped "70–83K cyc/head" was `mean(tile cycles)/8` — WRONG. The central
    tiler splits H=32 into **24 tile-instances** (not 4), ~6 run serially per HVX thread. Dividing one
@@ -41,6 +77,13 @@ H-sweep linear fit) for the compute-only figure. To get an op-internal total dir
 3. **sum vs max of per-thread `cycles_used`.** `sum` = work volume (Σ over threads); the real compute time
    is `max` (threads run in parallel). Use max for domain cycles. (`sum(htp_op_instances[].cycles)` is
    likewise work volume, not wall.)
+4. **latency vs throughput per op (can be ~6× wrong).** One op has TWO numbers:
+   `num_dominant_path_cycles` = **latency** (critical path, data resident) vs `by_htp_type`/`cycles_used` =
+   **throughput / busy** (occupancy). They diverge when internal passes pipeline — device: native int16 64³
+   = **256 latency but ~1167 throughput (6×)**. Pick by whether the unit is the **saturated bottleneck**:
+   idle-mostly / dependency-chain → latency; back-to-back / bottleneck → throughput. Reading throughput as
+   "the kernel cost" once wrongly killed the int16 GDN-inverse merge (it's producer-bound, HMX idle-mostly →
+   latency 1.45×, not throughput 6×). Full case: `Agent/current/int16_matmul_cycle_model.md`.
 
 ## Recipe for "my op vs QNN op" (apples-to-apples)
 

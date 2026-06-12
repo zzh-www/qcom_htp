@@ -18,6 +18,8 @@ ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 source "$ROOT_DIR/scripts/env.sh" >/dev/null
 # shellcheck disable=SC1091
 source "$ROOT_DIR/scripts/qairt_quant_flow.sh"
+# shellcheck disable=SC1091
+source "$ROOT_DIR/scripts/dssh.sh"
 
 DEVICE="${DEVICE:-oneplus}"
 CONNECT="${CONNECT:-ssh}"

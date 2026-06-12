@@ -24,6 +24,7 @@ source "$ROOT_DIR/scripts/env.sh" >/dev/null 2>&1
 export PATH="$QNN_SDK_ROOT/bin/x86_64-linux-clang:$PATH"
 export PYTHONPATH="$QNN_SDK_ROOT/lib/python${PYTHONPATH:+:$PYTHONPATH}"
 export LD_LIBRARY_PATH="$QNN_SDK_ROOT/lib/x86_64-linux-clang${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+source "$ROOT_DIR/scripts/dssh.sh"
 PY="$ROOT_DIR/.venv/bin/python"
 INPUTS=(qc kc vc gc betac S_in)
 OUTPUTS=(oc S_out)

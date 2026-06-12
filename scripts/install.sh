@@ -20,11 +20,11 @@ mkdir -p "$TOOLS_DIR" "$DOWNLOADS_DIR"
 # ============================================================
 # Versions and URLs
 # ============================================================
-HEXAGON_VERSION="6.5.0.0"
-HEXAGON_ZIP="Hexagon_SDK_Linux.zip"
-HEXAGON_URL="https://apigwx-aws.qualcomm.com/qsc/public/v1/api/download/software/sdks/Hexagon_SDK/Linux/Debian/${HEXAGON_VERSION}/${HEXAGON_ZIP}"
+HEXAGON_VERSION="6.6.0.0"
+HEXAGON_ZIP="Hexagon_SDK_Linux_${HEXAGON_VERSION}.zip"
+HEXAGON_URL="https://apigwx-aws.qualcomm.com/qsc/public/v1/api/download/software/sdks/Hexagon_SDK/Linux/Debian/${HEXAGON_VERSION}/Hexagon_SDK_Linux.zip"
 
-QNN_VERSION="2.45.0.260326"
+QNN_VERSION="2.46.0.260424"
 QNN_ZIP="v${QNN_VERSION}.zip"
 QNN_URL="https://apigwx-aws.qualcomm.com/qsc/public/v1/api/download/software/sdks/Qualcomm_AI_Runtime_Community/All/${QNN_VERSION}/${QNN_ZIP}"
 

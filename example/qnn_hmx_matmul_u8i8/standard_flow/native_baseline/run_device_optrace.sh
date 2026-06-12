@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 DEVICE="${DEVICE:-oneplus}"
 DEV_DIR="~/qnn_run/phaseA"
+source "$ROOT_DIR/scripts/dssh.sh"
 
 ssh "$DEVICE" "mkdir -p $DEV_DIR $DEV_DIR/runtime_inputs_u8"
 

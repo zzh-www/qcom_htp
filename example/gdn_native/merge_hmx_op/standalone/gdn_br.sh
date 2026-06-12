@@ -12,6 +12,7 @@ cd "$(dirname "$0")"
 ROOT="$(cd ../../../.. && pwd)"; OPDIR="$(cd .. && pwd)"
 PKG="GdnSolveBRPackage"; PROV="${PKG}InterfaceProvider"; ARCH=v75; DEVICE="${DEVICE:-oneplus}"
 source "$ROOT/scripts/env.sh" >/dev/null 2>&1
+source "$ROOT/scripts/dssh.sh"
 export PATH="$QNN_SDK_ROOT/bin/x86_64-linux-clang:$PATH"
 export PYTHONPATH="$QNN_SDK_ROOT/lib/python${PYTHONPATH:+:$PYTHONPATH}"
 export LD_LIBRARY_PATH="$QNN_SDK_ROOT/lib/x86_64-linux-clang${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"

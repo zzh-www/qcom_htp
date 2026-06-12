@@ -16,39 +16,43 @@ ROOT = Path(__file__).resolve().parents[1]
 VERIFY = ROOT / ".codex" / "skills" / "hmx-inline-asm" / "scripts" / "verify_hexagon_inline_asm.py"
 DEFAULT_SO = "tools/qnn-sdk/lib/hexagon-v75/unsigned/libQnnHtpV75Skel.so"
 DEFAULT_CLANG = "tools/hexagon-sdk/tools/HEXAGON_Tools/19.0.07/Tools/bin/clang-19"
+DEFAULT_NM = "tools/hexagon-sdk/tools/HEXAGON_Tools/19.0.07/Tools/bin/hexagon-nm"
 
+# native_vma is resolved at runtime from native_symbol via hexagon-nm against the
+# actual skel .so (see resolve_vma), so it survives SDK relocations. The literal
+# values below are a fallback only and track the current SDK (QNN 2.46.0.260424).
 BODY_MANIFEST = {
     "u8i8": {
         "native_symbol": "hmx_v73_convbbb1x1deep_stride1",
-        "native_vma": "0x2ebe40",
+        "native_vma": "0x2ef3c0",
         "native_size": 1132,
         "inc": "example/handwritten_hmx_matmul/kernels/u8i8/v73deep_conv1x1_kernel.inc",
         "abi_header": "example/handwritten_hmx_matmul/include/handwritten_hmx_u8i8_kernel.h",
     },
     "w4a8": {
         "native_symbol": "hmx_v73_convbnb1x1_stride1",
-        "native_vma": "0x2f0780",
+        "native_vma": "0x2f3d00",
         "native_size": 2624,
         "inc": "example/handwritten_hmx_matmul/kernels/w4a8/v73deep_conv1x1_kernel.inc",
         "abi_header": "example/handwritten_hmx_matmul/include/handwritten_hmx_w4a8_kernel.h",
     },
     "w4a16": {
         "native_symbol": "hmx_v73_convhnh1x1deep_stride1",
-        "native_vma": "0x2fdb80",
+        "native_vma": "0x301100",
         "native_size": 804,
         "inc": "example/handwritten_hmx_matmul/kernels/w4a16/v73deep_conv1x1_kernel.inc",
         "abi_header": "example/handwritten_hmx_matmul/include/handwritten_hmx_w4a16_kernel.h",
     },
     "w8a16": {
         "native_symbol": "hmx_v75_convhbh1x1deep_stride1",
-        "native_vma": "0x2f5200",
+        "native_vma": "0x2f8780",
         "native_size": 1348,
         "inc": "example/handwritten_hmx_matmul/kernels/w8a16/v73deep_conv1x1_kernel.inc",
         "abi_header": "example/handwritten_hmx_matmul/include/handwritten_hmx_w8a16_kernel.h",
     },
     "w16a16": {
         "native_symbol": "hmx_v73_convhhh1x1_stride1",
-        "native_vma": "0x2fa740",
+        "native_vma": "0x2fdcc0",
         "native_size": 1800,
         "inc": "example/handwritten_hmx_matmul/kernels/w16a16/v73deep_conv1x1_kernel.inc",
         "abi_header": "example/handwritten_hmx_matmul/include/handwritten_hmx_w16a16_kernel.h",
@@ -118,8 +122,37 @@ def run_header_compile(family: str, clang: str) -> dict:
     }
 
 
-def run_verify(family: str, so: str) -> dict:
+def resolve_vma(symbol: str, so: str, nm: str, fallback: str) -> str:
+    """Resolve a symbol's VMA from the skel .so via hexagon-nm.
+
+    Keeps the gate correct across SDK relocations (the skel grows and shifts
+    every release, so a hardcoded offset rots). Falls back to the manifest
+    value if nm is unavailable or the symbol is not found.
+    """
+    nm_bin = tool_path(nm)
+    if not (Path(nm_bin).exists() or shutil.which(nm_bin)):
+        return fallback
+    try:
+        out = subprocess.run(
+            [nm_bin, "-D", "--defined-only", so],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        ).stdout
+    except OSError:
+        return fallback
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) >= 3 and parts[2] == symbol:
+            return "0x" + parts[0].lstrip("0").rjust(1, "0")
+    return fallback
+
+
+def run_verify(family: str, so: str, nm: str) -> dict:
     record = BODY_MANIFEST[family]
+    vma = resolve_vma(record["native_symbol"], so, nm, record["native_vma"])
     command = [
         sys.executable,
         str(VERIFY),
@@ -128,7 +161,7 @@ def run_verify(family: str, so: str) -> dict:
         "--so",
         so,
         "--vma",
-        record["native_vma"],
+        vma,
         "--size",
         str(record["native_size"]),
     ]
@@ -143,7 +176,7 @@ def run_verify(family: str, so: str) -> dict:
     return {
         "family": family,
         "native_symbol": record["native_symbol"],
-        "native_vma": record["native_vma"],
+        "native_vma": vma,
         "native_size": record["native_size"],
         "inc": record["inc"],
         "abi_header": record["abi_header"],
@@ -162,6 +195,7 @@ def main() -> int:
     parser.add_argument("--family", choices=sorted(BODY_MANIFEST), action="append")
     parser.add_argument("--so", default=DEFAULT_SO)
     parser.add_argument("--clang", default=DEFAULT_CLANG)
+    parser.add_argument("--nm", default=DEFAULT_NM)
     parser.add_argument("--json-out")
     args = parser.parse_args()
 
@@ -173,7 +207,7 @@ def main() -> int:
 
     results = []
     for family in families:
-        result = run_verify(family, args.so)
+        result = run_verify(family, args.so, args.nm)
         result["header_compile"] = run_header_compile(family, clang)
         results.append(result)
     payload = {
