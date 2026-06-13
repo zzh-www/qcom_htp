@@ -878,6 +878,29 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
         *od = od_save; *ad = ad_save;                                    /* restore padded descriptor for the real solve */
     }
 #endif
+#ifdef GP_OUTMAP
+    {   /* OUTPUT-UNTILE derivation (cron#61): ramp act @ identity weight -> out = ramp (known). dense
+         * descriptor (all inputs == native, confirmed). dump raw m->out to T -> host maps internal
+         * out position -> (r,n) = native's output untile under n_tiles=8. */
+        gp_ctx *c = &g_ctx[0]; c->slot = -1;
+        hmx_conv_out_desc_t *od = (hmx_conv_out_desc_t *)c->mm.od; hmx_conv_act_desc_t *ad=(hmx_conv_act_desc_t*)c->mm.ad;
+        static uint16_t Aramp[4096] __attribute__((aligned(128))); static int16_t Wid[4096] __attribute__((aligned(128)));
+        for (int r=0;r<64;++r) for (int n=0;n<64;++n){ Aramp[r*64+n]=(uint16_t)(r*64+n); Wid[r*64+n]=(r==n)?(int16_t)32767:0; }
+        int hvx = qurt_hvx_lock(QURT_HVX_MODE_128B);
+        uint8_t *act=(uint8_t*)c->mm.act, *out=(uint8_t*)c->mm.out;
+        for(int i=0;i<16;++i){c->mm.atab[i]=(int32_t)(uintptr_t)(act+(size_t)(i&3)*2048);c->mm.otab[i]=(int32_t)(uintptr_t)(out+(size_t)(i&3)*2048);}
+        od->out_table_stride_dwords=2u; od->out_y_stride_words=4u; od->n_tiles_pow2=8u; od->m_total_minus_step=8; od->k_total_bytes=64u;
+        ad->n_act_pairs=2u; ad->act_table_y_stride_words=4u;
+        w16a16_pack_act_crouton16(Aramp,(uint16_t*)c->mm.act,64,64);
+        w16a16_pack_wt_kmajor(Wid,c->mm.wt,64,64); w16a16_pack_bias(Wid,(int32_t*)c->mm.bias,64,64);
+        memset(c->mm.out,0,W16MM_OUT_BYTES); w16a16_mm_run(&c->mm);
+        if (hvx==0) qurt_hvx_unlock();
+        memcpy(T, c->mm.out, W16MM_OUT_BYTES);   /* raw m->out -> T for host analysis */
+        if (hl == 0) HAP_compute_res_hmx_unlock(hctx); if (hctx) HAP_compute_res_release(hctx);
+        if (vctx) HAP_compute_res_release(vctx);
+        return 0;
+    }
+#endif
 #ifdef GP_DIFF
     {   /* IN-SOLVE dense-vs-sparse diff (cron#49): same input A, same aligned ctx buffers. Run the WORKING
          * sparse matmul (mm_init atab, n_tiles=GP_NTILES) and the DENSE matmul (atab i&3, n_tiles=8, perm),

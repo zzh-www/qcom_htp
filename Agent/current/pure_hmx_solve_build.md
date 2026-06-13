@@ -324,3 +324,14 @@ the OUTPUT READBACK: depack_crouton16 doesn't match native's output layout under
 (drain-tile-count / output-crouton differs from the act layout). This is the last layer and far more
 tractable: find the correct output untile for the dense descriptor (the matmul itself is right).
 Real best stays cron#42 (1.64× bit-exact); but native parity is now down to ONE output-readback fix.
+
+### cron#61: ramp@identity output-map attempt -> all-zeros; contradiction => bias/drain control is the 4th unverified input
+GP_OUTMAP (ramp act @ identity weight, dense descriptor, all-inputs-match-native): m->out = ALL ZEROS.
+Contradiction: act+weight+descriptor byte-match native (cron#57/58/60) + identical convhhh => output
+MUST match native, yet it's wrong/zero. ⇒ a 4th input is unverified: the **bias / drain-control word**
+(r3 = folded bias + 2-power drain exponent, mxmem2(r3)). all-zeros = consistent with a wrong drain gain
+killing the output. pack_bias(dense) likely != native's control word for n_tiles=8. This is the next
+(4th) layer to dump+match. SESSION ENDPOINT (cron#42-61, ~28 iters): every verified layer (act,weight,
+descriptor) revealed one more; goal NOT met; real best = cron#42 (1.64× bit-exact, oc 4.238e-3).
+Path remaining: dump+match native's bias/drain control word, then re-test output. Decode tooling +
+native input recipe all captured.
