@@ -90,4 +90,6 @@ dssh_get()  {
 dssh_close() { command ssh -o ControlPath="$DSSH_CM" -O exit "$DSSH_HOST" 2>/dev/null; }
 
 # Convenience: `source scripts/dssh.sh oneplus` sets the host in one line (does not auto-open).
-[ -n "${1:-}" ] && export DSSH_HOST="$1"
+# NB: use an `if` (not `[ ] && ...`) so this last line returns 0 — otherwise sourcing with no arg
+# returns non-zero and trips `set -e` in callers (e.g. the QNN run_*_chain.sh flows).
+if [ -n "${1:-}" ]; then export DSSH_HOST="$1"; fi
