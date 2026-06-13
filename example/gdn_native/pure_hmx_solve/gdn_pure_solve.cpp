@@ -92,7 +92,6 @@ static inline int gp_pack_idx(int r, int c) {
     int m32 = r >> 5, rr = r & 31, row4 = rr >> 2, rp = (rr >> 1) & 1, parity = r & 1, kt = c >> 5, cc = c & 31;
     return ((((row4 * 2 + kt) * 2 + m32) * 2 + rp) * 32 + cc) * 2 + parity;
 }
-#if GP_DENSE_PERM
 static void gp_cv_to_surf_perm(uint16_t *surf, const int16_t *cv, int16_t *stage) {
     const HVX_Vector K = Q6_Vh_vsplat_R(0x8000);
     for (int i = 0; i < 64; ++i) ((HVX_Vector *)stage)[i] = ((const HVX_Vector *)cv)[i];   /* cv -> VTCM */
@@ -113,7 +112,6 @@ static void gp_surf_to_cv_perm(int16_t *cv, const uint16_t *surf, int16_t *stage
         ((HVX_Vector *)cv)[v] = Q6_V_vxor_VV(*g, K);     /* cv[orig] = surf[pack pos] ^ zp */
     }
 }
-#endif
 
 #define GP_NB     4          /* 64-blocks per C=256 head */
 #define GP_BL     64
@@ -496,7 +494,7 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
     g_fl = (uint16_t *)(vbase + (size_t)P * GP_VSTRIDE + 0x4000u);          /* cv->linear (T-pack) */
     gp_hwlut_init();
     for (int i = 0; i < GP_BB; ++i) { g_il[g_lut[i]] = (uint16_t)(2 * i); g_fl[i] = (uint16_t)(2 * g_lut[i]); }
-#if GP_DENSE_PERM
+#if GP_DENSE_PERM || defined(GP_DIFF)
     /* cv<->pack-order perm LUTs (cron#48): g_qa[pack_pos p] = 2*(orig cv idx of the element at p);
      * g_qo[orig cv idx k] = 2*(pack pos of the element at k). Derived from original g_lut + pack idx. */
     g_qa = (uint16_t *)(vbase + (size_t)P * GP_VSTRIDE + 0x6000u);
@@ -878,6 +876,64 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
         FARF(ALWAYS, "GDN_PURE O6b compact-64 test: maxdiff=%d nonzero=%d cyc=%llu (vs padded %d)", maxd, nz, (unsigned long long)ccyc, (int)stats[5]);
         for (int i = 0; i < 128; ++i) { m->atab[i] = a_save[i]; m->otab[i] = o_save[i]; }
         *od = od_save; *ad = ad_save;                                    /* restore padded descriptor for the real solve */
+    }
+#endif
+#ifdef GP_DIFF
+    {   /* IN-SOLVE dense-vs-sparse diff (cron#49): same input A, same aligned ctx buffers. Run the WORKING
+         * sparse matmul (mm_init atab, n_tiles=GP_NTILES) and the DENSE matmul (atab i&3, n_tiles=8, perm),
+         * diff A@A. Bypasses the unreliable micro-bench harness — uses the solve's own aligned buffers. */
+        gp_ctx *c = &g_ctx[0]; c->slot = -1;
+        hmx_conv_out_desc_t *od = (hmx_conv_out_desc_t *)c->mm.od;
+        static int16_t Aq[64*256] __attribute__((aligned(128)));
+        for (int r=0;r<64;++r) for (int k=0;k<64;++k) Aq[r*256+k] = (r>k)?(int16_t)((((r*5+k*7)%41)-20)*300):0;
+        int hvx = qurt_hvx_lock(QURT_HVX_MODE_128B);
+        gp_unpack_blk(c->A[0], Aq, g_il, c->stage);                 /* A_cv (orig order) */
+        /* SPARSE (working): current atab is mm_init sparse, n_tiles=GP_NTILES (32) */
+        gp_cv_to_surf((uint16_t *)c->mm.act, c->A[0]);
+        gp_pack_wt_bias_hvx(c->A[0], c->stage, c->mm.wt, c->mm.bias);
+        memset(c->mm.out,0,W16MM_OUT_BYTES); w16a16_mm_run(&c->mm);
+        gp_surf_to_cv(c->AA, (const uint16_t *)c->mm.out);          /* AA_sparse */
+        /* DENSE: override atab (i&3) + n_tiles=8 + perm */
+        int32_t asv[128], osv[128]; for(int i=0;i<128;++i){asv[i]=c->mm.atab[i];osv[i]=c->mm.otab[i];}
+        uint32_t oy=od->out_y_stride_words, ntq=od->n_tiles_pow2;
+        uint8_t *act=(uint8_t*)c->mm.act,*out=(uint8_t*)c->mm.out;
+        for(int i=0;i<16;++i){c->mm.atab[i]=(int32_t)(uintptr_t)(act+(size_t)(i&3)*2048);c->mm.otab[i]=(int32_t)(uintptr_t)(out+(size_t)(i&3)*2048);}
+        od->out_y_stride_words=64u; od->n_tiles_pow2=8u;
+        gp_cv_to_surf_perm((uint16_t *)c->mm.act, c->A[0], c->stage);
+        gp_pack_wt_bias_hvx(c->A[0], c->stage, c->mm.wt, c->mm.bias);
+        memset(c->mm.out,0,W16MM_OUT_BYTES); w16a16_mm_run(&c->mm);
+        gp_surf_to_cv_perm(c->A3, (const uint16_t *)c->mm.out, c->stage);  /* AA_dense */
+        /* DENSE-DIRECT (D5-style): pack_act_crouton16(A_linear) + pack_wt_kmajor + dense atab + depack.
+         * isolates: if this matches sparse -> perm functions are the bug; if not -> dense matmul itself. */
+        static uint16_t Alin[4096] __attribute__((aligned(128))), Yd2[4096] __attribute__((aligned(128)));
+        static int16_t Wlin[4096] __attribute__((aligned(128)));
+        for (int r=0;r<64;++r) for (int k=0;k<64;++k){ Alin[r*64+k]=(uint16_t)(Aq[r*256+k]+32768); Wlin[r*64+k]=Aq[r*256+k]; }
+        w16a16_pack_act_crouton16(Alin,(uint16_t*)c->mm.act,64,64);
+        w16a16_pack_wt_kmajor(Wlin,c->mm.wt,64,64); w16a16_pack_bias(Wlin,(int32_t*)c->mm.bias,64,64);
+        memset(c->mm.out,0,W16MM_OUT_BYTES); w16a16_mm_run(&c->mm);
+        w16a16_depack_crouton16((const uint16_t*)c->mm.out, Yd2, 64, 64);
+        for(int i=0;i<128;++i){c->mm.atab[i]=asv[i];c->mm.otab[i]=osv[i];} od->out_y_stride_words=oy;od->n_tiles_pow2=ntq;
+        /* CPU A@A for the strictly-lower A (code space) */
+        { int nd2=0; for(int r=0;r<64;++r)for(int k=0;k<64;++k){ long a=0; for(int j=0;j<64;++j) a+=(long)(Aq[r*256+j])*(long)(Aq[j*256+k]); long ref=a/32767, got=(int)Yd2[r*64+k]-32768, dd=ref-got; if(dd<0)dd=-dd; if(dd>20) nd2++; }
+          if(statsLen>14) stats[14]=nd2; }   /* dense-DIRECT mismatch vs CPU (0 => dense matmul fine, perm is bug) */
+        /* diff c->AA (sparse) vs c->A3 (dense), both orig-order cv -> linear */
+        static int16_t Ts[64*256] __attribute__((aligned(128))), Td[64*256] __attribute__((aligned(128)));
+        for(int i=0;i<64*256;++i){Ts[i]=0;Td[i]=0;}
+        gp_pack_blk(Ts, c->AA, g_fl, c->stage); gp_pack_blk(Td, c->A3, g_fl, c->stage);
+        if (hvx==0) qurt_hvx_unlock();
+        int nm=0,mx=0,firstr=-1,firstc=-1;
+        for(int r=0;r<64;++r)for(int k=0;k<64;++k){int d=Ts[r*256+k]-Td[r*256+k]; if(d){ if(firstr<0){firstr=r;firstc=k;} nm++; if(d<0)d=-d; if(d>mx)mx=d;}}
+        FARF(ALWAYS,"GDN_PURE GP_DIFF first mismatch at (r=%d,c=%d) Ts=%d Td=%d", firstr, firstc, firstr<0?0:Ts[firstr*256+firstc], firstr<0?0:Td[firstr*256+firstc]);
+        FARF(ALWAYS,"GDN_PURE GP_DIFF A@A sparse-vs-dense mismatch=%d/4096 maxdiff=%d", nm, mx);
+        FARF(ALWAYS,"GDN_PURE GP_DIFF first row Ts[0..7]=%d %d %d %d %d %d %d %d", Ts[0],Ts[1],Ts[2],Ts[3],Ts[4],Ts[5],Ts[6],Ts[7]);
+        FARF(ALWAYS,"GDN_PURE GP_DIFF first row Td[0..7]=%d %d %d %d %d %d %d %d", Td[0],Td[1],Td[2],Td[3],Td[4],Td[5],Td[6],Td[7]);
+        if(statsLen>5) stats[5]=nm; if(statsLen>15) stats[15]=mx;
+        if(statsLen>6) stats[6]=firstr; if(statsLen>7) stats[7]=firstc;
+        if(statsLen>8) stats[8]=(firstr<0?0:Ts[firstr*256+firstc]); if(statsLen>9) stats[9]=(firstr<0?0:Td[firstr*256+firstc]);
+        if(statsLen>10) stats[10]=Ts[64]; if(statsLen>11) stats[11]=Td[64];  /* row1 col0 (Ts vs Td) */
+        if (hl == 0) HAP_compute_res_hmx_unlock(hctx); if (hctx) HAP_compute_res_release(hctx);
+        if (vctx) HAP_compute_res_release(vctx);
+        return 0;
     }
 #endif
     g_cbusy = 0; g_sat = 0; g_pdone = 0;
