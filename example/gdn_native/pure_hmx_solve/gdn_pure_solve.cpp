@@ -910,16 +910,34 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
         static int16_t Wlin[4096] __attribute__((aligned(128)));
         for (int r=0;r<64;++r) for (int k=0;k<64;++k){ Alin[r*64+k]=(uint16_t)(Aq[r*256+k]+32768); Wlin[r*64+k]=Aq[r*256+k]; }
         static int CPUaa2[4096]; for(int r=0;r<64;++r)for(int k=0;k<64;++k){ long a=0; for(int j=0;j<64;++j) a+=(long)(Aq[r*256+j])*(long)(Aq[j*256+k]); CPUaa2[r*64+k]=(int)(a/32767); }
-        const uint32_t NTS[4]={2u,4u,8u,16u}; int swres[4];
+        /* native FULL descriptor sweep (cron#53): act layout = pack_act_crouton16 (confirmed via act dump);
+         * test native's out_y/m_total/act_y (cron#41: out_y=4,m_total=8,act_y=4) not just n_tiles.
+         * variants: {out_y, n_tiles, m_total, act_y, out_tbl_stride}. */
+        hmx_conv_act_desc_t *ad2=(hmx_conv_act_desc_t*)c->mm.ad;
+        struct { uint32_t oy, nt; int32_t mt; uint32_t ay, ots; } DV[4] = {
+            {4u, 8u, 8, 4u, 2u},     /* native-exact (cron#41) */
+            {4u, 8u, 8, 4u, 4u},     /* out_tbl_stride=4 */
+            {64u,8u, 8, 4u, 2u},     /* our out_y, native m_total/act_y */
+            {4u, 8u, 1, 4u, 2u},     /* native strides, m_total=1 */
+        };
+        int swres[4];
         for (int s=0;s<4;++s){
             for(int i=0;i<16;++i){c->mm.atab[i]=(int32_t)(uintptr_t)(act+(size_t)(i&3)*2048);c->mm.otab[i]=(int32_t)(uintptr_t)(out+(size_t)(i&3)*2048);}
-            od->out_y_stride_words=64u; od->n_tiles_pow2=NTS[s];
+            od->out_y_stride_words=DV[s].oy; od->n_tiles_pow2=DV[s].nt; od->m_total_minus_step=DV[s].mt;
+            od->out_table_stride_dwords=DV[s].ots; od->k_total_bytes=64u;
+            ad2->n_act_pairs=2u; ad2->act_table_y_stride_words=DV[s].ay;
             w16a16_pack_act_crouton16(Alin,(uint16_t*)c->mm.act,64,64);
             w16a16_pack_wt_kmajor(Wlin,c->mm.wt,64,64); w16a16_pack_bias(Wlin,(int32_t*)c->mm.bias,64,64);
             memset(c->mm.out,0,W16MM_OUT_BYTES); w16a16_mm_run(&c->mm);
             w16a16_depack_crouton16((const uint16_t*)c->mm.out, Yd2, 64, 64);
             int nd=0; for(int r=0;r<64;++r)for(int k=0;k<64;++k){ long got=(int)Yd2[r*64+k]-32768, dd=CPUaa2[r*64+k]-got; if(dd<0)dd=-dd; if(dd>20) nd++; }
             swres[s]=nd;
+            if (s==0){ /* sorted-multiset: are values CORRECT but permuted (readback bug) vs wrong? */
+                static int gv[4096], cv2[4096]; for(int i=0;i<4096;++i){gv[i]=(int)Yd2[i]-32768; cv2[i]=CPUaa2[i];}
+                for(int a=0;a<4096;++a)for(int b2=a+1;b2<4096;++b2){ if(gv[b2]<gv[a]){int t=gv[a];gv[a]=gv[b2];gv[b2]=t;} if(cv2[b2]<cv2[a]){int t=cv2[a];cv2[a]=cv2[b2];cv2[b2]=t;} }
+                int sm=0; for(int i=0;i<4096;++i){int dd=gv[i]-cv2[i]; if(dd<0)dd=-dd; if(dd>20) sm++; }
+                if(statsLen>17) stats[17]=sm;   /* sorted mismatch: 0 => values correct, only PERMUTED (readback bug) */
+            }
         }
         for(int i=0;i<128;++i){c->mm.atab[i]=asv[i];c->mm.otab[i]=osv[i];} od->out_y_stride_words=oy;od->n_tiles_pow2=ntq;
         if(statsLen>12) stats[12]=swres[0]; if(statsLen>13) stats[13]=swres[1];
