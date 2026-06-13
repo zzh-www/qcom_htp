@@ -78,6 +78,43 @@ static inline void gp_surf_to_cv(int16_t *cv, const uint16_t *surf) {
     }
 }
 
+/* DENSE-PERM (cron#48): ISOLATED cv<->pack-order permutation INSIDE the surf copy only. Keeps the
+ * proven original g_lut for the whole solve (acc/diag/renorm/unpack/weight untouched); only the
+ * surf produced for the matmul is reordered into pack_act_crouton16 order so dense atab (i&3)*2048 +
+ * n_tiles=8 = native 1577. g_qa: pack-pos p -> 2*(orig cv idx); g_qo: orig cv idx k -> 2*(pack pos). */
+#ifndef GP_DENSE_PERM
+#define GP_DENSE_PERM 0   /* WIP (cron#48): isolated cv<->pack perm; full-solve oc still 0.708 (identical to
+                           * the g_lut-swap path => not the reorder method). 0 = safe cron#42 baseline. */
+#endif
+static uint16_t *g_qa, *g_qo;     /* VTCM, 4096 u16 each: byte-offset gather LUTs for the cv<->pack perm */
+/* pack_act_crouton16 contiguous index for linear (r*64+c). */
+static inline int gp_pack_idx(int r, int c) {
+    int m32 = r >> 5, rr = r & 31, row4 = rr >> 2, rp = (rr >> 1) & 1, parity = r & 1, kt = c >> 5, cc = c & 31;
+    return ((((row4 * 2 + kt) * 2 + m32) * 2 + rp) * 32 + cc) * 2 + parity;
+}
+#if GP_DENSE_PERM
+static void gp_cv_to_surf_perm(uint16_t *surf, const int16_t *cv, int16_t *stage) {
+    const HVX_Vector K = Q6_Vh_vsplat_R(0x8000);
+    for (int i = 0; i < 64; ++i) ((HVX_Vector *)stage)[i] = ((const HVX_Vector *)cv)[i];   /* cv -> VTCM */
+    HVX_Vector *g = (HVX_Vector *)(stage + 4096);
+    const HVX_Vector *o = (const HVX_Vector *)g_qa;
+    for (int v = 0; v < 64; ++v) {
+        Q6_vgather_ARMVh((void *)g, (uint32_t)(uintptr_t)stage, 8191, o[v]);
+        ((HVX_Vector *)surf)[v] = Q6_V_vxor_VV(*g, K);   /* surf[pack pos] = cv[orig] ^ zp */
+    }
+}
+static void gp_surf_to_cv_perm(int16_t *cv, const uint16_t *surf, int16_t *stage) {
+    const HVX_Vector K = Q6_Vh_vsplat_R(0x8000);
+    for (int i = 0; i < 64; ++i) ((HVX_Vector *)stage)[i] = ((const HVX_Vector *)surf)[i];   /* surf -> VTCM */
+    HVX_Vector *g = (HVX_Vector *)(stage + 4096);
+    const HVX_Vector *o = (const HVX_Vector *)g_qo;
+    for (int v = 0; v < 64; ++v) {
+        Q6_vgather_ARMVh((void *)g, (uint32_t)(uintptr_t)stage, 8191, o[v]);
+        ((HVX_Vector *)cv)[v] = Q6_V_vxor_VV(*g, K);     /* cv[orig] = surf[pack pos] ^ zp */
+    }
+}
+#endif
+
 #define GP_NB     4          /* 64-blocks per C=256 head */
 #define GP_BL     64
 #define GP_BB     4096       /* GP_BL*GP_BL = crouton-compact codes per 64-block */
@@ -321,7 +358,11 @@ static char __attribute__((aligned(128))) g_stack[GP_NT][32768];
  * out = surface direct into out_cv (NO depack). t_pack/t_depack probes split the two direct copies. */
 static void mm64(gp_ctx *c, const int16_t *a_cv, const int16_t *b_cv, int16_t *out_cv) {
     uint64_t p0 = gp_pcyc();
+#if GP_DENSE_PERM
+    gp_cv_to_surf_perm((uint16_t *)c->mm.act, a_cv, c->stage);   /* act: cv -> pack-order surf (gather) */
+#else
     gp_cv_to_surf((uint16_t *)c->mm.act, a_cv);                  /* act: cv -> surface (HVX vxor) */
+#endif
     uint64_t g0 = gp_pcyc(); c->t_pack += g0 - p0;              /* act-copy only (HVX, ~0) */
     gp_pack_wt_bias_hvx(b_cv, c->stage, c->mm.wt, c->mm.bias);   /* weight: HVX vgather + kmajor + bias -> VTCM */
     uint64_t k1 = gp_pcyc(); c->t_kmajor += k1 - g0;
@@ -340,7 +381,11 @@ static void mm64(gp_ctx *c, const int16_t *a_cv, const int16_t *b_cv, int16_t *o
         GP_EV(c->slot, 11, s0, s1);                             /* SPIN (idle-wait; not emitted as a slice) */
     }
     uint64_t d0 = gp_pcyc();
+#if GP_DENSE_PERM
+    gp_surf_to_cv_perm(out_cv, (const uint16_t *)c->mm.out, c->stage);  /* out: pack-order surf -> cv (gather) */
+#else
     gp_surf_to_cv(out_cv, (const uint16_t *)c->mm.out);          /* out: surface -> cv (HVX vxor) */
+#endif
     uint64_t d1 = gp_pcyc(); c->t_depack += d1 - d0;
     if (c->slot >= 0) GP_EV(c->slot, 10, d0, d1);              /* OUT_COPY (HVX) = q::*OutputSlice */
 }
@@ -436,7 +481,7 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
     HAP_power_set_core_corner(pctx, HAP_DCVS_VCORNER_TURBO, HAP_DCVS_VCORNER_TURBO, HAP_DCVS_VCORNER_MAX);
     { HAP_power_request_t r; memset(&r, 0, sizeof(r)); r.type = HAP_power_set_HMX; r.hmx.power_up = TRUE; HAP_power_set(pctx, &r); }
     compute_res_attr_t va; HAP_compute_res_attr_init(&va);
-    HAP_compute_res_attr_set_vtcm_param(&va, (unsigned)P * GP_VSTRIDE + 0x6000u, 0);   /* +24KB: g_hw/g_il/g_fl */
+    HAP_compute_res_attr_set_vtcm_param(&va, (unsigned)P * GP_VSTRIDE + 0xA000u, 0);   /* +40KB: g_hw/g_il/g_fl/g_qa/g_qo */
     unsigned int vctx = HAP_compute_res_acquire(&va, 2000000);
     uint8_t *vbase = (uint8_t *)HAP_compute_res_attr_get_vtcm_ptr(&va);
     compute_res_attr_t ha; HAP_compute_res_attr_init(&ha); HAP_compute_res_attr_set_hmx_param(&ha, 1);
@@ -451,11 +496,22 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
     g_fl = (uint16_t *)(vbase + (size_t)P * GP_VSTRIDE + 0x4000u);          /* cv->linear (T-pack) */
     gp_hwlut_init();
     for (int i = 0; i < GP_BB; ++i) { g_il[g_lut[i]] = (uint16_t)(2 * i); g_fl[i] = (uint16_t)(2 * g_lut[i]); }
+#if GP_DENSE_PERM
+    /* cv<->pack-order perm LUTs (cron#48): g_qa[pack_pos p] = 2*(orig cv idx of the element at p);
+     * g_qo[orig cv idx k] = 2*(pack pos of the element at k). Derived from original g_lut + pack idx. */
+    g_qa = (uint16_t *)(vbase + (size_t)P * GP_VSTRIDE + 0x6000u);
+    g_qo = (uint16_t *)(vbase + (size_t)P * GP_VSTRIDE + 0x8000u);
+    { static uint16_t lut_inv[GP_BB], pk[GP_BB], pk_inv[GP_BB];
+      for (int r = 0; r < 64; ++r) for (int c = 0; c < 64; ++c) { int L = r*64+c; pk[L] = (uint16_t)gp_pack_idx(r, c); }
+      for (int L = 0; L < GP_BB; ++L) { lut_inv[g_lut[L]] = (uint16_t)L; pk_inv[pk[L]] = (uint16_t)L; }
+      for (int p = 0; p < GP_BB; ++p) g_qa[p] = (uint16_t)(2 * g_lut[pk_inv[p]]);
+      for (int k = 0; k < GP_BB; ++k) g_qo[k] = (uint16_t)(2 * pk[lut_inv[k]]); }
+#endif
     for (int t = 0; t < P; ++t) {
         w16a16_mm_init(&g_ctx[t].mm, vbase + (size_t)t * GP_VSTRIDE, g_ctx[t].descs);
         { hmx_conv_out_desc_t *od = (hmx_conv_out_desc_t *)g_ctx[t].mm.od;   /* TRUE 64^3 (INVARIANT 7) */
-#if GP_DENSE_SURF
-          /* DENSE (cron#47): act/out packed contiguous (4 tiles of 2KB); atab/otab = (i&3)*2048; n_tiles=8
+#if GP_DENSE_SURF || GP_DENSE_PERM
+          /* DENSE (cron#47/48): act/out packed contiguous (4 tiles of 2KB); atab/otab = (i&3)*2048; n_tiles=8
            * = native [1,8,8,64]. per-call ->1577 = native warm HMX-busy 1547 parity, bit-exact. */
           uint8_t *act = (uint8_t *)g_ctx[t].mm.act, *out = (uint8_t *)g_ctx[t].mm.out;
           for (int i = 0; i < 16; ++i) {
@@ -714,7 +770,9 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
         }
         {   /* full diag_inv test: strictly-lower A -> X=(I-A)^-1 Taylor(3). reconstruct X_v=X_code*2^eX/32767,
              * compare to CPU I+A+A²+A³ (relative). This is the actual failing unit (T_ii diag blocks). */
-            static int16_t Aq2[64*256], Acv2[4096], Xcv[4096], Xlin[64*256]; static double Av[64][64], X0[64][64];
+            static int16_t Aq2[64*256] __attribute__((aligned(128))), Acv2[4096] __attribute__((aligned(128))),
+                           Xcv[4096] __attribute__((aligned(128))), Xlin[64*256] __attribute__((aligned(128)));
+            static double Av[64][64], X0[64][64];
             for (int r=0;r<64;++r) for (int c=0;c<64;++c){ int v = (r>c) ? (((r*5+c*7)%41)-20)*300 : 0;
                 Aq2[r*256+c]=(int16_t)v; Av[r][c]=v/32767.0; }
             gp_unpack_blk(Acv2, Aq2, g_il, g_ctx[0].stage);
