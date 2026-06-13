@@ -467,8 +467,13 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
             m->atab[i] = (int32_t)(uintptr_t)((uint8_t *)m->act + (size_t)(((mt & 7) * 2 + kt) * 512));
             m->otab[i] = (int32_t)(uintptr_t)((uint8_t *)m->out + (size_t)(((mt & 7) * 2 + kt) * 512));
         }
-        /* V2: keep the solve's WORKING descriptor fields (out_y=64,n_tiles=64,k_total=64,act_y=128);
-         * change ONLY the atab/otab spacing to ×512 (compact) + compact data. (V1 standalone strides crashed.) */
+        /* V3 (cron#20, REFUTED = DSP fault 0x8000040d): the OFFLINE byte-exact w16a16 descriptor
+         * (prepare_owned_inputs.py:generated_descriptor_tables) = FIXED out_y=256,n_tiles=256,k_total=128,
+         * act_y=512 + same ×512 compact table. FAULTED on device (solve crashed in this block). Those "256"
+         * are M=256 values (the 256 literally IS M); they don't transpose to a true compact 64³ — same fault
+         * class as V1. ⇒ Both natural hypotheses dead: V2 (shape-scaled 64/64/64/128) ran but WRONG (maxdiff
+         * 25774); V3 (fixed 256/256/128/512) FAULTS. Descriptor-guessing exhausted → STEP 1a (dump the real
+         * custom-op descriptor for an ACTUAL M=64 compact run) is now required. Below = V2 (bootable, wrong). */
         memset(m->out, 0, W16MM_OUT_BYTES);
         uint64_t c0 = gp_pcyc(); w16a16_mm_run(m); uint64_t ccyc = gp_pcyc() - c0;
         w16a16_depack_crouton16((const uint16_t *)m->out, outlin, 64, 64);
