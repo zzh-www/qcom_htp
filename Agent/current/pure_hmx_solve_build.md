@@ -14,16 +14,13 @@
 > **不要**用 git 历史 commit message、PROGRESS 里的 ✅、任何 memory、或 `gdn_solve.md` 等其它文档里**别条路线**(HVXMixHMX / merge-dtype / int16-merge / FP16)的"否决/OPEN/收口/比较"来判定本 loop——那些是**不同路线或旧目标(比快)下的结论**,与本 loop(目标 = min wall s.t. oc<4e-2,**不比较**)无关。本文自洽自足,不需旁读。
 > loop 只在 **wall 触 roofline 地板(~1.0M) 或 LEDGER A/B 全 DONE/REFUTED** 时到头——那时也是**写新 NEXT**,而非判"闭环"。
 >
-> ### 🔒 方向锁定 — ⏸️ LOOP 暂停,O6b-compact 已证伪,待用户裁定(2026-06-14)
-> **🟥 O6b compact-crouton 主线已被 ground truth 三方证伪,不要再做(cron#22):**
-> 1. **kernel 等价**:our custom op vs native QNN matmul 64³ = **4096/4096 bit-exact**(设备,同 wt+act)。
-> 2. **布局相同**:DESC_DUMP 抓 QNN op 64³ act 表 = `i×2048`(padded 32KB)= solve 现状;**不存在 compact-8KB 单-64³ 描述符**。
-> 3. **gap = fan-out**:native `[1,128,64,64]` = 2,020 cyc/matmul(128-tile fan-out 摊 fill/drain);我们 per-call 10,844。核同+布局同 → 5.4× 全是 dispatch/fan-out,**compact 治不了**。
-> **∴ "读 compact 8KB 省 per-mm" 的前提是错的。O6b-compact 死。cron loop 已停(96c4b3cc cancelled),不空转。**
-> **⏳ 待用户裁定下一方向(二选一):**
-> - **(A)转 fan-out 批**:让一个描述符驱多个独立 64³ tile(像 native),consumer 9.1M→朝 ~1.5M 压(768×2K)。受 Newton 链内依赖约束(128 对角链独立可批、链内串行)。**= 较大重构,需用户授权(本锁仍禁未授权新支线)。**
-> - **(B)收口出货**:接受 ~10M wall / oc 4.24e-3(135× vs naive,超参考,真数据过门)为单-64³-per-call 设备地板,固化当前 solve。
-> **仍然禁止(未授权前):** ❌ O6a w8a16 · ❌ 改数值算法(Taylor/Newton/scale)· ❌ 重测 V1/V2/V3(全 REFUTED,见 LEDGER)· ❌ 在 compact 上再花一分钟。
+> ### 🔒 方向锁定 — O7 fan-out 批(2026-06-14 用户裁定 A;唯一活动方向)
+> **背景(cron#22 三方坐实,compact 已死):** ① our op vs native 64³ = 4096/4096 bit-exact;② QNN op 64³ 布局 = ×2048 padded(= 我们);③ native `[1,128,64,64]` = 2,020 cyc/matmul vs 我们 per-call 10,844。**核同+布局同 → 5.4× 全是 fan-out/overlap。**
+> **机理(读 kernel asm `v73deep_conv1x1_kernel_i16.inc` 确认):** 我们的核 = 单-matmul conv(weight r2 每 M-group 重置、只随 N-tile 进 → M 行共享一权重,**一次调用表达不了 distinct-weight 批**)。768 次调用**串行**(feed→compute→feed→compute,每次 10,844)。native 2,020 = **把 tile i+1 的 mxmem-feed 叠到 tile i 的 compute 下**(同 feed,流水重叠)。
+> **= O7 fan-out 批(唯一活动方向):写一个 batched driver/核,把 mxmem 核心循环开在 N 个独立 64³ (act,wt,out,bias) 三元组上、HMX 保温 + 软件流水 feed → 目标 ~2K/matmul(native parity)。consumer 9.1M → 朝 ~1.5M(768×2K)。**
+> **杠杆在哪(solve 结构):** 128 条对角链(32 head × 4 块)彼此独立;每块 Taylor 要 A²=A×A、A³=A²×A(distinct act+wt)。**128 个 A² 跨 head = 正好 native `[1,128,64,64]` 那种独立 distinct-weight 批**,可一把流水。merge 同理找独立批。链内严格依赖(A³ 等 A²),跨链全独立。
+> **STEP(见 NEXT 详):** 1) 读 skill `htp-hardware-scheduling`(强制,HMX 流水);2) 量化可摊销上限(micro-bench:N 个独立 64³ 流水 vs 串行);3) 写 batched 核(核心循环跨 N 三元组,feed 叠 compute);设备验 cyc/matmul→~2K;4) 港进 solve consumer,oc<4e-2 + wall 环比。
+> **仍然禁止:** ❌ O6a w8a16 · ❌ 改数值算法(Taylor/Newton/scale,fan-out 纯调度 oc-中性)· ❌ compact(已死,V1/V2/V3 REFUTED)· ❌ thread HMX(SSR,HMX=1 单元;fan-out 是单 HMX 内的时间流水不是多 HMX)。
 
 > **每个 turn 的唯一入口。** 读 `STATE` 知道在哪 → 读 `NEXT` 知道这轮干什么 → 干完按 `LOOP` 更新本文。
 > 改任何东西前必读 `INVARIANTS` + `LEDGER`:**别重试 R 的 2 条死路,别改 INVARIANTS(除非新设备证据)。其余(A/B/D)都是活。**
@@ -42,7 +39,7 @@
 
 | 项 | 值 | 备注 |
 |---|---|---|
-| **当前 wall** | **~10.0M cyc = 干净重写 全HVX + Newton0 + O5 scatter-kill**(v1 1.354B → 135×) | **O5 DONE(cron#19,−12%):** fuse linear↔block strided memcpy 进 gp_perm 的 HVX staging(`gp_unpack_blk`/`gp_pack_blk`)→ **scatter memcpy 13.98M→0**,wall 12M→~10M(同窗 REPS=8 reps2-4 median 12.71M→10.76M=−15.3%),oc 4.238e-3 不变。**瓶颈翻到 consumer**(busy ~9.1M ≈ wall)。**NEXT = O6b compact-crouton(唯一主线,见方向锁定+NEXT)** —— 砍 consumer per-mm 10.8K→~3.3K → wall ~4-5M。🟥 **O6b-compact 前提被证伪(cron#22 DESC_DUMP 真值)。** QNN op 给 64³ 用 `act_tbl[i]=i×2048`(padded 32KB)= 跟 solve 一模一样,**没有 compact-8KB 单-64³ 描述符**。per-call 差(10.8K vs 3.3K)是 **fill/drain 摊销(fan-out 批 128 tile)非布局**。**O6b-compact 死路;真杠杆 = descriptor fan-out 批。锁定方向的前提已废 → 待用户裁定下一方向(见本轮报告)。** |
+| **当前 wall** | **~10.0M cyc = 干净重写 全HVX + Newton0 + O5 scatter-kill**(v1 1.354B → 135×) | **O5 DONE(cron#19,−12%):** fuse linear↔block strided memcpy 进 gp_perm 的 HVX staging(`gp_unpack_blk`/`gp_pack_blk`)→ **scatter memcpy 13.98M→0**,wall 12M→~10M(同窗 REPS=8 reps2-4 median 12.71M→10.76M=−15.3%),oc 4.238e-3 不变。**瓶颈翻到 consumer**(busy ~9.1M ≈ wall)。**NEXT = O6b compact-crouton(唯一主线,见方向锁定+NEXT)** —— 砍 consumer per-mm 10.8K→~3.3K → wall ~4-5M。✅ **方向 = O7 fan-out 批(用户裁定 A,2026-06-14)。** compact 已三方证伪死(核同+布局同,差 100% = overlap)。**O7:批独立 64³ 流水(prologue 一次 + 跨 N 三元组 feed 叠 compute)→ per-matmul 10,844 朝 native 2,020 压 → consumer 9.1M→~1.5M,wall→~3-4M,oc 不变。** 起手 = STEP 2 micro-bench 量摊销上限(见 NEXT)。新 loop 已起。 |
 | **oc** | **synthetic0.05 4.24e-3 · 真 GDN(A_u16_h32)1.107e-2** | 都 < 4e-2(真数据 2.6× 余量)。**Newton=0 在两 scale 都最优** |
 | **关键发现** | **设备上 Newton 反效:oc 单调 ↑ Newton(真数据 N0=1.1e-2 < N1=3.2e-2 < N2=3.35e-2,max 3.69e-2 近门)** | w16a16 每 Newton 步加的 quant 噪声 > 截断收益(真 scale ‖A‖↑ 噪声更大)→ **Taylor(3) Newton=0 = 甜点;原 "Newton=2" 设计次优**。fp 截断分析(Newton 有益)被设备 quant **反转** |
 | 配置 | Newton=2,**40 mm/head**(24 对角 + 16 merge)= 1280 mm/32head | scale = 精度旋钮(甜点 ~0.25) |
@@ -53,27 +50,16 @@
 
 ## NEXT（这轮单一最高优先）
 
-> ## 🔧 NEXT = O6b compact-crouton（用户裁定 = 主线;O6a w8a16 砍掉,非根本突破）
-> **用户裁定(2026-06-13):O6a w8a16 不做(不是根本优化);做 O6b compact-crouton —— 真·对齐 QNN,这才是主线。**
-> **现状(O5 后):** wall ~10.0-10.6M,**consumer-busy ~9.1M ≈ wall = 瓶颈**。consumer = 768 mm × ~10.8K(口径④)。
-> **compact 是真杠杆(已用 QNN trace 定性):** kernel = QNN op **byte-identical**;QNN instance 3,349 cyc、**25.76 cyc/packet → ~130 packet**,kernel 是 **packet-bound,packet ∝ 读的 tile 数**。我们 padded 读 4× 的 act tile(136KB 流量)→ ~4× packet = 那个 3.2-4×。**compact(少 tile)= 真降 per-mm,不是 pipeline。**
-> **已挖到 ground truth(`handwritten_hmx_matmul/prepare_owned_inputs.py:generated_descriptor_tables`,M-general byte-exact):**
-> - compact act packer 现成:`w16a16_pack_act_crouton16(A,out,64,64)` → **8KB(16 块×512B)**;depack `w16a16_depack_crouton16` blk=(M/32)*128 u16(M=256→2KB,M=64→512B)。
-> - atab/otab offset = `((mt&7)*k_tiles+kt)*m_tiles*256` 字节(M=256 ×2048=我们现状;**M=64 ×512=compact**)。
-> - 静态描述符(标准件,M-general):out_y_stride=256、n_tiles_pow2=256、k_total=128、**act_y_stride=512**、m_total_minus_step=1。
-> **RE 实测(scaffold `-DGP_O6B_TEST`,设备;两轮 cron#20):全部猜测已 REFUTED → STEP 1a 是唯一路。**
->   - **V1**(标准件 strides + ×512 atab) → **DSP fault**。
->   - **V2**(solve 现工作 strides 64/64/64/128 + ×512 atab) → 跑通但 **maxdiff 25774(错)+ cyc 10880 ≈ padded(无加速)**。
->   - **V3(cron#20-2):offline 真值 strides** `prepare_owned_inputs.py:generated_descriptor_tables`(byte-exact 生成器)给的 w16a16 FIXED 描述符 = **out_y=256, n_tiles=256, k_total=128, act_y=512** + 同 ×512 compact 表 → **DSP fault 0x8000040d**(solve 在 O6b 块崩;之前 MM64 微基准 stats[5]=10838 正常)。那些 "256" 是 **M=256 值(256 literally = M)**,不能搬给真 compact 64³。同 V1 fault class。
->   - **⇒ 两个自然假设全死**:shape-scaled(V2,跑通但错)/ fixed-256(V3,崩)。**descriptor 猜测穷尽** = 与 cron#15「compact 越界设备证伪」+ cron#17「QNN 靠 batched 描述符 fan-out 拿 compact,非 per-call 单 64³ compact」一致。**单 64³ compact 描述符可能根本不存在于此 per-tile kernel;真路 = 抓 QNN 实际怎么做(STEP 1a/1b)。**
-> **🔑 STEP 1a 已跑(cron#21)= 重大重定向:strides 不是问题,LAYOUT 才是。**
->   - **跑通了真 custom op 的 64³ device flow**(built 3 包 native_record_256;修 `dssh.sh` set -e bug + 装 lxml + CPU-op-pkg 注册失败→**HTP-only `--op_packages ...htp.so:...:HTP` 才行**;`run_w16a16_chain.sh M=64 K=64 N=64 CHAIN=1 MODE=direct`)。**custom op 注册+执行 64³ Crouton_16 图到完成**(ctx 含 `HmxU16I16ToU16MatMul` 节点)。
->   - **控制实验定性:M=256(已证 byte-exact 的形状)对 gen 的解析 ref `out_ref_u16` 的"对不上"模式与 M=64 完全相同**(都 dev 饱和 65535/30976 vs ref 小值 3079/70;256: 20770/65536)。256 是验证过的形状 → **是我的比对口径错(native_record_256 profile 验的是 native ORACLE sidecar,不是 gen 解析 ref),不是 kernel 错。** ⇒ **强证据:custom op 跑 compact 64³ 与 256 同样正确。**
->   - **⇒ 它给 64³ 用的描述符 = `FORMULA_DESC` = 64/64/64/128(从源码读),正好就是 V2 的 strides。可 V2 错了 → V2 的 bug 是 act 的 DATA/TABLE 布局(我的 `w16a16_pack_act_crouton16` + ×512 atab ≠ QNN 真 Crouton_16 块),不是 strides。** strides 一直是对的。**O6b 重定向:不再找 strides(已知=64/64/64/128),而是复刻 QNN 的 compact Crouton_16 act 块字节布局 + 表指针。**
-> **STEP 1b/2(下轮起手,二选一或都做):**
->   - **(校验,严)用 `--activation-mode k_impulse --activation-k <k>`**(gen_quant_chain 有此 arg):act 单脉冲 → 输出 = 单条 weight 行,**不饱和、自证、且直接暴露 act/out 表的布局映射**。设备跑对 → 钉死 op 正确 + 读出布局。(避开 gen 解析 ref 口径坑;V3 已证 offline 生成器在 64³ 不可信。)
->   - **(拿布局)build `-DHMX_W16A16_DESC_DUMP`** 跑 64³ → 现有 DESC_DUMP 只 dump 表基址,**加一段 dump `act_tbl_all[0..31]` / `out_tbl_all` 相对块基址的 OFFSET**(= QNN 真 compact 表偏移模式)→ 对照我的 `w16a16_pack_act_crouton16` 找差 → 修包器/atab 让它 byte-match QNN Crouton_16 → 填 scaffold STEP 2 验 maxdiff=0+cyc~3.3K。
->   - 复现:`cd example/qnn_hmx_matmul_w16a16 && W16A16_KERNEL_PROFILE=native_record_256 bash build.sh && bash build_x86.sh`;`cd standard_flow/custom_w16a16 && M=64 K=64 N=64 CHAIN=1 MODE=direct W16A16_KERNEL_PROFILE=native_record_256 SKIP_DEVICE=1 GEN_EXTRA_ARGS="--weight-limit 1" bash run_w16a16_chain.sh`;device 手跑 HTP-only(CPU-pkg 注册会失败,只挂 htp.so)。需 `uv pip install lxml`。
+> ## 🔧 NEXT = O7 fan-out 批（用户裁定 A,2026-06-14;唯一活动方向）
+> **目标:** consumer 768 次串行 per-call(10,844/call)→ 流水批让 per-matmul 朝 native 的 ~2,020 压 → consumer 9.1M → ~1.5M,wall ~10M → ~3-4M。oc 不变(纯调度,oc-中性)。
+> **已坐实的依据(cron#22,三方):** 核 = native(4096/4096 bit-exact)· 布局 = native(×2048 padded)· native `[1,128,64,64]` = 2,020/matmul vs 我们 10,844 → **5.4× 全是 overlap/批,不是核不是布局**。
+> **机理:** `v73deep_conv1x1_kernel_i16.inc` = 单-matmul conv,prologue 配 HMX array → {M-loop×N-loop×K-loop:mxmem 填+算} → epilogue(mxclracc 清+返回)。768 次调用 = 768 次 prologue/epilogue + feed→compute **串行无重叠**。native 把 N 个 tile 的 feed 叠到上一个的 compute 下 → wall≈compute(1,430)+小。
+> **STEP 1(强制先做):读 skill `htp-hardware-scheduling`**(HMX=1 单元绝不 thread;fan-out = 单 HMX 内时间流水 = DMA/HVX-feed ∥ HMX-compute ping-pong,不是多线程)。
+> **STEP 2 量上限(先验证再大改,避免 skill 警告的"没 profile 就赌 overlap"):** micro-bench:N 个独立 64³(distinct act+wt,VTCM-resident)用一个 batched 核心循环(prologue 一次 + 跨 N 个 (act,wt,out,bias) 三元组循环 mxmem,epilogue 一次)vs 现状 N 次独立调用。量 cyc/matmul。**判:能否从 10,844 朝 ~2,020 压。** 若能 → STEP 3;若卡住(feed 带宽而非 prologue 摊销主导)→ 记 LEDGER + 报。
+> **STEP 3 写 batched 核:** 改/扩 `our_v73deep_kernel_i16`(naked asm,谨慎)或写 driver:核心循环跨 N 个三元组,HMX 保温,feed(act/wt VTCM→mxmem)软件流水叠到上一 tile compute 下。设备验 N 个独立 64³ bit-exact(对 native oracle)+ cyc/matmul→~2K。
+> **STEP 4 港进 solve consumer:** 128 条独立对角链的 A²(跨 head)= 一把批(= native `[1,128,64,64]` 同型);A³、merge 各找独立批(链内严格依赖,跨链全独立,INVARIANT 4)。重排 consumer 把独立 matmul 攒成批喂 batched 核。设备测整 solve **oc<4e-2 不变 + wall 环比 ACAC ↓**。
+> **口径:** 全程 skill `htp-cycle-metric` 四口径;per-matmul = batched 核 wall / N(对标 native 2,020)。oc = `run_w16a16_head_phase4.py`。
+> **不碰:** 数值算法(Taylor/Newton/scale 全不动)· compact(死)· thread HMX(SSR)。
 >   - **1b(权威,1a 撞墙再上):vendor-dump native QNN** —— `[1,128,64,64]` 的 `q::ConvLayer` kernel 在 `libQnnHtpV75Skel.so`,打 vendor patch 在 conv slice 入口(`hmx_v73_convhhh1x1_stride1 @0x2fa740`)抓 r0..r5 + 指向字节;Skill `hmx-inline-asm` + 记忆 `reference_vendor_kernel_patch_dump`;复现 `GEN_BATCH=128 profile_all.sh`(已有 `output_b128/`)。
 >   - **1c(兜底):trace asm** `v73deep_conv1x1_kernel_i16.inc` 的 `activation.ub=mxmem(...)` 地址算术,定位 `act_y_stride`/`k_total`/`n_act_pairs` 里哪个决定每 tile 读 2KB vs 512B。
 > **STEP 2 验证:** 把精确描述符填进 `GP_O6B_TEST` scaffold(`gdn_pure_solve.cpp` 搜 `O6b COMPACT-64`)→ 构建 `-DGP_O6B_TEST` → 设备跑 → 门 **maxdiff=0 + cyc→~3.3K**(每版记进 LEDGER)。
