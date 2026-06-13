@@ -41,7 +41,10 @@ def main() -> int:
     out = sh(f"{SSH} 'cd $HOME/gdnbm_run && LD_LIBRARY_PATH=$PWD:/vendor/lib64:/system/lib64 "
              f"ADSP_LIBRARY_PATH=\"$PWD;/vendor/lib/rfsa/adsp;/vendor/dsp/cdsp;/dsp/cdsp\" "
              f"./gdnbm {a.threads} w16p4_A.raw w16p4_T.raw {H} 256 32768 32768 3.05e-5 3.05e-5 2>&1'").stdout.decode()
-    print("\n".join(l for l in out.splitlines() if "wall" in l or "stats" in l))
+    # surface the self-labeled 口径 cycle report (host prints ①/②/④ + cross-impl rule + native anchors).
+    _keys = ("rc=", "①", "②", "④", "clock self-check", "cross-impl", "native anchors",
+             "consumer HMX-busy", "raw stats", "NEVER compare")
+    print("\n".join(l for l in out.splitlines() if any(k in l for k in _keys)))
     sh(f"{SSH} 'cat $HOME/gdnbm_run/w16p4_T.raw' > /tmp/w16p4_T.raw")
     raw = Path("/tmp/w16p4_T.raw").read_bytes()
 

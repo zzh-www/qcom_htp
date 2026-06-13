@@ -44,24 +44,32 @@ int main(int argc, char **argv) {
     const char *re = getenv("GDNBM_REPS"); int reps = re ? atoi(re) : 1; if (reps < 1) reps = 1;
     for (int r = 0; r < reps; ++r) {
         rc = gdnbm_solve(h, A, (int)abytes, H, C, zpA, zpT, sA.i, sT.i, nthreads, T, (int)abytes, stats, 20);
-        printf("gdnbm_solve rc=0x%x  wall=%d cyc  nthreads=%d  heads=%d\n", rc, stats[0], stats[1], stats[2]);
-        if (rc == 0 && stats[2] > 0)
-            printf("  >>> %d cyc/head (%d-thread)\n", stats[0] / stats[2], stats[1]);
+        printf("gdnbm_solve rc=0x%x  P=%d  H=%d  rep=%d/%d\n", rc, stats[1], stats[2], r + 1, reps);
         if (rc) break;
     }
-    printf("  stats: [0]=%d [1]=%d [2]=%d [3]=%d [4]=%d\n", stats[0], stats[1], stats[2], stats[3], stats[4]);
-    printf("  stats: [5]=%d [6]=%d [7]=%d [8]=%d [9]=%d [10]=%d [11]=%d\n", stats[5], stats[6], stats[7], stats[8], stats[9], stats[10], stats[11]);
-    printf("  O5 scatter split: memcpy=%d gp_perm=%d memset=%d  (sum=%d vs scatter[9]=%d)\n",
-           stats[12], stats[13], stats[14], stats[12]+stats[13]+stats[14], stats[9]);
-    printf("  O6b compact-64 test: maxdiff=%d nonzero=%d cyc=%d  (vs padded bench %d)\n",
-           stats[15], stats[17], stats[16], stats[5]);
-    printf("  O7 fan-out probe: M64=%d M128=%d M256=%d cyc/call; per-64block M256/4=%d vs M64=%d (amortize=%.2fx)\n",
-           stats[5], stats[18], stats[19], stats[19]/4, stats[5], stats[5] > 0 ? (double)stats[5] / ((double)stats[19]/4.0) : 0.0);
-    if (stats[3] || stats[5] || stats[7]) {  /* PROBE_CYCLES per-stage (cyc/head) */
-        int sum = stats[3]+stats[4]+stats[5]+stats[6]+stats[7]+stats[8]+stats[9];
-        printf("  PROBE cyc/head: diag=%d zero=%d fold=%d quant=%d mm=%d acc=%d requant=%d  SUM=%d\n",
-               stats[3], stats[4], stats[5], stats[6], stats[7], stats[8], stats[9], sum);
+    /* ===== cycle report — SELF-LABELED 口径 (skill htp-cycle-metric). The ONLY cross-impl number is
+     * graph-wall÷N_mm (口径①). NEVER compare optrace per-op latency/busy (口径②③) to a wall (口径④).
+     * A latency-floor fact (~256/mm) is NOT a gate on a wall measurement: a per-call wall ≫300 is the
+     * CORRECT feed-inclusive cost, not a "口径 error". (Hardened cron#28 after the cross-口径 churn.) ===== */
+    if (rc == 0) {
+        int H_ = stats[2] ? stats[2] : 1;
+        int nmm = H_ * 24;                       /* 24 mm/head @ Newton=0 (8 diag + 16 merge); label notes it */
+        double cpu = stats[6] ? (double)stats[0] / (double)stats[6] : 0.0;   /* PCYCLE/µs clock self-check */
+        printf("  ① graph-wall (口径①, THE verdict = 32-head TOTAL) = %d cyc\n", stats[0]);
+        printf("     clock self-check wall/us = %d/%d = %.1f  (TURBO ~1594; >> => wrong counter, re-measure)\n",
+               stats[0], stats[6], cpu);
+        printf("     cross-impl compare ONLY via graph-wall/N_mm (口径①) = %d/%d = %d cyc/mm (N_mm=24/head @Newton0)\n",
+               stats[0], nmm, stats[0] / nmm);
+        printf("     native anchors (same 口径①): single 64^3 = 11034 wall ;  128-batch = 2020/mm  <- targets\n");
+        printf("  ④ per-call kernel wall (口径④, single 64^3 resident) = %d cyc  (= matmul + mxmem feed; >300 is CORRECT, not a bug)\n",
+               stats[5]);
+        printf("  ② matmul latency floor (口径②) = ~256 cyc/mm (native int16 dominant-path; what HMX does, NOT a wall target)\n");
+        printf("     !! NEVER compare optrace per-op (num_dominant_path_cycles / by_htp_type busy = 口径②③) to ④ or graph-wall.\n");
+        printf("  consumer HMX-busy Σ(口径④)=%d  feed Σ: wt-pack=%d scatter=%d renorm/acc=%d  slowest-prod-life=%d  PACKCHK=%d(0=ok)\n",
+               stats[3], stats[7], stats[9], stats[10], stats[11], stats[8]);
     }
+    printf("  raw stats[0..11]: %d %d %d %d %d %d %d %d %d %d %d %d\n",
+           stats[0], stats[1], stats[2], stats[3], stats[4], stats[5], stats[6], stats[7], stats[8], stats[9], stats[10], stats[11]);
 
     FILE *ft = fopen(Tpath, "wb"); fwrite(T, 1, abytes, ft); fclose(ft);
     printf("wrote %s (%ld bytes)\n", Tpath, abytes);
