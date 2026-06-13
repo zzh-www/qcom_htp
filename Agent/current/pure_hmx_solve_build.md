@@ -283,3 +283,17 @@ under n_tiles=8**: K sliced in 16-elem units ×4 vs 32×32 tile granularity; 4 a
 reads must reproduce the 64³ that the working 16-tile×4-slice=64-read path does. Resolving needs the HMX
 mxmem K/tile instruction semantics (how a 2KB tile + :dilate + the 16-K weight slice compose) — the one
 piece I lack and kept mis-accounting. Real best stays cron#42 (1.64× bit-exact, oc 4.238e-3).
+
+### cron#58: native descriptor CONFIRMED exact (clean dump) — bug isolated to M=64 weight/act pairing (INV3)
+Dumped mm32 single-matmul FULL descriptor (clean uint16 + cracked decode): out_table_stride=2,
+out_y=4, n_tiles=8, m_total_minus_step=8, k_total=64, n_act=2, act_y=4 — **byte-identical to what
+GP_DIFF native-exact used.** So descriptor ✓, act layout = pack_act_crouton16 ✓ (cron#57 ramp),
+weight = pack_wt_kmajor. Yet dense computes wrong values. **Isolation: INVARIANT 3 says
+pack_act_crouton16 + pack_wt_kmajor is byte-exact ONLY at M=256, NEVER at M=64 (64³ descriptors
+"never were byte-exact, verified by device bijection probe").** So native's M=64 dense uses an
+act/weight K-pairing that pack_wt_kmajor(64) does not reproduce. Blocker = native's M=64 dense
+WEIGHT prep (convert_weights_to_signed.packed.tcm), not the descriptor/act/n_tiles. Two proven
+systems exist: standalone M=256 (pack_act_crouton16+pack_wt_kmajor, byte-exact) and solve sparse
+M=64 (gp_cv_to_surf+pack_wt_kmajor+n_tiles=32, oc-correct). native's M=64 DENSE pairing is a third,
+unmatched. Next: dump native's weight tile layout (now possible via cracked decode) OR derive the
+M=64 dense weight K-order. Real best stays cron#42 (1.64× bit-exact, oc 4.238e-3).
