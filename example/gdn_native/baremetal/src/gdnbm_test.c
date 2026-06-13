@@ -37,13 +37,13 @@ int main(int argc, char **argv) {
     unsigned char *A = (unsigned char *)malloc(abytes), *T = (unsigned char *)calloc(abytes, 1);
     FILE *fa = fopen(Apath, "rb"); fread(A, 1, abytes, fa); fclose(fa);
 
-    int stats[12] = {0};
+    int stats[20] = {0};
     /* REPS: run the solve N times in ONE FastRPC session (env GDNBM_REPS, default 1). Repeated single-shot
      * processes churn the unsigned-PD FastRPC session and OCCASIONALLY deadlock the cDSP; looping the
      * remote call on the SAME handle does the steady-state measurement with NO session churn. */
     const char *re = getenv("GDNBM_REPS"); int reps = re ? atoi(re) : 1; if (reps < 1) reps = 1;
     for (int r = 0; r < reps; ++r) {
-        rc = gdnbm_solve(h, A, (int)abytes, H, C, zpA, zpT, sA.i, sT.i, nthreads, T, (int)abytes, stats, 12);
+        rc = gdnbm_solve(h, A, (int)abytes, H, C, zpA, zpT, sA.i, sT.i, nthreads, T, (int)abytes, stats, 20);
         printf("gdnbm_solve rc=0x%x  wall=%d cyc  nthreads=%d  heads=%d\n", rc, stats[0], stats[1], stats[2]);
         if (rc == 0 && stats[2] > 0)
             printf("  >>> %d cyc/head (%d-thread)\n", stats[0] / stats[2], stats[1]);
@@ -51,6 +51,10 @@ int main(int argc, char **argv) {
     }
     printf("  stats: [0]=%d [1]=%d [2]=%d [3]=%d [4]=%d\n", stats[0], stats[1], stats[2], stats[3], stats[4]);
     printf("  stats: [5]=%d [6]=%d [7]=%d [8]=%d [9]=%d [10]=%d [11]=%d\n", stats[5], stats[6], stats[7], stats[8], stats[9], stats[10], stats[11]);
+    printf("  O5 scatter split: memcpy=%d gp_perm=%d memset=%d  (sum=%d vs scatter[9]=%d)\n",
+           stats[12], stats[13], stats[14], stats[12]+stats[13]+stats[14], stats[9]);
+    printf("  O6b compact-64 test: maxdiff=%d nonzero=%d cyc=%d  (vs padded bench %d)\n",
+           stats[15], stats[17], stats[16], stats[5]);
     if (stats[3] || stats[5] || stats[7]) {  /* PROBE_CYCLES per-stage (cyc/head) */
         int sum = stats[3]+stats[4]+stats[5]+stats[6]+stats[7]+stats[8]+stats[9];
         printf("  PROBE cyc/head: diag=%d zero=%d fold=%d quant=%d mm=%d acc=%d requant=%d  SUM=%d\n",

@@ -106,11 +106,14 @@ def _emit_onnx(cfg: dict, path: str, m: int, k: int, n: int, seed: int = 42, dis
     else:
         onnx_dtype, np_dtype = TensorProto.FLOAT, np.float32
 
-    W_val = _draw(rng, (1, k, n), dist, np_dtype)
+    _B = int(os.environ.get("GEN_BATCH", "1"))   # batched MatMul: B independent (distinct-weight) M×K@K×N
+    if _B > 1:
+        W_val = _draw(rng, (1, _B, k, n), dist, np_dtype); ash, ysh = [1, _B, m, k], [1, _B, m, n]
+    else:
+        W_val = _draw(rng, (1, k, n), dist, np_dtype); ash, ysh = [1, m, k], [1, m, n]
     W_init = numpy_helper.from_array(W_val, name="W")
-
-    A = helper.make_tensor_value_info("A", onnx_dtype, [1, m, k])
-    Y = helper.make_tensor_value_info("Y", onnx_dtype, [1, m, n])
+    A = helper.make_tensor_value_info("A", onnx_dtype, ash)
+    Y = helper.make_tensor_value_info("Y", onnx_dtype, ysh)
     node = helper.make_node("MatMul", ["A", "W"], ["Y"], name="matmul_1")
     graph = helper.make_graph([node], "matmul", [A], [Y], [W_init])
     model = helper.make_model(
@@ -147,7 +150,8 @@ def _emit_quant(cfg: dict, path: str, n: int):
 
 def _emit_input(cfg: dict, out_dir: str, m: int, k: int, n: int, seed: int = 0xBEEF, dist: str = "uniform"):
     rng = np.random.default_rng(seed)
-    A = _draw(rng, (1, m, k), dist, np.float32)
+    _B = int(os.environ.get("GEN_BATCH", "1"))
+    A = _draw(rng, (1, _B, m, k) if _B > 1 else (1, m, k), dist, np.float32)
     raw = os.path.join(out_dir, "input_A.raw")
     A.tofile(raw)
     with open(os.path.join(out_dir, "input_list.txt"), "w") as f:
@@ -174,18 +178,19 @@ def _emit_input(cfg: dict, out_dir: str, m: int, k: int, n: int, seed: int = 0xB
         "runtime_input_list": "runtime_input_list.txt",
         "native_input_storage": native_meta["storage"],
         "native_input_bytes": native_meta["bytes"],
-        "shape": [1, m, k],
-        "output_shape": [1, m, n],
+        "shape": ([1, _B, m, k] if _B > 1 else [1, m, k]),
+        "output_shape": ([1, _B, m, n] if _B > 1 else [1, m, n]),
     }
+    _MN = _B * m * n if _B > 1 else m * n
     if cfg["dtype"] == "quant":
         meta["activation_encoding"] = _symmetric_encoding(cfg["act"])
         meta["expected_native_output_storage"] = (
             "uint8" if cfg["out"] <= 8 else "uint16_le"
         )
-        meta["expected_native_output_bytes"] = int(m * n * (1 if cfg["out"] <= 8 else 2))
+        meta["expected_native_output_bytes"] = int(_MN * (1 if cfg["out"] <= 8 else 2))
     else:
         meta["expected_native_output_storage"] = "float16_le"
-        meta["expected_native_output_bytes"] = int(m * n * 2)
+        meta["expected_native_output_bytes"] = int(_MN * 2)
     with open(os.path.join(out_dir, "native_io.json"), "w") as f:
         json.dump(meta, f, indent=2)
 

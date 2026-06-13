@@ -13,6 +13,15 @@
 > **范围 = 本 loop 只做 pure-HMX(`GDNSolveHMX`,全程 HMX matmul 的三角求逆)。** 判定本 loop 状态**只看本文 STATE/NEXT/LEDGER**。
 > **不要**用 git 历史 commit message、PROGRESS 里的 ✅、任何 memory、或 `gdn_solve.md` 等其它文档里**别条路线**(HVXMixHMX / merge-dtype / int16-merge / FP16)的"否决/OPEN/收口/比较"来判定本 loop——那些是**不同路线或旧目标(比快)下的结论**,与本 loop(目标 = min wall s.t. oc<4e-2,**不比较**)无关。本文自洽自足,不需旁读。
 > loop 只在 **wall 触 roofline 地板(~1.0M) 或 LEDGER A/B 全 DONE/REFUTED** 时到头——那时也是**写新 NEXT**,而非判"闭环"。
+>
+> ### 🔒 方向锁定(2026-06-13 用户裁定;后续 session 不准跑偏)
+> **当前唯一活动方向 = O6b compact-crouton 描述符**(让 consumer 64³ 读 compact 8KB 而非 padded 32KB,per-mm 10.8K→~3.3K,wall→~4-5M)。**这是主线,只做这个。** 细节 = 下面 `NEXT` 块。
+> **明令禁止跑偏(违反=作废):**
+> - ❌ **不做 O6a w8a16 单 pass**——用户已砍,非根本突破。
+> - ❌ **不动数值算法**(Taylor/Newton 次数、merge 顺序、scale)——O6b 纯布局,oc-中性。
+> - ❌ **不开新支线 / 不建新文档**——方向就在本文,别另起 goal 文档、别去捡 LEDGER 里的 A2/SKIPFIN/fan-out 等旧条目当 NEXT。
+> - ❌ **不重测已 REFUTED 的**(O6b 的 V1/V2 见 LEDGER;别再试"只挪 atab 间距")。
+> **O6b 的 crux 已收敛到一件事:拿到 QNN/标准件读 512B-tile 的精确 STRIDE 描述符**(不是 atab 间距)。起手见 `NEXT`。拿到→scaffold(`-DGP_O6B_TEST`)验 maxdiff=0 + cyc~3.3K→港进 solve,oc<4e-2 + wall 环比。
 
 > **每个 turn 的唯一入口。** 读 `STATE` 知道在哪 → 读 `NEXT` 知道这轮干什么 → 干完按 `LOOP` 更新本文。
 > 改任何东西前必读 `INVARIANTS` + `LEDGER`:**别重试 R 的 2 条死路,别改 INVARIANTS(除非新设备证据)。其余(A/B/D)都是活。**
@@ -31,7 +40,7 @@
 
 | 项 | 值 | 备注 |
 |---|---|---|
-| **当前 wall** | **~12.2-12.5M cyc（7.7ms）= 干净重写 全HVX + Newton0**(v1 1.354B → **111×**;**超参考 18.7M 1.5×**) | `gdn_pure_solve.cpp` 单路径,consumer-bound。**Newton=0 是真·最优**(下行 oc 证) |
+| **当前 wall** | **~10.0M cyc = 干净重写 全HVX + Newton0 + O5 scatter-kill**(v1 1.354B → 135×) | **O5 DONE(cron#19,−12%):** fuse linear↔block strided memcpy 进 gp_perm 的 HVX staging(`gp_unpack_blk`/`gp_pack_blk`)→ **scatter memcpy 13.98M→0**,wall 12M→~10M(同窗 REPS=8 reps2-4 median 12.71M→10.76M=−15.3%),oc 4.238e-3 不变。**瓶颈翻到 consumer**(busy ~9.1M ≈ wall)。**NEXT = O6b compact-crouton(唯一主线,见方向锁定+NEXT)** —— 砍 consumer per-mm 10.8K→~3.3K → wall ~4-5M。RE 进行中(STEP 1 拿精确 compact 描述符;V1/V2 已 REFUTED) |
 | **oc** | **synthetic0.05 4.24e-3 · 真 GDN(A_u16_h32)1.107e-2** | 都 < 4e-2(真数据 2.6× 余量)。**Newton=0 在两 scale 都最优** |
 | **关键发现** | **设备上 Newton 反效:oc 单调 ↑ Newton(真数据 N0=1.1e-2 < N1=3.2e-2 < N2=3.35e-2,max 3.69e-2 近门)** | w16a16 每 Newton 步加的 quant 噪声 > 截断收益(真 scale ‖A‖↑ 噪声更大)→ **Taylor(3) Newton=0 = 甜点;原 "Newton=2" 设计次优**。fp 截断分析(Newton 有益)被设备 quant **反转** |
 | 配置 | Newton=2,**40 mm/head**(24 对角 + 16 merge)= 1280 mm/32head | scale = 精度旋钮(甜点 ~0.25) |
@@ -42,11 +51,24 @@
 
 ## NEXT（这轮单一最高优先）
 
-> ## ✅ 收口（2026-06-13,用户裁定 commit）
-> **本 loop 目标达成:pure-HMX 路线推到设备极限 + 学清 w16a16。** 干净单路径 `gdn_pure_solve.cpp`:
-> **synthetic ~12M / oc 4.238e-3(3 reps 稳),真 GDN ~12M / oc 1.107e-2**,均 < 4e-2;**113× vs v1(1.354B),超旧 GDNSolveHMX 参考 18.7M 1.5×**;全 feed HVX,oc-neutral 路径 + PACKCHK byte-exact,Newton=0 锁定。
-> **已是 pure-HMX 路线硬地板**(consumer ~9M = 768×64³ padded 字节流量;真 scale 下 SKIPFIN/Taylor↓/Newton↑ 全不可)。**注:pure-HMX(12M)≠ 出货最优 —— 出货是 GDNSolveHVXMixHMX 1.78M(避开 per-64³ padded 字节);本 loop 是独立探索,价值 = 学清 w16a16 + Newton 反效。**
-> 剩余仅 A2 async(填 ~3M consumer idle,实为 scatter-stall,async 难填,diminishing)= 未做。重启 = 写新目标(E2E 集成 / 别路线)。下文 = 过程记录。
+> ## 🔧 NEXT = O6b compact-crouton（用户裁定 = 主线;O6a w8a16 砍掉,非根本突破）
+> **用户裁定(2026-06-13):O6a w8a16 不做(不是根本优化);做 O6b compact-crouton —— 真·对齐 QNN,这才是主线。**
+> **现状(O5 后):** wall ~10.0-10.6M,**consumer-busy ~9.1M ≈ wall = 瓶颈**。consumer = 768 mm × ~10.8K(口径④)。
+> **compact 是真杠杆(已用 QNN trace 定性):** kernel = QNN op **byte-identical**;QNN instance 3,349 cyc、**25.76 cyc/packet → ~130 packet**,kernel 是 **packet-bound,packet ∝ 读的 tile 数**。我们 padded 读 4× 的 act tile(136KB 流量)→ ~4× packet = 那个 3.2-4×。**compact(少 tile)= 真降 per-mm,不是 pipeline。**
+> **已挖到 ground truth(`handwritten_hmx_matmul/prepare_owned_inputs.py:generated_descriptor_tables`,M-general byte-exact):**
+> - compact act packer 现成:`w16a16_pack_act_crouton16(A,out,64,64)` → **8KB(16 块×512B)**;depack `w16a16_depack_crouton16` blk=(M/32)*128 u16(M=256→2KB,M=64→512B)。
+> - atab/otab offset = `((mt&7)*k_tiles+kt)*m_tiles*256` 字节(M=256 ×2048=我们现状;**M=64 ×512=compact**)。
+> - 静态描述符(标准件,M-general):out_y_stride=256、n_tiles_pow2=256、k_total=128、**act_y_stride=512**、m_total_minus_step=1。
+> **本轮(cron#20)RE 实测(scaffold `-DGP_O6B_TEST`,设备):**
+>   - **V1**(标准件 strides + ×512 atab) → **DSP fault**:n_tiles=256 越过我只填的 128-entry atab(标准件 M=64 表只 32 entry,(mt&7) 包在 offset 里不是 indexing)。
+>   - **V2**(solve 现工作 strides + ×512 atab) → 跑通但 **maxdiff 25774(错)+ cyc 10880 ≈ padded(无加速)** → **per-call 成本 = STRIDE 描述符,不是 atab 间距**;只挪 atab 没用。
+> **⇒ CRUX = 拿到精确 compact STRIDE 描述符**(读 512B-tile 的 stride 组合 + 正确 atab entry 数/wrapping)。猜要么 crash(V1)要么读 padded(V2)→ **不准再猜,去抓真值。**
+> **STEP 1 拿精确描述符(按便宜→贵,拿到即停):**
+>   - **1a(先试,最便宜):instrument 我们自己的 custom op** `example/qnn_hmx_matmul_w16a16/src/HmxU16I16ToU16MatMulOp.cpp`——它为给定 M,K,N 构建 compact 描述符并调 `our_v73deep_kernel_i16`。在 `hmx_w16a16_enter_kernel` 前 dump `out_desc`/`act_desc` 全字段 + `atab/otab` 前 32 entry;跑单个 **64×64×64** w16a16(`gen_onnx.py w16a16 --m 64 --k 64 --n 64`,走 custom op 包)并验证 op 输出对。**输出对 → 那就是合法 compact 描述符,抄下来。**
+>   - **1b(权威,1a 撞墙再上):vendor-dump native QNN** —— `[1,128,64,64]` 的 `q::ConvLayer` kernel 在 `libQnnHtpV75Skel.so`,打 vendor patch 在 conv slice 入口(`hmx_v73_convhhh1x1_stride1 @0x2fa740`)抓 r0..r5 + 指向字节;Skill `hmx-inline-asm` + 记忆 `reference_vendor_kernel_patch_dump`;复现 `GEN_BATCH=128 profile_all.sh`(已有 `output_b128/`)。
+>   - **1c(兜底):trace asm** `v73deep_conv1x1_kernel_i16.inc` 的 `activation.ub=mxmem(...)` 地址算术,定位 `act_y_stride`/`k_total`/`n_act_pairs` 里哪个决定每 tile 读 2KB vs 512B。
+> **STEP 2 验证:** 把精确描述符填进 `GP_O6B_TEST` scaffold(`gdn_pure_solve.cpp` 搜 `O6b COMPACT-64`)→ 构建 `-DGP_O6B_TEST` → 设备跑 → 门 **maxdiff=0 + cyc→~3.3K**(每版记进 LEDGER)。
+> **STEP 3 港进 solve:** `g_lut`/`gp_cv_to_surf`/`gp_surf_to_cv` 改 512B 块 + compact 描述符 → 设备测整 solve **oc 不变(4.238e-3)+ wall 环比 ↓**(consumer 9.1M→~3.7M,wall→~4-5M)= O6b DONE。
 
 **用户裁定(2026-06-13):旧实现是 6 套交叠迷宫 → 从头干净重写一套,然后逐步优化。** 干净重写 v1 已落地+验证正确(`gdn_pure_solve.cpp`,oc 9.662e-3 bit-match)。本 loop 转入**对 v1 逐步优化**,每步 oc<4e-2 + wall 环比门控。
 
@@ -109,8 +131,18 @@
 | **O4d HVX A-unpack/T-pack scatter(vgather perm)** | **DONE(1.28×,过参考)** | scatter 44.4M→**18.3M**,wall 23.9M→**18.68M**(< 参考 18.7M),oc 不变。`gp_perm`(memcpy 连续化 + vgather)+`g_il/g_fl` LUT。全 feed 现 HVX |
 | **Newton 2→1(精度换速)** | **DONE(1.22×)** | @scale0.05 oc **8.24e-3**(≈2 的 9.66e-3,quant-dominated)< 4e-2;mm 1280→1024,wall 18.68M→**15.23M**。默认改 1(`GP_NEWTON`)。⚠️ 大 ‖A‖ 需复核 |
 | **Newton 1→0 Taylor-only(精度换速)** | **DONE(1.25×)** | mm 1024→768,wall 15.23M→**12.21M**,oc **4.24e-3**(更优,Newton 单调加 quant 噪声)。默认改 0 + `#if GP_NEWTON>0` guard。⚠️ scale0.05-specific |
+| **O5 scatter-kill: fuse strided memcpy 进 gp_perm staging** | **DONE(cron#19,−12%)** | probe 拆 scatter 17.45M → **memcpy 13.98M(78.5%)** / gp_perm 3.39M / memset 0.39M。**memcpy 是全部瓶颈**(~1 byte/cyc,未向量化的 linear↔block strided 重排)。fix = `gp_unpack_blk`/`gp_pack_blk`:把 Aq 的 strided 64×64 块直接 HVX-load 进 gp_perm 的 VTCM staging(skip c->lin)、vgather 输出直接 strided-store 进 To → **memcpy 13.98M→0**。wall 12M→**~10.6M**(同窗 REPS=8 reps2-4 median 12.71M→10.76M=**−15.3%**;all-8 11.78M→10.62M=−9.8%),oc **4.238e-3 不变**(纯重排,oc-中性,128-align 安全)。**瓶颈翻到 consumer**(stats[3]~9.1M≈wall;producer-life 12.2M→9.9M)→ NEXT=O6 砍 consumer |
 | **DECISION 解决(真 scale 实测)** | **DONE(cron#11)** | 真 GDN ‖A‖ median 0.600/max 1.099(> synthetic 0.363)。设备真数据 oc:**N0 1.107e-2 < N1 3.2e-2 < N2 3.35e-2** → **Newton=0 在真 scale 也最优**(非 scale-fragile)。Newton=0 是真·最优,非精度换速妥协。**Taylor 3→2 在真 scale 会爆**(‖A‖~1.1,A³ 发散)→ 不可再降 diag |
-| SKIPFIN 跳远 merge / A2 async | OPEN-可选(diminishing) | SKIPFIN 真 scale 也要测(远块在大 ‖A‖ 贡献未必小);A2 填 ~3M consumer idle(oc-中性)。**或:已近极限,收口出货** |
+| **consumer idle probe + dynhead** | **DONE(cron#13)** | 实测 consumer 分解:busy 9.15M(78%)· **inter-job idle 2.04M(17%=A2 天花板)**· startup 0.33M · tail 0.21M。**dynhead 动态调度 REFUTED**(idle 2.04→2.08M 不变 → idle 非 head-对齐,是 1-job/producer 结构性 starve) |
+| **NOSCATTER 诊断** | **DONE(cron#14)** | 关 scatter:wall 11.73M→**9.18M**、consumer idle 2.04M→**0.02M** → **2.04M idle = 100% scatter 造成**(非 between-matmul)→ **double-buffer/async 无用**(scatter 时无 matmul 可 prep) |
+| **scatter-interleave(队列 drain 进 spin)** | **REFUTED(中性)** | 把 A-unpack 队列化、每 matmul spin drain 一块。oc 4.238e-3 ✓ 但 **wall/idle 不变**:**单块 scatter ~27K > 单 matmul 11.9K** → drain 溢出 spin,藏不住 |
+| **单 64³ matmul 实测(回应硬门质疑)** | **DONE(cron#15)** | 微基准(back-to-back resident)= **10,844 cyc/call** ≈ consumer 聚合 11.8K(非 contention)。**单 64³ 降不到 300**:300 是 MAC latency(data-resident,饱和拿不到);饱和 throughput = 字节流量 136KB = 4× padding(2KB HW tile,**compact 越界设备证伪** gdn_solve.md:145)× 2× double-pass(w16a16=2×w8a16,INVARIANT 1)。**= pure-HMX 64³ 根本地板,输 HVXMixHMX 的根因** |
+| **口径再纠(用户)** | **DONE(cron#16)** | 我的 10,844 是 **per-call feed-inclusive(口径④)非 HMX 计算**。consumer 9.1M = HMX 算 + feed |
+| **QNN-native 对齐(optrace+timeline,用户导)** | **DONE(cron#17)** | **重大纠错**:测 `[1,128,64,64]`(128 独立 distinct-weight 64³ = 128 链)→ **QNN hmx_used 1,430/matmul,ConvLayer 1,504/matmul,wall 2,020/matmul = 比我孤立 10,844 少 ~8×**。我微基准已证 back-to-back 同描述符仍 10,844/call → **8× 不是循环,是 descriptor fan-out**(QNN 一个 batched op 走 128 tile 保持 HMX 流水满,摊销 ~9K/call 的 fill/drain)。**我做 768 次 per-tile mxmem = 错模式**(`reference_hmx_dsp_vs_descriptor`:efficient HMX=fan-out 非 per-tile)。**12M 不是 feed 地板,是 per-call fill 重复 768 次** |
+| **stats 分解纠错(cron#18)= wall 不是纯 consumer-bound** | **DONE = 重定向 NEXT** | 实测 stats:wall 11.87M,**consumer-busy(stats[3])9.10M + 2.77M idle;slowest-producer-life(stats[11])11.8M ≈ wall;scatter Σ(stats[9])17.45M(/4=4.36M/prod)= producer 最大单项;spin Σ(stats[4])21.7M**。⇒ **producer/consumer 平衡流水**,非"768×fill 单一 consumer 地板"(cron#17 半对)。**两杠杆:O5 scatter-kill(producer 标量 repack,低险先)+ compact-crouton(consumer,后)**。详见 NEXT |
+| **起手:compact-crouton(consumer 第二杠杆,cron#18)** | **OPEN(scatter-kill 后)** | kernel `our_v73deep_kernel_i16` = QNN op **byte-identical**;描述符 FORMULA_DESC(M_t*32=M=64)= 我 override 一致。**我 M=64 单 mm 10,844(act 16×2KB padded span 32KB)vs QNN M=64 compact 3,349(读 18KB)= 3.2×,差在 act 的 row4-crouton 块格式(2KB-padded vs compact 512B-live)**。stride-hack 测无效(kernel 要 2KB-align,stride512/0→退化 4.9M/0)。要真港 `HmxU16I16ToU16MatMulOp.cpp` 的 row4 block table。**w16a16_mm.h "64³ 不 byte-exact" = 另一种手写;QNN M=64 compact 是 byte-exact(accepted 65536/65536)**。port 后 consumer 9.1M→~3.7M |
+| **w8a16 单 pass(砍 feed 2×,真 NEXT)** | **OPEN = NEXT** | w16a16=2×w8a16 双 pass 流 act/out 两遍。单 pass w8a16(int8 权重×int16 act)**腰斩 feed** → 5.2K/matmul → consumer ~4.5M → **wall ~7M**。sim:int8 权重 real-GDN oc 1.27e-3(< 4e-2,30× 余量,6-bit 都过)。需 int8 权重 pack + 单 pass kernel,设备测 oc |
+| M=256 批 / scatter-vshuff | 次要 | M=256 共享权重模式不配;scatter 填 2.04M idle 是次要(consumer feed 才是大头) |
 | A2 async dispatch overlap | OPEN | 去同步 spin(4.2%,小) |
 | O5 fan-out 批 | OPEN-评估 | HMX 已非瓶颈(④ 14%),收益存疑 |
 

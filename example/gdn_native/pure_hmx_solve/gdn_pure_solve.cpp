@@ -217,6 +217,29 @@ static void gp_perm(int16_t *dst, const int16_t *src, const uint16_t *ofs, int16
     }
 }
 
+/* O5 scatter-kill: fuse the (was-scalar) linear↔block memcpy into gp_perm's HVX staging, so the strided
+ * 64×64 block I/O is one HVX pass (no c->lin round-trip, no scalar memcpy). row r = 128B = 1 HVX vector,
+ * src/dst 128-aligned (rpcmem page + 128-multiple offsets). gp_unpack_blk: strided linear -> cv (A-unpack).
+ * gp_pack_blk: cv -> strided linear (T-pack), vgather output stored straight to the strided dst. */
+static void gp_unpack_blk(int16_t *dst, const int16_t *src_blk, const uint16_t *ofs, int16_t *stage) {
+    for (int r = 0; r < 64; ++r) ((HVX_Vector *)stage)[r] = *(const HVX_Vector *)&src_blk[r * 256];  /* strided -> VTCM */
+    HVX_Vector *g = (HVX_Vector *)(stage + 4096);
+    const HVX_Vector *o = (const HVX_Vector *)ofs;
+    for (int v = 0; v < 64; ++v) {
+        Q6_vgather_ARMVh((void *)g, (uint32_t)(uintptr_t)stage, 8191, o[v]);
+        ((HVX_Vector *)dst)[v] = *g;
+    }
+}
+static void gp_pack_blk(int16_t *dst_blk, const int16_t *src_cv, const uint16_t *ofs, int16_t *stage) {
+    for (int i = 0; i < 64; ++i) ((HVX_Vector *)stage)[i] = ((const HVX_Vector *)src_cv)[i];
+    HVX_Vector *g = (HVX_Vector *)(stage + 4096);
+    const HVX_Vector *o = (const HVX_Vector *)ofs;
+    for (int v = 0; v < 64; ++v) {
+        Q6_vgather_ARMVh((void *)g, (uint32_t)(uintptr_t)stage, 8191, o[v]);
+        *(HVX_Vector *)&dst_blk[v * 256] = *g;   /* vgather output -> strided linear dst (To) */
+    }
+}
+
 /* ---- job hand-off (producer -> main consumer): acquire/release on `state` only. ---- */
 struct gp_job { volatile int state; int _pad[31]; } __attribute__((aligned(128)));
 static gp_job g_job[GP_NT];
@@ -241,6 +264,7 @@ struct gp_ctx {
     int16_t     *stage;                  /* per-ctx VTCM 8KB+ staging for the HVX vgather weight pack */
     uint64_t    spin, t_pack, t_depack, t_life;
     uint64_t    t_gather, t_kmajor, t_bias, t_scatter;   /* sub-stage probes */
+    uint64_t    t_mc, t_pm, t_ms;   /* O5 scatter split: linear↔block memcpy / gp_perm vgather / memset */
 };
 static gp_ctx   g_ctx[GP_NT];
 static uint64_t g_cbusy;                 /* consumer: per-call feed-inclusive kernel cyc (口径 ④) */
@@ -300,10 +324,11 @@ static int diag_inv(gp_ctx *c, const int16_t *A, int16_t *X) {
 /* ---- one full C=256 head: 4 diag inverses + block forward-substitution for the off-diagonals. ---- */
 static void solve_head(gp_ctx *c, const int16_t *Aq, int16_t *To) {
     uint64_t us0 = gp_pcyc();
-    for (int bi = 0; bi < GP_NB; ++bi)                          /* unpack lower-tri A blocks linear -> cv (HVX) */
+    for (int bi = 0; bi < GP_NB; ++bi)                          /* unpack lower-tri A blocks linear -> cv (HVX, fused strided) */
         for (int bj = 0; bj <= bi; ++bj) {
-            for (int r = 0; r < GP_BL; ++r) memcpy(&c->lin[r * 64], &Aq[(bi * GP_BL + r) * 256 + bj * GP_BL], GP_BL * 2);
-            gp_perm(c->A[bi * 4 + bj], c->lin, g_il, c->stage);
+            uint64_t m1 = gp_pcyc();
+            gp_unpack_blk(c->A[bi * 4 + bj], &Aq[(bi * GP_BL) * 256 + bj * GP_BL], g_il, c->stage);
+            c->t_pm += gp_pcyc() - m1;
         }
     c->t_scatter += gp_pcyc() - us0;
     for (int b = 0; b < GP_NB; ++b) c->e[b * 5] = diag_inv(c, c->A[b * 5], c->T[b * 5]);
@@ -325,11 +350,13 @@ static void solve_head(gp_ctx *c, const int16_t *Aq, int16_t *To) {
             c->e[i * 4 + j] = c->e[i * 4 + i] + eS + gp_renorm(c->acc, c->T[i * 4 + j]);
         }
     uint64_t us1 = gp_pcyc();
-    memset(To, 0, 131072);                                     /* pack lower-tri blocks cv -> linear (HVX) */
+    memset(To, 0, 131072);                                     /* pack lower-tri blocks cv -> linear (HVX, fused strided) */
+    uint64_t ms1 = gp_pcyc(); c->t_ms += ms1 - us1;
     for (int bi = 0; bi < GP_NB; ++bi)
         for (int bj = 0; bj <= bi; ++bj) {
-            gp_perm(c->lin, c->T[bi * 4 + bj], g_fl, c->stage);
-            for (int r = 0; r < GP_BL; ++r) memcpy(&To[(bi * GP_BL + r) * 256 + bj * GP_BL], &c->lin[r * 64], GP_BL * 2);
+            uint64_t p0 = gp_pcyc();
+            gp_pack_blk(&To[(bi * GP_BL) * 256 + bj * GP_BL], c->T[bi * 4 + bj], g_fl, c->stage);
+            c->t_pm += gp_pcyc() - p0;
         }
     memcpy((uint8_t *)To + 128, c->e, 64);                     /* 16 block exps in unused upper-tri */
     c->t_scatter += gp_pcyc() - us1;
@@ -384,6 +411,7 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
         memset(g_ctx[t].mm.out, 0, W16MM_OUT_BYTES);
         g_ctx[t].spin = 0; g_ctx[t].t_pack = 0; g_ctx[t].t_depack = 0; g_ctx[t].t_life = 0;
         g_ctx[t].t_gather = 0; g_ctx[t].t_kmajor = 0; g_ctx[t].t_bias = 0; g_ctx[t].t_scatter = 0; g_job[t].state = 0;
+        g_ctx[t].t_mc = 0; g_ctx[t].t_pm = 0; g_ctx[t].t_ms = 0;
     }
     int packchk = -1;
     {   /* PACKCHK: HVX weight pack must be byte-identical to the scalar packer (else oc breaks). */
@@ -402,6 +430,62 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
         if (hvx == 0) qurt_hvx_unlock();
         FARF(ALWAYS, "GDN_PURE PACKCHK diff=%d (0 = HVX wt-pack byte-exact vs scalar)", packchk);
     }
+    {   /* SINGLE-64³-MATMUL micro-bench (answers the hard口径 gate): back-to-back w16a16_mm_run on
+         * resident VTCM operands -> true per-call throughput (NOT the consumer-loop aggregate). main
+         * thread holds the HMX lock. data-independent (mxmem cyc fixed). Warmup-excluded steady state
+         * ~8.2K (vs QNN compact M=64 = 3,349 -> 2.4x headroom = compact row4-crouton act layout, cron#18). */
+        const int B = 2000;
+        for (int i = 0; i < 64; ++i) w16a16_mm_run(&g_ctx[0].mm);   /* warmup (drop cold-start fill) */
+        uint64_t b0 = gp_pcyc();
+        for (int i = 0; i < B; ++i) w16a16_mm_run(&g_ctx[0].mm);
+        uint64_t per = (gp_pcyc() - b0) / B;
+        if (statsLen > 5) stats[5] = (int)per;
+        FARF(ALWAYS, "GDN_PURE MM64-bench: %llu cyc/call (single 64^3 w16a16, resident, back-to-back, steady)", (unsigned long long)per);
+    }
+#ifdef GP_O6B_TEST
+    {   /* O6b COMPACT-64³ correctness+timing (RE scaffold, -DGP_O6B_TEST). Premise: byte-identical kernel
+         * read a COMPACT act (8KB,512B blocks) vs our padded 32KB → 3.2× consumer lever.
+         * FINDINGS: V1 standalone strides (n_tiles=256,k_total=128,act_y=512) → DSP fault (n_tiles=256 reads
+         * past 128-entry atab). V2 working strides + ×512 atab → runs, maxdiff 25774 (wrong) + cyc=10880
+         * (NO speedup) → per-call cost = STRIDE descriptor, not atab spacing. Need QNN's exact compact stride
+         * descriptor (dump via vendor patch, reference_vendor_kernel_patch_dump). Restores desc for the solve. */
+        w16a16_mm_t *m = &g_ctx[0].mm;
+        int32_t a_save[128], o_save[128];
+        for (int i = 0; i < 128; ++i) { a_save[i] = m->atab[i]; o_save[i] = m->otab[i]; }
+        hmx_conv_out_desc_t *od = (hmx_conv_out_desc_t *)m->od; hmx_conv_act_desc_t *ad = (hmx_conv_act_desc_t *)m->ad;
+        hmx_conv_out_desc_t od_save = *od; hmx_conv_act_desc_t ad_save = *ad;
+        static uint16_t Aref[4096]; static int16_t Wq[4096]; static uint16_t outlin[4096];
+        for (int r = 0; r < 64; ++r) for (int c = 0; c < 64; ++c) {
+            Aref[r * 64 + c] = (uint16_t)(32768 + (((r * 7 + c * 3) % 97) - 48) * 64);   /* known act, zp32768 */
+            Wq[r * 64 + c]   = (int16_t)((((r * 5 + c * 11) % 127) - 63) * 240);          /* known wt q16 (±32639-ish) */
+        }
+        w16a16_pack_act_crouton16(Aref, (uint16_t *)m->act, 64, 64);     /* 8KB compact crouton16 */
+        w16a16_pack_wt_kmajor(Wq, m->wt, 64, 64);
+        w16a16_pack_bias(Wq, (int32_t *)m->bias, 64, 64);
+        for (int i = 0; i < 128; ++i) {                                  /* compact atab/otab: ×512 (m_tiles=2) */
+            int mt = i >> 1, kt = i & 1;
+            m->atab[i] = (int32_t)(uintptr_t)((uint8_t *)m->act + (size_t)(((mt & 7) * 2 + kt) * 512));
+            m->otab[i] = (int32_t)(uintptr_t)((uint8_t *)m->out + (size_t)(((mt & 7) * 2 + kt) * 512));
+        }
+        /* V2: keep the solve's WORKING descriptor fields (out_y=64,n_tiles=64,k_total=64,act_y=128);
+         * change ONLY the atab/otab spacing to ×512 (compact) + compact data. (V1 standalone strides crashed.) */
+        memset(m->out, 0, W16MM_OUT_BYTES);
+        uint64_t c0 = gp_pcyc(); w16a16_mm_run(m); uint64_t ccyc = gp_pcyc() - c0;
+        w16a16_depack_crouton16((const uint16_t *)m->out, outlin, 64, 64);
+        int maxd = 0, nz = 0;
+        for (int r = 0; r < 64; ++r) for (int c = 0; c < 64; ++c) {
+            long acc = 0; for (int kk = 0; kk < 64; ++kk) acc += (long)((int)Aref[r * 64 + kk] - 32768) * (int)Wq[kk * 64 + c];
+            long ref = acc / 32767; long got = (int)outlin[r * 64 + c] - 32768;
+            long d = ref - got; if (d < 0) d = -d; if (d > maxd) maxd = (int)d; if (outlin[r*64+c] != 32768) ++nz;
+        }
+        if (statsLen > 15) stats[15] = maxd;
+        if (statsLen > 16) stats[16] = (int)ccyc;
+        if (statsLen > 17) stats[17] = nz;
+        FARF(ALWAYS, "GDN_PURE O6b compact-64 test: maxdiff=%d nonzero=%d cyc=%llu (vs padded %d)", maxd, nz, (unsigned long long)ccyc, (int)stats[5]);
+        for (int i = 0; i < 128; ++i) { m->atab[i] = a_save[i]; m->otab[i] = o_save[i]; }
+        *od = od_save; *ad = ad_save;                                    /* restore padded descriptor for the real solve */
+    }
+#endif
     g_cbusy = 0; g_sat = 0; g_pdone = 0;
     g_Ah = A; g_Th = (uint8_t *)T; g_H = H; g_P = P;
 
@@ -439,8 +523,10 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
     { HAP_power_request_t off; memset(&off, 0, sizeof(off)); off.type = HAP_power_set_HMX; off.hmx.power_up = FALSE; HAP_power_set(pctx, &off); }
 
     uint64_t wall = t1 - t0, spin = 0, actcopy = 0, kmajor = 0, scatter = 0, outcopy = 0, life = 0, lmax = 0;
+    uint64_t sc_mc = 0, sc_pm = 0, sc_ms = 0;   /* O5 scatter split Σ */
     for (int t = 0; t < P; ++t) { spin += g_ctx[t].spin; actcopy += g_ctx[t].t_pack; kmajor += g_ctx[t].t_kmajor;
         scatter += g_ctx[t].t_scatter; outcopy += g_ctx[t].t_depack;
+        sc_mc += g_ctx[t].t_mc; sc_pm += g_ctx[t].t_pm; sc_ms += g_ctx[t].t_ms;
         life += g_ctx[t].t_life; if (g_ctx[t].t_life > lmax) lmax = g_ctx[t].t_life; }
     uint64_t other = life - spin - actcopy - kmajor - scatter - outcopy;   /* HVX renorm+acc (mm-level) */
     uint32_t nmm = (uint32_t)H * 40u;                          /* 24 diag + 16 merge per head */
@@ -449,13 +535,16 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
     if (statsLen > 2) stats[2] = H;
     if (statsLen > 3) stats[3] = (int)g_cbusy;                 /* ④ kernel (consumer) */
     if (statsLen > 4) stats[4] = (int)spin;                    /* spin Σ */
-    if (statsLen > 5) stats[5] = (int)(nmm * 256u);            /* ② HMX latency floor */
+    (void)nmm;   /* stats[5] = single-64³-matmul micro-bench cyc/call (set before solve) */
     if (statsLen > 6) stats[6] = (int)(us1 - us0);             /* wall us */
     if (statsLen > 7) stats[7] = (int)kmajor;                  /* HVX wt-pack Σ */
     if (statsLen > 8) stats[8] = packchk;                      /* HVX wt-pack byte-exact self-check (0 = ok) */
     if (statsLen > 9) stats[9] = (int)scatter;                 /* A-unpack + T-pack LUT-scatter Σ (SCALAR) */
     if (statsLen > 10) stats[10] = (int)other;                /* HVX renorm + acc (mm-level) Σ */
     if (statsLen > 11) stats[11] = (int)lmax;                  /* slowest producer life (~wall) */
+    if (statsLen > 12) stats[12] = (int)sc_mc;                 /* O5 scatter split: linear↔block memcpy Σ */
+    if (statsLen > 13) stats[13] = (int)sc_pm;                 /* O5 scatter split: gp_perm vgather Σ */
+    if (statsLen > 14) stats[14] = (int)sc_ms;                 /* O5 scatter split: memset(To,128KB) Σ */
     FARF(ALWAYS, "GDN_PURE(cv) P=%d H=%d wall=%llu packchk=%d | PROD-Σ actcopy=%llu kmajor=%llu scatter=%llu renorm/acc=%llu outcopy=%llu spin=%llu | CONS kernel=%llu",
          P, H, (unsigned long long)wall, packchk, (unsigned long long)actcopy, (unsigned long long)kmajor,
          (unsigned long long)scatter, (unsigned long long)other, (unsigned long long)outcopy,
