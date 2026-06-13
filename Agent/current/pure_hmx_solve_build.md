@@ -263,3 +263,12 @@ uv run python scripts/gdn_solve_taylor_newton_probe.py  # Newton 步数 vs 收�
 - ❌「w16a16 drain 走 fp16 / 深累加器丢低位 / 是 blocker」——**错**,drain 是 2-幂(INVARIANT 2)、matmul byte-exact(INVARIANT 3)。死因 = 用**错配量化**(native ONNX-scale bias 配任意 A,W)标定,被误读成有损。验证一律用**对配量化**(同 standalone 量化契约)。
 - ❌「64³ 描述符永不可用」——错,见 INVARIANT 7。
 - ❌「对角预条件能换便宜 dtype」——证伪,见 LEDGER R1。
+
+### cron#56: convhhh .inc loop-structure derivation (asm, start of descriptor-semantics task)
+Aligned entry (`v73deep_conv1x1_kernel_i16.inc`) loop nest, outer→inner:
+- **K-loop** (label 1): count=`k_total_bytes/16` (k=64→4 iters); advances WEIGHT r2 per iter (K-slices); resets atab/out base each iter (line 46).
+- **M-loop** (label 2): runs while `m_total_minus_step-8>0` ⇒ m_total∈{1..8}→**1 iter**; per iter atab r19+=act_y*4, out r18+=out_y*4 (line 45).
+- **loop0**: count=`n_act>>1` (n_act=2→1).
+- **loop1**: count=`(n_tiles+3)>>2`, reads 2 atab tiles/iter (line 33-35: r6=atab[i] r1++8, r23=atab[i+1]); drain+store output per loop1 (`mxmem(r10,r11):2x2=cvt`, line 44).
+
+Working (k=64,m=1,nact=2,n_tiles=32): 4 K × 16 act-tiles = 64 mxmem reads. Dense n_tiles=8: 4×4=16 reads (4× fewer = the speedup). **out_y/act_y unused at m_total≤8 (1 M-iter)** ⇒ native's out_y=4/act_y=4 vs our 64/128 irrelevant; dense bug is NOT those fields. Remaining: the **tile/K-slice accounting** — 16 sparse 256-live tiles vs 4 dense 1024-live tiles must present identical (act-tile × weight-K-slice) products. Next: trace mxmem tile geometry (how a 2KB tile's 256-live-vs-1024-live maps to the 32×32 HMX array + which K-bytes the weight stream feeds per slice) to build the dense 4-tile act + matching k_total. Real best stays cron#42 (1.64× bit-exact).
