@@ -442,6 +442,28 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
         if (statsLen > 5) stats[5] = (int)per;
         FARF(ALWAYS, "GDN_PURE MM64-bench: %llu cyc/call (single 64^3 w16a16, resident, back-to-back, steady)", (unsigned long long)per);
     }
+    {   /* O7 STEP 2: M-sweep fan-out amortization probe (cron, 2026-06-14). SAME kernel, descriptor M=128/256
+         * does 2/4 independent 64-row M-blocks in ONE prologue/epilogue (M-fan-out, shared-weight). atab is
+         * already ×2048 for 64 row-groups (mm_init). Linear fit cyc(M)=fixed+per_block*(M/64) -> 'fixed' =
+         * the per-call overhead that batching amortizes. If cyc(M256)/4 << cyc(M64) -> fan-out lever real;
+         * if cyc(M256)≈4×cyc(M64) -> cost is per-tile feed, batching won't help (skill warning gate). */
+        hmx_conv_out_desc_t *od = (hmx_conv_out_desc_t *)g_ctx[0].mm.od;
+        uint32_t sy = od->out_y_stride_words, sn = od->n_tiles_pow2;
+        const int B = 1000; uint64_t r[2] = {0, 0}; const uint32_t Ms[2] = {128u, 256u};
+        for (int mi = 0; mi < 2; ++mi) {
+            od->out_y_stride_words = Ms[mi]; od->n_tiles_pow2 = Ms[mi];
+            for (int i = 0; i < 32; ++i) w16a16_mm_run(&g_ctx[0].mm);   /* warmup */
+            uint64_t b0 = gp_pcyc();
+            for (int i = 0; i < B; ++i) w16a16_mm_run(&g_ctx[0].mm);
+            r[mi] = (gp_pcyc() - b0) / B;
+        }
+        od->out_y_stride_words = sy; od->n_tiles_pow2 = sn;            /* restore 64³ */
+        if (statsLen > 18) stats[18] = (int)r[0];                      /* M=128 call cyc */
+        if (statsLen > 19) stats[19] = (int)r[1];                      /* M=256 call cyc */
+        FARF(ALWAYS, "GDN_PURE O7-probe: M64=%d M128=%llu M256=%llu cyc/call; per-64block: M256/4=%llu vs M64=%d",
+             stats[5], (unsigned long long)r[0], (unsigned long long)r[1],
+             (unsigned long long)(r[1] / 4), stats[5]);
+    }
 #ifdef GP_O6B_TEST
     {   /* O6b COMPACT-64³ correctness+timing (RE scaffold, -DGP_O6B_TEST). Premise: byte-identical kernel
          * read a COMPACT act (8KB,512B blocks) vs our padded 32KB → 3.2× consumer lever.

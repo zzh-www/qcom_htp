@@ -55,6 +55,8 @@ int main(int argc, char **argv) {
            stats[12], stats[13], stats[14], stats[12]+stats[13]+stats[14], stats[9]);
     printf("  O6b compact-64 test: maxdiff=%d nonzero=%d cyc=%d  (vs padded bench %d)\n",
            stats[15], stats[17], stats[16], stats[5]);
+    printf("  O7 fan-out probe: M64=%d M128=%d M256=%d cyc/call; per-64block M256/4=%d vs M64=%d (amortize=%.2fx)\n",
+           stats[5], stats[18], stats[19], stats[19]/4, stats[5], stats[5] > 0 ? (double)stats[5] / ((double)stats[19]/4.0) : 0.0);
     if (stats[3] || stats[5] || stats[7]) {  /* PROBE_CYCLES per-stage (cyc/head) */
         int sum = stats[3]+stats[4]+stats[5]+stats[6]+stats[7]+stats[8]+stats[9];
         printf("  PROBE cyc/head: diag=%d zero=%d fold=%d quant=%d mm=%d acc=%d requant=%d  SUM=%d\n",
