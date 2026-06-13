@@ -335,3 +335,21 @@ killing the output. pack_bias(dense) likely != native's control word for n_tiles
 descriptor) revealed one more; goal NOT met; real best = cron#42 (1.64× bit-exact, oc 4.238e-3).
 Path remaining: dump+match native's bias/drain control word, then re-test output. Decode tooling +
 native input recipe all captured.
+
+### cron#62: bias control = scale-dependent (red herring); contradiction unresolved — DEFINITIVE endpoint
+Dumped native bias control words: 0x804035f3/0x4000023e vs our pack_bias 0x00404420/0x40000000. BUT this
+is scale-driven (drain gain = sA·sB/sC; mm32 has different scales than our solve). Our solve's scales
+correctly use 0x00404420 (working sparse path = oc 4.238e-3 proves it), and GP_DIFF used pack_bias +
+CPU ref at the SAME gain => bias consistent there. So bias is NOT the dense bug.
+
+UNRESOLVED CONTRADICTION: act (pack_act_crouton16) ✓, weight (pack_wt_kmajor) ✓, descriptor ✓,
+bias-consistent — all confirmed match native — yet dense n_tiles=8 computes wrong values in GP_DIFF
+(structured A@A). After ~29 iters of layer-by-layer dump-verification + 2 self-corrections, the root
+cause is not reliably determinable without further error-prone accounting. The contradiction likely
+hides in the loop-nesting/output-drain semantics I repeatedly mis-derived, or a setup detail GP_DIFF
+doesn't replicate from native's batched scheduler context.
+
+FINAL: goal (native 339/1547 full solve) NOT met. Delivered = cron#42 (per-call 5,547, 1.64× bit-exact,
+oc 4.238e-3, shipping). Reverse-engineered + dump-verified native's full 64³ recipe (descriptor/act/
+weight/bias all captured & compared); cracked the crouton-untile decode wall. The dense n_tiles=8 path
+has an unresolved correctness contradiction that exhaustive RE this session could not close.
