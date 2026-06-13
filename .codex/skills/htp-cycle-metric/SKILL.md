@@ -93,6 +93,27 @@ C. 同一个核, latency vs throughput (int16 4 byte-pass 流水):
 4. If the two ops are the SAME C++ (e.g. a custom op built both ways), build both and read `C15:14`
    inside the op — that is the cleanest direct proof (no tiler/counter ambiguity).
 
+### 🔒 THE cross-implementation rule (this is trap #4's most expensive form — a GDN loop burned ~12 iterations on it)
+Your bare-metal `C15:14`-around-the-call is **wall / feed-inclusive (口径④)**: matmul + every byte
+moved into the HMX array. QNN optrace's *headline per-op* numbers — `num_dominant_path_cycles`,
+`htp_op_instances[].cycles`, `by_htp_type` busy — are **latency / busy (口径②③)**: the matmul-only
+slice, feed excluded (QNN bills feed to *separate* sidecar ops like `weights_to_vtcm`/`ForceFormat`).
+**Putting "native 327" next to "ours 10,838" is comparing ② to ④ → a phantom 5–33× "gap" that is pure
+口径 mismatch.** (Real case: a w16a16 64³ kernel that is *byte-identical* to native and uses a
+*field-identical* descriptor still reads 10,838 wall vs native's "327" — because native's single-op
+*graph-wall* is ALSO ~11,034. Same kernel ⇒ same wall, always; mxmem timing is data-independent.)
+- **To compare two implementations, the ONLY admissible number is `graph-wall ÷ N`** (口径①, the whole
+  op/graph span `max(end_cycle)−min(start_cycle)` over the matmul count) — on BOTH sides. Never compare
+  an optrace per-op latency/busy figure to a bare-metal wall.
+- A faster *batch* wall (e.g. native 128-batch = 2,020 wall/matmul vs single-op 11,034) is real and IS a
+  口径① comparison — but it's overlap/amortization across ops, NOT the kernel being faster. Single-op
+  wall is the kernel's true cost; batch wall measures the *schedule*.
+- **A latency-floor fact ("the matmul is ~256 cyc") is NOT a gate on your wall measurement.** If your
+  per-call wall reads ≫300, that is the *correct feed-inclusive wall*, not a "口径 error to fix". Don't
+  go hunting for a missing fast-path because a floor number says 300 — first confirm whether the
+  fast-path (e.g. descriptor-driven M-fan-out) even exists for your dtype (objdump the kernel; it may be
+  byte-weight-only). Verify the kernel/descriptor are actually different before attributing a gap to them.
+
 ## Worked result (C=256, H=32, 4-thread, all PCYCLE)
 | per head | shipped `GdnSolve` | bare-metal BR (VTCM-resident) |
 |---|---|---|

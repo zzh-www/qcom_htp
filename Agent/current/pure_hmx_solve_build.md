@@ -7,8 +7,10 @@
 > **任何性能统计 / 分析 / 报数 / wall 判定 / NEXT 决策,MUST 走 skill `htp-cycle-metric`。** 先 `Skill(htp-cycle-metric)` 读口径,再测、再报、再判。规则:
 > - 每个数 = **value + 口径 + context**;四口径分清且分列:**① graph wall**(全程 span = 裁决)·**② op-latency**(`num_dominant_path_cycles` / `N_mm×256` = HMX 算力)·**③ unit-throughput/busy**(occupancy)·**④ per-call feed-inclusive**(kernel-call wall,含字节搬运)。
 > - 全 PCYCLE(`C15:14`);**时钟自检 `wall/µs ≈ 1594`**(本设备 TURBO;≫此 = 读错计数器,作废重测)。
-> - **硬门:单个 64³ 纯 HMX matmul 算力 = 200~300 cyc latency**(native int16 ~256)。任何把单 64³ 报成 >300 = 口径错(feed/padded 字节流量当算力)或实现没流水 → **先定位修正,该数不准用于判定**。
-> - **不按此口径产出的任何性能结论 = 无效**,不得写进 STATE/LEDGER、不得用于 wall 环比或 NEXT 取舍。(本轮我违反过:把 `g_cbusy` feed-inclusive 当 HMX 算力 → 误判 HMX-bound;已纠为 feed-bound。)
+> - **口径② 事实(非门):单个 64³ 的 *matmul-only latency* = 200~300 cyc**(native int16 ~256,dominant-path,数据驻留)。⚠️ **这是 HMX 做的那一段,不是你 stats 该读到的数。** 我们 `stats[5]` 是**口径④ per-call wall = matmul(~327) + mxmem-load feed(~10,500)**,**10,838 是正确的 wall,不是"口径错"、不是 bug、不需要"定位修正"。** (作废旧措辞「>300 = 口径错 → 先修正」:它把 ② 当成 ④ 该达到的目标,害本 loop cron#15→26 反复去"找口径错/找缺失的 fan-out",而 10,838 本就对。INVARIANT 9 同步纠。)
+> - 🔒 **跨实现比较铁律(cron#27 固化,防本轮原误):比"我们 vs native"只准用 *graph-wall ÷ matmul 数*(口径① 同口径)。** **optrace 的 `num_dominant_path_cycles` / `htp_op_instances[].cycles` / `by_htp_type` busy(口径②③)绝不直接对 baremetal 的 per-call wall(口径④)比** —— 那是跨口径,必造假差(本轮 327/1,430 对 10,838 = 假 7~33×)。要拿 native 当对照,**必须取它的 graph-wall span ÷ N**(`scripts/decode_qnn_optrace.py` 的 `max(end)-min(start)`,不是 per-op cycles)。
+> - 🔒 **native graph-wall 锚(唯一可比的 native 数,已 pin,别再从 optrace per-op 重导):** 单 64³ = **11,034 wall ≈ 我们 10,838**(同核同 descriptor → 必同,cron#23/27);128-batch = **2,020 wall/matmul**(跨 op 流水藏 stall = 真目标)。**"native <300" 永远指口径②,我们同核也 <300;别拿它当 wall 目标。**
+> - **不按此口径产出的任何性能结论 = 无效**,不得写进 STATE/LEDGER、不得用于 wall 环比或 NEXT 取舍。(本轮原罪 ×2:① 把 `g_cbusy` feed-inclusive 当 HMX 算力 → 误判 HMX-bound;② 把 optrace per-op 327/1,430 对 wall 10,838 比 → 误判 5~33× fan-out gap。均跨口径,均已固化禁止。)
 >
 > **范围 = 本 loop 只做 pure-HMX(`GDNSolveHMX`,全程 HMX matmul 的三角求逆)。** 判定本 loop 状态**只看本文 STATE/NEXT/LEDGER**。
 > **不要**用 git 历史 commit message、PROGRESS 里的 ✅、任何 memory、或 `gdn_solve.md` 等其它文档里**别条路线**(HVXMixHMX / merge-dtype / int16-merge / FP16)的"否决/OPEN/收口/比较"来判定本 loop——那些是**不同路线或旧目标(比快)下的结论**,与本 loop(目标 = min wall s.t. oc<4e-2,**不比较**)无关。本文自洽自足,不需旁读。
@@ -31,7 +33,7 @@
 **最小化 32-head TOTAL wall,硬约束 `oc < 4e-2`(每轮重测)。**
 - 任何让 `oc ≥ 4e-2` 的改动**否决**。oc 不随热漂 → **绝对门**。oc = device 输出 vs fp64 真值 inv,32-head aggregate(由 `run_w16a16_head_phase4.py` 输出)。
 - wall 口径 = skill `htp-cycle-metric`(**32-head TOTAL wall domain cyc**;per-head/min-of-reps/PROBE 全禁)。
-- **硬口径门(matmul sanity,每次报数自检):单个 64³ 纯 HMX matmul = 200~300 cyc latency**(native int16 ~256,dominant-path;或等效吞吐效率)。**任何把单 64³ matmul 报成 ≫300 cyc 的数 = 口径错(把 feed/padded 字节流量当算力,如 ~10.4K/call)或实现没流水(throughput/padding 主导)——必须先定位修正,不准当作"matmul 就这么贵"。** 见 INVARIANT 5/9 + skill `htp-cycle-metric`。本轮我违反过此门(g_cbusy 15.3M 当 HMX busy),已记录。
+- **口径分清(每次报数自检,非"门"):** 单个 64³ 的 **matmul-only latency = 200~300 cyc(口径②,native int16 ~256 dominant-path,数据驻留)= HMX 做的那一段**;**per-call wall(口径④,我们 stats[5])= matmul + mxmem-load feed ≈ 10,838 = 正确值,不是口径错。** ⚠️ **作废旧措辞「单 64³ ≫300 = 口径错 → 先定位修正」** —— 它把 ② 当 ④ 的目标,是本 loop cron#15→26 反复误判的根因(详见上方 §强制·性能口径 的"跨实现比较铁律")。**跨实现比 native 只用 graph-wall÷N(口径①),native 锚:单 64³ 11,034≈我们、128-batch 2,020/matmul;optrace per-op(327/1,430)绝不对 wall 比。** 本轮两次原罪(g_cbusy 当算力;optrace per-op 对 wall)均已固化禁止。
 - **wall 判定一律环比:新旧 A/B 同热窗 ACAC 交替,看配对差中位,绝不跟固定常数比**(协议见 LOOP 步骤 2)。绝对 18.7M 随设备热态漂(±~10%)= 参考,非门。
 - 不以"比其它实现快"为目标(用户定义);目标 = 本实现做到**设备极限** + 学清 w16a16 怎么用。
 - 真代码 / 真设备 / 真数据;预估、garbage-data 计时不算结论。
