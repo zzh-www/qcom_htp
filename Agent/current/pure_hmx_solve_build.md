@@ -272,3 +272,14 @@ Aligned entry (`v73deep_conv1x1_kernel_i16.inc`) loop nest, outer→inner:
 - **loop1**: count=`(n_tiles+3)>>2`, reads 2 atab tiles/iter (line 33-35: r6=atab[i] r1++8, r23=atab[i+1]); drain+store output per loop1 (`mxmem(r10,r11):2x2=cvt`, line 44).
 
 Working (k=64,m=1,nact=2,n_tiles=32): 4 K × 16 act-tiles = 64 mxmem reads. Dense n_tiles=8: 4×4=16 reads (4× fewer = the speedup). **out_y/act_y unused at m_total≤8 (1 M-iter)** ⇒ native's out_y=4/act_y=4 vs our 64/128 irrelevant; dense bug is NOT those fields. Remaining: the **tile/K-slice accounting** — 16 sparse 256-live tiles vs 4 dense 1024-live tiles must present identical (act-tile × weight-K-slice) products. Next: trace mxmem tile geometry (how a 2KB tile's 256-live-vs-1024-live maps to the 32×32 HMX array + which K-bytes the weight stream feeds per slice) to build the dense 4-tile act + matching k_total. Real best stays cron#42 (1.64× bit-exact).
+
+### cron#57: act layout CONFIRMED = pack_act_crouton16 (clean ramp dump) — bug isolated to K-slice/tile interaction
+Ramp act input (native code[r,c]=r*64+c) + act-data dump + cracked untile decode: native tile0[0..30]
+= (0,0),(1,0),(0,1),(1,1),...,(0,15),(1,15) = byte-exact w16a16_pack_act_crouton16(64,64). **Act input
+layout is NOT the dense bug (ruled out decisively).** weight=pack_wt_kmajor (same as correct sparse
+path), K-loop=k_total/16=4 (same). GP_DIFF dense (pack_act_crouton16 act + native descriptor) still
+computes WRONG VALUES (sorted-multiset mismatch) => bug isolated to the **K-slice<->4-tile interaction
+under n_tiles=8**: K sliced in 16-elem units ×4 vs 32×32 tile granularity; 4 act tiles × 4 K-slices=16
+reads must reproduce the 64³ that the working 16-tile×4-slice=64-read path does. Resolving needs the HMX
+mxmem K/tile instruction semantics (how a 2KB tile + :dilate + the 16-K weight slice compose) — the one
+piece I lack and kept mis-accounting. Real best stays cron#42 (1.64× bit-exact, oc 4.238e-3).
