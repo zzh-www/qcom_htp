@@ -71,9 +71,18 @@ def to_chrometrace(wall, base, evs):
     return out
 
 
+# HMX-active reference (口径③) per 64^3 matmul — from native parity (INVARIANT 5/9, NOT measured here).
+# We have NO HMX-unit hardware counter in this bare-metal trace: the slice dur is the consumer
+# KERNEL-CALL WALL (口径④ = matmul + mxmem feed/stall), which is what the thread is occupied by, NOT
+# what the HMX unit computes. Setting HMX_BUSY_REF lets us SHOW the gap honestly, never claim it as measured.
+HMX_ACTIVE_REF_PER_MM = 1430     # native 128-batch htp_resources.cycles_used / matmul (口径③, reference)
+MATMUL_LATENCY_FLOOR = 256       # 口径② dominant-path floor
+
+
 def summarize(wall, evs, nmm_per_head, heads):
-    """Print the summary using QNN's EXACT field names / 口径 (htp_overall_summary + htp_op_types)."""
-    busy = collections.Counter()          # cycles_used per unit-tid
+    """Print honestly-separated 口径. CRITICAL: the slice dur = consumer kernel-call WALL (口径④),
+    NOT HMX-unit compute. We do NOT have an HMX-active counter here; never call 口径④ 'HMX cycles_used'."""
+    occ = collections.Counter()           # thread-occupancy per tid (= Σ slice dur, 口径④ for HMX thread)
     by_op = collections.defaultdict(lambda: [0, 0])   # name -> [Σdur, count]
     span_lo, span_hi = 1 << 62, 0
     for (t, s, t0, t1) in evs:
@@ -81,27 +90,34 @@ def summarize(wall, evs, nmm_per_head, heads):
             continue
         _stg, name, typ = STAGE[s]
         tid = HMX_TID if typ == "HMX" else HVX_TID0 + t
-        if _stg != "SPIN":                # SPIN = idle-wait, excluded from busy (QNN: not active cycles)
-            busy[tid] += t1 - t0
+        if _stg != "SPIN":                # SPIN = idle-wait, not occupancy
+            occ[tid] += t1 - t0
         by_op[name][0] += t1 - t0; by_op[name][1] += 1
         span_lo = min(span_lo, t0); span_hi = max(span_hi, t1)
     timeline = span_hi - span_lo if span_hi else wall
-    hmx_busy = busy.get(HMX_TID, 0)
-    hvx_busy = sum(v for k, v in busy.items() if k >= HVX_TID0)
+    hmx_occ = occ.get(HMX_TID, 0)         # 口径④ consumer-thread slice-sum (matmul + mxmem feed/stall)
+    hvx_occ = sum(v for k, v in occ.items() if k >= HVX_TID0)
     spin = sum((t1 - t0) for (t, s, t0, t1) in evs if s == 11)
     n_mm = next((c for (nm, (d, c)) in by_op.items() if nm.endswith("matmul.stride1")), 0)
-    print("=== GDN baremetal solve — QNN-optrace-ALIGNED report (口径 == QHAS htp_overall_summary) ===")
-    print(f"  graph wall (timeline_cycles, 口径① THE verdict)      = {timeline}")
-    print(f"  HMX  tid256  cycles_used (口径③ busy) = {hmx_busy}  utilization = {hmx_busy*100.0/timeline:.1f}%  <- consumer matmul")
-    print(f"  HVX  tid512+ cycles_used (口径③ busy) = {hvx_busy}  utilization = {hvx_busy*100.0/timeline:.1f}%  (producer pack; SPIN-wait {spin} excluded)")
+    hmx_active_est = n_mm * HMX_ACTIVE_REF_PER_MM     # 口径③ ESTIMATE (native ref), NOT measured
+    print("=== GDN baremetal solve — QNN-optrace-ALIGNED report (口径 separated; skill htp-cycle-metric) ===")
+    print(f"  口径① graph wall (timeline_cycles, THE verdict)            = {timeline}")
+    print(f"  口径④ consumer-thread occupancy (HMX tid256 slice Σ)       = {hmx_occ}  = {hmx_occ*100.0/timeline:.0f}% of wall")
+    print(f"        ^ = matmul + mxmem-load STALL. THREAD-busy, NOT HMX-compute. (= QNN op 'Duration', not htp_resources.cycles_used)")
+    print(f"  口径③ HMX-UNIT active (true compute, = QNN htp_resources.cycles_used) — our baremetal has NO HMX counter,")
+    print(f"        but the kernel is byte-identical to native, so QNN optrace of it MEASURES our HMX-active = {HMX_ACTIVE_REF_PER_MM}/mm")
+    print(f"        x {n_mm} = ~{hmx_active_est} = ~{hmx_active_est*100.0/timeline:.0f}% of wall")
+    print(f"        => HMX truly computes only ~{hmx_active_est*100.0/max(hmx_occ,1):.0f}% of the consumer wall; the other ~{100-hmx_active_est*100.0/max(hmx_occ,1):.0f}% = mxmem feed/stall (HMX idle/stalled)")
+    print(f"  口径② matmul latency floor                                  = ~{MATMUL_LATENCY_FLOOR}/mm (dominant-path)")
+    print(f"  HVX producers tid512+: pack occupancy {hvx_occ} ; SPIN-wait {spin} (idle, waiting on consumer)")
     if n_mm:
-        print(f"  cross-impl (口径① ONLY): graph-wall / N_mm = {timeline}/{n_mm} = {timeline//n_mm} cyc/mm")
-        print(f"     QNN native anchors (same 口径①): single 64^3 = 11034 wall ; 128-batch = 2020/mm  <- targets")
-    print("  per HTP-op-type (QNN htp_op_types: cycles=active/busy, dp=Dominant Path=口径② latency):")
+        print(f"  cross-impl (口径① ONLY): graph-wall / N_mm = {timeline}/{n_mm} = {timeline//n_mm} cyc/mm  "
+              f"<-> QNN native: single 64^3=11034, 128-batch=2020/mm")
+    print("  per HTP-op-type (slice Σ = thread occupancy 口径④, NOT HMX-active):")
     for nm, (d, c) in sorted(by_op.items(), key=lambda kv: -kv[1][0]):
-        print(f"     {nm:28s} cycles(busy Σ)={d:>10}  instances={c:>4}  ~per-inst={d//max(c,1):>7}")
-    print("  !! 口径②(Dominant Path / per-op latency) NEVER compared to a bare-metal wall (口径④). "
-          "Cross-impl = graph-wall/N only. (skill htp-cycle-metric)")
+        print(f"     {nm:28s} occ Σ(口径④)={d:>10}  instances={c:>4}  per-call wall={d//max(c,1):>7}")
+    print("  !! NEVER read 口径④ (slice dur / thread occupancy) as HMX compute. True HMX-active needs the")
+    print("     HMX PMU counter (TODO) or a QNN optrace htp_resources.cycles_used. Cross-impl = graph-wall/N only.")
 
 
 def main():
