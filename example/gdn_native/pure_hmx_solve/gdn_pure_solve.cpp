@@ -47,18 +47,32 @@ namespace gdn_pure {
 /* HVX cv<->surface copy: int16 code <-> u16 zp-32768 is exactly XOR 0x8000. 16 blocks, 256 live u16
  * each (= 4 HVX vectors). Replaces the scalar per-element VTCM access (~4x slower than DDR, INV 8③).
  * Requires the cv side 128-byte aligned; surface (VTCM act/out) is 2KB-block aligned. */
+/* DENSE (cron#47): pack the 16 cv blocks CONTIGUOUS (b*256, 4 blocks/2KB tile) instead of 16 sparse
+ * ×2048 tiles. With dense atab (i&3)*2048 + n_tiles=8 the matmul streams in 8 walks (= native's
+ * [1,8,8,64] n_tiles=8) -> per-call 10841->1577 = native warm HMX-busy parity, bit-exact (micro-bench
+ * D1). GP_DENSE_SURF=0 keeps the old sparse layout. */
+#ifndef GP_DENSE_SURF
+#define GP_DENSE_SURF 0   /* WIP (cron#47): kernel parity PROVEN (D1 micro-bench 1577 bit-exact) but the
+                           * solve cv-path with dense g_lut still gives oc 0.708 (n_tiles-independent =
+                           * cv-build/output chain bug, not root-caused). 0 = safe cron#42 baseline. */
+#endif
+#if GP_DENSE_SURF
+#define GP_SURF_BLK 256
+#else
+#define GP_SURF_BLK 1024
+#endif
 static inline void gp_cv_to_surf(uint16_t *surf, const int16_t *cv) {
     const HVX_Vector K = Q6_Vh_vsplat_R(0x8000);
     for (int b = 0; b < 16; ++b) {
         const HVX_Vector *s = (const HVX_Vector *)(cv + b * 256);
-        HVX_Vector *d = (HVX_Vector *)(surf + b * 1024);
+        HVX_Vector *d = (HVX_Vector *)(surf + b * GP_SURF_BLK);
         for (int k = 0; k < 4; ++k) d[k] = Q6_V_vxor_VV(s[k], K);
     }
 }
 static inline void gp_surf_to_cv(int16_t *cv, const uint16_t *surf) {
     const HVX_Vector K = Q6_Vh_vsplat_R(0x8000);
     for (int b = 0; b < 16; ++b) {
-        const HVX_Vector *s = (const HVX_Vector *)(surf + b * 1024);
+        const HVX_Vector *s = (const HVX_Vector *)(surf + b * GP_SURF_BLK);
         HVX_Vector *d = (HVX_Vector *)(cv + b * 256);
         for (int k = 0; k < 4; ++k) d[k] = Q6_V_vxor_VV(s[k], K);
     }
@@ -99,10 +113,21 @@ static inline void gp_ev_push(uint32_t tid, uint32_t stage, uint64_t t0, uint64_
 /* crouton LUT: linear 64x64 index (r*64+c) -> compact cv index (block*256 + intra), block<16. */
 static uint16_t g_lut[GP_BB];
 static void gp_lut_init(void) {
+#if GP_DENSE_SURF
+    /* DENSE (cron#47): cv = w16a16_pack_act_crouton16 contiguous order (4096, 4 dense 2KB tiles). With
+     * dense atab (i&3)*2048 + n_tiles=8 the kernel streams in 8 walks = native [1,8,8,64]. Everything
+     * (g_hw weight pack / g_il-g_fl / diag / PACKCHK) derives from g_lut so it all follows. Proven
+     * bit-exact + 1577 cyc in the GP_DENSE8 micro-bench (D1). */
+    for (int r = 0; r < 64; ++r) for (int c = 0; c < 64; ++c) {
+        int m32 = r >> 5, rr = r & 31, row4 = rr >> 2, rp = (rr >> 1) & 1, parity = r & 1, kt = c >> 5, cc = c & 31;
+        g_lut[r * 64 + c] = (uint16_t)(((((row4 * 2 + kt) * 2 + m32) * 2 + rp) * 32 + cc) * 2 + parity);
+    }
+#else
     for (int r = 0; r < 64; ++r) for (int c = 0; c < 64; ++c)
         g_lut[r * 64 + c] = (uint16_t)(((((r >> 2) & 7) * 2 + (c >> 5)) * 1024) +
             (((r >> 5) * 2 + ((r >> 1) & 1)) * 64) + ((c & 31) * 2) + (r & 1));   /* -> surface u16 idx */
     for (int i = 0; i < GP_BB; ++i) { int s = g_lut[i]; g_lut[i] = (uint16_t)(((s >> 10) << 8) + (s & 1023)); }
+#endif
 }
 
 /* ---- HVX weight pack (O4b): replaces scalar gather + kmajor + bias (all scalar VTCM writes). ----
@@ -429,13 +454,23 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
     for (int t = 0; t < P; ++t) {
         w16a16_mm_init(&g_ctx[t].mm, vbase + (size_t)t * GP_VSTRIDE, g_ctx[t].descs);
         { hmx_conv_out_desc_t *od = (hmx_conv_out_desc_t *)g_ctx[t].mm.od;   /* TRUE 64^3 (INVARIANT 7) */
-          /* n_tiles: atab/otab repeat every 8 row-groups (rg&7); n_tiles=64 does redundant MAC passes.
-           * Sweeping GP_NTILES against the REAL solve oc (the micro-bench layout differs from the solve's
-           * gp_cv_to_surf surface, so its floor doesn't transfer). cron 2026-06-14. */
+#if GP_DENSE_SURF
+          /* DENSE (cron#47): act/out packed contiguous (4 tiles of 2KB); atab/otab = (i&3)*2048; n_tiles=8
+           * = native [1,8,8,64]. per-call ->1577 = native warm HMX-busy 1547 parity, bit-exact. */
+          uint8_t *act = (uint8_t *)g_ctx[t].mm.act, *out = (uint8_t *)g_ctx[t].mm.out;
+          for (int i = 0; i < 16; ++i) {
+              g_ctx[t].mm.atab[i] = (int32_t)(uintptr_t)(act + (size_t)(i & 3) * 2048);
+              g_ctx[t].mm.otab[i] = (int32_t)(uintptr_t)(out + (size_t)(i & 3) * 2048);
+          }
+          od->out_y_stride_words = 64u; od->n_tiles_pow2 = 8u;
+#else
+          /* n_tiles: atab/otab repeat every 8 row-groups (rg&7); n_tiles=64 does redundant MAC passes. */
 #ifndef GP_NTILES
 #define GP_NTILES 32u   /* solve floor = ~30 (gp_cv_to_surf layout); 32 = safe margin, oc byte-identical to 64 */
 #endif
-          od->out_y_stride_words = 64u; od->n_tiles_pow2 = GP_NTILES; }
+          od->out_y_stride_words = 64u; od->n_tiles_pow2 = GP_NTILES;
+#endif
+        }
         g_ctx[t].stage = (int16_t *)(vbase + (size_t)t * GP_VSTRIDE + 0x28000u);   /* gap after mm.out */
         uint16_t *act = (uint16_t *)g_ctx[t].mm.act;                         /* prefill padded act = zp */
         for (int i = 0; i < W16MM_ACT_BYTES / 2; ++i) act[i] = 32768;
@@ -581,6 +616,63 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
         if (hl == 0) HAP_compute_res_hmx_unlock(hctx); if (hctx) HAP_compute_res_release(hctx);
         if (vctx) HAP_compute_res_release(vctx);
         return 0;                                                     /* sweep only — skip the solve */
+    }
+#endif
+#ifdef GP_DENSE8
+    {   /* DENSE-8-TILE sweep (cron, 2026-06-14, GP_DENSE8). native warm matmul-op = 335 via n_tiles=8 over
+         * a DENSE 4-tile act ([1,8,8,64], atab[0..3]=0/2048/4096/6144 = mm_init's first 4). pack_act_crouton16
+         * fills exactly 4 contiguous 2KB tiles. 2 byte-passes (n_act=2) re-read them. Test dense atab variants
+         * + n_tiles to find the bit-exact + fast config -> per-call toward native 335-1547. CPU-ref correctness
+         * (maxd~190 = drain rounding = OK, like V0). cyc = back-to-back resident. */
+        w16a16_mm_t *m = &g_ctx[0].mm;
+        hmx_conv_out_desc_t *od = (hmx_conv_out_desc_t *)m->od; hmx_conv_act_desc_t *ad = (hmx_conv_act_desc_t *)m->ad;
+        hmx_conv_out_desc_t od_save = *od; hmx_conv_act_desc_t ad_save = *ad;
+        static int32_t a_save[128], o_save[128];
+        for (int i = 0; i < 128; ++i) { a_save[i] = m->atab[i]; o_save[i] = m->otab[i]; }
+        static uint16_t Aref[4096]; static int16_t Wq[4096]; static uint16_t outlin[4096];
+        for (int r = 0; r < 64; ++r) for (int c = 0; c < 64; ++c) {
+            Aref[r*64+c] = (uint16_t)(32768 + (((r*7+c*3)%97)-48)*5);
+            Wq[r*64+c]   = (int16_t)((((r*5+c*11)%127)-63)*24);
+        }
+        w16a16_pack_act_crouton16(Aref, (uint16_t *)m->act, 64, 64);   /* DENSE: 4096 u16 contiguous = 4 tiles */
+        w16a16_pack_wt_kmajor(Wq, m->wt, 64, 64); w16a16_pack_bias(Wq, (int32_t *)m->bias, 64, 64);
+        uint8_t *act = (uint8_t *)m->act, *out = (uint8_t *)m->out;
+        /* variant: {label, atab-builder-id, n_tiles}. atab id: 0=mod4-flat[t0t1t2t3t0..] 1=pairs[t0t0t1t1..] */
+        struct { const char *lbl; int aid; uint32_t nt; } V[] = {
+            { "D0 working(16wrap)n64", -1, 64u },   /* control: known-correct */
+            { "D1 dense mod4 nt8",      0,  8u },
+            { "D2 dense mod4 nt16",     0, 16u },
+            { "D3 dense pairs nt8",     1,  8u },
+            { "D4 dense linear8 nt8",   2,  8u },   /* tiles 0-7 linear (4-7 zp) = expect wrong */
+        };
+        const int NV = (int)(sizeof(V)/sizeof(V[0])), B = 500;
+        for (int v = 0; v < NV; ++v) {
+            if (V[v].aid >= 0) {
+                for (int i = 0; i < 16; ++i) {
+                    int tile = (V[v].aid == 0) ? (i & 3) : (V[v].aid == 1) ? ((i >> 1) & 3) : (i & 7);
+                    m->atab[i] = (int32_t)(uintptr_t)(act + (size_t)tile * 2048);
+                    m->otab[i] = (int32_t)(uintptr_t)(out + (size_t)tile * 2048);
+                }
+                od->n_tiles_pow2 = V[v].nt; od->out_y_stride_words = 64u; od->m_total_minus_step = 1;
+                ad->act_table_y_stride_words = 128u;
+            } else { for (int i=0;i<128;++i){m->atab[i]=a_save[i];m->otab[i]=o_save[i];} *od=od_save;*ad=ad_save; od->n_tiles_pow2=V[v].nt; }
+            memset(m->out, 0, W16MM_OUT_BYTES);
+            w16a16_mm_run(m);
+            w16a16_depack_crouton16((const uint16_t *)m->out, outlin, 64, 64);
+            int maxd = 0;
+            for (int r = 0; r < 64; ++r) for (int c = 0; c < 64; ++c) {
+                long acc = 0; for (int kk = 0; kk < 64; ++kk) acc += (long)((int)Aref[r*64+kk]-32768)*(int)Wq[kk*64+c];
+                long d = acc/32767 - ((int)outlin[r*64+c]-32768); if (d<0) d=-d; if (d>maxd) maxd=(int)d;
+            }
+            for (int i = 0; i < 8; ++i) w16a16_mm_run(m);
+            uint64_t b0 = gp_pcyc(); for (int i = 0; i < B; ++i) w16a16_mm_run(m); uint64_t cyc = (gp_pcyc()-b0)/B;
+            FARF(ALWAYS, "GDN_PURE DENSE8 %-22s: maxdiff=%d cyc=%llu (CPU-ref; ~190=OK drain)", V[v].lbl, maxd, (unsigned long long)cyc);
+            if (statsLen > v*2+1) { stats[v*2] = maxd; stats[v*2+1] = (int)cyc; }
+        }
+        for (int i=0;i<128;++i){m->atab[i]=a_save[i];m->otab[i]=o_save[i];} *od=od_save;*ad=ad_save;
+        if (hl == 0) HAP_compute_res_hmx_unlock(hctx); if (hctx) HAP_compute_res_release(hctx);
+        if (vctx) HAP_compute_res_release(vctx);
+        return 0;
     }
 #endif
 #ifdef GP_O6B_TEST
