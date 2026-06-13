@@ -629,24 +629,27 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
         hmx_conv_out_desc_t od_save = *od; hmx_conv_act_desc_t ad_save = *ad;
         static int32_t a_save[128], o_save[128];
         for (int i = 0; i < 128; ++i) { a_save[i] = m->atab[i]; o_save[i] = m->otab[i]; }
-        static uint16_t Aref[4096]; static int16_t Wq[4096]; static uint16_t outlin[4096];
+        static uint16_t Aref[4096]; static int16_t Wq[4096]; static uint16_t outlin[4096]; static int16_t cvbuf[4096];
         for (int r = 0; r < 64; ++r) for (int c = 0; c < 64; ++c) {
             Aref[r*64+c] = (uint16_t)(32768 + (((r*7+c*3)%97)-48)*5);
             Wq[r*64+c]   = (int16_t)((((r*5+c*11)%127)-63)*24);
         }
-        w16a16_pack_act_crouton16(Aref, (uint16_t *)m->act, 64, 64);   /* DENSE: 4096 u16 contiguous = 4 tiles */
         w16a16_pack_wt_kmajor(Wq, m->wt, 64, 64); w16a16_pack_bias(Wq, (int32_t *)m->bias, 64, 64);
         uint8_t *act = (uint8_t *)m->act, *out = (uint8_t *)m->out;
-        /* variant: {label, atab-builder-id, n_tiles}. atab id: 0=mod4-flat[t0t1t2t3t0..] 1=pairs[t0t0t1t1..] */
-        struct { const char *lbl; int aid; uint32_t nt; } V[] = {
-            { "D0 working(16wrap)n64", -1, 64u },   /* control: known-correct */
-            { "D1 dense mod4 nt8",      0,  8u },
-            { "D2 dense mod4 nt16",     0, 16u },
-            { "D3 dense pairs nt8",     1,  8u },
-            { "D4 dense linear8 nt8",   2,  8u },   /* tiles 0-7 linear (4-7 zp) = expect wrong */
+        /* variant: {label, atab-id, n_tiles, actfill}. atab: 0=mod4 1=pairs 2=linear8; -1=working16.
+         * actfill: 0=pack_act_crouton16(direct) 1=cv->gp_cv_to_surf(solve act path,needs GP_DENSE_SURF). */
+        struct { const char *lbl; int aid; uint32_t nt; int af; } V[] = {
+            { "D0 working n64",       -1, 64u, 0 },
+            { "D1 dense mod4 nt8",     0,  8u, 0 },
+            { "D5 cv-path mod4 nt8",   0,  8u, 1 },   /* = solve act path (gp_cv_to_surf dense) */
+            { "D6 cv-path mod4 nt64",  0, 64u, 1 },
+            { "D7 cv-path 16wrap n64",-1, 64u, 1 },   /* solve act path on WORKING atab */
         };
         const int NV = (int)(sizeof(V)/sizeof(V[0])), B = 500;
         for (int v = 0; v < NV; ++v) {
+            if (V[v].af == 0) w16a16_pack_act_crouton16(Aref, (uint16_t *)m->act, 64, 64);  /* direct */
+            else { for (int i=0;i<4096;++i) cvbuf[g_lut[i]] = (int16_t)((int)Aref[i]-32768);  /* cv in g_lut order */
+                   gp_cv_to_surf((uint16_t *)m->act, cvbuf); }                               /* solve act path */
             if (V[v].aid >= 0) {
                 for (int i = 0; i < 16; ++i) {
                     int tile = (V[v].aid == 0) ? (i & 3) : (V[v].aid == 1) ? ((i >> 1) & 3) : (i & 7);
@@ -668,6 +671,101 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
             uint64_t b0 = gp_pcyc(); for (int i = 0; i < B; ++i) w16a16_mm_run(m); uint64_t cyc = (gp_pcyc()-b0)/B;
             FARF(ALWAYS, "GDN_PURE DENSE8 %-22s: maxdiff=%d cyc=%llu (CPU-ref; ~190=OK drain)", V[v].lbl, maxd, (unsigned long long)cyc);
             if (statsLen > v*2+1) { stats[v*2] = maxd; stats[v*2+1] = (int)cyc; }
+        }
+        {   /* gp_surf_to_cv chain test: matmul -> gp_surf_to_cv(out_cv) -> gp_pack_blk(->linear) vs CPU.
+             * tests the OUTPUT readback that feeds the next matmul (D5 used depack_crouton16, not this). */
+            static int16_t out_cv[4096], To[64*256];
+            w16a16_pack_act_crouton16(Aref, (uint16_t *)m->act, 64, 64);
+            for (int i = 0; i < 16; ++i) { int t=i&3; m->atab[i]=(int32_t)(uintptr_t)(act+(size_t)t*2048);
+                m->otab[i]=(int32_t)(uintptr_t)(out+(size_t)t*2048); }
+            od->n_tiles_pow2=8u; od->out_y_stride_words=64u; od->m_total_minus_step=1; ad->act_table_y_stride_words=128u;
+            memset(m->out,0,W16MM_OUT_BYTES); w16a16_mm_run(m);
+            gp_surf_to_cv(out_cv, (const uint16_t *)m->out);
+            for (int i=0;i<64*256;++i) To[i]=0;
+            gp_pack_blk(To, out_cv, g_fl, g_ctx[0].stage);
+            int sd=0; for (int r=0;r<64;++r) for (int c=0;c<64;++c){
+                long acc=0; for(int kk=0;kk<64;++kk) acc+=(long)((int)Aref[r*64+kk]-32768)*(int)Wq[kk*64+c];
+                long d=acc/32767 - (int)To[r*256+c]; if(d<0)d=-d; if(d>sd)sd=(int)d; }
+            FARF(ALWAYS,"GDN_PURE DENSE8 surf_to_cv chain maxdiff=%d (~190=ok)", sd);
+            if (statsLen>17) stats[17]=sd;
+        }
+        {   /* full mm64 composition test (gp_cv_to_surf + gp_pack_wt_bias_hvx weight + matmul + gp_surf_to_cv):
+             * A_cv @ A_cv -> AA_cv, compare to CPU A@A. tests the SOLVE weight path inside a real matmul. */
+            static int16_t Acv[4096], AAcv[4096], Taa[64*256], Aqs[64*256];
+            for (int r=0;r<64;++r) for (int c=0;c<64;++c) Aqs[r*256+c]=(int16_t)((int)Aref[r*64+c]-32768);
+            gp_unpack_blk(Acv, Aqs, g_il, g_ctx[0].stage);   /* SOLVE input path (not direct cvbuf) */
+            { hmx_conv_out_desc_t *od2=(hmx_conv_out_desc_t*)m->od; hmx_conv_act_desc_t *ad2=(hmx_conv_act_desc_t*)m->ad;
+              for (int i=0;i<16;++i){int t=i&3; m->atab[i]=(int32_t)(uintptr_t)(act+(size_t)t*2048); m->otab[i]=(int32_t)(uintptr_t)(out+(size_t)t*2048);}
+              od2->n_tiles_pow2=8u; od2->out_y_stride_words=64u; od2->m_total_minus_step=1; ad2->act_table_y_stride_words=128u; }
+            static int16_t A3cv[4096]; static int CPUaa[4096];
+            int sl=g_ctx[0].slot; g_ctx[0].slot=-1;
+            mm64(&g_ctx[0], Acv, Acv, AAcv);          /* AA = A@A */
+            mm64(&g_ctx[0], AAcv, Acv, A3cv);         /* A3 = AA@A (CHAINED: AA fed back as act) */
+            g_ctx[0].slot=sl;
+            for (int i=0;i<64*256;++i) Taa[i]=0;
+            gp_pack_blk(Taa, A3cv, g_fl, g_ctx[0].stage);
+            /* CPU AA then A3 (code space, /32767 drain each) */
+            for (int r=0;r<64;++r) for (int c=0;c<64;++c){ long a=0; for(int kk=0;kk<64;++kk) a+=(long)((int)Aref[r*64+kk]-32768)*((int)Aref[kk*64+c]-32768); CPUaa[r*64+c]=(int)(a/32767); }
+            int md=0; for (int r=0;r<64;++r) for (int c=0;c<64;++c){
+                long acc=0; for(int kk=0;kk<64;++kk) acc+=(long)CPUaa[r*64+kk]*((int)Aref[kk*64+c]-32768);
+                long d=acc/32767-(int)Taa[r*256+c]; if(d<0)d=-d; if(d>md)md=(int)d; }
+            FARF(ALWAYS,"GDN_PURE DENSE8 mm64 CHAIN A3=AA@A maxdiff=%d (small=ok)", md);
+            if (statsLen>14) stats[14]=md;
+        }
+        {   /* full diag_inv test: strictly-lower A -> X=(I-A)^-1 Taylor(3). reconstruct X_v=X_code*2^eX/32767,
+             * compare to CPU I+A+A²+A³ (relative). This is the actual failing unit (T_ii diag blocks). */
+            static int16_t Aq2[64*256], Acv2[4096], Xcv[4096], Xlin[64*256]; static double Av[64][64], X0[64][64];
+            for (int r=0;r<64;++r) for (int c=0;c<64;++c){ int v = (r>c) ? (((r*5+c*7)%41)-20)*300 : 0;
+                Aq2[r*256+c]=(int16_t)v; Av[r][c]=v/32767.0; }
+            gp_unpack_blk(Acv2, Aq2, g_il, g_ctx[0].stage);
+            int sl=g_ctx[0].slot; g_ctx[0].slot=-1;
+            int eX = diag_inv(&g_ctx[0], Acv2, Xcv);
+            g_ctx[0].slot=sl;
+            for (int i=0;i<64*256;++i) Xlin[i]=0; gp_pack_blk(Xlin, Xcv, g_fl, g_ctx[0].stage);
+            /* CPU X0 = I + A + A^2 + A^3 */
+            static double A2[64][64], A3[64][64];
+            for (int r=0;r<64;++r) for (int c=0;c<64;++c){ double s=0; for(int k=0;k<64;++k) s+=Av[r][k]*Av[k][c]; A2[r][c]=s; }
+            for (int r=0;r<64;++r) for (int c=0;c<64;++c){ double s=0; for(int k=0;k<64;++k) s+=A2[r][k]*Av[k][c]; A3[r][c]=s; }
+            for (int r=0;r<64;++r) for (int c=0;c<64;++c) X0[r][c]=(r==c?1.0:0.0)+Av[r][c]+A2[r][c]+A3[r][c];
+            double num=0,den=0; double sc=1.0; for(int i=0;i<eX;++i) sc*=2.0; for(int i=0;i<-eX;++i) sc/=2.0;
+            for (int r=0;r<64;++r) for (int c=0;c<64;++c){ double xv=Xlin[r*256+c]*sc/32767.0; double d=xv-X0[r][c]; num+=d*d; den+=X0[r][c]*X0[r][c]; }
+            int rel = (int)(10000.0 * (den>0? (num/den):0));   /* relerr^2 *1e4 */
+            FARF(ALWAYS,"GDN_PURE DENSE8 diag_inv relerr^2*1e4=%d eX=%d (small=ok)", rel, eX);
+            if (statsLen>13) stats[13]=rel;
+        }
+        {   /* diag-add isolation: acc=0, +1000 to diagonal, ->cv->linear. check ONLY (d,d)=1000.
+             * misplaced diag (under new g_lut) corrupts whole block via renorm absmax->shift. */
+            static int16_t cvd[4096], Td[64*256];
+            gp_acc_zero(g_ctx[0].acc);
+            gp_acc_diag_add(g_ctx[0].acc, 1000);
+            gp_acc_to_cv(cvd, g_ctx[0].acc, 0);
+            for (int i=0;i<64*256;++i) Td[i]=0;
+            gp_pack_blk(Td, cvd, g_fl, g_ctx[0].stage);
+            int dbad=0, obad=0;
+            for (int r=0;r<64;++r) for (int c=0;c<64;++c) { int v=Td[r*256+c];
+                if (r==c) { if (v!=1000) dbad++; } else if (v!=0) obad++; }
+            FARF(ALWAYS,"GDN_PURE DENSE8 diag-add: diag-wrong=%d off-diag-nonzero=%d (0,0=ok)", dbad, obad);
+            if (statsLen>15) stats[15]=dbad*10000+obad;
+        }
+        {   /* cv<->acc round-trip (gp_acc_from_cv vsxt in / gp_acc_to_cv vasr out): is it IDENTITY?
+             * If a permutation (not identity), the OLD g_lut absorbed it but pack-order g_lut breaks. */
+            static int16_t cvin[4096], cvout[4096];
+            for (int i=0;i<4096;++i) cvin[i]=(int16_t)((i*131+7)%1999 - 999);
+            gp_acc_from_cv(g_ctx[0].acc, cvin);
+            gp_acc_to_cv(cvout, g_ctx[0].acc, 0);
+            int rt=0; for (int i=0;i<4096;++i) if (cvout[i]!=cvin[i]) rt++;
+            FARF(ALWAYS,"GDN_PURE DENSE8 cv<->acc round-trip mismatches=%d/4096 (0=identity)", rt);
+            if (statsLen>16) stats[16]=rt;
+        }
+        {   /* gp_unpack_blk/gp_pack_blk round-trip under current g_lut: A(strided int16)->cv->A'. */
+            static int16_t Aq[64*256], Ap[64*256], cvb[4096];
+            for (int r=0;r<64;++r) for (int c=0;c<64;++c) Aq[r*256+c]=(int16_t)((int)Aref[r*64+c]-32768);
+            gp_unpack_blk(cvb, Aq, g_il, g_ctx[0].stage);
+            for (int i=0;i<64*256;++i) Ap[i]=0;
+            gp_pack_blk(Ap, cvb, g_fl, g_ctx[0].stage);
+            int rt=0; for (int r=0;r<64;++r) for (int c=0;c<64;++c){ if(Ap[r*256+c]!=Aq[r*256+c]) rt++; }
+            FARF(ALWAYS, "GDN_PURE DENSE8 unpack/pack round-trip mismatches=%d/4096 (0=ok)", rt);
+            if (statsLen>11) stats[11]=rt;
         }
         for (int i=0;i<128;++i){m->atab[i]=a_save[i];m->otab[i]=o_save[i];} *od=od_save;*ad=ad_save;
         if (hl == 0) HAP_compute_res_hmx_unlock(hctx); if (hctx) HAP_compute_res_release(hctx);
