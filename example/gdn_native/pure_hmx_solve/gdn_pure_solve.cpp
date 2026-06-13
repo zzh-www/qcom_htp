@@ -429,7 +429,13 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
     for (int t = 0; t < P; ++t) {
         w16a16_mm_init(&g_ctx[t].mm, vbase + (size_t)t * GP_VSTRIDE, g_ctx[t].descs);
         { hmx_conv_out_desc_t *od = (hmx_conv_out_desc_t *)g_ctx[t].mm.od;   /* TRUE 64^3 (INVARIANT 7) */
-          od->out_y_stride_words = 64u; od->n_tiles_pow2 = 64u; }
+          /* n_tiles: atab/otab repeat every 8 row-groups (rg&7); n_tiles=64 does redundant MAC passes.
+           * Sweeping GP_NTILES against the REAL solve oc (the micro-bench layout differs from the solve's
+           * gp_cv_to_surf surface, so its floor doesn't transfer). cron 2026-06-14. */
+#ifndef GP_NTILES
+#define GP_NTILES 32u   /* solve floor = ~30 (gp_cv_to_surf layout); 32 = safe margin, oc byte-identical to 64 */
+#endif
+          od->out_y_stride_words = 64u; od->n_tiles_pow2 = GP_NTILES; }
         g_ctx[t].stage = (int16_t *)(vbase + (size_t)t * GP_VSTRIDE + 0x28000u);   /* gap after mm.out */
         uint16_t *act = (uint16_t *)g_ctx[t].mm.act;                         /* prefill padded act = zp */
         for (int i = 0; i < W16MM_ACT_BYTES / 2; ++i) act[i] = 32768;
@@ -518,6 +524,65 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
              stats[5], (unsigned long long)r[0], (unsigned long long)r[1],
              (unsigned long long)(r[1] / 4), stats[5]);
     }
+#ifdef GP_NATIVE_DESC
+    {   /* NATIVE-DESCRIPTOR SWEEP (cron, 2026-06-14, GP_NATIVE_DESC). Tests the cron#41 vendor-dumped
+         * native batched-64³ convhhh descriptor {out_y=4,n_tiles=8,m_total=8,act_y=4} on OUR working
+         * ×2048 atab layout, with KNOWN 64³ inputs + CPU reference (maxdiff) + cyc. Hypothesis: our
+         * atab repeats every 8 row-groups (rg&7), so n_tiles=64 does 8× REDUNDANT MAC over 8 distinct
+         * tiles; native's n_tiles=8 = one pass = same output ~8× faster. cron#35 only swept n_tiles
+         * DOWN to 4 (< 8 distinct -> dropped tiles -> garbage); it never tried exactly 8. Each variant
+         * isolates one field. Restores the working desc for the solve. */
+        w16a16_mm_t *m = &g_ctx[0].mm;
+        hmx_conv_out_desc_t *od = (hmx_conv_out_desc_t *)m->od;
+        hmx_conv_act_desc_t *ad = (hmx_conv_act_desc_t *)m->ad;
+        hmx_conv_out_desc_t od_save = *od; hmx_conv_act_desc_t ad_save = *ad;
+        static uint16_t Aa[4096], Ab[4096]; static int16_t Wqa[4096], Wqb[4096];
+        static uint16_t outlin[4096]; static uint16_t goldenB[4096];
+        for (int r = 0; r < 64; ++r) for (int c = 0; c < 64; ++c) {  /* two DIFFERENT operands A,B (non-saturated) */
+            Aa[r*64+c] = (uint16_t)(32768 + (((r*7 + c*3) % 97) - 48) * 5);
+            Wqa[r*64+c] = (int16_t)((((r*5 + c*11) % 127) - 63) * 24);
+            Ab[r*64+c] = (uint16_t)(32768 + (((r*13 + c*5) % 89) - 44) * 6);
+            Wqb[r*64+c] = (int16_t)((((r*3 + c*7) % 113) - 56) * 27);
+        }
+        /* goldenB = correct B·Wb output (NT=64, cleared out). */
+        od->n_tiles_pow2 = 64u;
+        w16a16_pack_act_crouton16(Ab, (uint16_t *)m->act, 64, 64); w16a16_pack_wt_kmajor(Wqb, m->wt, 64, 64);
+        w16a16_pack_bias(Wqb, (int32_t *)m->bias, 64, 64);
+        memset(m->out, 0, W16MM_OUT_BYTES); w16a16_mm_run(m);
+        w16a16_depack_crouton16((const uint16_t *)m->out, goldenB, 64, 64);
+        /* n_tiles sweep: STALE-FAITHFUL (mirrors solve: out NOT cleared between matmuls). Run A·Wa, then
+         * B·Wb WITHOUT memset; if NT writes the FULL output, A's stale tiles are fully overwritten ->
+         * matches goldenB. If NT partial -> A leaks -> mismatch. = the exact condition the solve needs. */
+        const uint32_t NT[] = { 64u, 48u, 40u, 32u, 24u, 20u, 18u, 16u };
+        const int NV = (int)(sizeof(NT) / sizeof(NT[0])), B = 500;
+        for (int v = 0; v < NV; ++v) {
+            od->n_tiles_pow2 = NT[v];
+            /* fill out with A's result (stale source) */
+            w16a16_pack_act_crouton16(Aa, (uint16_t *)m->act, 64, 64); w16a16_pack_wt_kmajor(Wqa, m->wt, 64, 64);
+            w16a16_pack_bias(Wqa, (int32_t *)m->bias, 64, 64);
+            memset(m->out, 0, W16MM_OUT_BYTES); w16a16_mm_run(m);
+            /* now B WITHOUT clearing out (exactly like the solve consumer) */
+            w16a16_pack_act_crouton16(Ab, (uint16_t *)m->act, 64, 64); w16a16_pack_wt_kmajor(Wqb, m->wt, 64, 64);
+            w16a16_pack_bias(Wqb, (int32_t *)m->bias, 64, 64);
+            w16a16_mm_run(m);
+            w16a16_depack_crouton16((const uint16_t *)m->out, outlin, 64, 64);
+            int maxd = 0, nz = 0;
+            for (int i = 0; i < 4096; ++i) { int d = (int)outlin[i] - (int)goldenB[i]; if (d < 0) d = -d;
+                if (d > maxd) maxd = d; if (outlin[i] != goldenB[i]) ++nz; }   /* mismatch vs correct B = stale leak */
+            for (int i = 0; i < 8; ++i) w16a16_mm_run(m);              /* warmup for timing */
+            uint64_t b0 = gp_pcyc();
+            for (int i = 0; i < B; ++i) w16a16_mm_run(m);
+            uint64_t cyc = (gp_pcyc() - b0) / B;
+            FARF(ALWAYS, "GDN_PURE NTSWEEP n_tiles=%-3u: maxdiff=%d nmismatch=%d cyc=%llu (stale-faithful)",
+                 NT[v], maxd, nz, (unsigned long long)cyc);
+            if (statsLen > v * 2 + 1) { stats[v * 2] = maxd; stats[v * 2 + 1] = (int)cyc; }  /* [v*2]=maxdiff [v*2+1]=cyc */
+        }
+        *od = od_save; *ad = ad_save;                                 /* restore working 64³ desc */
+        if (hl == 0) HAP_compute_res_hmx_unlock(hctx); if (hctx) HAP_compute_res_release(hctx);
+        if (vctx) HAP_compute_res_release(vctx);
+        return 0;                                                     /* sweep only — skip the solve */
+    }
+#endif
 #ifdef GP_O6B_TEST
     {   /* O6b COMPACT-64³ correctness+timing (RE scaffold, -DGP_O6B_TEST). Premise: byte-identical kernel
          * read a COMPACT act (8KB,512B blocks) vs our padded 32KB → 3.2× consumer lever.

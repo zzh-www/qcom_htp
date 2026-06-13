@@ -70,6 +70,8 @@ int main(int argc, char **argv) {
     }
     printf("  raw stats[0..11]: %d %d %d %d %d %d %d %d %d %d %d %d\n",
            stats[0], stats[1], stats[2], stats[3], stats[4], stats[5], stats[6], stats[7], stats[8], stats[9], stats[10], stats[11]);
+    printf("  raw stats[12..19]: %d %d %d %d %d %d %d %d\n",
+           stats[12], stats[13], stats[14], stats[15], stats[16], stats[17], stats[18], stats[19]);
 
     FILE *ft = fopen(Tpath, "wb"); fwrite(T, 1, abytes, ft); fclose(ft);
     printf("wrote %s (%ld bytes)\n", Tpath, abytes);
