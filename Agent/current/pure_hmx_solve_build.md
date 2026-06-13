@@ -313,3 +313,14 @@ conclusions (false-positive parity, atab[4..7]). Goal (native 339/1547 full solv
 gap remains. Clear focused continuation: byte-decode native's dumped weight stream (cron#59) vs
 pack_wt_kmajor, replicate the M=64 dense weight prep, build dense act+wt+desc, verify -DGP_DIFF
 (structured). Real best = cron#42.
+
+### cron#60: weight = pack_wt_kmajor BYTE-MATCH — ALL inputs match native; bug is OUTPUT READBACK (corrects #58/59)
+Ported pack_wt_kmajor to host, ran on ramp B0, compared to native's dumped weight stream:
+**0/40 byte mismatch => native weight prep == pack_wt_kmajor (byte-identical).** So cron#58/59
+("weight prep is the blocker") were WRONG. **All three inputs now confirmed byte-identical to native:
+act=pack_act_crouton16 (cron#57), descriptor exact (cron#58), weight=pack_wt_kmajor (cron#60).**
+Same convhhh kernel => the matmul OUTPUT in m->out is native-correct. The remaining bug is purely
+the OUTPUT READBACK: depack_crouton16 doesn't match native's output layout under n_tiles=8/out_y=4
+(drain-tile-count / output-crouton differs from the act layout). This is the last layer and far more
+tractable: find the correct output untile for the dense descriptor (the matmul itself is right).
+Real best stays cron#42 (1.64× bit-exact); but native parity is now down to ONE output-readback fix.
