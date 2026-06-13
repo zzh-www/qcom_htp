@@ -78,6 +78,24 @@ static inline void gp_surf_to_cv(int16_t *cv, const uint16_t *surf) {
 
 static inline uint64_t gp_pcyc(void) { uint64_t v; asm volatile("%0 = C15:14" : "=r"(v)); return v; }
 
+/* ---- GP_TRACE: per-thread event trace for the ASCII timeline (scripts/gdn_pipe_timeline.py).
+ * Format written into T at run() end: [magic u32=0x47545203][n u32][wall u64][base u64] then
+ * n*{tid u32, stage u32, t0 u64, t1 u64}. tids: producers 0..P-1, consumer = GP_NT(=4). Stages
+ * reuse the script's map: 3=MM(consumer kernel), 5=PREP(producer pack), 11=SPIN(producer wait).
+ * Gated so the normal build/measure path is byte-identical (no trace overhead). ---- */
+#ifdef GP_TRACE
+struct gp_ev { uint32_t tid, stage; uint64_t t0, t1; };
+static struct gp_ev g_ev[16384];
+static volatile int g_ev_n;
+static inline void gp_ev_push(uint32_t tid, uint32_t stage, uint64_t t0, uint64_t t1) {
+    int i = __atomic_fetch_add(&g_ev_n, 1, __ATOMIC_RELAXED);
+    if (i < (int)(sizeof(g_ev) / sizeof(g_ev[0]))) { g_ev[i].tid = tid; g_ev[i].stage = stage; g_ev[i].t0 = t0; g_ev[i].t1 = t1; }
+}
+#define GP_EV(tid, stage, t0, t1) gp_ev_push((tid), (stage), (t0), (t1))
+#else
+#define GP_EV(tid, stage, t0, t1) ((void)0)
+#endif
+
 /* crouton LUT: linear 64x64 index (r*64+c) -> compact cv index (block*256 + intra), block<16. */
 static uint16_t g_lut[GP_BB];
 static void gp_lut_init(void) {
@@ -281,14 +299,17 @@ static void mm64(gp_ctx *c, const int16_t *a_cv, const int16_t *b_cv, int16_t *o
     gp_cv_to_surf((uint16_t *)c->mm.act, a_cv);                  /* act: cv -> surface (HVX vxor) */
     uint64_t g0 = gp_pcyc(); c->t_pack += g0 - p0;              /* act-copy only (HVX, ~0) */
     gp_pack_wt_bias_hvx(b_cv, c->stage, c->mm.wt, c->mm.bias);   /* weight: HVX vgather + kmajor + bias -> VTCM */
-    c->t_kmajor += gp_pcyc() - g0;
+    uint64_t k1 = gp_pcyc(); c->t_kmajor += k1 - g0;
     if (c->slot < 0) {                                          /* single-thread: run inline */
-        uint64_t t0 = gp_pcyc(); w16a16_mm_run(&c->mm); g_cbusy += gp_pcyc() - t0;
+        uint64_t t0 = gp_pcyc(); w16a16_mm_run(&c->mm); uint64_t t1 = gp_pcyc(); g_cbusy += t1 - t0;
+        GP_EV(GP_NT, 3, t0, t1);                                /* consumer MM (inline) */
     } else {                                                    /* producer: hand to main consumer */
+        GP_EV(c->slot, 5, p0, k1);                              /* producer PREP (act-copy + wt-pack) */
         GP_ARM(&g_job[c->slot]);
         uint64_t s0 = gp_pcyc();
         GP_WAIT(&g_job[c->slot]); GP_RESET(&g_job[c->slot]);
-        c->spin += gp_pcyc() - s0;
+        uint64_t s1 = gp_pcyc(); c->spin += s1 - s0;
+        GP_EV(c->slot, 11, s0, s1);                             /* producer SPIN (wait for consumer) */
     }
     uint64_t d0 = gp_pcyc();
     gp_surf_to_cv(out_cv, (const uint16_t *)c->mm.out);          /* out: surface -> cv (HVX vxor) */
@@ -514,6 +535,9 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
     }
 #endif
     g_cbusy = 0; g_sat = 0; g_pdone = 0;
+#ifdef GP_TRACE
+    g_ev_n = 0;
+#endif
     g_Ah = A; g_Th = (uint8_t *)T; g_H = H; g_P = P;
 
     uint64_t us0 = HAP_perf_get_time_us(), t0 = gp_pcyc();
@@ -537,7 +561,8 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
         while (__atomic_load_n(&g_pdone, __ATOMIC_ACQUIRE) < P) {   /* consumer: run any armed kernel */
             for (int t = 0; t < P; ++t)
                 if (GP_POLL(&g_job[t])) {
-                    uint64_t k0 = gp_pcyc(); w16a16_mm_run(&g_ctx[t].mm); g_cbusy += gp_pcyc() - k0;
+                    uint64_t k0 = gp_pcyc(); w16a16_mm_run(&g_ctx[t].mm); uint64_t k1 = gp_pcyc(); g_cbusy += k1 - k0;
+                    GP_EV(GP_NT, 3, k0, k1);                    /* consumer MM (口径④ per-call wall) */
                     GP_DONE(&g_job[t]);
                 }
         }
@@ -576,6 +601,23 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
          P, H, (unsigned long long)wall, packchk, (unsigned long long)actcopy, (unsigned long long)kmajor,
          (unsigned long long)scatter, (unsigned long long)other, (unsigned long long)outcopy,
          (unsigned long long)spin, (unsigned long long)g_cbusy);
+#ifdef GP_TRACE
+    {   /* serialize the event trace into T (overwrites the result; trace runs are timeline-only).
+         * [magic][n][wall u64][base u64=t0] then n*{tid u32, stage u32, t0 u64, t1 u64}. */
+        int n = g_ev_n; if (n > (int)(sizeof(g_ev) / sizeof(g_ev[0]))) n = (int)(sizeof(g_ev) / sizeof(g_ev[0]));
+        uint8_t *tb = (uint8_t *)T;
+        if ((size_t)TLen >= 24u + (size_t)n * 24u) {
+            *(uint32_t *)(tb + 0) = 0x47545203u; *(uint32_t *)(tb + 4) = (uint32_t)n;
+            *(uint64_t *)(tb + 8) = wall;        *(uint64_t *)(tb + 16) = 0;   /* base 0: t0/t1 stored RELATIVE */
+            uint8_t *p = tb + 24;
+            for (int i = 0; i < n; ++i) {
+                *(uint32_t *)(p + 0) = g_ev[i].tid;       *(uint32_t *)(p + 4) = g_ev[i].stage;
+                *(uint64_t *)(p + 8) = g_ev[i].t0 - t0;   *(uint64_t *)(p + 16) = g_ev[i].t1 - t0; p += 24;
+            }
+        }
+        FARF(ALWAYS, "GDN_PURE TRACE: %d events serialized into T (wall=%llu base=%llu)", n, (unsigned long long)wall, (unsigned long long)t0);
+    }
+#endif
     return 0;
 }
 
