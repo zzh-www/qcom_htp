@@ -14,14 +14,16 @@
 > **不要**用 git 历史 commit message、PROGRESS 里的 ✅、任何 memory、或 `gdn_solve.md` 等其它文档里**别条路线**(HVXMixHMX / merge-dtype / int16-merge / FP16)的"否决/OPEN/收口/比较"来判定本 loop——那些是**不同路线或旧目标(比快)下的结论**,与本 loop(目标 = min wall s.t. oc<4e-2,**不比较**)无关。本文自洽自足,不需旁读。
 > loop 只在 **wall 触 roofline 地板(~1.0M) 或 LEDGER A/B 全 DONE/REFUTED** 时到头——那时也是**写新 NEXT**,而非判"闭环"。
 >
-> ### 🔒 方向锁定(2026-06-13 用户裁定;后续 session 不准跑偏)
-> **当前唯一活动方向 = O6b compact-crouton 描述符**(让 consumer 64³ 读 compact 8KB 而非 padded 32KB,per-mm 10.8K→~3.3K,wall→~4-5M)。**这是主线,只做这个。** 细节 = 下面 `NEXT` 块。
-> **明令禁止跑偏(违反=作废):**
-> - ❌ **不做 O6a w8a16 单 pass**——用户已砍,非根本突破。
-> - ❌ **不动数值算法**(Taylor/Newton 次数、merge 顺序、scale)——O6b 纯布局,oc-中性。
-> - ❌ **不开新支线 / 不建新文档**——方向就在本文,别另起 goal 文档、别去捡 LEDGER 里的 A2/SKIPFIN/fan-out 等旧条目当 NEXT。
-> - ❌ **不重测已 REFUTED 的**(O6b 的 V1/V2 见 LEDGER;别再试"只挪 atab 间距")。
-> **O6b 的 crux 已收敛到一件事:拿到 QNN/标准件读 512B-tile 的精确 STRIDE 描述符**(不是 atab 间距)。起手见 `NEXT`。拿到→scaffold(`-DGP_O6B_TEST`)验 maxdiff=0 + cyc~3.3K→港进 solve,oc<4e-2 + wall 环比。
+> ### 🔒 方向锁定 — ⏸️ LOOP 暂停,O6b-compact 已证伪,待用户裁定(2026-06-14)
+> **🟥 O6b compact-crouton 主线已被 ground truth 三方证伪,不要再做(cron#22):**
+> 1. **kernel 等价**:our custom op vs native QNN matmul 64³ = **4096/4096 bit-exact**(设备,同 wt+act)。
+> 2. **布局相同**:DESC_DUMP 抓 QNN op 64³ act 表 = `i×2048`(padded 32KB)= solve 现状;**不存在 compact-8KB 单-64³ 描述符**。
+> 3. **gap = fan-out**:native `[1,128,64,64]` = 2,020 cyc/matmul(128-tile fan-out 摊 fill/drain);我们 per-call 10,844。核同+布局同 → 5.4× 全是 dispatch/fan-out,**compact 治不了**。
+> **∴ "读 compact 8KB 省 per-mm" 的前提是错的。O6b-compact 死。cron loop 已停(96c4b3cc cancelled),不空转。**
+> **⏳ 待用户裁定下一方向(二选一):**
+> - **(A)转 fan-out 批**:让一个描述符驱多个独立 64³ tile(像 native),consumer 9.1M→朝 ~1.5M 压(768×2K)。受 Newton 链内依赖约束(128 对角链独立可批、链内串行)。**= 较大重构,需用户授权(本锁仍禁未授权新支线)。**
+> - **(B)收口出货**:接受 ~10M wall / oc 4.24e-3(135× vs naive,超参考,真数据过门)为单-64³-per-call 设备地板,固化当前 solve。
+> **仍然禁止(未授权前):** ❌ O6a w8a16 · ❌ 改数值算法(Taylor/Newton/scale)· ❌ 重测 V1/V2/V3(全 REFUTED,见 LEDGER)· ❌ 在 compact 上再花一分钟。
 
 > **每个 turn 的唯一入口。** 读 `STATE` 知道在哪 → 读 `NEXT` 知道这轮干什么 → 干完按 `LOOP` 更新本文。
 > 改任何东西前必读 `INVARIANTS` + `LEDGER`:**别重试 R 的 2 条死路,别改 INVARIANTS(除非新设备证据)。其余(A/B/D)都是活。**
