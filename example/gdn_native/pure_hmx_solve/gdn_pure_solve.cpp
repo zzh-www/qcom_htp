@@ -302,18 +302,22 @@ static void mm64(gp_ctx *c, const int16_t *a_cv, const int16_t *b_cv, int16_t *o
     uint64_t k1 = gp_pcyc(); c->t_kmajor += k1 - g0;
     if (c->slot < 0) {                                          /* single-thread: run inline */
         uint64_t t0 = gp_pcyc(); w16a16_mm_run(&c->mm); uint64_t t1 = gp_pcyc(); g_cbusy += t1 - t0;
-        GP_EV(GP_NT, 3, t0, t1);                                /* consumer MM (inline) */
+        GP_EV(GP_NT, 3, t0, t1);                                /* MATMUL op (HMX) */
     } else {                                                    /* producer: hand to main consumer */
-        GP_EV(c->slot, 5, p0, k1);                              /* producer PREP (act-copy + wt-pack) */
+        /* per-op events (QNN-granular): act-format(4) + wt-pack(5) are SEPARATE feed ops, like QNN's
+         * q::ForceFormat_Crouton + q::ConvLayer.opt.weights_to_vtcm. MATMUL(3) is the consumer's own op. */
+        GP_EV(c->slot, 4, p0, g0);                              /* ACT_FORMAT (HVX) = ForceFormat_Crouton */
+        GP_EV(c->slot, 5, g0, k1);                              /* WT_PACK (HVX) = weights_to_vtcm */
         GP_ARM(&g_job[c->slot]);
         uint64_t s0 = gp_pcyc();
         GP_WAIT(&g_job[c->slot]); GP_RESET(&g_job[c->slot]);
         uint64_t s1 = gp_pcyc(); c->spin += s1 - s0;
-        GP_EV(c->slot, 11, s0, s1);                             /* producer SPIN (wait for consumer) */
+        GP_EV(c->slot, 11, s0, s1);                             /* SPIN (idle-wait; not emitted as a slice) */
     }
     uint64_t d0 = gp_pcyc();
     gp_surf_to_cv(out_cv, (const uint16_t *)c->mm.out);          /* out: surface -> cv (HVX vxor) */
-    c->t_depack += gp_pcyc() - d0;
+    uint64_t d1 = gp_pcyc(); c->t_depack += d1 - d0;
+    if (c->slot >= 0) GP_EV(c->slot, 10, d0, d1);              /* OUT_COPY (HVX) = q::*OutputSlice */
 }
 
 /* ---- diag block inverse: X = (I - A)^-1, A strictly-lower 64x64 (e=0), all in cv. Returns eX.

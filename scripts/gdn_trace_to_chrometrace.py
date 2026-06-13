@@ -25,9 +25,14 @@ import sys, json, struct, argparse, collections
 # match QNN's tid convention so the Perfetto tracks line up 1:1 with a QNN optrace.
 HMX_TID = 256
 HVX_TID0 = 512
-STAGE = {3: ("MM", "gdn::w16a16_matmul.stride1", "HMX"),
-         5: ("PREP", "gdn::producer_pack", "HVX"),
-         11: ("SPIN", "gdn::producer_spin_wait", "HVX")}
+# op names mirror QNN's per-op granularity (q::ConvLayer / ForceFormat / weights_to_vtcm / OutputSlice)
+# so each op is a SEPARATE line, and THE matmul op is distinct from the feed ops — exactly like QNN.
+MATMUL_OP = "q::HmxW16A16MatMul_s1.opt"   # <-> QNN q::ConvLayer_s1.opt / HmxU8I8ToU8MatMul (the matmul op)
+STAGE = {3:  ("MATMUL",     MATMUL_OP,                          "HMX"),  # the matmul op (HMX)
+         4:  ("ACT_FORMAT", "q::ForceFormat_Crouton(act)",      "HVX"),  # act crouton format
+         5:  ("WT_PACK",    "q::ConvLayer.opt.weights_to_vtcm", "HVX"),  # weight+bias -> VTCM
+         10: ("OUT_COPY",   "q::*OutputSlice",                  "HVX"),  # output read-back
+         11: ("SPIN",       "spin_idle",                        "HVX")}  # idle-wait: NOT an op (skipped)
 
 
 def load_trace(path):
@@ -101,25 +106,26 @@ def summarize(wall, evs, nmm_per_head, heads):
         lo, hi = tspan.get(tid, (1 << 62, 0)); tspan[tid] = (min(lo, t0), max(hi, t1))
         by_op[name][0] += t1 - t0; by_op[name][1] += 1
     timeline = span_hi - span_lo if span_hi else wall
-    hmx_cu = cu.get(HMX_TID, 0)
-    n_mm = next((c for (nm, (d, c)) in by_op.items() if nm.endswith("matmul.stride1")), 0)
-    print("=== GDN baremetal — reported EXACTLY like QNN optrace (cycles_used = Σ op Duration per unit-thread) ===")
-    print(f"  graph timeline_cycles (口径① verdict)            = {timeline}")
-    print("  per-unit htp_resources (QNN's own field defs; cycles_used = Σ op Duration on that thread = OCCUPANCY, not pure MAC):")
+    md = by_op.get(MATMUL_OP, [0, 0])
+    mm_per = md[0] // md[1] if md[1] else 0     # matmul op cycles/instance (Duration/op) = THE number
+    print("=== GDN baremetal — per-op trace, reported EXACTLY like QNN optrace (each op separate) ===")
+    print("  >>> THE MATMUL OP (its own op, separate from feed — like QNN q::ConvLayer_s1.opt):")
+    print(f"        {MATMUL_OP}  =  {mm_per} cyc/instance   (instances={md[1]}, total cycles_used={md[0]})")
+    print(f"        <-> QNN q::ConvLayer_s1.opt (native [1,128,64,64]) = {QNN_BATCH_CYCLES_USED_PER_MM} cyc/instance "
+          f" => {mm_per/QNN_BATCH_CYCLES_USED_PER_MM:.1f}x  (SAME 口径: per-op Duration on HMX thread; gap = batch amortization, A-warm)")
+    print(f"        (pure-MAC ~{MATMUL_LATENCY_FLOOR} is BELOW op granularity — absent from QNN's optrace too; this op = matmul + its mxmem-load)")
+    print("  per HTP-op-type (= QNN htp_op_types; EACH op separate; Duration/op is the per-instance cycle):")
+    print(f"     {'op (HMX=matmul, HVX=feed/IO)':34s} {'unit':4s} {'instances':>9} {'Duration/op':>12} {'total cyc':>11}")
+    for nm, (d, c) in sorted(by_op.items(), key=lambda kv: -kv[1][0]):
+        typ = "HMX" if nm == MATMUL_OP else "HVX"
+        mark = "  <== MATMUL" if nm == MATMUL_OP else ""
+        print(f"     {nm:34s} {typ:4s} {c:>9} {d//max(c,1):>12} {d:>11}{mark}")
+    print("  per-unit htp_resources (QNN field defs; cycles_used = Σ that unit's op Durations; SPIN idle excluded, like QNN):")
     for tid in sorted(cu):
         typ = "HMX" if tid == HMX_TID else "HVX"
         lo, hi = tspan[tid]; tl = (hi - lo) or timeline
         print(f"     tid{tid:<4d} {typ}  cycles_used={cu[tid]:>9}  timeline_cycles={tl:>9}  utilization={cu[tid]*100.0/tl:5.1f}%")
-    spin = sum((t1 - t0) for (t, s, t0, t1) in evs if s == 11)
-    print(f"     (producer SPIN-wait Σ={spin} = HVX threads idle waiting on the 1 HMX consumer; not an op, excluded — like QNN)")
-    if n_mm:
-        print(f"  per-matmul HMX cycles_used = {hmx_cu}/{n_mm} = {hmx_cu//n_mm}/mm   <-> QNN [1,128,64,64] = {QNN_BATCH_CYCLES_USED_PER_MM}/mm")
-        print(f"     ^ SAME 口径 (both Σ op-Duration on HMX thread). gap {hmx_cu//n_mm/QNN_BATCH_CYCLES_USED_PER_MM:.1f}x = batch amortization we lack (A-warm), NOT a faster kernel.")
-    print("  per HTP-op-type (op Duration = QNN 'Duration (cycles)'; Dominant Path = Duration for these leaf ops):")
-    for nm, (d, c) in sorted(by_op.items(), key=lambda kv: -kv[1][0]):
-        print(f"     {nm:26s} cycles_used Σ={d:>10}  instances={c:>4}  Duration/op={d//max(c,1):>7}")
-    print(f"  NB: pure-MAC compute (~{MATMUL_LATENCY_FLOOR}/mm) is BELOW QNN's op granularity — NOT in any optrace "
-          "(QNN's too). 'utilization' is occupancy, exactly as QNN reports it; it is NOT a pure-compute %.")
+    print(f"  graph timeline_cycles (口径① verdict) = {timeline}")
 
 
 def main():
