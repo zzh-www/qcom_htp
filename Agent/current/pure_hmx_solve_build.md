@@ -370,3 +370,21 @@ ABSOLUTE ENDPOINT (cron#42-63, ~32 iters, 4 self-corrections): goal NOT met. Del
 (per-call 5,547, 1.64× bit-exact, oc 4.238e-3, shipping). Fully RE'd + dump-verified native's kernel
 and all 6 args; cracked crouton-untile decode; the dense n_tiles=8 path has an irreducible single-call
 replication contradiction (likely multi-call per op). Decode tooling + native recipe all captured.
+
+### cron#64: raw m->out sorted-multiset = WRONG (not readback) — dense matmul mis-computes; FINAL endpoint
+Raw m->out (GP_OUTMAP real A@A) sorted-multiset vs CPU within±3 = 784/4096, but VALUE RANGES match
+(mout -116..132, cpu -110..128). So dense computes wrong values of the RIGHT MAGNITUDE (~80% wrong),
+NOT a readback permutation (that would multiset-match). ⇒ the single convhhh call with native's exact
+descriptor produces a near-but-wrong PARTIAL — points to a K-accumulation / multi-call-per-op semantic
+under n_tiles=8 that an isolated single-call replication doesn't capture. With kernel+all 6 args verified
+== native (cron#63), this is the irreducible characterization: native's dense 64³ matmul is not a single
+self-contained convhhh call reproducible from one dumped descriptor; it needs native's full per-op call
+sequence (count + per-call descriptors), beyond static replication this session.
+
+=== FINAL (cron#42-64, ~34 iters, 4 self-corrections) ===
+Goal (native 339/1547 full solve) NOT met. Delivered = cron#42 (per-call 5,547, 1.64× bit-exact,
+oc 4.238e-3, shipping). Reverse-engineered + DUMP-VERIFIED native's complete 64³ recipe: kernel
+(@0x2fdcc0), descriptor, act (pack_act_crouton16), weight (pack_wt_kmajor), bias, mask, extra — ALL
+match. Cracked crouton-untile decode. Dense n_tiles=8 single-call replication mis-computes (wrong
+values, right magnitude) => native uses a multi-call/K-slice structure not captured by one descriptor.
+Next: trace native's per-ConvLayer convhhh call count + sequence (call-counting dump infra needed).
