@@ -1141,6 +1141,9 @@ static void feed_producer(void *arg) {
 #if defined(GDNBM_PURE_HMX_SOLVE)
 #include "../../pure_hmx_solve/pure_hmx_solve.cpp"   /* isolated pure-HMX experiment (own namespace) */
 #endif
+#if defined(GDNBM_GDN_PURE_SOLVE)
+#include "../../pure_hmx_solve/gdn_pure_solve.cpp"   /* clean single-path real-data solve (own namespace) */
+#endif
 int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, int zpA, int zpT,
                 int sA_bits, int sT_bits, int nthreads, uint8_t *T, int TLen, int *stats, int statsLen) {
     (void)_h; (void)ALen; (void)TLen;
@@ -1149,6 +1152,9 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
     if (H < nthreads) nthreads = H;
 #if defined(GDNBM_PURE_HMX_SOLVE)   /* isolated experiment: pure-HMX all-w16a16 schedule (logic in ../../pure_hmx_solve/) */
     return pure_hmx::run(nthreads, H, A, stats, statsLen, T, TLen);
+#endif
+#if defined(GDNBM_GDN_PURE_SOLVE)   /* clean single-path real-data pure-HMX solve (logic in gdn_pure_solve.cpp) */
+    return gdn_pure::run(nthreads, H, A, stats, statsLen, T, TLen);
 #endif
     const uint16_t *Au = (const uint16_t *)A;
     uint16_t *Tu = (uint16_t *)T;

@@ -1,0 +1,466 @@
+/* gdn_pure_solve.cpp — CLEAN single-path real-data pure-HMX w16a16 triangular inverse.
+ *
+ * One implementation, no harness/no garbage operands. T = (I-A)^-1 for a block-lower-triangular
+ * (I-A), C=256 = 4x4 blocks of 64, H heads. Built ENTIRELY on the byte-proven w16a16_mm.h
+ * primitive (M=256 x K=64 x N=64, software exponent tracking, oc 1.4e-5 vs fp64 on the primitive).
+ *
+ * Per head:
+ *   - diag  T_ii = (I - A_ii)^-1  via Taylor(p=3) seed + Newton-Schulz(K)   [A_ii strictly-lower]
+ *   - merge T_ij = T_ii @ ( sum_{k=j}^{i-1} A_ik @ T_kj )   (block forward-substitution, i>j)
+ *
+ * Scale model (caller-owned, the primitive only drains product/32767): a matrix V is stored as
+ * int16 codes (|code| <= 32639) plus an integer exponent e, with  V = code * 2^e / 32767.
+ *
+ * CV-DOMAIN (O2): every intermediate (A/T/X/Z/...) lives as CROUTON16 codes (the kernel's act/out
+ * layout, compact 16x256 = 4096), so a matmul does NO per-mm depack/repack: act = direct cv->surface
+ * copy, out = direct surface->cv copy. Only the WEIGHT is LUT-linearized + kmajor-packed each call
+ * (kmajor != crouton). Pointwise renorm/acc are layout-agnostic; the 64 diag fix-ups index via the
+ * crouton LUT. A unpacks linear->cv once/head, T depacks cv->linear once/head. Uses TRUE 64^3
+ * descriptors (INVARIANT 7: out_y_stride=64, n_tiles=64; padded 2KB act/out blocks, live 512B).
+ *
+ * THREADING (O1): the per-head math runs on a `gp_ctx` (scratch + one VTCM mm region). P>=2 = P HVX
+ * producers (static head-stripe) each own a ctx and do the FULL solve EXCEPT the HMX kernel, which is
+ * delegated to the single MAIN-thread consumer (1 HMX unit -> only main touches mxmem). Hand-off =
+ * one job slot/producer (synchronous: pack -> arm -> spin -> use). P=1 = single-thread inline.
+ *
+ * 口径 (skill htp-cycle-metric, all PCYCLE): stats report graph-wall(0), HMX op-latency floor
+ * (N_mm*256), per-call feed-inclusive kernel(g_cbusy), producer pack/spin. NEVER label feed-inclusive
+ * kernel time as HMX compute.
+ *
+ * Build: EXTRA_DEFS="-DGDNBM_GDN_PURE_SOLVE" bash example/gdn_native/baremetal/build.sh
+ * Entry: gdn_pure::run(P, H, A, stats, statsLen, T, TLen)
+ *   A: H*(256x256 int16 q16, strictly lower)  T: H*(256x256 int16 codes + 16 int32 block exps @ +128B)
+ */
+#include <stdint.h>
+#include <string.h>
+#include "qurt.h"
+#include "HAP_compute_res.h"
+#include "HAP_farf.h"
+#include "HAP_power.h"
+#include "HAP_perf.h"
+#include "w16a16_mm.h"
+#include "hexagon_types.h"
+#include "hvx_hexagon_protos.h"
+
+namespace gdn_pure {
+
+/* HVX cv<->surface copy: int16 code <-> u16 zp-32768 is exactly XOR 0x8000. 16 blocks, 256 live u16
+ * each (= 4 HVX vectors). Replaces the scalar per-element VTCM access (~4x slower than DDR, INV 8③).
+ * Requires the cv side 128-byte aligned; surface (VTCM act/out) is 2KB-block aligned. */
+static inline void gp_cv_to_surf(uint16_t *surf, const int16_t *cv) {
+    const HVX_Vector K = Q6_Vh_vsplat_R(0x8000);
+    for (int b = 0; b < 16; ++b) {
+        const HVX_Vector *s = (const HVX_Vector *)(cv + b * 256);
+        HVX_Vector *d = (HVX_Vector *)(surf + b * 1024);
+        for (int k = 0; k < 4; ++k) d[k] = Q6_V_vxor_VV(s[k], K);
+    }
+}
+static inline void gp_surf_to_cv(int16_t *cv, const uint16_t *surf) {
+    const HVX_Vector K = Q6_Vh_vsplat_R(0x8000);
+    for (int b = 0; b < 16; ++b) {
+        const HVX_Vector *s = (const HVX_Vector *)(surf + b * 1024);
+        HVX_Vector *d = (HVX_Vector *)(cv + b * 256);
+        for (int k = 0; k < 4; ++k) d[k] = Q6_V_vxor_VV(s[k], K);
+    }
+}
+
+#define GP_NB     4          /* 64-blocks per C=256 head */
+#define GP_BL     64
+#define GP_BB     4096       /* GP_BL*GP_BL = crouton-compact codes per 64-block */
+#define GP_NT     4          /* max producer threads */
+#ifndef GP_NEWTON
+#define GP_NEWTON 0          /* Newton-Schulz iters. @scale0.05 oc is MONOTONIC in Newton (0:4.24e-3 < 1:8.24e-3
+                              * < 2:9.66e-3): Taylor(3) is already near-exact, each Newton iter only ADDS w16a16
+                              * quant noise. So 0 = best (768 mm, both faster & more accurate). ⚠️ SCALE-DEPENDENT:
+                              * larger ‖A‖ (real GDN) needs Newton>=1 — re-check oc per deployment scale. */
+#endif
+#define GP_VSTRIDE 0x30000u  /* per-producer VTCM region (w16a16_mm needs ~0x28000) */
+
+static inline uint64_t gp_pcyc(void) { uint64_t v; asm volatile("%0 = C15:14" : "=r"(v)); return v; }
+
+/* crouton LUT: linear 64x64 index (r*64+c) -> compact cv index (block*256 + intra), block<16. */
+static uint16_t g_lut[GP_BB];
+static void gp_lut_init(void) {
+    for (int r = 0; r < 64; ++r) for (int c = 0; c < 64; ++c)
+        g_lut[r * 64 + c] = (uint16_t)(((((r >> 2) & 7) * 2 + (c >> 5)) * 1024) +
+            (((r >> 5) * 2 + ((r >> 1) & 1)) * 64) + ((c & 31) * 2) + (r & 1));   /* -> surface u16 idx */
+    for (int i = 0; i < GP_BB; ++i) { int s = g_lut[i]; g_lut[i] = (uint16_t)(((s >> 10) << 8) + (s & 1023)); }
+}
+
+/* ---- HVX weight pack (O4b): replaces scalar gather + kmajor + bias (all scalar VTCM writes). ----
+ * g_hw[h] = byte offset (into the VTCM stage) of stream-order halfword h; vgather pulls cv codes in
+ * kmajor stream order, then lo/hi byte split + 4lo|4hi shuffle -> wt; HVX colsum -> bias. Byte-identical
+ * to w16a16_pack_wt_kmajor + w16a16_pack_bias (PACKCHK self-check in run()). Ported from the proven
+ * pure_hmx_solve.cpp:p4v_pack_wt_bias. cv codes are already <=32639 (renorm), so no extra clip needed. */
+static uint16_t *g_hw;            /* VTCM, 4096 u16 stream-order gather offsets */
+static void gp_hwlut_init(void) {
+    int h = 0;
+    for (int nt = 0; nt < 2; ++nt)
+        for (int half = 0; half < 2; ++half)
+            for (int kt = 0; kt < 2; ++kt)
+                for (int grp = 0; grp < 8; ++grp)
+                    for (int idx = 0; idx < 64; idx += 8)
+                        for (int j = 0; j < 8; ++j) {
+                            int vi = idx + j, lane = vi / 16, off0 = (grp * 8 + half * 4 + lane) * 16;
+                            int off = off0 + (vi & 15), rgrp = off / 128, rem = off % 128;
+                            int col = rem / 4, row = rgrp * 4 + rem % 4;
+                            g_hw[h++] = (uint16_t)(2 * g_lut[(kt * 32 + row) * 64 + (nt * 32 + col)]);
+                        }
+}
+static void gp_pack_wt_bias_hvx(const int16_t *w_cv, int16_t *stage /*VTCM 8KB+*/, uint8_t *wt, int32_t *bias) {
+    for (int i = 0; i < 4096 / 64; ++i) ((HVX_Vector *)stage)[i] = ((const HVX_Vector *)w_cv)[i];   /* cv -> VTCM stage */
+    HVX_Vector *gtmp = (HVX_Vector *)(stage + 4096);
+    const HVX_Vector *ofs = (const HVX_Vector *)g_hw;
+    const HVX_Vector K128 = Q6_Vh_vsplat_R(128);
+    for (int v = 0; v < 64; v += 2) {
+        Q6_vgather_ARMVh((void *)&gtmp[0], (uint32_t)(uintptr_t)stage, 8191, ofs[v]);
+        Q6_vgather_ARMVh((void *)&gtmp[1], (uint32_t)(uintptr_t)stage, 8191, ofs[v + 1]);
+        HVX_Vector q0 = gtmp[0], q1 = gtmp[1];
+        HVX_Vector lo = Q6_Vb_vpacke_VhVh(q1, q0);                                  /* low bytes */
+        HVX_Vector h0 = Q6_Vh_vasr_VhR(Q6_Vh_vadd_VhVh_sat(q0, K128), 8);
+        HVX_Vector h1 = Q6_Vh_vasr_VhR(Q6_Vh_vadd_VhVh_sat(q1, K128), 8);
+        HVX_Vector hi = Q6_Vb_vpack_VhVh_sat(h1, h0);                               /* rounded high bytes */
+        HVX_VectorPair il = Q6_W_vshuff_VVR(hi, lo, -4);                            /* 4lo|4hi grains */
+        ((HVX_Vector *)wt)[v] = Q6_V_lo_W(il); ((HVX_Vector *)wt)[v + 1] = Q6_V_hi_W(il);
+    }
+    static const int32_t ctrl[2] = { 0x00404420, 0x40000000 };
+    for (int nt = 0; nt < 2; ++nt) {
+        HVX_Vector aL = Q6_V_vzero(), aH = Q6_V_vzero();
+        for (int k4 = 0; k4 < 8; ++k4) {
+            const HVX_Vector *blk = (const HVX_Vector *)(w_cv + (k4 * 2 + nt) * 256);
+            for (int sv = 0; sv < 4; ++sv) {
+                HVX_VectorPair w = Q6_Ww_vsxt_Vh(blk[sv]);
+                aL = Q6_Vw_vadd_VwVw(aL, Q6_V_lo_W(w)); aH = Q6_Vw_vadd_VwVw(aH, Q6_V_hi_W(w));
+            }
+        }
+        union { HVX_Vector v; int32_t w[32]; } uL, uH; uL.v = aL; uH.v = aH;
+        for (int c = 0; c < 32; ++c) {
+            long cs = (long)uL.w[c] + uH.w[c];
+            long v2 = -cs, eff = (v2 >= 0) ? (v2 / 2) : -(((-v2) + 1) / 2);
+            int n = nt * 32 + c, g = n >> 4, idx = n & 15;
+            bias[g * 64 + 32 + idx * 2] = (int32_t)eff; bias[g * 64 + 32 + idx * 2 + 1] = 0;
+        }
+    }
+    for (int g = 0; g < 4; ++g) for (int i = 0; i < 32; ++i) bias[g * 64 + i] = ctrl[i & 1];
+}
+
+/* ---- HVX int32 acc helpers (O4c). acc layout = interleaved {lo=even hw lanes, hi=odd} from vsxt;
+ * round-trip cv<->acc is consistent (vsxt in / vasr_VwVwR_sat out). Pointwise ops order-agnostic; only
+ * the 64 diag fix-ups need the interleaved index. Ported from pure_hmx_solve.cpp:p4v_acc*. Replaces the
+ * scalar renorm/acc loops (the lone remaining scalar bottleneck). acc must be 128-byte aligned. */
+static inline void gp_acc3(int32_t *acc, const int16_t *a, const int16_t *b, const int16_t *cc) {
+    const HVX_Vector *va = (const HVX_Vector *)a, *vb = (const HVX_Vector *)b, *vc = (const HVX_Vector *)cc;
+    HVX_Vector *d = (HVX_Vector *)acc;
+    for (int i = 0; i < 64; ++i) {
+        HVX_VectorPair s = Q6_Ww_vadd_WwWw(Q6_Ww_vadd_WwWw(Q6_Ww_vsxt_Vh(va[i]), Q6_Ww_vsxt_Vh(vb[i])), Q6_Ww_vsxt_Vh(vc[i]));
+        d[2 * i] = Q6_V_lo_W(s); d[2 * i + 1] = Q6_V_hi_W(s);
+    }
+}
+static inline void gp_acc_negw(int32_t *acc, const int16_t *a) {
+    const HVX_Vector *va = (const HVX_Vector *)a; HVX_Vector *d = (HVX_Vector *)acc;
+    HVX_VectorPair z = Q6_Ww_vsxt_Vh(Q6_V_vzero());
+    for (int i = 0; i < 64; ++i) { HVX_VectorPair s = Q6_Ww_vsxt_Vh(va[i]);
+        d[2 * i] = Q6_Vw_vsub_VwVw(Q6_V_lo_W(z), Q6_V_lo_W(s));
+        d[2 * i + 1] = Q6_Vw_vsub_VwVw(Q6_V_hi_W(z), Q6_V_hi_W(s)); }
+}
+static inline void gp_acc_zero(int32_t *acc) { HVX_Vector *d = (HVX_Vector *)acc, z = Q6_V_vzero();
+    for (int i = 0; i < 128; ++i) d[i] = z; }
+static inline void gp_acc_addsh(int32_t *acc, const int16_t *p, int sh) {
+    const HVX_Vector *vp = (const HVX_Vector *)p; HVX_Vector *d = (HVX_Vector *)acc;
+    for (int i = 0; i < 64; ++i) { HVX_VectorPair w = Q6_Ww_vsxt_Vh(vp[i]);
+        d[2 * i] = Q6_Vw_vadd_VwVw(d[2 * i], Q6_Vw_vasr_VwR(Q6_V_lo_W(w), sh));
+        d[2 * i + 1] = Q6_Vw_vadd_VwVw(d[2 * i + 1], Q6_Vw_vasr_VwR(Q6_V_hi_W(w), sh)); }
+}
+static inline void gp_acc_shr(int32_t *acc, int sh) { HVX_Vector *d = (HVX_Vector *)acc;
+    for (int i = 0; i < 128; ++i) d[i] = Q6_Vw_vasr_VwR(d[i], sh); }
+static inline int32_t gp_acc_absmax(const int32_t *acc) {
+    const HVX_Vector *d = (const HVX_Vector *)acc; HVX_Vector mx = Q6_V_vzero();
+    for (int i = 0; i < 128; ++i) mx = Q6_Vw_vmax_VwVw(mx, Q6_Vw_vabs_Vw(d[i]));
+    for (int sh = 64; sh >= 4; sh >>= 1) mx = Q6_Vw_vmax_VwVw(mx, Q6_V_vror_VR(mx, sh));
+    union { HVX_Vector v; int32_t w[32]; } u; u.v = mx; return u.w[0];
+}
+static inline void gp_acc_to_cv(int16_t *cv, const int32_t *acc, int s) {
+    const HVX_Vector *d = (const HVX_Vector *)acc; HVX_Vector *o = (HVX_Vector *)cv;
+    const HVX_Vector CP = Q6_Vh_vsplat_R(32639), CN = Q6_Vh_vsplat_R(-32639);
+    for (int i = 0; i < 64; ++i) { HVX_Vector lo = d[2 * i], hi = d[2 * i + 1];
+        if (s < 0) { lo = Q6_Vw_vasl_VwR(lo, -s); hi = Q6_Vw_vasl_VwR(hi, -s); }
+        o[i] = Q6_Vh_vasr_VwVwR_sat(hi, lo, s > 0 ? (s & 31) : 0);
+        o[i] = Q6_Vh_vmin_VhVh(Q6_Vh_vmax_VhVh(o[i], CN), CP); }
+}
+static inline int gp_renorm(int32_t *acc, int16_t *cv) {
+    int32_t mx = gp_acc_absmax(acc);
+    int s = 0; while ((mx >> s) > 32639) ++s;
+    if (s == 0) { while (mx && (mx << 1) <= 16384) { mx <<= 1; --s; } }
+    gp_acc_to_cv(cv, acc, s); return s;
+}
+static inline void gp_acc_diag_add(int32_t *acc, int32_t add) {   /* 64 diag (d,d) -> interleaved index */
+    for (int d = 0; d < 64; ++d) { int i = g_lut[d * 65], off = i & 63;
+        acc[(i >> 6) * 64 + (off & 1) * 32 + (off >> 1)] += add; }
+}
+static inline void gp_acc_from_cv(int32_t *acc, const int16_t *a) {
+    const HVX_Vector *va = (const HVX_Vector *)a; HVX_Vector *d = (HVX_Vector *)acc;
+    for (int i = 0; i < 64; ++i) { HVX_VectorPair s = Q6_Ww_vsxt_Vh(va[i]);
+        d[2 * i] = Q6_V_lo_W(s); d[2 * i + 1] = Q6_V_hi_W(s); }
+}
+
+/* HVX permute (O4d): dst[j] = src[ofs[j]/2], src staged in VTCM (8KB), ofs = byte offsets. Replaces the
+ * scalar per-head A-unpack / T-pack LUT-scatter. g_il: linear->cv (A-unpack), g_fl: cv->linear (T-pack).
+ * Ported from pure_hmx_solve.cpp:p4v_perm. src/dst/stage 128-aligned; ofs in VTCM. */
+static uint16_t *g_il, *g_fl;     /* VTCM, 4096 u16 each: byte-offset LUTs for vgather */
+static void gp_perm(int16_t *dst, const int16_t *src, const uint16_t *ofs, int16_t *stage) {
+    for (int i = 0; i < 64; ++i) ((HVX_Vector *)stage)[i] = ((const HVX_Vector *)src)[i];   /* src -> VTCM */
+    HVX_Vector *g = (HVX_Vector *)(stage + 4096);
+    const HVX_Vector *o = (const HVX_Vector *)ofs;
+    for (int v = 0; v < 64; ++v) {
+        Q6_vgather_ARMVh((void *)g, (uint32_t)(uintptr_t)stage, 8191, o[v]);
+        ((HVX_Vector *)dst)[v] = *g;
+    }
+}
+
+/* ---- job hand-off (producer -> main consumer): acquire/release on `state` only. ---- */
+struct gp_job { volatile int state; int _pad[31]; } __attribute__((aligned(128)));
+static gp_job g_job[GP_NT];
+#define GP_ARM(j)   __atomic_store_n(&(j)->state, 1, __ATOMIC_RELEASE)
+#define GP_POLL(j)  (__atomic_load_n(&(j)->state, __ATOMIC_ACQUIRE) == 1)
+#define GP_WAIT(j)  do { while (__atomic_load_n(&(j)->state, __ATOMIC_ACQUIRE) != 2) {} } while (0)
+#define GP_DONE(j)  __atomic_store_n(&(j)->state, 2, __ATOMIC_RELEASE)
+#define GP_RESET(j) __atomic_store_n(&(j)->state, 0, __ATOMIC_RELAXED)
+
+/* ---- per-head/per-producer context: cv-code scratch + one VTCM matmul region. ---- */
+struct gp_ctx {
+    w16a16_mm_t mm;
+    uint8_t     descs[256] __attribute__((aligned(64)));
+    int         slot;                    /* -1 = single-thread inline; >=0 = producer (delegate kernel) */
+    int16_t     A[16][GP_BB] __attribute__((aligned(128))), T[16][GP_BB] __attribute__((aligned(128)));   /* cv codes */
+    int         e[16];
+    int16_t     AA[GP_BB] __attribute__((aligned(128))), A3[GP_BB] __attribute__((aligned(128)));         /* cv codes */
+    int16_t     M[GP_BB] __attribute__((aligned(128))), Z[GP_BB] __attribute__((aligned(128)));
+    int16_t     Tt[GP_BB] __attribute__((aligned(128))), prod[GP_BB] __attribute__((aligned(128)));
+    int32_t     acc[GP_BB] __attribute__((aligned(128)));   /* interleaved int32 accumulator (HVX) */
+    int16_t     lin[GP_BB] __attribute__((aligned(128)));   /* contiguous scratch (perm / self-check) */
+    int16_t     *stage;                  /* per-ctx VTCM 8KB+ staging for the HVX vgather weight pack */
+    uint64_t    spin, t_pack, t_depack, t_life;
+    uint64_t    t_gather, t_kmajor, t_bias, t_scatter;   /* sub-stage probes */
+};
+static gp_ctx   g_ctx[GP_NT];
+static uint64_t g_cbusy;                 /* consumer: per-call feed-inclusive kernel cyc (口径 ④) */
+static int      g_sat;
+static volatile int g_pdone;
+static const uint8_t *g_Ah; static uint8_t *g_Th; static int g_H, g_P;
+static char __attribute__((aligned(128))) g_stack[GP_NT][32768];
+
+/* ---- one 64x64 cv matmul: out_cv = a_cv @ b_cv, e_out = e_a + e_b (out_code = a@b/32767). ----
+ * act = a_cv direct into the padded surface (NO crouton repack); weight = b_cv LUT-linearized + kmajor;
+ * out = surface direct into out_cv (NO depack). t_pack/t_depack probes split the two direct copies. */
+static void mm64(gp_ctx *c, const int16_t *a_cv, const int16_t *b_cv, int16_t *out_cv) {
+    uint64_t p0 = gp_pcyc();
+    gp_cv_to_surf((uint16_t *)c->mm.act, a_cv);                  /* act: cv -> surface (HVX vxor) */
+    uint64_t g0 = gp_pcyc(); c->t_pack += g0 - p0;              /* act-copy only (HVX, ~0) */
+    gp_pack_wt_bias_hvx(b_cv, c->stage, c->mm.wt, c->mm.bias);   /* weight: HVX vgather + kmajor + bias -> VTCM */
+    c->t_kmajor += gp_pcyc() - g0;
+    if (c->slot < 0) {                                          /* single-thread: run inline */
+        uint64_t t0 = gp_pcyc(); w16a16_mm_run(&c->mm); g_cbusy += gp_pcyc() - t0;
+    } else {                                                    /* producer: hand to main consumer */
+        GP_ARM(&g_job[c->slot]);
+        uint64_t s0 = gp_pcyc();
+        GP_WAIT(&g_job[c->slot]); GP_RESET(&g_job[c->slot]);
+        c->spin += gp_pcyc() - s0;
+    }
+    uint64_t d0 = gp_pcyc();
+    gp_surf_to_cv(out_cv, (const uint16_t *)c->mm.out);          /* out: surface -> cv (HVX vxor) */
+    c->t_depack += gp_pcyc() - d0;
+}
+
+/* ---- diag block inverse: X = (I - A)^-1, A strictly-lower 64x64 (e=0), all in cv. Returns eX.
+ * acc/renorm all HVX (interleaved layout). ---- */
+static int diag_inv(gp_ctx *c, const int16_t *A, int16_t *X) {
+    mm64(c, A, A, c->AA);                                       /* A^2 */
+    mm64(c, c->AA, A, c->A3);                                   /* A^3 */
+    gp_acc3(c->acc, A, c->AA, c->A3);
+    gp_acc_diag_add(c->acc, 32767);                             /* X0 = I + A + A^2 + A^3 (Taylor p=3) */
+    int eX = gp_renorm(c->acc, X);
+#if GP_NEWTON > 0
+    gp_acc_negw(c->acc, A);
+    gp_acc_diag_add(c->acc, 32767);                            /* M = I - A */
+    int eM = gp_renorm(c->acc, c->M);
+    for (int it = 0; it < GP_NEWTON; ++it) {                    /* Newton-Schulz: X <- X(2I - (I-A)X) */
+        mm64(c, c->M, X, c->Tt);                                /* (I-A)X */
+        int e = eM + eX;
+        gp_acc_negw(c->acc, c->Tt);
+        if (e < 31) gp_acc_diag_add(c->acc, (int32_t)(65534u >> e));   /* 2I - (I-A)X */
+        int eZ = e + gp_renorm(c->acc, c->Z);
+        mm64(c, X, c->Z, c->Tt);                                /* X(2I-(I-A)X) */
+        gp_acc_from_cv(c->acc, c->Tt);
+        eX = eX + eZ + gp_renorm(c->acc, X);
+    }
+#endif  /* GP_NEWTON > 0 */
+    return eX;
+}
+
+/* ---- one full C=256 head: 4 diag inverses + block forward-substitution for the off-diagonals. ---- */
+static void solve_head(gp_ctx *c, const int16_t *Aq, int16_t *To) {
+    uint64_t us0 = gp_pcyc();
+    for (int bi = 0; bi < GP_NB; ++bi)                          /* unpack lower-tri A blocks linear -> cv (HVX) */
+        for (int bj = 0; bj <= bi; ++bj) {
+            for (int r = 0; r < GP_BL; ++r) memcpy(&c->lin[r * 64], &Aq[(bi * GP_BL + r) * 256 + bj * GP_BL], GP_BL * 2);
+            gp_perm(c->A[bi * 4 + bj], c->lin, g_il, c->stage);
+        }
+    c->t_scatter += gp_pcyc() - us0;
+    for (int b = 0; b < GP_NB; ++b) c->e[b * 5] = diag_inv(c, c->A[b * 5], c->T[b * 5]);
+    for (int d = 1; d < GP_NB; ++d)
+        for (int i = d; i < GP_NB; ++i) {
+            int j = i - d, eAcc = 0;
+            gp_acc_zero(c->acc);
+            for (int k = j; k < i; ++k) {                      /* acc = sum_k A_ik @ T_kj (exp-aligned) */
+                mm64(c, c->A[i * 4 + k], c->T[k * 4 + j], c->prod);
+                int ep = c->e[k * 4 + j];
+                if (k == j) eAcc = ep;
+                else if (ep > eAcc) { gp_acc_shr(c->acc, ep - eAcc); eAcc = ep; }
+                int sh = eAcc - ep;
+                if (sh < 31) gp_acc_addsh(c->acc, c->prod, sh);
+            }
+            int eS = eAcc + gp_renorm(c->acc, c->prod);
+            mm64(c, c->T[i * 4 + i], c->prod, c->T[i * 4 + j]); /* T_ij = T_ii @ S */
+            gp_acc_from_cv(c->acc, c->T[i * 4 + j]);
+            c->e[i * 4 + j] = c->e[i * 4 + i] + eS + gp_renorm(c->acc, c->T[i * 4 + j]);
+        }
+    uint64_t us1 = gp_pcyc();
+    memset(To, 0, 131072);                                     /* pack lower-tri blocks cv -> linear (HVX) */
+    for (int bi = 0; bi < GP_NB; ++bi)
+        for (int bj = 0; bj <= bi; ++bj) {
+            gp_perm(c->lin, c->T[bi * 4 + bj], g_fl, c->stage);
+            for (int r = 0; r < GP_BL; ++r) memcpy(&To[(bi * GP_BL + r) * 256 + bj * GP_BL], &c->lin[r * 64], GP_BL * 2);
+        }
+    memcpy((uint8_t *)To + 128, c->e, 64);                     /* 16 block exps in unused upper-tri */
+    c->t_scatter += gp_pcyc() - us1;
+}
+
+/* ---- producer thread: own a head-stripe, run the full solve, delegate each kernel to the consumer. ---- */
+static void producer(void *arg) {
+    int slot = (int)(intptr_t)arg;
+    gp_ctx *c = &g_ctx[slot];
+    int hvx = qurt_hvx_lock(QURT_HVX_MODE_128B);
+    uint64_t L0 = gp_pcyc();
+    for (int h = slot; h < g_H; h += g_P) {                    /* static interleave */
+        const int16_t *Aq = (const int16_t *)(g_Ah + (size_t)h * 131072);
+        int16_t *To = (int16_t *)(g_Th + (size_t)h * 131072);
+        solve_head(c, Aq, To);
+    }
+    c->t_life = gp_pcyc() - L0;
+    if (hvx == 0) qurt_hvx_unlock();
+    __atomic_fetch_add(&g_pdone, 1, __ATOMIC_RELEASE);
+}
+
+/* ---- entry. ---- */
+int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int TLen) {
+    if (TLen < (size_t)H * 131072) return -2;
+    if (P > GP_NT) P = GP_NT; if (P < 1) P = 1; if (P > H) P = H;
+    static int pwr_client; void *pctx = &pwr_client;
+    HAP_power_set_core_corner(pctx, HAP_DCVS_VCORNER_TURBO, HAP_DCVS_VCORNER_TURBO, HAP_DCVS_VCORNER_MAX);
+    { HAP_power_request_t r; memset(&r, 0, sizeof(r)); r.type = HAP_power_set_HMX; r.hmx.power_up = TRUE; HAP_power_set(pctx, &r); }
+    compute_res_attr_t va; HAP_compute_res_attr_init(&va);
+    HAP_compute_res_attr_set_vtcm_param(&va, (unsigned)P * GP_VSTRIDE + 0x6000u, 0);   /* +24KB: g_hw/g_il/g_fl */
+    unsigned int vctx = HAP_compute_res_acquire(&va, 2000000);
+    uint8_t *vbase = (uint8_t *)HAP_compute_res_attr_get_vtcm_ptr(&va);
+    compute_res_attr_t ha; HAP_compute_res_attr_init(&ha); HAP_compute_res_attr_set_hmx_param(&ha, 1);
+    unsigned int hctx = HAP_compute_res_acquire(&ha, 2000000);
+    int hl = HAP_compute_res_hmx_lock(hctx);                    /* consumer = main, PURE HMX (no HVX lock) */
+    if (!vbase || hl != 0) { if (hl == 0) HAP_compute_res_hmx_unlock(hctx); if (hctx) HAP_compute_res_release(hctx);
+        if (vctx) HAP_compute_res_release(vctx); return -1; }
+
+    gp_lut_init();
+    g_hw = (uint16_t *)(vbase + (size_t)P * GP_VSTRIDE);                    /* shared VTCM LUTs */
+    g_il = (uint16_t *)(vbase + (size_t)P * GP_VSTRIDE + 0x2000u);          /* linear->cv (A-unpack) */
+    g_fl = (uint16_t *)(vbase + (size_t)P * GP_VSTRIDE + 0x4000u);          /* cv->linear (T-pack) */
+    gp_hwlut_init();
+    for (int i = 0; i < GP_BB; ++i) { g_il[g_lut[i]] = (uint16_t)(2 * i); g_fl[i] = (uint16_t)(2 * g_lut[i]); }
+    for (int t = 0; t < P; ++t) {
+        w16a16_mm_init(&g_ctx[t].mm, vbase + (size_t)t * GP_VSTRIDE, g_ctx[t].descs);
+        { hmx_conv_out_desc_t *od = (hmx_conv_out_desc_t *)g_ctx[t].mm.od;   /* TRUE 64^3 (INVARIANT 7) */
+          od->out_y_stride_words = 64u; od->n_tiles_pow2 = 64u; }
+        g_ctx[t].stage = (int16_t *)(vbase + (size_t)t * GP_VSTRIDE + 0x28000u);   /* gap after mm.out */
+        uint16_t *act = (uint16_t *)g_ctx[t].mm.act;                         /* prefill padded act = zp */
+        for (int i = 0; i < W16MM_ACT_BYTES / 2; ++i) act[i] = 32768;
+        memset(g_ctx[t].mm.out, 0, W16MM_OUT_BYTES);
+        g_ctx[t].spin = 0; g_ctx[t].t_pack = 0; g_ctx[t].t_depack = 0; g_ctx[t].t_life = 0;
+        g_ctx[t].t_gather = 0; g_ctx[t].t_kmajor = 0; g_ctx[t].t_bias = 0; g_ctx[t].t_scatter = 0; g_job[t].state = 0;
+    }
+    int packchk = -1;
+    {   /* PACKCHK: HVX weight pack must be byte-identical to the scalar packer (else oc breaks). */
+        int hvx = qurt_hvx_lock(QURT_HVX_MODE_128B);
+        static int16_t wcv[GP_BB]; static uint8_t wA[W16MM_WT_BYTES], wB[W16MM_WT_BYTES];
+        static int32_t bA[W16MM_BIAS_BYTES / 4], bB[W16MM_BIAS_BYTES / 4];
+        for (int i = 0; i < GP_BB; ++i) { int v = (int)((i * 2654435761u >> 15) & 0xffff) - 32768;
+            wcv[i] = (int16_t)(v > 32639 ? 32639 : (v < -32639 ? -32639 : v)); }
+        gp_pack_wt_bias_hvx(wcv, g_ctx[0].stage, wA, bA);
+        for (int i = 0; i < GP_BB; ++i) g_ctx[0].lin[i] = wcv[g_lut[i]];
+        w16a16_pack_wt_kmajor(g_ctx[0].lin, wB, W16MM_K, W16MM_N);
+        w16a16_pack_bias(g_ctx[0].lin, bB, W16MM_K, W16MM_N);
+        packchk = 0;
+        for (int i = 0; i < W16MM_WT_BYTES; ++i) if (wA[i] != wB[i]) ++packchk;
+        for (int i = 0; i < W16MM_BIAS_BYTES / 4; ++i) if (bA[i] != bB[i]) ++packchk;
+        if (hvx == 0) qurt_hvx_unlock();
+        FARF(ALWAYS, "GDN_PURE PACKCHK diff=%d (0 = HVX wt-pack byte-exact vs scalar)", packchk);
+    }
+    g_cbusy = 0; g_sat = 0; g_pdone = 0;
+    g_Ah = A; g_Th = (uint8_t *)T; g_H = H; g_P = P;
+
+    uint64_t us0 = HAP_perf_get_time_us(), t0 = gp_pcyc();
+    if (P == 1) {
+        g_ctx[0].slot = -1;
+        int hvx = qurt_hvx_lock(QURT_HVX_MODE_128B);            /* main does HVX copies inline (+ HMX) */
+        uint64_t L0 = gp_pcyc();
+        for (int h = 0; h < H; ++h)
+            solve_head(&g_ctx[0], (const int16_t *)(A + (size_t)h * 131072),
+                       (int16_t *)((uint8_t *)T + (size_t)h * 131072));
+        g_ctx[0].t_life = gp_pcyc() - L0;
+        if (hvx == 0) qurt_hvx_unlock();
+    } else {
+        qurt_thread_t tid[GP_NT];
+        for (int t = 0; t < P; ++t) {
+            g_ctx[t].slot = t;
+            qurt_thread_attr_t a; qurt_thread_attr_init(&a); qurt_thread_attr_set_name(&a, (char *)"gp_prod");
+            qurt_thread_attr_set_stack_addr(&a, g_stack[t]); qurt_thread_attr_set_stack_size(&a, sizeof(g_stack[t]));
+            if (qurt_thread_create(&tid[t], &a, producer, (void *)(intptr_t)t) != QURT_EOK) tid[t] = 0;
+        }
+        while (__atomic_load_n(&g_pdone, __ATOMIC_ACQUIRE) < P) {   /* consumer: run any armed kernel */
+            for (int t = 0; t < P; ++t)
+                if (GP_POLL(&g_job[t])) {
+                    uint64_t k0 = gp_pcyc(); w16a16_mm_run(&g_ctx[t].mm); g_cbusy += gp_pcyc() - k0;
+                    GP_DONE(&g_job[t]);
+                }
+        }
+        for (int t = 0; t < P; ++t) { int s; if (tid[t]) qurt_thread_join(tid[t], &s); }
+    }
+    uint64_t t1 = gp_pcyc(), us1 = HAP_perf_get_time_us();
+
+    if (hl == 0) HAP_compute_res_hmx_unlock(hctx); if (hctx) HAP_compute_res_release(hctx);
+    if (vctx) HAP_compute_res_release(vctx);
+    { HAP_power_request_t off; memset(&off, 0, sizeof(off)); off.type = HAP_power_set_HMX; off.hmx.power_up = FALSE; HAP_power_set(pctx, &off); }
+
+    uint64_t wall = t1 - t0, spin = 0, actcopy = 0, kmajor = 0, scatter = 0, outcopy = 0, life = 0, lmax = 0;
+    for (int t = 0; t < P; ++t) { spin += g_ctx[t].spin; actcopy += g_ctx[t].t_pack; kmajor += g_ctx[t].t_kmajor;
+        scatter += g_ctx[t].t_scatter; outcopy += g_ctx[t].t_depack;
+        life += g_ctx[t].t_life; if (g_ctx[t].t_life > lmax) lmax = g_ctx[t].t_life; }
+    uint64_t other = life - spin - actcopy - kmajor - scatter - outcopy;   /* HVX renorm+acc (mm-level) */
+    uint32_t nmm = (uint32_t)H * 40u;                          /* 24 diag + 16 merge per head */
+    if (statsLen > 0) stats[0] = (int)wall;                    /* ① graph wall (PCYCLE) */
+    if (statsLen > 1) stats[1] = P;
+    if (statsLen > 2) stats[2] = H;
+    if (statsLen > 3) stats[3] = (int)g_cbusy;                 /* ④ kernel (consumer) */
+    if (statsLen > 4) stats[4] = (int)spin;                    /* spin Σ */
+    if (statsLen > 5) stats[5] = (int)(nmm * 256u);            /* ② HMX latency floor */
+    if (statsLen > 6) stats[6] = (int)(us1 - us0);             /* wall us */
+    if (statsLen > 7) stats[7] = (int)kmajor;                  /* HVX wt-pack Σ */
+    if (statsLen > 8) stats[8] = packchk;                      /* HVX wt-pack byte-exact self-check (0 = ok) */
+    if (statsLen > 9) stats[9] = (int)scatter;                 /* A-unpack + T-pack LUT-scatter Σ (SCALAR) */
+    if (statsLen > 10) stats[10] = (int)other;                /* HVX renorm + acc (mm-level) Σ */
+    if (statsLen > 11) stats[11] = (int)lmax;                  /* slowest producer life (~wall) */
+    FARF(ALWAYS, "GDN_PURE(cv) P=%d H=%d wall=%llu packchk=%d | PROD-Σ actcopy=%llu kmajor=%llu scatter=%llu renorm/acc=%llu outcopy=%llu spin=%llu | CONS kernel=%llu",
+         P, H, (unsigned long long)wall, packchk, (unsigned long long)actcopy, (unsigned long long)kmajor,
+         (unsigned long long)scatter, (unsigned long long)other, (unsigned long long)outcopy,
+         (unsigned long long)spin, (unsigned long long)g_cbusy);
+    return 0;
+}
+
+}  /* namespace gdn_pure */
