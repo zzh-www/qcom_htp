@@ -467,6 +467,35 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
         if (statsLen > 5) stats[5] = (int)per;
         FARF(ALWAYS, "GDN_PURE MM64-bench: %llu cyc/call (single 64^3 w16a16, resident, back-to-back, steady)", (unsigned long long)per);
     }
+#if defined(GP_MMBATCH) && defined(GP_TRACE)
+    {   /* PURE-MATMUL BATCH DEMO (-DGP_MMBATCH -DGP_TRACE): N independent 64³ w16a16 matmuls back-to-back
+         * on resident VTCM operands — NO solve, NO producer/consumer glue. Each = one MATMUL op (stage 3,
+         * HMX tid256). Serialized into T as a chrometrace trace → gdn_trace_to_chrometrace.py reports the
+         * matmul-op cyc/instance, apples-to-apples vs QNN native q::ConvLayer_s1.opt (~1,204-1,430/op). */
+        const int N = 128;
+        for (int i = 0; i < 32; ++i) w16a16_mm_run(&g_ctx[0].mm);   /* warmup */
+        g_ev_n = 0;
+        uint64_t base = gp_pcyc();
+        for (int i = 0; i < N; ++i) {
+            uint64_t t0 = gp_pcyc(); w16a16_mm_run(&g_ctx[0].mm); uint64_t t1 = gp_pcyc();
+            GP_EV(GP_NT, 3, t0, t1);                                /* MATMUL op */
+        }
+        uint64_t wall = gp_pcyc() - base;
+        int n = g_ev_n; uint8_t *tb = (uint8_t *)T;
+        *(uint32_t *)(tb + 0) = 0x47545203u; *(uint32_t *)(tb + 4) = (uint32_t)n;
+        *(uint64_t *)(tb + 8) = wall; *(uint64_t *)(tb + 16) = 0;
+        uint8_t *p = tb + 24;
+        for (int i = 0; i < n; ++i) {
+            *(uint32_t *)(p + 0) = g_ev[i].tid; *(uint32_t *)(p + 4) = g_ev[i].stage;
+            *(uint64_t *)(p + 8) = g_ev[i].t0 - base; *(uint64_t *)(p + 16) = g_ev[i].t1 - base; p += 24;
+        }
+        FARF(ALWAYS, "GDN_PURE MMBATCH: %d matmul ops serialized into T (wall=%llu, %llu/op)",
+             n, (unsigned long long)wall, (unsigned long long)(wall / N));
+        if (hl == 0) HAP_compute_res_hmx_unlock(hctx); if (hctx) HAP_compute_res_release(hctx);
+        if (vctx) HAP_compute_res_release(vctx);
+        return 0;                                                   /* demo only — skip the solve */
+    }
+#endif
     {   /* O7 STEP 2: M-sweep fan-out amortization probe (cron, 2026-06-14). SAME kernel, descriptor M=128/256
          * does 2/4 independent 64-row M-blocks in ONE prologue/epilogue (M-fan-out, shared-weight). atab is
          * already ×2048 for 64 row-groups (mm_init). Linear fit cyc(M)=fixed+per_block*(M/64) -> 'fixed' =

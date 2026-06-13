@@ -238,7 +238,8 @@ uv run python scripts/gdn_solve_taylor_newton_probe.py  # Newton 步数 vs 收�
 - `baremetal/src/gdnbm_imp.cpp` — FastRPC 驱动 + pipeline(`pipe_producer`×P + 主线程 PURE-HMX consumer,`g_hmx_dispatch` 钩子)。**A1+A2 主战场。**
 - `pure_hmx_solve/w16a16_pack.h` / `w16a16_mm.h` — C 打包器 + 64³ 原语(byte-exact,CI-gated)。
 - `scripts/run_w16a16_{mm_phase1,diag_phase2,head_phase3,head_phase4}.py` — gdnbm H=1/2/3/≥5 模式驱动。
-- `scripts/gdn_trace_to_chrometrace.py` — GP_TRACE T.raw → QNN-IDENTICAL Perfetto chrometrace.json + QNN 口径 summary(perf 汇报的正式载体,cron#30)。`scripts/gdn_pipe_timeline.py` — 同 trace 的 ASCII 速览。
+- `scripts/gdn_trace_to_chrometrace.py` — GP_TRACE T.raw → QNN-IDENTICAL Perfetto chrometrace.json + per-op QNN 口径 summary(matmul op 单列,cron#30-32)。`scripts/gdn_pipe_timeline.py` — 同 trace 的 ASCII 速览。
+- `scripts/mm_batch_demo.sh` — **纯-matmul batch demo 对比(cron#33)**:OUR 128× 64³ w16a16(baremetal,resident,无 solve glue)matmul op = **10,838 cyc/op** ↔ QNN native `q::ConvLayer_s1.opt` = **1,204-1,430 cyc/op** = ~8-9×(batched-conv streaming = A-warm)。build `-DGP_TRACE -DGP_MMBATCH`(gdn_pure_solve.cpp 内,gated,跑 128 traced matmul 后 return,不跑 solve)。
 
 ## BANNED（作废论断,凡再见一律忽略）
 
