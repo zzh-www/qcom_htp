@@ -884,18 +884,22 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
          * out position -> (r,n) = native's output untile under n_tiles=8. */
         gp_ctx *c = &g_ctx[0]; c->slot = -1;
         hmx_conv_out_desc_t *od = (hmx_conv_out_desc_t *)c->mm.od; hmx_conv_act_desc_t *ad=(hmx_conv_act_desc_t*)c->mm.ad;
-        static uint16_t Aramp[4096] __attribute__((aligned(128))); static int16_t Wid[4096] __attribute__((aligned(128)));
-        for (int r=0;r<64;++r) for (int n=0;n<64;++n){ Aramp[r*64+n]=(uint16_t)(r*64+n); Wid[r*64+n]=(r==n)?(int16_t)32767:0; }
+        /* real A@A (near-zp, distinct non-saturated out) — all 6 kernel args match native (confirmed) so
+         * m->out is native-correct; dump raw m->out to find native's output untile by matching CPU A@A. */
+        static uint16_t Aa[4096] __attribute__((aligned(128))); static int16_t Wa[4096] __attribute__((aligned(128)));
+        for (int r=0;r<64;++r) for (int n=0;n<64;++n){ Aa[r*64+n]=(uint16_t)(32768+(((r*7+n*3)%97)-48)*5); Wa[r*64+n]=(int16_t)((((r*5+n*11)%127)-63)*24); }
         int hvx = qurt_hvx_lock(QURT_HVX_MODE_128B);
         uint8_t *act=(uint8_t*)c->mm.act, *out=(uint8_t*)c->mm.out;
         for(int i=0;i<16;++i){c->mm.atab[i]=(int32_t)(uintptr_t)(act+(size_t)(i&3)*2048);c->mm.otab[i]=(int32_t)(uintptr_t)(out+(size_t)(i&3)*2048);}
         od->out_table_stride_dwords=2u; od->out_y_stride_words=4u; od->n_tiles_pow2=8u; od->m_total_minus_step=8; od->k_total_bytes=64u;
         ad->n_act_pairs=2u; ad->act_table_y_stride_words=4u;
-        w16a16_pack_act_crouton16(Aramp,(uint16_t*)c->mm.act,64,64);
-        w16a16_pack_wt_kmajor(Wid,c->mm.wt,64,64); w16a16_pack_bias(Wid,(int32_t*)c->mm.bias,64,64);
+        w16a16_pack_act_crouton16(Aa,(uint16_t*)c->mm.act,64,64);
+        w16a16_pack_wt_kmajor(Wa,c->mm.wt,64,64); w16a16_pack_bias(Wa,(int32_t*)c->mm.bias,64,64);
         memset(c->mm.out,0,W16MM_OUT_BYTES); w16a16_mm_run(&c->mm);
         if (hvx==0) qurt_hvx_unlock();
         memcpy(T, c->mm.out, W16MM_OUT_BYTES);   /* raw m->out -> T for host analysis */
+        /* store the inputs into T tail so host can compute CPU A@A (T is 131072 bytes/head, out used 8KB) */
+        memcpy((uint8_t*)T+8192, Aa, 8192); memcpy((uint8_t*)T+16384, Wa, 8192);
         if (hl == 0) HAP_compute_res_hmx_unlock(hctx); if (hctx) HAP_compute_res_release(hctx);
         if (vctx) HAP_compute_res_release(vctx);
         return 0;

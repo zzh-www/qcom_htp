@@ -353,3 +353,20 @@ FINAL: goal (native 339/1547 full solve) NOT met. Delivered = cron#42 (per-call 
 oc 4.238e-3, shipping). Reverse-engineered + dump-verified native's full 64³ recipe (descriptor/act/
 weight/bias all captured & compared); cracked the crouton-untile decode wall. The dense n_tiles=8 path
 has an unresolved correctness contradiction that exhaustive RE this session could not close.
+
+### cron#63: kernel + ALL 6 args verified == native, yet dense wrong — IRREDUCIBLE contradiction; absolute endpoint
+Verified our built kernel = @0x2fdcc0 (7c700378...) = native's mm32 convhhh (byte-pattern in built .so).
+(@0x2fa740 is a DIFFERENT kernel, 1151/1216 bytes differ; .inc header comment is stale.) Also dumped+
+matched mask (mask[0..13]==native exactly) and extra ({1,0x600}==our {1,1536}). So EVERY convhhh input
+— descriptor, act(pack_act_crouton16), weight(pack_wt_kmajor), bias-consistent, mask, extra — AND the
+kernel itself match native byte-for-byte. Yet the isolated dense matmul (GP_OUTMAP real A@A) computes
+wrong values (1/4096 match CPU). IRREDUCIBLE CONTRADICTION: deterministic kernel + identical inputs must
+=> identical output, but doesn't. Most likely: native does the matmul in MULTIPLE convhhh calls per
+ConvLayer op (dump caught only the 1st call's descriptor), or runtime/HMX state my isolated baremetal
+harness doesn't replicate. Resolving needs tracing native's full per-op call sequence (count convhhh
+invocations + their descriptors), beyond this session.
+
+ABSOLUTE ENDPOINT (cron#42-63, ~32 iters, 4 self-corrections): goal NOT met. Delivered = cron#42
+(per-call 5,547, 1.64× bit-exact, oc 4.238e-3, shipping). Fully RE'd + dump-verified native's kernel
+and all 6 args; cracked crouton-untile decode; the dense n_tiles=8 path has an irreducible single-call
+replication contradiction (likely multi-call per op). Decode tooling + native recipe all captured.
