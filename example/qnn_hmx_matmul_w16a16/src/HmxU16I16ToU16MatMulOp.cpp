@@ -733,26 +733,54 @@ static uint32_t hmx_w16a16_to_u16_matmul_precomputed_kernel(
     const hmx_conv_act_desc_t *act_desc = &act_desc_local;
 
 #if defined(HMX_W16A16_DESC_DUMP)
-    if (pc->out_first_block) {
-        uint8_t *dst = pc->out_first_block;
-        for (uint32_t i = 0; i < 128; ++i) dst[i] = 0;
-        store_le32(dst, 0, 0x48385844u); /* H8XD */
-        store_le32(dst, 4, pc->S);
-        store_le32(dst, 8, pc->M_t);
-        store_le32(dst, 12, pc->N_t);
-        store_le32(dst, 16, pc->K_t);
-        store_le32(dst, 20, pc->mt_per_block);
-        store_le32(dst, 24, reinterpret_cast<uintptr_t>(act_desc->act_ptr_pairs));
-        store_le32(dst, 28, reinterpret_cast<uintptr_t>(out_desc->out_tile_ptr_table));
-        store_le32(dst, 32, out_desc->out_table_stride_dwords);
-        store_le32(dst, 36, out_desc->out_y_stride_words);
-        store_le32(dst, 40, out_desc->n_tiles_pow2);
-        store_le32(dst, 44, static_cast<uint32_t>(out_desc->m_total_minus_step));
-        store_le32(dst, 48, out_desc->k_total_bytes);
-        store_le32(dst, 52, act_desc->n_act_pairs);
-        store_le32(dst, 56, act_desc->act_table_y_stride_words);
-        const uint32_t *mask_words = reinterpret_cast<const uint32_t *>(mask_desc);
-        for (uint32_t i = 0; i < 16; ++i) store_le32(dst, 64 + i * 4, mask_words[i]);
+    /* RE dump (cron#22): write a 256B payload to EVERY out block (all identical -> robust to physical
+     * block ordering; the official delinearization recovers it from any region). Words 0..15 = descriptor;
+     * bytes 64..127 = act table offsets/512 (u8, i 0..31, rel to act_tbl[0]); bytes 128..191 = out
+     * offsets/512 (u8); bytes 192.. = raw act_tbl[0..3] low-16 for a sanity base. Decode: read out_native.raw
+     * (u16), first 128 u16 = these 256 bytes (block byte[2j..2j+1] -> linear u16[j]). */
+    {
+        uint8_t pay[256];
+        for (uint32_t i = 0; i < 256; ++i) pay[i] = 0;
+        store_le32(pay, 0, 0x48385844u); /* H8XD */
+        store_le32(pay, 4, pc->S);
+        store_le32(pay, 8, pc->M_t);
+        store_le32(pay, 12, pc->N_t);
+        store_le32(pay, 16, pc->K_t);
+        store_le32(pay, 20, out_desc->out_table_stride_dwords);
+        store_le32(pay, 24, out_desc->out_y_stride_words);
+        store_le32(pay, 28, out_desc->n_tiles_pow2);
+        store_le32(pay, 32, static_cast<uint32_t>(out_desc->m_total_minus_step));
+        store_le32(pay, 36, out_desc->k_total_bytes);
+        store_le32(pay, 40, act_desc->n_act_pairs);
+        store_le32(pay, 44, act_desc->act_table_y_stride_words);
+        store_le32(pay, 48, pc->act_entries);
+        store_le32(pay, 52, pc->out_entries);
+        store_le32(pay, 56, pc->mt_groups);
+        const int32_t a0 = act_tbl_ptr ? act_tbl_ptr[0] : 0;
+        const int32_t o0 = out_tbl_ptr ? out_tbl_ptr[0] : 0;
+        for (uint32_t i = 0; i < 32 && act_tbl_ptr && i < pc->act_entries; ++i) {
+            int32_t off = (act_tbl_ptr[i] - a0);                    /* bytes rel to act_tbl[0] */
+            pay[64 + i] = (uint8_t)((off >> 9) & 0xff);             /* off/512 (0..15 for 64^3) */
+        }
+        for (uint32_t i = 0; i < 32 && out_tbl_ptr && i < pc->out_entries; ++i) {
+            int32_t off = (out_tbl_ptr[i] - o0);
+            pay[128 + i] = (uint8_t)((off >> 9) & 0xff);
+        }
+        /* low 12 bits of act_tbl[0..3] to see absolute block spacing/alignment if /512 hides it */
+        for (uint32_t i = 0; i < 4 && act_tbl_ptr && i < pc->act_entries; ++i)
+            store_le32(pay, 192 + i * 4, (uint32_t)(act_tbl_ptr[i] - a0));
+        for (uint32_t i = 0; i < 4 && out_tbl_ptr && i < pc->out_entries; ++i)
+            store_le32(pay, 224 + i * 4, (uint32_t)(out_tbl_ptr[i] - o0));
+        /* write to every out block (handles block-ordering: all identical) */
+        if (out_tbl_ptr) {
+            for (uint32_t e = 0; e < pc->out_entries && e < 1024; ++e) {
+                uint8_t *blk = reinterpret_cast<uint8_t *>(static_cast<uintptr_t>(
+                    (uint32_t)out_tbl_ptr[e]));
+                if (blk) for (uint32_t i = 0; i < 256; ++i) blk[i] = pay[i];
+            }
+        } else if (pc->out_first_block) {
+            for (uint32_t i = 0; i < 256; ++i) pc->out_first_block[i] = pay[i];
+        }
     }
     return QHPI_Success;
 #endif
