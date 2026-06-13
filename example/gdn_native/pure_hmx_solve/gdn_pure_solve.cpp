@@ -903,19 +903,27 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
         gp_pack_wt_bias_hvx(c->A[0], c->stage, c->mm.wt, c->mm.bias);
         memset(c->mm.out,0,W16MM_OUT_BYTES); w16a16_mm_run(&c->mm);
         gp_surf_to_cv_perm(c->A3, (const uint16_t *)c->mm.out, c->stage);  /* AA_dense */
-        /* DENSE-DIRECT (D5-style): pack_act_crouton16(A_linear) + pack_wt_kmajor + dense atab + depack.
-         * isolates: if this matches sparse -> perm functions are the bug; if not -> dense matmul itself. */
+        /* DENSE-DIRECT n_tiles SWEEP (cron#52): pack_act_crouton16 + 4-tile atab(i&3) + depack, sweep
+         * n_tiles to find which reads the 4 tiles correctly (structured A@A vs CPU). native uses 4
+         * contiguous tiles (atab[0..3]); the right n_tiles for 4 tiles is unknown ((i&3)+nt8 = refuted). */
         static uint16_t Alin[4096] __attribute__((aligned(128))), Yd2[4096] __attribute__((aligned(128)));
         static int16_t Wlin[4096] __attribute__((aligned(128)));
         for (int r=0;r<64;++r) for (int k=0;k<64;++k){ Alin[r*64+k]=(uint16_t)(Aq[r*256+k]+32768); Wlin[r*64+k]=Aq[r*256+k]; }
-        w16a16_pack_act_crouton16(Alin,(uint16_t*)c->mm.act,64,64);
-        w16a16_pack_wt_kmajor(Wlin,c->mm.wt,64,64); w16a16_pack_bias(Wlin,(int32_t*)c->mm.bias,64,64);
-        memset(c->mm.out,0,W16MM_OUT_BYTES); w16a16_mm_run(&c->mm);
-        w16a16_depack_crouton16((const uint16_t*)c->mm.out, Yd2, 64, 64);
+        static int CPUaa2[4096]; for(int r=0;r<64;++r)for(int k=0;k<64;++k){ long a=0; for(int j=0;j<64;++j) a+=(long)(Aq[r*256+j])*(long)(Aq[j*256+k]); CPUaa2[r*64+k]=(int)(a/32767); }
+        const uint32_t NTS[4]={2u,4u,8u,16u}; int swres[4];
+        for (int s=0;s<4;++s){
+            for(int i=0;i<16;++i){c->mm.atab[i]=(int32_t)(uintptr_t)(act+(size_t)(i&3)*2048);c->mm.otab[i]=(int32_t)(uintptr_t)(out+(size_t)(i&3)*2048);}
+            od->out_y_stride_words=64u; od->n_tiles_pow2=NTS[s];
+            w16a16_pack_act_crouton16(Alin,(uint16_t*)c->mm.act,64,64);
+            w16a16_pack_wt_kmajor(Wlin,c->mm.wt,64,64); w16a16_pack_bias(Wlin,(int32_t*)c->mm.bias,64,64);
+            memset(c->mm.out,0,W16MM_OUT_BYTES); w16a16_mm_run(&c->mm);
+            w16a16_depack_crouton16((const uint16_t*)c->mm.out, Yd2, 64, 64);
+            int nd=0; for(int r=0;r<64;++r)for(int k=0;k<64;++k){ long got=(int)Yd2[r*64+k]-32768, dd=CPUaa2[r*64+k]-got; if(dd<0)dd=-dd; if(dd>20) nd++; }
+            swres[s]=nd;
+        }
         for(int i=0;i<128;++i){c->mm.atab[i]=asv[i];c->mm.otab[i]=osv[i];} od->out_y_stride_words=oy;od->n_tiles_pow2=ntq;
-        /* CPU A@A for the strictly-lower A (code space) */
-        { int nd2=0; for(int r=0;r<64;++r)for(int k=0;k<64;++k){ long a=0; for(int j=0;j<64;++j) a+=(long)(Aq[r*256+j])*(long)(Aq[j*256+k]); long ref=a/32767, got=(int)Yd2[r*64+k]-32768, dd=ref-got; if(dd<0)dd=-dd; if(dd>20) nd2++; }
-          if(statsLen>14) stats[14]=nd2; }   /* dense-DIRECT mismatch vs CPU (0 => dense matmul fine, perm is bug) */
+        if(statsLen>12) stats[12]=swres[0]; if(statsLen>13) stats[13]=swres[1];
+        if(statsLen>14) stats[14]=swres[2]; if(statsLen>16) stats[16]=swres[3];   /* nt=2,4,8,16 mismatch vs CPU */
         /* diff c->AA (sparse) vs c->A3 (dense), both orig-order cv -> linear */
         static int16_t Ts[64*256] __attribute__((aligned(128))), Td[64*256] __attribute__((aligned(128)));
         for(int i=0;i<64*256;++i){Ts[i]=0;Td[i]=0;}
