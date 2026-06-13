@@ -297,3 +297,19 @@ systems exist: standalone M=256 (pack_act_crouton16+pack_wt_kmajor, byte-exact) 
 M=64 (gp_cv_to_surf+pack_wt_kmajor+n_tiles=32, oc-correct). native's M=64 DENSE pairing is a third,
 unmatched. Next: dump native's weight tile layout (now possible via cracked decode) OR derive the
 M=64 dense weight K-order. Real best stays cron#42 (1.64× bit-exact, oc 4.238e-3).
+
+### cron#59: native weight stream dumped — bug fully isolated to M=64 dense weight prep; session endpoint
+Dumped native's prepared weight stream (r2=wt) with ramp B0: byte-packed hi/lo (dilate), pattern steps
+257 (0x101) every 4 entries = transformed kmajor+dilate, NOT directly pack_wt_kmajor's bytes. Combined
+with cron#57 (act=pack_act_crouton16 ✓) + cron#58 (descriptor exact ✓), the dense bug is now FULLY
+isolated to the **M=64 dense weight prep** (native's convert_weights_to_signed.packed.tcm format ≠
+pack_wt_kmajor at M=64; INV3 = our pack only byte-exact at M=256). native's weight stream is now
+captured (/tmp/vdump2/Ywt.raw) for future byte-level replication.
+
+SESSION SUMMARY (cron#42–59): delivered 1.64× bit-exact (cron#42, shipping); cracked crouton-untile
+decode (ramp); confirmed native act=pack_act_crouton16 + descriptor exact (clean dumps); isolated the
+remaining blocker layer-by-layer to native's M=64 dense weight kmajor format; corrected 2 false
+conclusions (false-positive parity, atab[4..7]). Goal (native 339/1547 full solve) NOT met; ~3.2×
+gap remains. Clear focused continuation: byte-decode native's dumped weight stream (cron#59) vs
+pack_wt_kmajor, replicate the M=64 dense weight prep, build dense act+wt+desc, verify -DGP_DIFF
+(structured). Real best = cron#42.
