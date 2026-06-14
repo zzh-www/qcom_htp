@@ -6,9 +6,13 @@ w16a16 = uint16 激活 × int16 权重 → uint16 的 HMX matmul。本文档讲�
 
 - **状态**：byte-exact，**hexagon-sim 与真设备 CDSP 双向验证通过**（`diff=0`）。
 - **shape 覆盖**：**M=256 × 任意 K,N（均 32 倍数）** 全部 byte-exact（split 路 N%128==0、
-  single-call 路 N%128≠0、K∈{32,64,128,256} 都验过）。M<256 暂未覆盖（standalone 自重建缺
-  per-shape Crouton 输出 padding，那部分 QHPI 直接喂给 op）；productized QNN op 则 M 一直下探到
-  64（`scripts/w16a16_shape_sweep.sh`）。
+  single-call 路 N%128≠0、K∈{32,64,128,256} 都验过）。~~M<256 暂未覆盖~~；productized QNN op 则
+  M 一直下探到 64（`scripts/w16a16_shape_sweep.sh`）。
+  - **更新（cron#66–67, 2026-06-14）**：**M=64 单块 64³ 已 byte-exact 到 native `ConvLayer_s1`（max|d|=0,
+    4 case）**，用 native 的 M=64 描述符（out_y=4/m_total=8/n_tiles=8/act_y=4, 4 tile @mod4）+ **闭式
+    `crouton_pos(r,c)` bit-置换布局**（act/out 共用）+ native control `0x804035F3/0x4000023E`。"M<256 缺
+    per-shape Crouton padding" 的旧限制 = 之前没逆出 M=64 的 crouton 布局公式而已,现已解。详见
+    `Agent/current/pure_hmx_solve_build.md` 末节「对齐 native 64³ ✅ SOLVED」。
 - QNN custom-op 出货路线（任意 32-multiple shape）见 `Agent/current/w16a16_production_kernel_plan.md`；
   kernel 本身机理见 `docs/w16a16_kernel_mechanism.md`、`docs/w16a16_is_two_w8a16.md`。
 

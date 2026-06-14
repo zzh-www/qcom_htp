@@ -19,6 +19,18 @@ def sh(cmd):
     return subprocess.run(f"timeout 600 {cmd}", shell=True, check=True, capture_output=True)
 
 
+def _crouton_posf():
+    """crouton_pos(r,c) bit-permutation table, flattened [4096] (must match the C CROUTON_POS macro).
+    cv[posf[r*64+c]] = block[r,c]. Used by the GP_CVIO=1 contract (cron#73): host does the linear<->cv
+    permute so the DSP skips the per-block vgather (was scatter's #1 feed cost)."""
+    r = np.arange(64)[:, None]; c = np.arange(64)[None, :]
+    pos = ((r & 1) | ((c & 1) << 1) | (((c >> 1) & 1) << 2) | (((c >> 2) & 1) << 3)
+           | (((c >> 3) & 1) << 4) | (((c >> 4) & 1) << 5) | (((r >> 1) & 1) << 6)
+           | (((r >> 3) & 1) << 7) | (((r >> 4) & 1) << 8) | (((r >> 5) & 1) << 9)
+           | (((c >> 5) & 1) << 10) | (((r >> 2) & 1) << 11))
+    return pos.ravel().astype(np.int64)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--heads", type=int, default=32)
@@ -26,12 +38,26 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--deploy", action="store_true")
     ap.add_argument("--threads", type=int, default=1, help=">=2 = producer pool + HMX consumer")
+    ap.add_argument("--linear", action="store_true",
+                    help="legacy linear I/O (GP_CVIO=0 build); default = cv-block contract (GP_CVIO=1)")
     a = ap.parse_args()
     H = a.heads
+    cvio = not a.linear
+    posf = _crouton_posf()
     rng = np.random.default_rng(a.seed)
     A = np.stack([np.tril(rng.uniform(-a.scale, a.scale, (256, 256)), -1) for _ in range(H)])
     q16 = np.round(A * 32767).astype(np.int16)
-    Path("/tmp/w16p4_A.raw").write_bytes(q16.tobytes())
+    if cvio:
+        # A in cv-blocks: block (bi,bj) at int16 offset (bi*4+bj)*4096, crouton_pos order. 16 blocks/head.
+        Abuf = np.zeros((H, 16, 4096), dtype=np.int16)
+        for h in range(H):
+            for bi in range(4):
+                for bj in range(bi + 1):
+                    blk = q16[h, bi * 64:(bi + 1) * 64, bj * 64:(bj + 1) * 64].ravel()
+                    Abuf[h, bi * 4 + bj, posf] = blk
+        Path("/tmp/w16p4_A.raw").write_bytes(Abuf.tobytes())
+    else:
+        Path("/tmp/w16p4_A.raw").write_bytes(q16.tobytes())
 
     if a.deploy:
         for f in ["libgdnbm_skel.so", "gdnbm"]:
@@ -50,15 +76,26 @@ def main() -> int:
 
     ocs = []
     for h in range(H):
-        Tc = np.frombuffer(raw[h*131072:(h+1)*131072], np.int16).reshape(256, 256).astype(np.float64)
-        eb = np.frombuffer(raw[h*131072+128:h*131072+192], np.int32).reshape(4, 4)
+        base = h * 131072
         Aq = q16[h].astype(np.float64) / 32767.0
         Tref = np.linalg.inv(np.eye(256) - Aq)
         Tdev = np.zeros((256, 256))
-        for bi in range(4):
-            for bj in range(bi + 1):
-                Tdev[bi*64:(bi+1)*64, bj*64:(bj+1)*64] = (
-                    Tc[bi*64:(bi+1)*64, bj*64:(bj+1)*64] * (2.0 ** int(eb[bi, bj])) / 32767.0)
+        if cvio:
+            # T in cv-blocks: block (bi,bj) at int16 offset (bi*4+bj)*4096; exps in block (0,1) @ offset 4096.
+            head = np.frombuffer(raw[base:base + 131072], np.int16)
+            eb = np.frombuffer(raw[base + 1 * 4096 * 2:base + 1 * 4096 * 2 + 64], np.int32).reshape(4, 4)
+            for bi in range(4):
+                for bj in range(bi + 1):
+                    cvT = head[(bi * 4 + bj) * 4096:(bi * 4 + bj) * 4096 + 4096].astype(np.float64)
+                    Tdev[bi*64:(bi+1)*64, bj*64:(bj+1)*64] = (
+                        cvT[posf].reshape(64, 64) * (2.0 ** int(eb[bi, bj])) / 32767.0)
+        else:
+            Tc = np.frombuffer(raw[base:base + 131072], np.int16).reshape(256, 256).astype(np.float64)
+            eb = np.frombuffer(raw[base + 128:base + 192], np.int32).reshape(4, 4)
+            for bi in range(4):
+                for bj in range(bi + 1):
+                    Tdev[bi*64:(bi+1)*64, bj*64:(bj+1)*64] = (
+                        Tc[bi*64:(bi+1)*64, bj*64:(bj+1)*64] * (2.0 ** int(eb[bi, bj])) / 32767.0)
         ocs.append(np.abs(Tdev - Tref).mean() / max(np.abs(Tref).mean(), 1e-12))
     ocs = np.array(ocs)
     print(f"H={H} oc mean={ocs.mean():.3e} max={ocs.max():.3e} min={ocs.min():.3e}")

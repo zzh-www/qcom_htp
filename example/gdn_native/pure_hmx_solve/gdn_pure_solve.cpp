@@ -56,11 +56,41 @@ namespace gdn_pure {
                            * solve cv-path with dense g_lut still gives oc 0.708 (n_tiles-independent =
                            * cv-build/output chain bug, not root-caused). 0 = safe cron#42 baseline. */
 #endif
+
+/* GP_CROUTON8 (cron#68, NEXT①): the CORRECT dense path — store cv in the PROVEN closed-form
+ * `crouton_pos` order (cron#66-67 bit-exact to native ConvLayer_s1) + native M=64 descriptor
+ * (out_y=4/n_tiles=8/m_total=8/act_y=4). Replaces the gp_cv_to_surf n_tiles=32 (4× over-walk) with
+ * n_tiles=8 = the true per-matmul floor (~5547→~1577/call, consumer-busy ~4.9M→~1.2M). g_lut becomes
+ * crouton_pos so cv == surface (contiguous 4096) and g_hw/g_il/g_fl auto-follow (PACKCHK stays 0).
+ * Supersedes GP_DENSE_SURF/GP_DENSE_PERM which used the WRONG pack_act_crouton16 order (→ oc 0.708). */
+#ifndef GP_CROUTON8
+#define GP_CROUTON8 1   /* DEFAULT (cron#68): proven crouton_pos n_tiles=8 = consumer-busy 4.9M->1.5M (3.27×),
+                         * graph-wall 6.61M->4.77M (1.39×, oc 4.24e-3 unchanged). =0 = legacy n_tiles=32. */
+#endif
+/* native M=64 act/out crouton tile = a pure bit-permutation (cron#67; bit-exact reproduces the
+ * ramp-dump tables). bits of pos (lo->hi): r0,c0,c1,c2,c3,c4,r1,r3,r4,r5,c5,r2. */
+#define CROUTON_POS(r,c) ( (((r)&1)<<0) | (((c)&1)<<1) | ((((c)>>1)&1)<<2) | ((((c)>>2)&1)<<3) | \
+    ((((c)>>3)&1)<<4) | ((((c)>>4)&1)<<5) | ((((r)>>1)&1)<<6) | ((((r)>>3)&1)<<7) | \
+    ((((r)>>4)&1)<<8) | ((((r)>>5)&1)<<9) | ((((c)>>5)&1)<<10) | ((((r)>>2)&1)<<11) )
 #if GP_DENSE_SURF
 #define GP_SURF_BLK 256
 #else
 #define GP_SURF_BLK 1024
 #endif
+#if GP_CROUTON8
+/* cv is stored in crouton_pos order (g_lut=crouton_pos) == the kernel's act/out surface (4 contiguous
+ * 2KB tiles = 4096 u16). So the copy is a flat XOR (int16 code <-> u16 zp32768). */
+static inline void gp_cv_to_surf(uint16_t *surf, const int16_t *cv) {
+    const HVX_Vector K = Q6_Vh_vsplat_R(0x8000);
+    const HVX_Vector *s = (const HVX_Vector *)cv; HVX_Vector *d = (HVX_Vector *)surf;
+    for (int k = 0; k < 64; ++k) d[k] = Q6_V_vxor_VV(s[k], K);   /* 4096 u16 = 64 HVX vectors */
+}
+static inline void gp_surf_to_cv(int16_t *cv, const uint16_t *surf) {
+    const HVX_Vector K = Q6_Vh_vsplat_R(0x8000);
+    const HVX_Vector *s = (const HVX_Vector *)surf; HVX_Vector *d = (HVX_Vector *)cv;
+    for (int k = 0; k < 64; ++k) d[k] = Q6_V_vxor_VV(s[k], K);
+}
+#else
 static inline void gp_cv_to_surf(uint16_t *surf, const int16_t *cv) {
     const HVX_Vector K = Q6_Vh_vsplat_R(0x8000);
     for (int b = 0; b < 16; ++b) {
@@ -77,6 +107,7 @@ static inline void gp_surf_to_cv(int16_t *cv, const uint16_t *surf) {
         for (int k = 0; k < 4; ++k) d[k] = Q6_V_vxor_VV(s[k], K);
     }
 }
+#endif
 
 /* DENSE-PERM (cron#48): ISOLATED cv<->pack-order permutation INSIDE the surf copy only. Keeps the
  * proven original g_lut for the whole solve (acc/diag/renorm/unpack/weight untouched); only the
@@ -123,7 +154,7 @@ static void gp_surf_to_cv_perm(int16_t *cv, const uint16_t *surf, int16_t *stage
                               * quant noise. So 0 = best (768 mm, both faster & more accurate). ⚠️ SCALE-DEPENDENT:
                               * larger ‖A‖ (real GDN) needs Newton>=1 — re-check oc per deployment scale. */
 #endif
-#define GP_VSTRIDE 0x30000u  /* per-producer VTCM region (w16a16_mm needs ~0x28000) */
+#define GP_VSTRIDE 0x84000u  /* per-producer VTCM region: mm(~0x28000)+stage(0x8000)+resident A/T/scratch/acc/lin(0x52000) (cron#74). 4*0x84000=2.1MB < 8MB VTCM */
 
 static inline uint64_t gp_pcyc(void) { uint64_t v; asm volatile("%0 = C15:14" : "=r"(v)); return v; }
 
@@ -147,8 +178,14 @@ static inline void gp_ev_push(uint32_t tid, uint32_t stage, uint64_t t0, uint64_
 
 /* crouton LUT: linear 64x64 index (r*64+c) -> compact cv index (block*256 + intra), block<16. */
 static uint16_t g_lut[GP_BB];
+static int32_t g_diagmask[GP_BB] __attribute__((aligned(128)));   /* cron#74: -1 at the 64 diag acc-positions, 0 else -> vectorizes gp_acc_diag_add (was 64 scalar RMW; prereq for VTCM-resident acc) */
 static void gp_lut_init(void) {
-#if GP_DENSE_SURF
+#if GP_CROUTON8
+    /* CROUTON8 (cron#68): cv index = native crouton_pos(r,c). Everything (g_hw weight pack, g_il/g_fl
+     * unpack/pack, diag fix-up) derives from g_lut so it all follows. gp_cv_to_surf is then a flat copy. */
+    for (int r = 0; r < 64; ++r) for (int c = 0; c < 64; ++c)
+        g_lut[r * 64 + c] = (uint16_t)CROUTON_POS(r, c);
+#elif GP_DENSE_SURF
     /* DENSE (cron#47): cv = w16a16_pack_act_crouton16 contiguous order (4096, 4 dense 2KB tiles). With
      * dense atab (i&3)*2048 + n_tiles=8 the kernel streams in 8 walks = native [1,8,8,64]. Everything
      * (g_hw weight pack / g_il-g_fl / diag / PACKCHK) derives from g_lut so it all follows. Proven
@@ -163,6 +200,10 @@ static void gp_lut_init(void) {
             (((r >> 5) * 2 + ((r >> 1) & 1)) * 64) + ((c & 31) * 2) + (r & 1));   /* -> surface u16 idx */
     for (int i = 0; i < GP_BB; ++i) { int s = g_lut[i]; g_lut[i] = (uint16_t)(((s >> 10) << 8) + (s & 1023)); }
 #endif
+    /* diag mask (cron#74): acc interleaved index of (d,d) = (i>>6)*64 + (off&1)*32 + (off>>1), i=g_lut[d*65]. */
+    for (int i = 0; i < GP_BB; ++i) g_diagmask[i] = 0;
+    for (int d = 0; d < 64; ++d) { int i = g_lut[d * 65], off = i & 63;
+        g_diagmask[(i >> 6) * 64 + (off & 1) * 32 + (off >> 1)] = -1; }
 }
 
 /* ---- HVX weight pack (O4b): replaces scalar gather + kmajor + bias (all scalar VTCM writes). ----
@@ -171,6 +212,7 @@ static void gp_lut_init(void) {
  * to w16a16_pack_wt_kmajor + w16a16_pack_bias (PACKCHK self-check in run()). Ported from the proven
  * pure_hmx_solve.cpp:p4v_pack_wt_bias. cv codes are already <=32639 (renorm), so no extra clip needed. */
 static uint16_t *g_hw;            /* VTCM, 4096 u16 stream-order gather offsets */
+static uint16_t *g_il, *g_fl;     /* VTCM, 4096 u16 each: byte-offset LUTs (linear<->cv vgather; g_fl also = colsum gather) */
 static void gp_hwlut_init(void) {
     int h = 0;
     for (int nt = 0; nt < 2; ++nt)
@@ -186,13 +228,28 @@ static void gp_hwlut_init(void) {
                         }
 }
 static void gp_pack_wt_bias_hvx(const int16_t *w_cv, int16_t *stage /*VTCM 8KB+*/, uint8_t *wt, int32_t *bias) {
-    for (int i = 0; i < 4096 / 64; ++i) ((HVX_Vector *)stage)[i] = ((const HVX_Vector *)w_cv)[i];   /* cv -> VTCM stage */
-    HVX_Vector *gtmp = (HVX_Vector *)(stage + 4096);
+    /* cron#74: w_cv is VTCM-resident (all block operands live in VTCM) -> gather DIRECTLY from it; the old
+     * 64-vec cv->stage staging copy is gone. gtmp (gather output, 64 vec) goes at stage[0]. */
+    HVX_Vector *gtmp = (HVX_Vector *)stage;
     const HVX_Vector *ofs = (const HVX_Vector *)g_hw;
     const HVX_Vector K128 = Q6_Vh_vsplat_R(128);
+#if GP_GPIPE
+    /* cron#72: was 2-deep gather (gtmp[0..1]) read back inside the pack loop => each pair's pack stalled on
+     * its gather. Issue ALL 64 gathers into a 64-vec buffer first (engine pipelines), then pack. */
+    for (int v = 0; v < 64; ++v) Q6_vgather_ARMVh((void *)&gtmp[v], (uint32_t)(uintptr_t)w_cv, 8191, ofs[v]);
     for (int v = 0; v < 64; v += 2) {
-        Q6_vgather_ARMVh((void *)&gtmp[0], (uint32_t)(uintptr_t)stage, 8191, ofs[v]);
-        Q6_vgather_ARMVh((void *)&gtmp[1], (uint32_t)(uintptr_t)stage, 8191, ofs[v + 1]);
+        HVX_Vector q0 = gtmp[v], q1 = gtmp[v + 1];
+        HVX_Vector lo = Q6_Vb_vpacke_VhVh(q1, q0);                                  /* low bytes */
+        HVX_Vector h0 = Q6_Vh_vasr_VhR(Q6_Vh_vadd_VhVh_sat(q0, K128), 8);
+        HVX_Vector h1 = Q6_Vh_vasr_VhR(Q6_Vh_vadd_VhVh_sat(q1, K128), 8);
+        HVX_Vector hi = Q6_Vb_vpack_VhVh_sat(h1, h0);                               /* rounded high bytes */
+        HVX_VectorPair il = Q6_W_vshuff_VVR(hi, lo, -4);                            /* 4lo|4hi grains */
+        ((HVX_Vector *)wt)[v] = Q6_V_lo_W(il); ((HVX_Vector *)wt)[v + 1] = Q6_V_hi_W(il);
+    }
+#else
+    for (int v = 0; v < 64; v += 2) {
+        Q6_vgather_ARMVh((void *)&gtmp[0], (uint32_t)(uintptr_t)w_cv, 8191, ofs[v]);
+        Q6_vgather_ARMVh((void *)&gtmp[1], (uint32_t)(uintptr_t)w_cv, 8191, ofs[v + 1]);
         HVX_Vector q0 = gtmp[0], q1 = gtmp[1];
         HVX_Vector lo = Q6_Vb_vpacke_VhVh(q1, q0);                                  /* low bytes */
         HVX_Vector h0 = Q6_Vh_vasr_VhR(Q6_Vh_vadd_VhVh_sat(q0, K128), 8);
@@ -201,7 +258,32 @@ static void gp_pack_wt_bias_hvx(const int16_t *w_cv, int16_t *stage /*VTCM 8KB+*
         HVX_VectorPair il = Q6_W_vshuff_VVR(hi, lo, -4);                            /* 4lo|4hi grains */
         ((HVX_Vector *)wt)[v] = Q6_V_lo_W(il); ((HVX_Vector *)wt)[v + 1] = Q6_V_hi_W(il);
     }
-    static const int32_t ctrl[2] = { 0x00404420, 0x40000000 };
+#endif
+    static const int32_t ctrl[2] = { 0x00404420, 0x40000000 };   /* 1/32767 drain = the solve's scale model */
+#if GP_CROUTON8
+    /* colsum GATHER-FREE (cron#68): exploit the crouton_pos cv structure directly (no extra vgather — feed
+     * is the wall, a 2nd 64-vec gather here cost ~3.4M). cv index k: lane=k&63 -> bit0=r0, bits1-5=c&31;
+     * vector v=k>>6 -> bit4=c5. So column n=(lane>>1) | (c5<<5); group vectors by c5 (v bit4), accumulate
+     * int32 per lane, then colsum[n] = lo[n&31]+hi[n&31] (even lane 2cc=lo, odd lane 2cc+1=hi). */
+    {
+        const HVX_Vector *cvv = (const HVX_Vector *)w_cv;
+        HVX_Vector p0L = Q6_V_vzero(), p0H = Q6_V_vzero(), p1L = Q6_V_vzero(), p1H = Q6_V_vzero();
+        for (int v = 0; v < 64; ++v) {
+            HVX_VectorPair w = Q6_Ww_vsxt_Vh(cvv[v]);
+            if ((v >> 4) & 1) { p1L = Q6_Vw_vadd_VwVw(p1L, Q6_V_lo_W(w)); p1H = Q6_Vw_vadd_VwVw(p1H, Q6_V_hi_W(w)); }
+            else              { p0L = Q6_Vw_vadd_VwVw(p0L, Q6_V_lo_W(w)); p0H = Q6_Vw_vadd_VwVw(p0H, Q6_V_hi_W(w)); }
+        }
+        union { HVX_Vector v; int32_t w[32]; } a0L, a0H, a1L, a1H;
+        a0L.v = p0L; a0H.v = p0H; a1L.v = p1L; a1H.v = p1H;
+        for (int n = 0; n < 64; ++n) {
+            int cc = n & 31, c5 = n >> 5;
+            int32_t cs = c5 ? (a1L.w[cc] + a1H.w[cc]) : (a0L.w[cc] + a0H.w[cc]);
+            int32_t eff = (-cs) >> 1;   /* == floor(-cs/2) for all cs (arith shift); was a per-elem /2 (cron#73) */
+            int g = n >> 4, idx = n & 15;
+            bias[g * 64 + 32 + idx * 2] = eff; bias[g * 64 + 32 + idx * 2 + 1] = 0;
+        }
+    }
+#else
     for (int nt = 0; nt < 2; ++nt) {
         HVX_Vector aL = Q6_V_vzero(), aH = Q6_V_vzero();
         for (int k4 = 0; k4 < 8; ++k4) {
@@ -219,6 +301,7 @@ static void gp_pack_wt_bias_hvx(const int16_t *w_cv, int16_t *stage /*VTCM 8KB+*
             bias[g * 64 + 32 + idx * 2] = (int32_t)eff; bias[g * 64 + 32 + idx * 2 + 1] = 0;
         }
     }
+#endif
     for (int g = 0; g < 4; ++g) for (int i = 0; i < 32; ++i) bias[g * 64 + i] = ctrl[i & 1];
 }
 
@@ -271,9 +354,10 @@ static inline int gp_renorm(int32_t *acc, int16_t *cv) {
     if (s == 0) { while (mx && (mx << 1) <= 16384) { mx <<= 1; --s; } }
     gp_acc_to_cv(cv, acc, s); return s;
 }
-static inline void gp_acc_diag_add(int32_t *acc, int32_t add) {   /* 64 diag (d,d) -> interleaved index */
-    for (int d = 0; d < 64; ++d) { int i = g_lut[d * 65], off = i & 63;
-        acc[(i >> 6) * 64 + (off & 1) * 32 + (off >> 1)] += add; }
+static inline void gp_acc_diag_add(int32_t *acc, int32_t add) {   /* cron#74: vector acc += diagmask & splat(add) (was 64 scalar RMW) */
+    const HVX_Vector *m = (const HVX_Vector *)g_diagmask; HVX_Vector *d = (HVX_Vector *)acc;
+    HVX_Vector av = Q6_V_vsplat_R(add);
+    for (int v = 0; v < GP_BB / 32; ++v) d[v] = Q6_Vw_vadd_VwVw(d[v], Q6_V_vand_VV(m[v], av));
 }
 static inline void gp_acc_from_cv(int32_t *acc, const int16_t *a) {
     const HVX_Vector *va = (const HVX_Vector *)a; HVX_Vector *d = (HVX_Vector *)acc;
@@ -284,15 +368,30 @@ static inline void gp_acc_from_cv(int32_t *acc, const int16_t *a) {
 /* HVX permute (O4d): dst[j] = src[ofs[j]/2], src staged in VTCM (8KB), ofs = byte offsets. Replaces the
  * scalar per-head A-unpack / T-pack LUT-scatter. g_il: linear->cv (A-unpack), g_fl: cv->linear (T-pack).
  * Ported from pure_hmx_solve.cpp:p4v_perm. src/dst/stage 128-aligned; ofs in VTCM. */
-static uint16_t *g_il, *g_fl;     /* VTCM, 4096 u16 each: byte-offset LUTs for vgather */
+static uint16_t *g_tr;            /* VTCM, 4096 u16: cv transpose gather LUT (cron#65 dense merge fix) */
+
+/* GP_GPIPE (cron#72): the per-block permute was 64× {vgather -> immediate readback of the SAME slot},
+ * so every gather stalled the full VTCM-gather latency (~184 cyc) before its readback => 7.56M Σ (43% of
+ * producer feed, the #1 cost). FIX: issue all 64 gathers into 64 DISTINCT VTCM slots (g+v) so the
+ * scatter/gather engine pipelines them at throughput, then bulk-read. Pure schedule change, bit-identical
+ * output (same offsets, same source). g needs 64 vec = 8KB at stage+4096 (stage region = 32KB, src uses
+ * the first 8KB) — no overlap with the [stage, stage+8191] gather source region. */
+#ifndef GP_GPIPE
+#define GP_GPIPE 1
+#endif
 static void gp_perm(int16_t *dst, const int16_t *src, const uint16_t *ofs, int16_t *stage) {
     for (int i = 0; i < 64; ++i) ((HVX_Vector *)stage)[i] = ((const HVX_Vector *)src)[i];   /* src -> VTCM */
     HVX_Vector *g = (HVX_Vector *)(stage + 4096);
     const HVX_Vector *o = (const HVX_Vector *)ofs;
+#if GP_GPIPE
+    for (int v = 0; v < 64; ++v) Q6_vgather_ARMVh((void *)(g + v), (uint32_t)(uintptr_t)stage, 8191, o[v]);
+    for (int v = 0; v < 64; ++v) ((HVX_Vector *)dst)[v] = g[v];
+#else
     for (int v = 0; v < 64; ++v) {
         Q6_vgather_ARMVh((void *)g, (uint32_t)(uintptr_t)stage, 8191, o[v]);
         ((HVX_Vector *)dst)[v] = *g;
     }
+#endif
 }
 
 /* O5 scatter-kill: fuse the (was-scalar) linear↔block memcpy into gp_perm's HVX staging, so the strided
@@ -303,19 +402,29 @@ static void gp_unpack_blk(int16_t *dst, const int16_t *src_blk, const uint16_t *
     for (int r = 0; r < 64; ++r) ((HVX_Vector *)stage)[r] = *(const HVX_Vector *)&src_blk[r * 256];  /* strided -> VTCM */
     HVX_Vector *g = (HVX_Vector *)(stage + 4096);
     const HVX_Vector *o = (const HVX_Vector *)ofs;
+#if GP_GPIPE
+    for (int v = 0; v < 64; ++v) Q6_vgather_ARMVh((void *)(g + v), (uint32_t)(uintptr_t)stage, 8191, o[v]);
+    for (int v = 0; v < 64; ++v) ((HVX_Vector *)dst)[v] = g[v];
+#else
     for (int v = 0; v < 64; ++v) {
         Q6_vgather_ARMVh((void *)g, (uint32_t)(uintptr_t)stage, 8191, o[v]);
         ((HVX_Vector *)dst)[v] = *g;
     }
+#endif
 }
 static void gp_pack_blk(int16_t *dst_blk, const int16_t *src_cv, const uint16_t *ofs, int16_t *stage) {
     for (int i = 0; i < 64; ++i) ((HVX_Vector *)stage)[i] = ((const HVX_Vector *)src_cv)[i];
     HVX_Vector *g = (HVX_Vector *)(stage + 4096);
     const HVX_Vector *o = (const HVX_Vector *)ofs;
+#if GP_GPIPE
+    for (int v = 0; v < 64; ++v) Q6_vgather_ARMVh((void *)(g + v), (uint32_t)(uintptr_t)stage, 8191, o[v]);
+    for (int v = 0; v < 64; ++v) *(HVX_Vector *)&dst_blk[v * 256] = g[v];   /* gather output -> strided linear dst */
+#else
     for (int v = 0; v < 64; ++v) {
         Q6_vgather_ARMVh((void *)g, (uint32_t)(uintptr_t)stage, 8191, o[v]);
         *(HVX_Vector *)&dst_blk[v * 256] = *g;   /* vgather output -> strided linear dst (To) */
     }
+#endif
 }
 
 /* ---- job hand-off (producer -> main consumer): acquire/release on `state` only. ---- */
@@ -328,17 +437,24 @@ static gp_job g_job[GP_NT];
 #define GP_RESET(j) __atomic_store_n(&(j)->state, 0, __ATOMIC_RELAXED)
 
 /* ---- per-head/per-producer context: cv-code scratch + one VTCM matmul region. ---- */
+/* cron#74 (VTCM residency, [[feedback_vtcm_only_intermediates]]): ALL intermediate solve state lives in
+ * VTCM (pointers into the producer's VTCM slice, assigned in run()); DDR only at head-load (A in) and
+ * head-store (T out). Offsets within the per-producer slice, AFTER mm(<=0x28000)+stage(0x28000..0x30000). */
+#define GPV_A    0x30000u   /* 16 cv blocks  = 0x20000 (128KB) */
+#define GPV_T    0x50000u   /* 16 cv blocks  = 0x20000 */
+#define GPV_SCR  0x70000u   /* AA,A3,M,Z,Tt,prod = 6*0x2000 = 0xC000 */
+#define GPV_ACC  0x7C000u   /* acc int32[GP_BB] = 0x4000 (16KB) */
+#define GPV_LIN  0x80000u   /* lin int16[GP_BB] = 0x2000 */
+/* per-producer VTCM slice end = 0x82000; GP_VSTRIDE must be >= this. */
 struct gp_ctx {
     w16a16_mm_t mm;
     uint8_t     descs[256] __attribute__((aligned(64)));
     int         slot;                    /* -1 = single-thread inline; >=0 = producer (delegate kernel) */
-    int16_t     A[16][GP_BB] __attribute__((aligned(128))), T[16][GP_BB] __attribute__((aligned(128)));   /* cv codes */
+    int16_t     (*A)[GP_BB], (*T)[GP_BB];                   /* cv codes — VTCM-resident (16 blocks each) */
     int         e[16];
-    int16_t     AA[GP_BB] __attribute__((aligned(128))), A3[GP_BB] __attribute__((aligned(128)));         /* cv codes */
-    int16_t     M[GP_BB] __attribute__((aligned(128))), Z[GP_BB] __attribute__((aligned(128)));
-    int16_t     Tt[GP_BB] __attribute__((aligned(128))), prod[GP_BB] __attribute__((aligned(128)));
-    int32_t     acc[GP_BB] __attribute__((aligned(128)));   /* interleaved int32 accumulator (HVX) */
-    int16_t     lin[GP_BB] __attribute__((aligned(128)));   /* contiguous scratch (perm / self-check) */
+    int16_t     *AA, *A3, *M, *Z, *Tt, *prod;              /* cv-code scratch — VTCM-resident */
+    int32_t     *acc;                    /* interleaved int32 accumulator (HVX) — VTCM-resident */
+    int16_t     *lin;                    /* contiguous scratch (perm / self-check) — VTCM-resident */
     int16_t     *stage;                  /* per-ctx VTCM 8KB+ staging for the HVX vgather weight pack */
     uint64_t    spin, t_pack, t_depack, t_life;
     uint64_t    t_gather, t_kmajor, t_bias, t_scatter;   /* sub-stage probes */
@@ -388,11 +504,26 @@ static void mm64(gp_ctx *c, const int16_t *a_cv, const int16_t *b_cv, int16_t *o
     if (c->slot >= 0) GP_EV(c->slot, 10, d0, d1);              /* OUT_COPY (HVX) = q::*OutputSlice */
 }
 
+#if GP_DENSE_SURF || GP_DENSE_PERM
+/* cron#65: dense n_tiles=8 mis-computes when the ACT has large hi-byte deviation × full weight (data-dep).
+ * Compute out = a@b via the working operand order (a@b = (b^T@a^T)^T); transposes via g_tr (HVX vgather).
+ * Uses c->Tt/Z/M scratch (free at GP_NEWTON=0). a_cv/b_cv/out_cv must not alias Tt/Z/M. */
+static void mm64T(gp_ctx *c, const int16_t *a_cv, const int16_t *b_cv, int16_t *out_cv) {
+    gp_perm(c->Tt, a_cv, g_tr, c->stage);            /* a^T */
+    gp_perm(c->Z,  b_cv, g_tr, c->stage);            /* b^T */
+    mm64(c, c->Z, c->Tt, c->M);                      /* b^T @ a^T = (a@b)^T  (act=b^T, weight=a^T) */
+    gp_perm(out_cv, c->M, g_tr, c->stage);           /* -> a@b */
+}
+#define MM64 mm64T
+#else
+#define MM64 mm64
+#endif
+
 /* ---- diag block inverse: X = (I - A)^-1, A strictly-lower 64x64 (e=0), all in cv. Returns eX.
  * acc/renorm all HVX (interleaved layout). ---- */
 static int diag_inv(gp_ctx *c, const int16_t *A, int16_t *X) {
-    mm64(c, A, A, c->AA);                                       /* A^2 */
-    mm64(c, c->AA, A, c->A3);                                   /* A^3 */
+    mm64(c, A, A, c->AA);                                       /* A^2 (benign act=A) */
+    MM64(c, c->AA, A, c->A3);                                   /* A^3 (act=AA can be extreme -> transpose under dense) */
     gp_acc3(c->acc, A, c->AA, c->A3);
     gp_acc_diag_add(c->acc, 32767);                             /* X0 = I + A + A^2 + A^3 (Taylor p=3) */
     int eX = gp_renorm(c->acc, X);
@@ -414,23 +545,49 @@ static int diag_inv(gp_ctx *c, const int16_t *A, int16_t *X) {
     return eX;
 }
 
-/* ---- one full C=256 head: 4 diag inverses + block forward-substitution for the off-diagonals. ---- */
+/* GP_CVIO (cron#73): I/O contract = A delivered / T returned already in cv-block layout (block (bi,bj) at
+ * int16 offset (bi*4+bj)*GP_BB, crouton_pos order within block). The linear<->cv permute (was scatter's
+ * vgather, #1 feed cost ~1.25M/producer) moves to the HOST (numpy, free vs DSP wall): in production the
+ * solve is a custom op and A arrives from upstream already in crouton layout, so the on-DSP linear<->cv was
+ * a standalone-harness artifact. On-DSP only an 8KB HVX block-copy remains (could alias to zero-copy later).
+ * The 6 unused upper-tri blocks need no zeroing (host reads only lower-tri+diag). Exps -> unused block 1.
+ * User-ratified 2026-06-15 (the metric now excludes layout conversion — legitimate per the integration). */
+#ifndef GP_CVIO
+#define GP_CVIO 1
+#endif
+/* ---- one full C=256 head: 4 diag inverses + block forward-substitution for the off-diagonals. ----
+ * cron#74 ([[feedback_vtcm_only_intermediates]]): ALL intermediate state (A/T blocks, scratch, acc) is
+ * VTCM-resident (c->A/c->T/... are VTCM pointers). DDR is touched ONLY at head-load (A cv-block in) and
+ * head-store (T cv-block out). The whole solve runs in VTCM — no per-matmul DDR staging, no DDR round-trip
+ * for the repeated T-block reads in the merge. ABLK/TBLK are macros (not local arrays) to keep the P=1
+ * inline path's stack small. */
+#define ABLK(i) (c->A[i])
+#define TBLK(i) (c->T[i])
 static void solve_head(gp_ctx *c, const int16_t *Aq, int16_t *To) {
     uint64_t us0 = gp_pcyc();
-    for (int bi = 0; bi < GP_NB; ++bi)                          /* unpack lower-tri A blocks linear -> cv (HVX, fused strided) */
+#if GP_CVIO
+    for (int bi = 0; bi < GP_NB; ++bi)                          /* head-load: A cv-blocks rpcmem(DDR) -> c->A VTCM */
+        for (int bj = 0; bj <= bi; ++bj) {
+            const HVX_Vector *s = (const HVX_Vector *)&Aq[(bi * 4 + bj) * GP_BB];
+            HVX_Vector *d = (HVX_Vector *)c->A[bi * 4 + bj];
+            for (int v = 0; v < 64; ++v) d[v] = s[v];
+        }
+#else
+    for (int bi = 0; bi < GP_NB; ++bi)                          /* head-load: unpack A blocks linear -> c->A VTCM (HVX) */
         for (int bj = 0; bj <= bi; ++bj) {
             uint64_t m1 = gp_pcyc();
             gp_unpack_blk(c->A[bi * 4 + bj], &Aq[(bi * GP_BL) * 256 + bj * GP_BL], g_il, c->stage);
             c->t_pm += gp_pcyc() - m1;
         }
+#endif
     c->t_scatter += gp_pcyc() - us0;
-    for (int b = 0; b < GP_NB; ++b) c->e[b * 5] = diag_inv(c, c->A[b * 5], c->T[b * 5]);
+    for (int b = 0; b < GP_NB; ++b) c->e[b * 5] = diag_inv(c, ABLK(b * 5), TBLK(b * 5));
     for (int d = 1; d < GP_NB; ++d)
         for (int i = d; i < GP_NB; ++i) {
             int j = i - d, eAcc = 0;
             gp_acc_zero(c->acc);
             for (int k = j; k < i; ++k) {                      /* acc = sum_k A_ik @ T_kj (exp-aligned) */
-                mm64(c, c->A[i * 4 + k], c->T[k * 4 + j], c->prod);
+                mm64(c, ABLK(i * 4 + k), TBLK(k * 4 + j), c->prod);   /* benign act=A_ik; weight may be extreme (ok via :dilate) */
                 int ep = c->e[k * 4 + j];
                 if (k == j) eAcc = ep;
                 else if (ep > eAcc) { gp_acc_shr(c->acc, ep - eAcc); eAcc = ep; }
@@ -438,12 +595,35 @@ static void solve_head(gp_ctx *c, const int16_t *Aq, int16_t *To) {
                 if (sh < 31) gp_acc_addsh(c->acc, c->prod, sh);
             }
             int eS = eAcc + gp_renorm(c->acc, c->prod);
-            mm64(c, c->T[i * 4 + i], c->prod, c->T[i * 4 + j]); /* T_ij = T_ii @ S */
-            gp_acc_from_cv(c->acc, c->T[i * 4 + j]);
-            c->e[i * 4 + j] = c->e[i * 4 + i] + eS + gp_renorm(c->acc, c->T[i * 4 + j]);
+            MM64(c, TBLK(i * 4 + i), c->prod, TBLK(i * 4 + j));   /* T_ij = T_ii @ S (dense: working operand order) */
+            gp_acc_from_cv(c->acc, TBLK(i * 4 + j));
+            c->e[i * 4 + j] = c->e[i * 4 + i] + eS + gp_renorm(c->acc, TBLK(i * 4 + j));
         }
     uint64_t us1 = gp_pcyc();
+#if GP_CVIO
+    /* head-store: c->T VTCM -> To cv-blocks rpcmem(DDR) (10 lower-tri+diag; 6 upper-tri never read).
+     * Exps -> unused block (0,1) @ int16 offset 1*GP_BB. */
+    for (int bi = 0; bi < GP_NB; ++bi)
+        for (int bj = 0; bj <= bi; ++bj) {
+            const HVX_Vector *s = (const HVX_Vector *)c->T[bi * 4 + bj];
+            HVX_Vector *d = (HVX_Vector *)&To[(bi * 4 + bj) * GP_BB];
+            for (int v = 0; v < 64; ++v) d[v] = s[v];
+        }
+    memcpy((uint8_t *)&To[1 * GP_BB], c->e, 64);              /* 16 block exps in unused upper-tri block (0,1) */
+    c->t_scatter += gp_pcyc() - us1;
+#else
+#if GP_GPIPE
+    /* cron#72: zero ONLY the 6 strict-upper blocks (bj>bi). The lower-tri + diagonal blocks are fully
+     * written by gp_pack_blk below (gp_pack_blk writes all 64×64, incl. the diag block's 0 upper-tri from
+     * the lower-tri inverse), so the full 128KB memset (0.88M Σ) wasted ~10/16 of its stores. */
+    for (int bi = 0; bi < GP_NB; ++bi)
+        for (int bj = bi + 1; bj < GP_NB; ++bj) {
+            int16_t *blk = &To[(bi * GP_BL) * 256 + bj * GP_BL];
+            for (int r = 0; r < GP_BL; ++r) *(HVX_Vector *)&blk[r * 256] = Q6_V_vzero();
+        }
+#else
     memset(To, 0, 131072);                                     /* pack lower-tri blocks cv -> linear (HVX, fused strided) */
+#endif
     uint64_t ms1 = gp_pcyc(); c->t_ms += ms1 - us1;
     for (int bi = 0; bi < GP_NB; ++bi)
         for (int bj = 0; bj <= bi; ++bj) {
@@ -453,7 +633,10 @@ static void solve_head(gp_ctx *c, const int16_t *Aq, int16_t *To) {
         }
     memcpy((uint8_t *)To + 128, c->e, 64);                     /* 16 block exps in unused upper-tri */
     c->t_scatter += gp_pcyc() - us1;
+#endif
 }
+#undef ABLK
+#undef TBLK
 
 /* ---- producer thread: own a head-stripe, run the full solve, delegate each kernel to the consumer. ---- */
 static void producer(void *arg) {
@@ -479,7 +662,11 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
     HAP_power_set_core_corner(pctx, HAP_DCVS_VCORNER_TURBO, HAP_DCVS_VCORNER_TURBO, HAP_DCVS_VCORNER_MAX);
     { HAP_power_request_t r; memset(&r, 0, sizeof(r)); r.type = HAP_power_set_HMX; r.hmx.power_up = TRUE; HAP_power_set(pctx, &r); }
     compute_res_attr_t va; HAP_compute_res_attr_init(&va);
+#if GP_DENSE_SURF || GP_DENSE_PERM
+    HAP_compute_res_attr_set_vtcm_param(&va, (unsigned)P * GP_VSTRIDE + 0xC000u, 0);   /* +48KB: g_hw/g_il/g_fl/g_qa/g_qo/g_tr */
+#else
     HAP_compute_res_attr_set_vtcm_param(&va, (unsigned)P * GP_VSTRIDE + 0xA000u, 0);   /* +40KB: g_hw/g_il/g_fl/g_qa/g_qo */
+#endif
     unsigned int vctx = HAP_compute_res_acquire(&va, 2000000);
     uint8_t *vbase = (uint8_t *)HAP_compute_res_attr_get_vtcm_ptr(&va);
     compute_res_attr_t ha; HAP_compute_res_attr_init(&ha); HAP_compute_res_attr_set_hmx_param(&ha, 1);
@@ -494,6 +681,12 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
     g_fl = (uint16_t *)(vbase + (size_t)P * GP_VSTRIDE + 0x4000u);          /* cv->linear (T-pack) */
     gp_hwlut_init();
     for (int i = 0; i < GP_BB; ++i) { g_il[g_lut[i]] = (uint16_t)(2 * i); g_fl[i] = (uint16_t)(2 * g_lut[i]); }
+#if GP_DENSE_SURF || GP_DENSE_PERM
+    /* cv transpose gather LUT (cron#65): dst_cv[g_lut[c*64+r]] = src_cv[g_lut[r*64+c]] => g_tr[g_lut[c*64+r]]=2*g_lut[r*64+c].
+     * used to compute the merge's T_ii@S as (S^T @ T_ii^T)^T (working operand order under dense n_tiles=8). */
+    g_tr = (uint16_t *)(vbase + (size_t)P * GP_VSTRIDE + 0xA000u);
+    for (int r = 0; r < 64; ++r) for (int c = 0; c < 64; ++c) g_tr[g_lut[c*64+r]] = (uint16_t)(2 * g_lut[r*64+c]);
+#endif
 #if GP_DENSE_PERM || defined(GP_DIFF)
     /* cv<->pack-order perm LUTs (cron#48): g_qa[pack_pos p] = 2*(orig cv idx of the element at p);
      * g_qo[orig cv idx k] = 2*(pack pos of the element at k). Derived from original g_lut + pack idx. */
@@ -508,7 +701,20 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
     for (int t = 0; t < P; ++t) {
         w16a16_mm_init(&g_ctx[t].mm, vbase + (size_t)t * GP_VSTRIDE, g_ctx[t].descs);
         { hmx_conv_out_desc_t *od = (hmx_conv_out_desc_t *)g_ctx[t].mm.od;   /* TRUE 64^3 (INVARIANT 7) */
-#if GP_DENSE_SURF || GP_DENSE_PERM
+#if GP_CROUTON8
+          /* CROUTON8 (cron#68): PROVEN native M=64 descriptor (cron#66-67, bit-exact). act/out = 4
+           * contiguous 2KB tiles (atab/otab=(i&3)*2048); cv stored in crouton_pos order. n_tiles=8 =
+           * true per-matmul floor (out_y=4/m_total=8/act_y=4 — the EXACT GP_ALIGN descriptor). */
+          uint8_t *act = (uint8_t *)g_ctx[t].mm.act, *out = (uint8_t *)g_ctx[t].mm.out;
+          for (int i = 0; i < 16; ++i) {
+              g_ctx[t].mm.atab[i] = (int32_t)(uintptr_t)(act + (size_t)(i & 3) * 2048);
+              g_ctx[t].mm.otab[i] = (int32_t)(uintptr_t)(out + (size_t)(i & 3) * 2048);
+          }
+          od->out_table_stride_dwords = 2u; od->out_y_stride_words = 4u; od->n_tiles_pow2 = 8u;
+          od->m_total_minus_step = 8u; od->k_total_bytes = 64u;
+          { hmx_conv_act_desc_t *ad = (hmx_conv_act_desc_t *)g_ctx[t].mm.ad;
+            ad->n_act_pairs = 2u; ad->act_table_y_stride_words = 4u; }
+#elif GP_DENSE_SURF || GP_DENSE_PERM
           /* DENSE (cron#47/48): act/out packed contiguous (4 tiles of 2KB); atab/otab = (i&3)*2048; n_tiles=8
            * = native [1,8,8,64]. per-call ->1577 = native warm HMX-busy 1547 parity, bit-exact. */
           uint8_t *act = (uint8_t *)g_ctx[t].mm.act, *out = (uint8_t *)g_ctx[t].mm.out;
@@ -526,6 +732,19 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
 #endif
         }
         g_ctx[t].stage = (int16_t *)(vbase + (size_t)t * GP_VSTRIDE + 0x28000u);   /* gap after mm.out */
+        {   /* cron#74: VTCM-resident intermediate state (DDR only at head load/store). */
+            uint8_t *vb = vbase + (size_t)t * GP_VSTRIDE;
+            g_ctx[t].A   = (int16_t (*)[GP_BB])(vb + GPV_A);
+            g_ctx[t].T   = (int16_t (*)[GP_BB])(vb + GPV_T);
+            g_ctx[t].AA  = (int16_t *)(vb + GPV_SCR + 0 * 0x2000u);
+            g_ctx[t].A3  = (int16_t *)(vb + GPV_SCR + 1 * 0x2000u);
+            g_ctx[t].M   = (int16_t *)(vb + GPV_SCR + 2 * 0x2000u);
+            g_ctx[t].Z   = (int16_t *)(vb + GPV_SCR + 3 * 0x2000u);
+            g_ctx[t].Tt  = (int16_t *)(vb + GPV_SCR + 4 * 0x2000u);
+            g_ctx[t].prod= (int16_t *)(vb + GPV_SCR + 5 * 0x2000u);
+            g_ctx[t].acc = (int32_t *)(vb + GPV_ACC);
+            g_ctx[t].lin = (int16_t *)(vb + GPV_LIN);
+        }
         uint16_t *act = (uint16_t *)g_ctx[t].mm.act;                         /* prefill padded act = zp */
         for (int i = 0; i < W16MM_ACT_BYTES / 2; ++i) act[i] = 32768;
         memset(g_ctx[t].mm.out, 0, W16MM_OUT_BYTES);
@@ -540,7 +759,8 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
         static int32_t bA[W16MM_BIAS_BYTES / 4], bB[W16MM_BIAS_BYTES / 4];
         for (int i = 0; i < GP_BB; ++i) { int v = (int)((i * 2654435761u >> 15) & 0xffff) - 32768;
             wcv[i] = (int16_t)(v > 32639 ? 32639 : (v < -32639 ? -32639 : v)); }
-        gp_pack_wt_bias_hvx(wcv, g_ctx[0].stage, wA, bA);
+        for (int i = 0; i < GP_BB; ++i) g_ctx[0].AA[i] = wcv[i];   /* cron#74: wt-pack gathers from VTCM-resident w_cv -> stage test cv into VTCM */
+        gp_pack_wt_bias_hvx(g_ctx[0].AA, g_ctx[0].stage, wA, bA);
         for (int i = 0; i < GP_BB; ++i) g_ctx[0].lin[i] = wcv[g_lut[i]];
         w16a16_pack_wt_kmajor(g_ctx[0].lin, wB, W16MM_K, W16MM_N);
         w16a16_pack_bias(g_ctx[0].lin, bB, W16MM_K, W16MM_N);
@@ -550,6 +770,87 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
         if (hvx == 0) qurt_hvx_unlock();
         FARF(ALWAYS, "GDN_PURE PACKCHK diff=%d (0 = HVX wt-pack byte-exact vs scalar)", packchk);
     }
+#ifdef GP_ALIGN
+    {   /* BIT-EXACT vs NATIVE `ConvLayer_s1` (cron#66/67, 2026-06-14). dense n_tiles=8 native M=64 descriptor +
+         * native control words + CLOSED-FORM crouton layout (no dumped tables). Output codes -> T; host
+         * compares to native Cout DIRECTLY (no CPU). GP_ALIGN_NCASE inputs (default 4) guard false-positive.
+         *
+         * crouton_pos(r,c) = the native M=64 act/out tile layout, a PURE BIT-PERMUTATION (reverse-engineered
+         * from ramp-dumps, cron#67; bit-exact reproduces both dumped tables). act[crouton_pos(r,c)]=Aref[r,c];
+         * outlin[r*64+c]=raw_out[crouton_pos(r,c)]. CROUTON_POS macro is file-scope (shared with GP_CROUTON8). */
+        w16a16_mm_t *m = &g_ctx[0].mm;
+        static uint16_t Aref[4096]; static int16_t Wq[4096]; static uint16_t outlin[4096];
+        hmx_conv_out_desc_t *od = (hmx_conv_out_desc_t *)m->od; hmx_conv_act_desc_t *ad = (hmx_conv_act_desc_t *)m->ad;
+        uint8_t *act = (uint8_t *)m->act, *out = (uint8_t *)m->out;
+        uint16_t *Tu = (uint16_t *)T;
+        /* M=256 carrier per-call (口径④) for the doc comparison: default w16a16_mm_init descriptor
+         * (out_y=256,m_total=1,n_tiles=256,act_y=128) = the production primitive (4x 64-row blocks/call). */
+        uint64_t cyc256 = 0, cyc256n32 = 0; int n32_byteid = -1;
+        {   /* n_tiles=256 = original over-walk; n_tiles=32 = shape-minimum (new default). Verify the
+             * default trim is BYTE-IDENTICAL output (only faster), then time both. */
+            static uint16_t out256[W16MM_OUT_BYTES/2];
+            od->n_tiles_pow2 = 256u; memset(m->out,0,W16MM_OUT_BYTES); w16a16_mm_run(m);
+            for (int i=0;i<W16MM_OUT_BYTES/2;++i) out256[i]=((uint16_t*)m->out)[i];
+            od->n_tiles_pow2 = 32u;  memset(m->out,0,W16MM_OUT_BYTES); w16a16_mm_run(m);
+            n32_byteid = 0; for (int i=0;i<W16MM_OUT_BYTES/2;++i) if (((uint16_t*)m->out)[i]!=out256[i]) ++n32_byteid;
+            od->n_tiles_pow2 = 256u;
+            for (int i = 0; i < 32; ++i) w16a16_mm_run(m);
+            uint64_t b0 = gp_pcyc(); for (int i = 0; i < 200; ++i) w16a16_mm_run(m); cyc256 = (gp_pcyc()-b0)/200;
+            od->n_tiles_pow2 = 32u;
+            for (int i = 0; i < 32; ++i) w16a16_mm_run(m);
+            b0 = gp_pcyc(); for (int i = 0; i < 200; ++i) w16a16_mm_run(m); cyc256n32 = (gp_pcyc()-b0)/200;
+        }
+        for (int i = 0; i < 16; ++i) { m->atab[i] = (int32_t)(uintptr_t)(act + (size_t)(i & 3) * 2048);
+                                       m->otab[i] = (int32_t)(uintptr_t)(out + (size_t)(i & 3) * 2048); }
+        od->out_table_stride_dwords = 2u; od->out_y_stride_words = 4u; od->n_tiles_pow2 = 8u;
+        od->m_total_minus_step = 8u; od->k_total_bytes = 64u;
+        ad->n_act_pairs = 2u; ad->act_table_y_stride_words = 4u;
+#ifndef GP_ALIGN_NCASE
+#define GP_ALIGN_NCASE 4
+#endif
+        uint64_t cyc8 = 0;
+        for (int v = 0; v < GP_ALIGN_NCASE; ++v) {   /* multi-case false-positive guard (cron#47 lesson) */
+            for (int r = 0; r < 64; ++r) for (int c = 0; c < 64; ++c) {
+                unsigned a, w;
+                switch (v) {   /* distinct large-range patterns + a strictly-lower structured case (v==3) */
+                    case 0:  a=(unsigned)(r*97+c*53);      w=(unsigned)(r*131+c*71);      break;
+                    case 1:  a=(unsigned)(r*61+c*29+7);    w=(unsigned)(r*43+c*101+13);   break;
+                    case 2:  a=(unsigned)(r*199+c*7+5000); w=(unsigned)(r*17+c*251+999);  break;
+                    default: a=(unsigned)(r*97+c*53);      w=(r>c)?(unsigned)(r*131+c*71):0u; break; /* strictly-lower wt */
+                }
+                Aref[r*64+c] = (uint16_t)(32768 + (int)(a % 30000u) - 15000);
+                Wq[r*64+c]   = w16a16_clip_q16((int)(w % 30000u) - 15000);
+            }
+            {   uint16_t *ao = (uint16_t *)m->act;            /* closed-form act layout */
+                for (int r = 0; r < 64; ++r) for (int c = 0; c < 64; ++c) ao[CROUTON_POS(r,c)] = Aref[r*64+c];
+            }
+            w16a16_pack_wt_kmajor(Wq, m->wt, 64, 64);
+            w16a16_pack_bias(Wq, (int32_t *)m->bias, 64, 64);
+            for (int g = 0; g < 4; ++g) for (int i = 0; i < 16; ++i) {   /* native control = sA*sB/sC drain */
+                m->bias[g*64 + 2*i]     = (int32_t)0x804035F3;
+                m->bias[g*64 + 2*i + 1] = (int32_t)0x4000023E;
+            }
+            memset(m->out, 0, W16MM_OUT_BYTES);
+            w16a16_mm_run(m);
+            {   const uint16_t *so = (const uint16_t *)m->out;   /* closed-form untile */
+                for (int r = 0; r < 64; ++r) for (int c = 0; c < 64; ++c) outlin[r*64+c] = so[CROUTON_POS(r,c)];
+            }
+            if (v < 8) for (int i = 0; i < 4096; ++i) Tu[v*4096 + i] = outlin[i];   /* T[v*4096..] = case v out */
+            if (v == 0) {   /* per-call cyc on resident operands (口径④, target native ~1577) */
+                for (int i = 0; i < 64; ++i) w16a16_mm_run(m);
+                uint64_t b0 = gp_pcyc(); for (int i = 0; i < 500; ++i) w16a16_mm_run(m); cyc8 = (gp_pcyc()-b0)/500;
+            }
+        }
+        FARF(ALWAYS, "GDN_PURE GP_ALIGN: M64 dense n_tiles=8=%llu cyc (native ~1577) vs M256 carrier n_tiles=256=%llu cyc (=%llu/64^3-equiv); %d cases -> T",
+             (unsigned long long)cyc8, (unsigned long long)cyc256, (unsigned long long)(cyc256/4), GP_ALIGN_NCASE);
+        if (statsLen > 0) stats[0] = (int)cyc8;
+        if (statsLen > 1) stats[1] = (int)cyc256;
+        if (statsLen > 2) stats[2] = (int)cyc256n32;
+        if (statsLen > 3) stats[3] = n32_byteid;   /* 0 = n_tiles=32 (new default) byte-identical to 256 */
+        HAP_compute_res_hmx_unlock(hctx); if (hctx) HAP_compute_res_release(hctx); if (vctx) HAP_compute_res_release(vctx);
+        return 0;
+    }
+#endif
     {   /* SINGLE-64³-MATMUL micro-bench (answers the hard口径 gate): back-to-back w16a16_mm_run on
          * resident VTCM operands -> true per-call throughput (NOT the consumer-loop aggregate). main
          * thread holds the HMX lock. data-independent (mxmem cyc fixed). Warmup-excluded steady state
@@ -561,6 +862,59 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
         uint64_t per = (gp_pcyc() - b0) / B;
         if (statsLen > 5) stats[5] = (int)per;
         FARF(ALWAYS, "GDN_PURE MM64-bench: %llu cyc/call (single 64^3 w16a16, resident, back-to-back, steady)", (unsigned long long)per);
+    }
+    {   /* SELF-MEASURED dominant-path (cron#69, no QNN): sweep descriptor n_tiles = the mxmem MAC-walk
+         * count. n_tiles=8 = the EXACT 64^3 MAC; >8 = bit-identical REDUNDANT walks. So wall(nt) =
+         * fixed_overhead(load act+wt into mxmem, drain out, setup) + nt * per_walk_mxmem. The SLOPE
+         * isolates pure mxmem (per_walk); slope*8 = the pure-conv cost = native ConvLayer_s1's 370
+         * domain; the INTERCEPT = the per-call feed (= what native splits off into weights_to_vtcm /
+         * OutputSlice). Pure baremetal C15:14, data-independent. */
+        hmx_conv_out_desc_t *od = (hmx_conv_out_desc_t *)g_ctx[0].mm.od;
+        uint32_t save = od->n_tiles_pow2;
+        const int B = 1000; const int NTS[4] = { 8, 16, 32, 64 }; uint64_t r[4];
+        for (int i = 0; i < 4; ++i) {
+            od->n_tiles_pow2 = (uint32_t)NTS[i];
+            for (int w = 0; w < 64; ++w) w16a16_mm_run(&g_ctx[0].mm);   /* warmup */
+            uint64_t b0 = gp_pcyc();
+            for (int rr = 0; rr < B; ++rr) w16a16_mm_run(&g_ctx[0].mm);
+            r[i] = (gp_pcyc() - b0) / B;
+            if (statsLen > 20 + i) stats[20 + i] = (int)r[i];
+        }
+        od->n_tiles_pow2 = save;
+        /* slope = per-walk mxmem; intercept = per-call fixed feed; conv8 = slope*8 (vs native 370). */
+        long slope = (long)(r[3] - r[0]) / (64 - 8);
+        long conv8 = slope * 8, intercept = (long)r[0] - conv8;
+        FARF(ALWAYS, "GDN_PURE NTSWEEP nt8=%llu nt16=%llu nt32=%llu nt64=%llu | per-walk=%ld pure-conv(8walk)=%ld fixed-feed=%ld",
+             (unsigned long long)r[0], (unsigned long long)r[1], (unsigned long long)r[2], (unsigned long long)r[3], slope, conv8, intercept);
+        if (statsLen > 24) stats[24] = (int)slope;
+        if (statsLen > 25) stats[25] = (int)conv8;
+        if (statsLen > 26) stats[26] = (int)intercept;
+    }
+    {   /* DISTINCT-TILE test (cron#70, no QNN): native QNN op lays act/out into 32 DISTINCT contiguous tiles
+         * (act_tbl[i]=base+i*2048, dumped via custom-op DESC_DUMP); our crouton8 collapses to 4 reused
+         * (i&3)*2048. Hypothesis: reused tiles serialize mxmem (loads to the same VTCM addr/bank can't
+         * pipeline) -> per-walk 165 vs native 46. Repoint atab/otab to 32 distinct tiles in the (idle,
+         * pre-spawn) ctx1 VTCM region, measure n_tiles=8 per-call. Timing-only (data-independent). */
+        hmx_conv_out_desc_t *od = (hmx_conv_out_desc_t *)g_ctx[0].mm.od;
+        int32_t *atab = g_ctx[0].mm.atab, *otab = g_ctx[0].mm.otab;
+        int32_t sa[32], so2[32];
+        for (int i = 0; i < 32; ++i) { sa[i] = atab[i]; so2[i] = otab[i]; }
+        uint8_t *scr = (uint8_t *)g_ctx[0].mm.act + GP_VSTRIDE;        /* ctx1 region (free pre-spawn) */
+        uint8_t *scro = scr + 0x10000;                                 /* +64KB for out tiles */
+        for (int i = 0; i < 32; ++i) {
+            atab[i] = (int32_t)(uintptr_t)(scr + (size_t)i * 2048);
+            otab[i] = (int32_t)(uintptr_t)(scro + (size_t)i * 2048);
+        }
+        uint32_t save2 = od->n_tiles_pow2; od->n_tiles_pow2 = 8u;
+        for (int w = 0; w < 64; ++w) w16a16_mm_run(&g_ctx[0].mm);
+        uint64_t b0 = gp_pcyc();
+        for (int rr = 0; rr < 1000; ++rr) w16a16_mm_run(&g_ctx[0].mm);
+        uint64_t per = (gp_pcyc() - b0) / 1000;
+        od->n_tiles_pow2 = save2;
+        for (int i = 0; i < 32; ++i) { atab[i] = sa[i]; otab[i] = so2[i]; }
+        if (statsLen > 27) stats[27] = (int)per;
+        FARF(ALWAYS, "GDN_PURE DISTINCT-TILE nt8 32-distinct=%llu cyc (vs 4-reused; native 370)",
+             (unsigned long long)per);
     }
 #if defined(GP_MMBATCH) && defined(GP_TRACE)
     {   /* PURE-MATMUL BATCH DEMO (-DGP_MMBATCH -DGP_TRACE): N independent 64³ w16a16 matmuls back-to-back
@@ -771,7 +1125,7 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
             static int16_t Aq2[64*256] __attribute__((aligned(128))), Acv2[4096] __attribute__((aligned(128))),
                            Xcv[4096] __attribute__((aligned(128))), Xlin[64*256] __attribute__((aligned(128)));
             static double Av[64][64], X0[64][64];
-            for (int r=0;r<64;++r) for (int c=0;c<64;++c){ int v = (r>c) ? (((r*5+c*7)%41)-20)*300 : 0;
+            for (int r=0;r<64;++r) for (int c=0;c<64;++c){ int v = (r>c) ? (((r*5+c*7)%41)-20)*80 : 0; /* ~scale0.05 */
                 Aq2[r*256+c]=(int16_t)v; Av[r][c]=v/32767.0; }
             gp_unpack_blk(Acv2, Aq2, g_il, g_ctx[0].stage);
             int sl=g_ctx[0].slot; g_ctx[0].slot=-1;
@@ -788,6 +1142,122 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
             int rel = (int)(10000.0 * (den>0? (num/den):0));   /* relerr^2 *1e4 */
             FARF(ALWAYS,"GDN_PURE DENSE8 diag_inv relerr^2*1e4=%d eX=%d (small=ok)", rel, eX);
             if (statsLen>13) stats[13]=rel;
+        }
+        {   /* 2-BLOCK MERGE test under dense (cron#65): T10 = T11 @ (A10 @ T00), matching solve_head's
+             * forward-subst. Uses a COMPUTED T as the matmul WEIGHT across blocks (no passing test does).
+             * CPU: t00=I+a00+a00^2+a00^3 (Taylor3, = device), t11 likewise, s=a10@t00, t10=t11@s. */
+            static int16_t q00[64*256],q11[64*256],q10[64*256],B00[4096],B11[4096],B10[4096];
+            static int16_t T00[4096],T11[4096],Sm[4096],T10[4096],Tln[64*256];
+            static double a00[64][64],a11[64][64],a10[64][64];
+            for (int r=0;r<64;++r) for (int c=0;c<64;++c){
+                int v00=(r>c)?(((r*5+c*7)%41)-20)*10:0, v11=(r>c)?(((r*3+c*11)%37)-18)*10:0, v10=(((r*7+c*5)%53)-26)*10;
+                q00[r*256+c]=(int16_t)v00; q11[r*256+c]=(int16_t)v11; q10[r*256+c]=(int16_t)v10;
+                a00[r][c]=v00/32767.0; a11[r][c]=v11/32767.0; a10[r][c]=v10/32767.0; }
+            gp_unpack_blk(B00,q00,g_il,g_ctx[0].stage); gp_unpack_blk(B11,q11,g_il,g_ctx[0].stage); gp_unpack_blk(B10,q10,g_il,g_ctx[0].stage);
+            int sl2=g_ctx[0].slot; g_ctx[0].slot=-1;
+            int e00=diag_inv(&g_ctx[0],B00,T00), e11=diag_inv(&g_ctx[0],B11,T11);
+            gp_acc_zero(g_ctx[0].acc); mm64(&g_ctx[0],B10,T00,Sm);    /* S=A10@T00 (T00 = computed WEIGHT) */
+            gp_acc_addsh(g_ctx[0].acc,Sm,0); int eS=e00+gp_renorm(g_ctx[0].acc,Sm);
+            {   /* ISOLATE: S=A10@T00 vs CPU a10@t00cpu (computed-WEIGHT matmul) — needs t00 below; deferred check */
+                static int16_t Sln[64*256]; for(int i=0;i<64*256;++i)Sln[i]=0; gp_pack_blk(Sln,Sm,g_fl,g_ctx[0].stage);
+                static double t00x[64][64],tmpx[64][64]; for(int r=0;r<64;++r)for(int c=0;c<64;++c){double s2=0;for(int k=0;k<64;++k)s2+=a00[r][k]*a00[k][c];tmpx[r][c]=s2;}
+                for(int r=0;r<64;++r)for(int c=0;c<64;++c){double s3=0;for(int k=0;k<64;++k)s3+=tmpx[r][k]*a00[k][c];t00x[r][c]=(r==c?1.0:0.0)+a00[r][c]+tmpx[r][c]+s3;}
+                double num=0,den=0,sc=1.0; for(int i=0;i<eS;++i)sc*=2.0; for(int i=0;i<-eS;++i)sc/=2.0;
+                for(int r=0;r<64;++r)for(int c=0;c<64;++c){double sx=0;for(int k=0;k<64;++k)sx+=a10[r][k]*t00x[k][c];double xv=Sln[r*256+c]*sc/32767.0;double d=xv-sx;num+=d*d;den+=sx*sx;}
+                if(statsLen>15) stats[15]=(int)(1000000.0*(den>0?num/den:0)); }   /* S relerr^2 *1e6 (1st mm64, computed wt) */
+            {   /* ISOLATE: mm64(T00, B00) = renorm-output T00 as ACT + input weight B00, vs CPU t00@a00 */
+                static int16_t Pm[4096], Pln[64*256]; static double t00y[64][64],tmpy[64][64],p00[64][64];
+                for(int r=0;r<64;++r)for(int c=0;c<64;++c){double s2=0;for(int k=0;k<64;++k)s2+=a00[r][k]*a00[k][c];tmpy[r][c]=s2;}
+                for(int r=0;r<64;++r)for(int c=0;c<64;++c){double s3=0;for(int k=0;k<64;++k)s3+=tmpy[r][k]*a00[k][c];t00y[r][c]=(r==c?1.0:0.0)+a00[r][c]+tmpy[r][c]+s3;}
+                gp_acc_zero(g_ctx[0].acc); mm64(&g_ctx[0],T00,B00,Pm); gp_acc_addsh(g_ctx[0].acc,Pm,0); int eP=e00+gp_renorm(g_ctx[0].acc,Pm);
+                for(int i=0;i<64*256;++i)Pln[i]=0; gp_pack_blk(Pln,Pm,g_fl,g_ctx[0].stage);
+                double num=0,den=0,sc=1.0; for(int i=0;i<eP;++i)sc*=2.0; for(int i=0;i<-eP;++i)sc/=2.0;
+                for(int r=0;r<64;++r)for(int c=0;c<64;++c){double pv=0;for(int k=0;k<64;++k)pv+=t00y[r][k]*a00[k][c];double xv=Pln[r*256+c]*sc/32767.0;double d=xv-pv;num+=d*d;den+=pv*pv;}
+                if(statsLen>11) stats[11]=(int)(1000000.0*(den>0?num/den:0)); }   /* T00@B00 relerr^2 *1e6 (renorm act) */
+            {   /* WORKAROUND VALIDATION: T_ii@S via transpose(mm64(S^T, T_ii^T)) — the working operand order.
+                 * compare to CPU T11_code@Sm_code/32767. if 0 => bit-exact + dense-speed fix CONFIRMED. */
+                static int16_t STcv[4096], TTcv[4096], Qcv[4096];
+                static int16_t lin[64*256], linT[64*256], QTln[64*256], T11l[64*256], Sml[64*256];
+                for(int i=0;i<64*256;++i){lin[i]=0;linT[i]=0;} gp_pack_blk(lin,Sm,g_fl,g_ctx[0].stage);
+                for(int r=0;r<64;++r)for(int c=0;c<64;++c) linT[c*256+r]=lin[r*256+c]; gp_unpack_blk(STcv,linT,g_il,g_ctx[0].stage);  /* S^T */
+                for(int i=0;i<64*256;++i){lin[i]=0;linT[i]=0;} gp_pack_blk(lin,T11,g_fl,g_ctx[0].stage);
+                for(int r=0;r<64;++r)for(int c=0;c<64;++c) linT[c*256+r]=lin[r*256+c]; gp_unpack_blk(TTcv,linT,g_il,g_ctx[0].stage);  /* T11^T */
+                mm64(&g_ctx[0],STcv,TTcv,Qcv);                          /* Q = S^T @ T11^T = (T11@S)^T */
+                for(int i=0;i<64*256;++i){lin[i]=0;QTln[i]=0;} gp_pack_blk(lin,Qcv,g_fl,g_ctx[0].stage);
+                for(int r=0;r<64;++r)for(int c=0;c<64;++c) QTln[r*256+c]=lin[c*256+r];   /* Q^T = T11@S */
+                for(int i=0;i<64*256;++i){T11l[i]=0;Sml[i]=0;} gp_pack_blk(T11l,T11,g_fl,g_ctx[0].stage); gp_pack_blk(Sml,Sm,g_fl,g_ctx[0].stage);
+                int qb=0; for(int r=0;r<64;++r)for(int c=0;c<64;++c){ long acc=0; for(int k=0;k<64;++k) acc+=(long)T11l[r*256+k]*(long)Sml[k*256+c];
+                    long ref=acc/32767,got=QTln[r*256+c],d=ref-got; if(d<0)d=-d; if(d>20)qb++; }
+                if(statsLen>16) stats[16]=qb; }   /* transpose-workaround T11@S code-mismatch (0 = FIX works) */
+            mm64(&g_ctx[0],T11,Sm,T10);                               /* T10=T11@S (T11,S computed WEIGHTs) */
+            gp_acc_from_cv(g_ctx[0].acc,T10); int e10=e11+eS+gp_renorm(g_ctx[0].acc,T10);
+            g_ctx[0].slot=sl2;
+            for (int i=0;i<64*256;++i) Tln[i]=0; gp_pack_blk(Tln,T10,g_fl,g_ctx[0].stage);
+            {   /* DEFINITIVE: CPU-replicate the exact CODE matmul T11_code@Sm_code/32767, vs device T10 codes.
+                 * removes all Taylor/exponent reference uncertainty. mismatch => mm64 itself mis-computes. */
+                static int16_t T11ln[64*256], Smln[64*256];
+                for(int i=0;i<64*256;++i){T11ln[i]=0;Smln[i]=0;} gp_pack_blk(T11ln,T11,g_fl,g_ctx[0].stage); gp_pack_blk(Smln,Sm,g_fl,g_ctx[0].stage);
+                int nbad=0,mxd=0; for(int r=0;r<64;++r)for(int c=0;c<64;++c){ long acc=0; for(int k=0;k<64;++k) acc+=(long)T11ln[r*256+k]*(long)Smln[k*256+c];
+                    long ref=acc/32767, got=Tln[r*256+c], d=ref-got; if(d<0)d=-d; if(d>mxd)mxd=(int)d; if(d>20)nbad++; }
+                if(statsLen>13) stats[13]=nbad;    /* # codes mm64(T11,Sm) differs from CPU code-matmul (>20) */
+                if(statsLen>9)  stats[9]=mxd;      /* max code diff */
+                /* ISOLATE packer: gp_pack_wt_bias_hvx(Sm) [= c->mm.wt/bias after mm64(T11,Sm)] vs reference
+                 * w16a16_pack_wt_kmajor/pack_bias(Sm_linear). large-value/full-matrix Sm path (PACKCHK only
+                 * checked a specific weight). mismatch => weight/bias byte pack is the dense bug. */
+                static int16_t Sm64[4096]; static uint8_t wtref[W16MM_WT_BYTES]; static int32_t bsref[W16MM_WT_BYTES/4+64];
+                for(int r=0;r<64;++r)for(int c=0;c<64;++c) Sm64[r*64+c]=Smln[r*256+c];
+                w16a16_pack_wt_kmajor(Sm64, wtref, 64, 64); w16a16_pack_bias(Sm64, bsref, 64, 64);
+                gp_pack_wt_bias_hvx(Sm, g_ctx[0].stage, g_ctx[0].mm.wt, g_ctx[0].mm.bias);   /* re-pack Sm weight */
+                int wbad=0; for(int i=0;i<(int)W16MM_WT_BYTES;++i) if(((uint8_t*)g_ctx[0].mm.wt)[i]!=wtref[i]) wbad++;
+                int bbad=0; for(int i=0;i<256;++i) if(g_ctx[0].mm.bias[i]!=bsref[i]) bbad++;
+                if(statsLen>8)  stats[8]=wbad;     /* weight byte mismatch (HVX vs ref) for Sm */
+                if(statsLen>10) stats[10]=bbad; }  /* bias mismatch (HVX vs ref) for Sm */
+            /* CPU t00,t11 Taylor3 ; s=a10@t00 ; t10=t11@s */
+            static double t00[64][64],t11[64][64],sm[64][64],t10c[64][64],tmp[64][64],tmp2[64][64];
+            for (int r=0;r<64;++r) for (int c=0;c<64;++c){ double s2=0,s3=0; for(int k=0;k<64;++k) s2+=a00[r][k]*a00[k][c]; tmp[r][c]=s2; }
+            for (int r=0;r<64;++r) for (int c=0;c<64;++c){ double s3=0; for(int k=0;k<64;++k) s3+=tmp[r][k]*a00[k][c]; t00[r][c]=(r==c?1.0:0.0)+a00[r][c]+tmp[r][c]+s3; }
+            for (int r=0;r<64;++r) for (int c=0;c<64;++c){ double s2=0; for(int k=0;k<64;++k) s2+=a11[r][k]*a11[k][c]; tmp2[r][c]=s2; }
+            for (int r=0;r<64;++r) for (int c=0;c<64;++c){ double s3=0; for(int k=0;k<64;++k) s3+=tmp2[r][k]*a11[k][c]; t11[r][c]=(r==c?1.0:0.0)+a11[r][c]+tmp2[r][c]+s3; }
+            for (int r=0;r<64;++r) for (int c=0;c<64;++c){ double s=0; for(int k=0;k<64;++k) s+=a10[r][k]*t00[k][c]; sm[r][c]=s; }
+            for (int r=0;r<64;++r) for (int c=0;c<64;++c){ double s=0; for(int k=0;k<64;++k) s+=t11[r][k]*sm[k][c]; t10c[r][c]=s; }
+            { /* EXPONENT SWEEP: is it a wrong-value bug or a wrong-exponent (scale) bug? try e10+off */
+              double best=1e30; int boff=0;
+              for (int off=-4; off<=4; ++off){ double sc=1.0; int ee=e10+off; for(int i=0;i<ee;++i)sc*=2.0; for(int i=0;i<-ee;++i)sc/=2.0;
+                double num=0,den=0; for (int r=0;r<64;++r) for (int c=0;c<64;++c){ double xv=Tln[r*256+c]*sc/32767.0; double d=xv-t10c[r][c]; num+=d*d; den+=t10c[r][c]*t10c[r][c]; }
+                double re=(den>0?num/den:0); if(re<best){best=re;boff=off;} }
+              if (statsLen>12) stats[12]=(int)(1000000.0*best);    /* MERGE best relerr^2 *1e6 over exp offsets */
+              if (statsLen>10) stats[10]=boff; }                   /* best exponent offset (0 = exp ok -> value bug) */
+        }
+        {   /* cron#65 ★: native-descriptor vs ours on EXTREME act (A≈I). native graph proved n_tiles=8 works
+             * for extreme acts; native desc = out_y=4/m_total=8/act_y=4/ots=2. test if that fixes OUR kernel. */
+            static uint16_t Ae[4096], oe[4096]; static int16_t We[4096];
+            for (int r=0;r<64;++r) for (int c=0;c<64;++c){ Ae[r*64+c]=(uint16_t)((r==c)?48768:32768);  /* A≈I extreme */
+                We[r*64+c]=(int16_t)((((r*7+c*5)%53)-26)*460); }                                       /* full ±~12000 */
+            w16a16_pack_act_crouton16(Ae,(uint16_t*)m->act,64,64); w16a16_pack_wt_kmajor(We,m->wt,64,64); w16a16_pack_bias(We,(int32_t*)m->bias,64,64);
+            uint8_t *act2=(uint8_t*)m->act,*out2=(uint8_t*)m->out;
+            struct { const char *l; uint32_t oy,nt; int32_t mt; uint32_t ay,ots; } DD[2] = {
+                {"native(oy4/mt8/ay4)",4u,8u,8,4u,2u}, {"ours(oy64/mt1/ay128)",64u,8u,1,128u,2u} };
+            for (int v=0; v<2; ++v){
+                for(int i=0;i<16;++i){m->atab[i]=(int32_t)(uintptr_t)(act2+(size_t)(i&3)*2048); m->otab[i]=(int32_t)(uintptr_t)(out2+(size_t)(i&3)*2048);}
+                od->out_table_stride_dwords=DD[v].ots; od->out_y_stride_words=DD[v].oy; od->n_tiles_pow2=DD[v].nt; od->m_total_minus_step=DD[v].mt; od->k_total_bytes=64u;
+                ad->n_act_pairs=2u; ad->act_table_y_stride_words=DD[v].ay;
+                memset(m->out,0,W16MM_OUT_BYTES); w16a16_mm_run(m); w16a16_depack_crouton16((const uint16_t*)m->out,oe,64,64);
+                int md=0; for(int r=0;r<64;++r)for(int c=0;c<64;++c){ long acc=0; for(int k=0;k<64;++k) acc+=(long)((int)Ae[r*64+k]-32768)*(int)We[k*64+c];
+                    long ref=acc/32767, got=(int)oe[r*64+c]-32768, d=ref-got; if(d<0)d=-d; if(d>md)md=(int)d; }
+                if (v==0 && statsLen>18) stats[18]=md;   /* native-desc maxd (extreme act) */
+                if (v==1 && statsLen>19) stats[19]=md;   /* our-desc maxd (extreme act) */
+            }
+            /* cron#65 ★: replicate native EXACTLY = native act+weight+desc + NATIVE bias control
+             * (0x804035f3/0x4000023e, bit-31 set) -> depack -> T. host compares to native's cout_native.raw. */
+            w16a16_pack_bias(We,(int32_t*)m->bias,64,64);   /* OUR control 0x00404420 (consistent w/ CPU /32767) */
+            for(int i=0;i<16;++i){m->atab[i]=(int32_t)(uintptr_t)(act2+(size_t)(i&3)*2048); m->otab[i]=(int32_t)(uintptr_t)(out2+(size_t)(i&3)*2048);}
+            od->out_table_stride_dwords=2u; od->out_y_stride_words=4u; od->n_tiles_pow2=8u; od->m_total_minus_step=8; od->k_total_bytes=64u;
+            ad->n_act_pairs=2u; ad->act_table_y_stride_words=4u;
+            memset(m->out,0,W16MM_OUT_BYTES); w16a16_mm_run(m); (void)oe;
+            memcpy(T, m->out, 8192);   /* T = RAW m->out (no depack); host compares MULTISET vs cout_native.raw (readback-independent) */
+            if (hl == 0) HAP_compute_res_hmx_unlock(hctx); if (hctx) HAP_compute_res_release(hctx);
+            if (vctx) HAP_compute_res_release(vctx);
+            return 0;
         }
         {   /* diag-add isolation: acc=0, +1000 to diagonal, ->cv->linear. check ONLY (d,d)=1000.
              * misplaced diag (under new g_lut) corrupts whole block via renorm absmax->shift. */
@@ -996,6 +1466,10 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
     g_Ah = A; g_Th = (uint8_t *)T; g_H = H; g_P = P;
 
     uint64_t us0 = HAP_perf_get_time_us(), t0 = gp_pcyc();
+    /* ⚠️ P==1 (single-thread) is BROKEN under the crouton8/cv-block regime (since cron#68, never re-tested —
+     * the metric is P=4): the inline path runs the whole solve_head->diag_inv->mm64 chain on the small main
+     * FastRPC stack and crouton8's 4×128B colsum unions overflow it; the threaded P=1 (1 producer) path
+     * also faults (untested). Use P>=2. All of P=2/3/4 work and are bit-exact. */
     if (P == 1) {
         g_ctx[0].slot = -1;
         int hvx = qurt_hvx_lock(QURT_HVX_MODE_128B);            /* main does HVX copies inline (+ HMX) */

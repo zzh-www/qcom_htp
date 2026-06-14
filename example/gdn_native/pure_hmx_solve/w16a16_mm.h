@@ -1,16 +1,29 @@
 /* w16a16_mm.h — w16a16 matmul PRIMITIVE on the M=256 carrier (device-side, VTCM).
  *
- * Shape M=256 x K=64 x N=64: the byte-exact-proven standalone envelope (M=256 x any K,N; M<256
- * is NOT covered — 64^3 descriptors never were byte-exact, verified by device bijection probe).
- * 256 act rows = 4 independent 64-row blocks sharing one 64x64 weight, which is exactly the
- * Phase-4 fan-out batching (amortizes per-op setup; 256^3 measured 5844/64^3-equiv vs 8259).
+ * Shape M=256 x K=64 x N=64: the device-verified byte-exact shape (verified == QNN native via the
+ * custom op qnn_hmx_matmul_w16a16, accepted 65536/65536). 256 act rows = 4 independent
+ * 64-row blocks sharing one 64x64 weight = Phase-4 fan-out batching (amortizes per-op setup).
+ * This carrier's act/out crouton = `pack_act_crouton16(.,256,.)` = 8 row4-groups x 32-row m32
+ * blocks; descriptor out_y=256/m_total=1/n_tiles=256/act_y=128.
+ *
+ * ⚠️ STALE-CLAIM CORRECTED (cron#66, 2026-06-14): the old comment "M<256 / single-64^3 descriptors
+ * never byte-exact" is FALSE. A single M=64 64^3 IS bit-exact to QNN native `ConvLayer_s1`
+ * (max|d|=0) using native's M=64 descriptor (out_y=4/m_total=8/n_tiles=8/act_y=4, 4 tiles @mod4) +
+ * the CLOSED-FORM `crouton_pos(r,c)` bit-permutation layout + native control 0x804035F3/0x4000023E.
+ * See `Agent/current/pure_hmx_solve_build.md` 末节 + `project_dense_n8_matmul_bitexact_2026-06-14`.
+ *
+ * PER-CALL cyc (口径④, resident, back-to-back, this device): M=256 carrier n_tiles=256 = 42333
+ * (=10583/64^3-equiv); cron#42 n_tiles=32 trim = 5547 (=1387/64^3-equiv, = 8 tile/block x4 = already
+ * the dense floor via batching); single M=64 dense n_tiles=8 = 1576/64^3. ⇒ the carrier's n_tiles=32
+ * already achieves the per-matmul floor; M=64 dense is the bit-exact-to-native reference + single-block
+ * (no 4-way batch) option, NOT a per-matmul speedup over the batched carrier.
  *
  * Pipeline: C packers (w16a16_pack.h, byte-exact) -> our_v73deep_kernel_i16 (sha256 == device-
  * byte-exact custom op) -> crouton16 row4 deblock -> linear u16.
  *
  * Quant contract (standalone's): act u16 zp 32768, wt q16 clipped ±32639, out u16 zp 32768,
- * gain = product/32767 (constant 2-pow drain, extra={1,1536}, control 0x00404420). Scale
- * tracking is SOFTWARE (caller owns sA/sW/sY).
+ * gain = product/32767 (constant 2-pow drain, extra={1,1536}, control 0x00404420 = 1/32767 drain;
+ * native mm1ex uses 0x804035F3/0x4000023E = sA*sB/sC drain). Scale tracking SOFTWARE (caller owns sA/sW/sY).
  */
 #ifndef W16A16_MM_H
 #define W16A16_MM_H
@@ -61,7 +74,11 @@ static void w16a16_mm_init(w16a16_mm_t *b, uint8_t *vtcm, void *desc_mem) {
     hmx_conv_out_desc_t *od = (hmx_conv_out_desc_t *)desc_mem;
     hmx_conv_act_desc_t *ad = (hmx_conv_act_desc_t *)((uint8_t *)desc_mem + 64);
     od->out_tile_ptr_table = b->otab; od->out_table_stride_dwords = 2u; od->out_y_stride_words = 256u;
-    od->n_tiles_pow2 = 256u; od->m_total_minus_step = 1; od->k_total_bytes = 64u;
+    /* DEFAULT n_tiles = the EXACT minimum for this shape (cron#67): ceil(M/32)*ceil(N/32)*byte_pass,
+     * byte_pass=2 for w16a16. M=256,N=64 -> 8*2*2 = 32. (Was hardcoded 256 = 8x over-walk; trimming to
+     * the minimum is byte-identical output + ~4x faster per-call. See docs/w16a16_kernel_mechanism.md §5.) */
+    od->n_tiles_pow2 = (uint32_t)(((W16MM_M + 31) / 32) * ((W16MM_N + 31) / 32) * 2);
+    od->m_total_minus_step = 1; od->k_total_bytes = 64u;
     ad->act_ptr_pairs = b->atab; ad->n_act_pairs = 2u; ad->act_table_y_stride_words = 128u;
     b->od = od; b->ad = ad;
 }

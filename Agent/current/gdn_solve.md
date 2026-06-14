@@ -13,12 +13,12 @@ GDN/KDA linear-attention 在 v75 HTP 上的核心难点 = 每 head 对 C×C 下�
 | 指标 | 值 |
 |---|---|
 | **精度 oc**（设备 T vs host fp64 `inv(I−A)`，32 头） | **3.10e-3**（vs 旧 u8i8 int8-drain 基线 1.37e-2 = **4.4×**；由 SBOOST+FBOOST 达成,见 §1.1） |
-| **32-head TOTAL wall** | 冷态 ~1.79M domain cyc（≈1.12ms @1.594GHz）；**绝对值随设备态漂(冷~1.7-1.8M/热~1.9-2.1M),只作参考** |
+| **32-head TOTAL wall**（= QNN `graph wall` = `gdnbm wall=t1-t0`，PCYCLE） | 冷态 ~1.79M（≈1.12ms @1.594GHz）；**绝对值随设备态漂(冷~1.7-1.8M/热~1.9-2.1M),只作参考** |
 | vs GDNSolveHVX 4-thread 基线 | **~2.2×**（基线 ~3.97M） |
 | 正确性 | 对角块 bit-exact；DIAG_I16/REQ_FUSE/SBOOST 全 bit-exact 验证，FBOOST oc 兑现 oracle |
 
 > **对外展示文档 = `docs/gdn_inverse.md`（图为主：架构/算法/性能）。本文 = 工程权威源。优化全台账 = `gdn_opt_ledger.md`。**
-> **口径铁律：唯一权威终指标 = C=256, 32-head TOTAL wall（domain cyc）。** per-head（tiler 88K artifact）、min-of-reps、per-stage PROBE **全禁**。**wall 比对用交替全交织 A/B（ACAC… median）消热漂,不与固定常数比。**
+> **口径铁律（详见 §5.1，唯一标准 = QNN optrace 字段）：唯一权威终指标 = C=256, 32-head TOTAL wall（= QNN `graph wall`，PCYCLE）。** per-head（tiler 88K artifact）、min-of-reps、per-stage PROBE **全禁**。**只比 同字段+同 shape+同场景**（跨字段 `num_dominant_path` vs `cycles_used`、跨场景 单 conv vs 批摊销 = 假矛盾）。**wall 比对用交替全交织 A/B（ACAC… median）消热漂,不与固定常数比。**
 
 ### 1.1 本轮采纳的 4 项优化（出货默认开）
 
@@ -170,8 +170,7 @@ w16a16 ≈ 2×w8a16 + drain（证实"w16a16 = 2×w8a16 + 排空"）。**全 int1
 （peak 1.9e13）→ **未预条件时对角必须 w16a16**。注意这是**非正规瞬态**（谱 ρ=0，不是真发散）：对角均衡
 `D⁻¹AD`（D=diag(sⁱ)）把 ‖Ã‖<1 即可令 `Ã^k` 有界 → 换 u8i8/w8a16 对角。这是 §6 杠杆 4 的数值前提，待 probe 验。
 
-**当前实测**：GDNSolveHMX 18.7M（real device）。据 head/块独立性分析这是**欠流水**（per-mm glue + feed 串 consumer，
-HVX 58% 闲），非地板；全 w16a16 的 HMX-busy 地板 ~2.24M，混精 + 对角预条件可更低 —— 极限阶梯见 §6。
+**当前实测**：纯 HMX solve（`gdn_pure_solve.cpp`）= **~2.36M graph wall**（cron#73,2026-06-15;干净重写后 4.97M→2.36M=2.10× 本 session,全 bit-exact,oc 4.238e-3/真GDN 1.107e-2）。瓶颈 = **HVX-bound 在 4-unit 天花板**（wt-pack producer feed + 单-HMX-consumer 1.37M 渐平衡),非 HMX 算力。完整 loop 状态/分解/NEXT = `pure_hmx_solve_build.md`。(旧 "18.7M 欠流水" 已被 cron#42→68→72→73 一系列 feed 优化取代。)
 
 ---
 
@@ -187,6 +186,37 @@ HVX 58% 闲），非地板；全 w16a16 的 HMX-busy 地板 ~2.24M，混精 + �
 | PROBE_CYCLES / per-head / min-of-reps | — | ❌ artifact，禁用 |
 
 **铁律**：① **HMX = 1 单元,绝不 thread**（多 HMX worker → SSR；正确多线程 = HMX consumer 在 MAIN，HVX work 多线程,≤4 单元；先读 skill `htp-hardware-scheduling`）。② 基线 GDNSolveHVX **只测不改**。③ 公平比较（同线程数/harness）前不下"快/慢"结论；`pkill -9 gdnbm` between runs。④ 反直觉"优化更慢"先查自己实现（热循环分支/寄存器溢出/次优 intrinsic），别急着下结论。
+
+## 5.1 口径（唯一标准 = QNN optrace 字段，cron#71 统一；其他口径名一律废弃）
+
+**只用 QNN optrace summary 的 3 个字段，不再造任何并行口径名**（旧的 ①op-latency/②unit-busy/③graph-wall/④per-call-wall、"domain cyc" 等自创名 = 混乱之源，全废）：
+
+| 唯一口径 = QNN 字段 | 取自 | 含义 |
+|---|---|---|
+| **`num_dominant_path_cycles`**（per-op） | optrace `htp_op_types[].num_dominant_path_cycles_htp_0` | 一个 op 的关键依赖路径（理论流水满） |
+| **`cycles_used`**（per-unit HMX/HVX） | optrace `htp_overall_summary[].htp_resources[].cycles_used` | 该硬件单元**实际占用**（含流水气泡）= 真实成本 |
+| **graph wall** | `max(end_cycle)−min(start_cycle)`（= `gdnbm_solve` 的 `wall=t1-t0` 同一 makespan） | 端到端 |
+
+全是 **PCYCLE**；baremetal `C15:14` == QNN PCYCLE（同一计数器，skill 已证），所以 baremetal 读的数**直接归到上面字段的含义**（back-to-back per-call wall = `cycles_used`/occupancy；不要再叫"per-call wall"）。
+
+**铁律**：**只比 同字段 + 同 shape + 同场景**。跨字段比（如 `num_dominant_path` 比 `cycles_used`）或跨场景比（单 conv 比 批处理摊销）= 必造假矛盾。
+
+**单 conv ≠ 批处理摊销（两套场景，差一个量级，别混）**：
+- 单个孤立 `[1,1,64,64]`（optrace 实测）：`num_dominant_path` 3543 / `cycles_used` 11176。
+- 批 `[1,32,64,64]` supertile（n_tiles=8）摊销 per-conv：`num_dominant_path` 370 / `cycles_used` 1388。
+
+**我们 w16a16 kernel = native（同字段同场景实测，cron#71）**：
+| 场景 | 字段 | 我们 | native | 比 |
+|---|---|---|---|---|
+| 单 [1,1,64,64]（QNN optrace 两边） | num_dominant_path | 3789 | 3543 | 1.07× |
+| 单 [1,1,64,64] | cycles_used | 11152 | 11176 | **0.998×** |
+| 批 n_tiles=8 摊销 | cycles_used | 1320(baremetal C15:14) | 1388 | 0.95× |
+结论：**HMX 计算两边持平，已到地板，榨不动**；solve wall 真瓶颈 = producer feed（HMX 仅 ~7-8% busy）。
+
+**64³ custom op 进 optrace 的正确流程（cron#71；错过一次的教训）**：
+- ✅ `native_record_256` profile（FORMULA_DESC 按 shape 算 descriptor）+ `MODE=chain_qdq` + `W16A16_NATIVE_ORACLE_DIR`（native 64³ oracle 出 weight sidecar）+ 设备 **HTP-only** op package（CPU package 注册失败）。一键：`SHAPES="64,64,64" bash scripts/w16a16_shape_sweep.sh`（CI 覆盖）。
+- ❌ 死因（别再犯）：用 `accepted` profile（描述符 out_y/n_tiles **写死 256**）跑 64³ → HMX 按 256 宽读写 64 宽缓冲 → 越界 → optrace execute fault（plain execute 容忍）。**把"自己配错 profile"误判成"QNN 工具对小 shape 的限制"——这是借口不是诊断。**
+- 细节 memory：`[[reference_64cube_conv_occupancy_vs_latency]]`。
 
 ---
 

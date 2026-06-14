@@ -37,14 +37,15 @@ int main(int argc, char **argv) {
     unsigned char *A = (unsigned char *)malloc(abytes), *T = (unsigned char *)calloc(abytes, 1);
     FILE *fa = fopen(Apath, "rb"); fread(A, 1, abytes, fa); fclose(fa);
 
-    int stats[20] = {0};
+    int stats[32] = {0};
     /* REPS: run the solve N times in ONE FastRPC session (env GDNBM_REPS, default 1). Repeated single-shot
      * processes churn the unsigned-PD FastRPC session and OCCASIONALLY deadlock the cDSP; looping the
      * remote call on the SAME handle does the steady-state measurement with NO session churn. */
     const char *re = getenv("GDNBM_REPS"); int reps = re ? atoi(re) : 1; if (reps < 1) reps = 1;
     for (int r = 0; r < reps; ++r) {
-        rc = gdnbm_solve(h, A, (int)abytes, H, C, zpA, zpT, sA.i, sT.i, nthreads, T, (int)abytes, stats, 20);
-        printf("gdnbm_solve rc=0x%x  P=%d  H=%d  rep=%d/%d\n", rc, stats[1], stats[2], r + 1, reps);
+        rc = gdnbm_solve(h, A, (int)abytes, H, C, zpA, zpT, sA.i, sT.i, nthreads, T, (int)abytes, stats, 32);
+        printf("gdnbm_solve rc=0x%x  P=%d  H=%d  rep=%d/%d  wall=%d scatter=%d wtpack=%d cons=%d\n",
+               rc, stats[1], stats[2], r + 1, reps, stats[0], stats[9], stats[7], stats[3]);
         if (rc) break;
     }
     /* ===== cycle report — SELF-LABELED 口径 (skill htp-cycle-metric). The ONLY cross-impl number is
@@ -72,6 +73,9 @@ int main(int argc, char **argv) {
            stats[0], stats[1], stats[2], stats[3], stats[4], stats[5], stats[6], stats[7], stats[8], stats[9], stats[10], stats[11]);
     printf("  raw stats[12..19]: %d %d %d %d %d %d %d %d\n",
            stats[12], stats[13], stats[14], stats[15], stats[16], stats[17], stats[18], stats[19]);
+    printf("  NTSWEEP nt8=%d nt16=%d nt32=%d nt64=%d | per-walk=%d pure-conv(8walk)=%d fixed-feed=%d\n",
+           stats[20], stats[21], stats[22], stats[23], stats[24], stats[25], stats[26]);
+    printf("  DISTINCT-TILE nt8 32-distinct=%d (vs 4-reused nt8=%d; native 370)\n", stats[27], stats[20]);
 
     FILE *ft = fopen(Tpath, "wb"); fwrite(T, 1, abytes, ft); fclose(ft);
     printf("wrote %s (%ld bytes)\n", Tpath, abytes);
