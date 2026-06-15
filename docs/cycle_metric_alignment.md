@@ -171,6 +171,84 @@ PY
 
 ---
 
+# Canonical cycle taxonomy (AUTHORITATIVE — cron#81 SPEC; cite this, don't re-copy)
+
+**The bug this kills (the SECOND-level口径 error, after the 290-vs-1576 one).** Even after cron#78
+corrected "native 290 = we're 4.5× slow" → "our 1576 ≈ native single 1970, NOT slow", the docs kept
+calling that **1576/conv (1.31M total)** the consumer's "真算 / HMX compute". It is NOT. The HMX *unit*
+only MACs ~363/conv; the other ~1213/conv is liftable non-MAC kernel bloat. Mislabeling occupancy as
+"真算" produced the chain of wrong verdicts: "producer-bound", "consumer only worth ~11%", "165/walk =
+pure mxmem", "#1 lever = producer feed". All are口径 errors. The taxonomy below is the single source of
+truth; every pure-HMX number is tagged with WHICH level it is.
+
+## The 6 cycle levels (the only legal vocabulary for a per-stage number)
+
+A solve number must say which of these it is — they differ by **4–5×** and conflating them is what
+repeatedly inverted verdicts. Unit = PCYCLE (= C15:14 = optrace; this baseline self-checks ~1593 PCYCLE/µs).
+
+| level | what it is | pure-HMX value (device, cron#77 baseline `Agent/current/perf_baseline_cron77.txt`) | NEVER call it |
+|---|---|---|---|
+| **HMX-unit MAC (真算)** | the HMX *unit* actually MACing — the only irreducible work | **~363/conv** (lean from-scratch dilate micro, 4.5 cyc/pkt, SAME 16 tile-MAC, cron#78); total ~0.28M (768×363) | the consumer's cost (it's a fraction of it) |
+| **Consumer kernel occupancy (整核)** | the consumer *thread* running the matmul kernel (convhhh) per call = thread-wall | **~1576/conv** = MAC(~363) + non-MAC bloat(~1213: bias staircase + M-loop + 14 cyc/pkt packet-stall); total `cbusy` **1.31M** | **"HMX compute / 真算" — this is the classic confusion.** It is thread-occupancy, mostly liftable. |
+| **Σ work-volume** | a stage's cycles summed across ALL threads/calls — NOT a wall | e.g. wt-vec Σ 2.05M = 4 producer threads = 0.51M/thread | a wall; **never rank wall levers by a Σ %** |
+| **Critical-path / thread-life** | the slowest single-thread span — correlates with wall | slowest-prod-life lmax = **1.53M** (= feed 1.00M + spin 0.50M + skew) | "producer work" (it includes spin = waiting the HMX) |
+| **Roofline floor** | max(parallel producer-feed/P, serial consumer-occupancy) | current = max(1.00M, **1.31M**) = **1.31M**; after a lean consumer = max(1.00M, 0.28M) = **1.00M** (🟡 derived) | settled (the lean-consumer branch is DERIVED) |
+| **Wall** | 32-head TOTAL, VTCM-only, reps2-8 median | **1.738M** (the final verdict number) | — |
+
+**The crucial distinction (memorize): consumer-thread-occupancy ≠ HMX-unit-MAC.** Same 16 tile-MAC →
+lean dilate micro 363 cyc vs convhhh 1576 cyc (4.3×). The 1213-cyc difference is kernel bloat
+(THREAD_IDLE/WAIT between MAC packets), **not** the HMX doing math. So:
+- **真算 (the irreducible floor) = ~363/conv ≈ 0.28M**, NOT 1576/1.31M.
+- A Σ work-volume number (e.g. wt-pack 2.52M Σ) is the sum over 4 producers (0.63M/thread); it sits
+  *below* the roofline floor, so its **%-of-Σ does NOT set its wall priority**.
+- latency vs throughput (which field to read) follows the existing htp-cycle-metric rule (pick by whether
+  that unit is the saturated bottleneck); unchanged.
+
+## Current pure-HMX numbers, every one tagged to a level + 🟢verified/🟡derived (cron#81 SPEC)
+
+| quantity | value | level / 口径 | tag |
+|---|---|---|---|
+| wall | 1.738M | Wall (32-head total, VTCM-only, reps2-8 median) | 🟢 |
+| HMX-unit MAC (真算)/conv | ~363 | HMX-unit MAC (lean kernel, same 16 tile-MAC, cron#78) | 🟢 |
+| HMX-unit MAC total | ~0.28M | 768 × 363 | 🟢/🟡 (×768 not yet measured on the solve path) |
+| consumer occupancy/conv | ~1576 | Consumer kernel occupancy (convhhh, 14 cyc/pkt) | 🟢 |
+| consumer occupancy total (cbusy) | 1.31M | = MAC 0.28M + bloat ~1.0M | 🟢 |
+| producer feed/thread (feed_pt) | 1.00M | DERIVED: (verified-Σ 的合计)/P — Σ_HVX≈4.02M = wt-vec 2.054M + wt-bias 0.456M + act 0.112M + renorm/acc 1.255M + outcopy 0.139M (各 Σ 均逐字见 perf_baseline_cron77.txt;outcopy=卸料 HVX,producer 线程也做), ÷4 | 🟡 DERIVED |
+| spin/thread (spin_pt) | 0.50M | DERIVED: SPIN Σ 2.007M (🟢 逐字见 perf_baseline_cron77.txt `[waste] SPIN idle-wait Σcyc=2007041`) ÷4 = waiting-HMX, **consumer-dependent** | 🟡 DERIVED |
+| slowest-prod-life (lmax) | 1.53M | Critical-path (feed 1.00M + spin 0.50M + skew) | 🟢 |
+| roofline floor (current) | 1.31M | max(feed/P 1.00M, consumer-occupancy 1.31M) | 🟢 |
+| roofline floor (after lean consumer) | 1.00M | max(feed/P 1.00M, MAC 0.28M) | 🟡 derived |
+| wall ceiling (after lean consumer) | ~1.0M + glue ≈ **−42%** | derived | 🟡 derived |
+| wall − current floor = schedulable slack | ~0.43M | glue + spin-bubble + imbalance | 🟢 |
+
+## The verdict, restated to this taxonomy (and what it RETRACTS)
+
+**Current pure-HMX is consumer-occupancy-bound AT THE FLOOR 1.31M — and it is BLOAT-bound, not
+MAC-bound.** The #1 lever is **leaning the consumer kernel** (strip the ~1.0M of non-MAC bloat →
+consumer 0.28M → floor 1.00M); wt-pack feed is the SECOND tier (it only becomes binding after the
+consumer is leaned). The following earlier claims are RETRACTED (kept struck for the audit trail):
+
+- ❌ ~~"producer-bound (lmax 1.53M > consumer 1.30M)"~~ → lmax includes 0.50M spin = waiting-HMX, not
+  pure producer work. **Correction: currently consumer-occupancy-bound at floor 1.31M (and bloat-bound,
+  not MAC-bound).**
+- ❌ ~~"leaning the consumer is worth only ~11% of wall"~~ → spin is consumer-dependent. **Correction:
+  ceiling ~42% (🟡 derived).**
+- ❌ ~~"真算 = 1576/conv (1.31M)" / "165/walk = pure mxmem"~~ → 1576 is the bloated occupancy; 165/walk
+  includes stall. **Correction: 真算 = 363/conv ≈ 0.28M.**
+- ❌ ~~"#1 lever = producer feed (wt-pack vgather)"~~ → wt-pack is below the floor (Σ 2.52M = 0.63M/thread;
+  0.51M is the wt-**vec** sub-item per-thread, not wt-pack). **Correction: #1 lever = lean the consumer
+  kernel; wt-pack is the second tier, binding only after.**
+
+## Honesty rule (so this doesn't mislead in the OTHER direction)
+
+The *decomposition* of the verdict ("consumer-occupancy-bound / #1 = lean consumer kernel") is
+**🟢 verified**. But the **42% ceiling is 🟡 DERIVED** — it assumes the lean from-scratch micro (cron#78's
+363 cyc) actually drops onto the solve's consumer path, which has NOT been done (the 363 is a
+from-scratch micro, not yet landed in the solve consumer). Tag it 🟡; **do not write it as a new
+"settled" number.**
+
+---
+
 # Canonical 口径 map: our pure-HMX solve ↔ QNN optrace (cron#79)
 
 **The bug this kills.** Our solve's instrumentation used an ad-hoc taxonomy

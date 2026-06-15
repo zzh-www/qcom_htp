@@ -26,9 +26,20 @@ wall     : reps2-8 = [1735607,1729493,1740174,1696375,1737681,1742638,1652054]
            reps2-8 MEDIAN = 1,735,607 cyc ≈ 1.736M  (≈1.09ms @1594/µs)
            spread 5.2% (热漂 ±, 同热窗); 与 loop doc STATE 的 ~1.738M 一致 (-0.1%)。
 consumer : per-call occupancy = 1574 cyc (≈ native single ConvLayer 1970, 不慢);
-           HMX Σ cycles_used = 1.309M
-producer : slowest-prod-life (lmax) = 1.540M  (> consumer 1.309M ⇒ producer-bound, 印证 cron#77)
-           wt-pack Σ = 2.521M (wt-vec 2.054M + wt-bias 0.456M)
+           HMX Σ cycles_used (consumer-thread-occupancy) = 1.309M
+           ⚠️ cron#81 SPEC: 这 1574/1.31M 是 consumer-thread-occupancy, 不是真算;
+              真算 = HMX-unit MAC ~363/conv ≈ 0.28M (lean dilate micro, cron#78);
+              其余 ~1.0M 是可拆非-MAC 臃肿 (bias staircase+M-loop, 14 cyc/pkt)。
+producer : slowest-prod-life (lmax) = 1.540M
+           wt-pack Σ = 2.521M (wt-vec 2.054M + wt-bias 0.456M)  [Σ work-volume = 4 线程之和, 非 wall]
+           ❌ ~~(> consumer 1.309M ⇒ producer-bound, 印证 cron#77)~~ → cron#81 SPEC 撤 (保留作审计链):
+              lmax 1.540M 含 spin ~0.50M=等-HMX (consumer-依赖, 非纯 producer 活);
+              wt-pack 2.521M Σ = 0.63M/线程 在地板之下, Σ-% 不能给 wall 排序。
+           ⇒ 瓶颈 = consumer-occupancy-bound AT FLOOR 1.31M (臃肿-bound, NOT MAC-bound);
+              roofline 地板 = max(feed/P 1.00M, consumer-占用 1.31M) = 1.31M;
+              #1 杠杆 = 精简 consumer kernel (拆 ~1.0M 臃肿 → 地板 1.00M, ceiling ~−42% 🟡 derived);
+              wt-pack vgather 第二档 (仅 consumer 精简后 binding)。
+              权威 taxonomy = docs/cycle_metric_alignment.md §"Canonical cycle taxonomy"。
 
 完整 stdout (reps2-8 median 热窗, 同一 FastRPC session)
 =======================================================

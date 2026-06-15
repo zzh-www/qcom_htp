@@ -154,6 +154,22 @@ it's producer-bound, HMX idle-mostly, so its marginal HMX add is small.)
    HMX has 1 int32 acc, no bank)**. Reproduce: `-DGP_PKTPROBE` build, stats[18/19] (dilate SERIAL/PIPE), stats[12-17]
    (PMU: THREAD_IDLE≈1564/COPROC_BUSY=0), stats[20-23] (SMT spinners don't shrink the conv).**
 
+7. **consumer-thread-occupancy ≠ HMX-unit-MAC (cron#81, cost 1 inverted verdict).** A kernel's
+   back-to-back per-call `cycles_used`/occupancy is the *thread* running the kernel — it is **NOT** the
+   HMX unit's MAC ("真算"). Device proof: the SAME 16 tile-MAC costs **363 cyc** in a lean from-scratch
+   dilate micro (81 pkt, 4.5 cyc/pkt) but **1576 cyc** in convhhh (113 pkt, 14 cyc/pkt) — a 4.3× gap that
+   is non-MAC kernel bloat (bias staircase + M-loop + THREAD_IDLE/WAIT between MAC packets), NOT the HMX
+   computing. So calling the pure-HMX consumer's 1576/conv (1.31M total) "真算 / HMX compute" is wrong:
+   the irreducible 真算 floor = ~363/conv ≈ 0.28M; the other ~1.0M is liftable. Two follow-on rules:
+   - A **Σ work-volume** (a stage summed over all threads, e.g. wt-pack 2.52M Σ = 4 producers = 0.63M each)
+     is NOT a wall — **never rank wall levers by a Σ %**; compare it to the roofline floor max(feed/P,
+     consumer-occupancy), not to the wall.
+   - **slowest-prod-life (critical-path)** includes spin = the producer *waiting the HMX*; that spin is
+     consumer-dependent, so "lmax > consumer ⇒ producer-bound" is a trap. Decide bound-by from the
+     roofline floor max(parallel-feed/P, serial-consumer-occupancy), not from lmax alone.
+   Full level taxonomy (6 levels: HMX-unit-MAC / consumer-occupancy / Σ-work-volume / critical-path /
+   roofline-floor / wall): `docs/cycle_metric_alignment.md` §"Canonical cycle taxonomy".
+
 ## Getting a hand-written op measured under the SAME QNN optrace (apples-to-apples)
 
 1. Build the op into a QNN custom-op package; run it under `qnn-net-run --profiling_level detailed
