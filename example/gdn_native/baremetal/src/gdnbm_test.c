@@ -91,6 +91,13 @@ int main(int argc, char **argv) {
                nconv ? stats[0] / nconv : 0);
         printf("     packets/cyc-per-pkt: build -DGP_PKTPROBE (consumer MAC packets=130 native @2.04 cyc/pkt; ours nt8 below).\n");
     }
+    if (stats[31] == 0x4C45414E)   /* cron#82 LEANCHK build marker ("LEAN"): print lean bit-exact result */
+        printf("  LEANCHK max|d|=%d (0 = lean_mm64 bit-exact vs native our_v73deep_kernel_i16)\n", stats[30]);
+#ifdef GP_LEANCHK_LIVE
+    /* cron#83 LEANCHK_LIVE: device wrote stats[30]=max|d|, stats[31]=checked count (expect H*24=768). */
+    printf("  LEANCHK_LIVE max|d|=%d checked=%d (0/768 = lean bit-exact over full live solve)\n",
+           stats[30], stats[31]);
+#endif
     printf("  raw stats[0..11]: %d %d %d %d %d %d %d %d %d %d %d %d\n",
            stats[0], stats[1], stats[2], stats[3], stats[4], stats[5], stats[6], stats[7], stats[8], stats[9], stats[10], stats[11]);
     printf("  raw stats[12..19]: %d %d %d %d %d %d %d %d\n",
@@ -110,7 +117,11 @@ int main(int argc, char **argv) {
                stats[12], stats[13], stats[14], stats[15], stats[16], stats[17]);
         printf("  PKTPROBE SMT spinners 0/1/2/4 = %d/%d/%d/%d (do NOT shrink conv => WAIT is this thread's HMX latency)\n",
                stats[20], stats[21], stats[22], stats[23]);
-        printf("  PKTPROBE DILATE/fp16/FANOUT: see on-device FARF (GDN_PURE DILATE/FANOUT lines; host stats unreliable there)\n");
+        printf("  PKTPROBE DILATE micro: SERIAL=%d PIPE=%d cyc/conv, %d pkt/conv (vs convhhh per-call=%d cyc / %d pkt)\n",
+               stats[18], stats[19], stats[27], stats[5], stats[28]);
+        printf("  raw stats[20..31]: %d %d %d %d %d %d %d %d %d %d %d 0x%08x\n",
+               stats[20], stats[21], stats[22], stats[23], stats[24], stats[25],
+               stats[26], stats[27], stats[28], stats[29], stats[30], (unsigned)stats[31]);
     }
 
     FILE *ft = fopen(Tpath, "wb"); fwrite(T, 1, abytes, ft); fclose(ft);

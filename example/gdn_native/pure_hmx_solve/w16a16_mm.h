@@ -93,10 +93,21 @@ static void w16a16_mm(w16a16_mm_t *b, const uint16_t *A, const int16_t *W, uint1
     w16a16_depack_crouton16((const uint16_t *)b->out, Y, W16MM_M, W16MM_N);
 }
 
+#ifndef GP_NO_LEANMM
+/* Stage B (cron#83): lean from-scratch 8-tile MAC consumer is the PRODUCTION DEFAULT (cron#83); build
+ * with -DGP_NO_LEANMM to escape to the native our_v73deep_kernel_i16. Production byte-identical. Replaces
+ * our_v73deep_kernel_i16 at ALL 3 call sites via this single hot-path wrapper. */
+#include "lean_mm64.h"
+#endif
+
 /* kernel-only (operands already packed) — Phase-4 hot path. */
 static inline void w16a16_mm_run(w16a16_mm_t *b) {
+#ifndef GP_NO_LEANMM
+    lean_mm64(b);          /* lean is the production default; non-nt8 shapes runtime-fallback to native inside lean_mm64 */
+#else
     our_v73deep_kernel_i16((const hmx_conv_out_desc_t *)b->od, (const hmx_conv_act_desc_t *)b->ad,
                            b->wt, (const uint8_t *)b->bias, (const hmx_conv_mask_desc_t *)b->mb, b->ep);
+#endif
 }
 #endif /* __hexagon__ */
 

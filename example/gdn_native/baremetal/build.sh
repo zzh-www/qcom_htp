@@ -29,7 +29,7 @@ echo "--- link skel .so ---"
 
 echo "--- host driver (aarch64-android) ---"
 "$ARMCC" --target=aarch64-none-linux-android21 --sysroot="$NDK_BIN/../sysroot" -O2 \
-    "${INCS[@]}" -DUSE_OS_LINUX \
+    "${INCS[@]}" -DUSE_OS_LINUX ${EXTRA_DEFS:-} \
     src/gdnbm_test.c inc/gdnbm_stub.c \
     -L"$SDK/ipc/fastrpc/remote/ship/android_aarch64" -lcdsprpc \
     -o build/gdnbm 2>&1 | head -30

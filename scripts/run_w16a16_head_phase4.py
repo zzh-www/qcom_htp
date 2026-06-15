@@ -74,7 +74,7 @@ def main() -> int:
              f"./gdnbm {a.threads} w16p4_A.raw w16p4_T.raw {H} 256 32768 32768 3.05e-5 3.05e-5 2>&1'").stdout.decode()
     # surface the QNN-aligned cycle report (host prints 真算/装料/卸料 by QNN op + field; cron#79).
     _keys = ("rc=", "QNN-ALIGNED", "graph-wall", "basis:", "真算", "装料", "卸料", "waste",
-             "clock self-check", "THROUGHPUT", "apples-to-apples", "raw stats", "NTSWEEP")
+             "clock self-check", "THROUGHPUT", "apples-to-apples", "raw stats", "NTSWEEP", "LEANCHK")
     print("\n".join(l for l in out.splitlines() if any(k in l for k in _keys)))
     # cron#80: reps2-N median wall (steady-state metric, loop doc 口径 — drop rep1 warm-up, never min).
     if reps > 1:

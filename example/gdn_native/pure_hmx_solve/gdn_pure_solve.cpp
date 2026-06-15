@@ -513,6 +513,27 @@ struct gp_ctx {
 static gp_ctx   g_ctx[GP_NT];
 static uint64_t g_cbusy;                 /* consumer: per-call feed-inclusive kernel cyc (口径 ④) */
 static int      g_sat;
+#ifdef GP_LEANCHK_LIVE
+/* cron#83 LIVE shadow check: every production w16a16_mm_run (lean default) is re-checked against the
+ * native kernel on the SAME packed operands, in-place during the timed solve. PASS = g_live_maxd==0
+ * over all 768 matmuls (32 head x 24 conv). Accumulated by the single consumer thread (serial poll). */
+static int      g_live_maxd, g_live_nz, g_live_n;
+static uint16_t g_live_leanbuf[W16MM_OUT_BYTES/2];   /* 32KB scratch (full out surface) */
+static inline void gp_leanchk_live(w16a16_mm_t *m) {
+    /* lean already wrote m->out. Snapshot it, run native into m->out, diff, restore lean for production. */
+    const uint16_t *so = (const uint16_t *)m->out;
+    for (int i = 0; i < W16MM_OUT_BYTES/2; ++i) g_live_leanbuf[i] = so[i];
+    our_v73deep_kernel_i16((const hmx_conv_out_desc_t *)m->od, (const hmx_conv_act_desc_t *)m->ad,
+                           m->wt, (const uint8_t *)m->bias, (const hmx_conv_mask_desc_t *)m->mb, m->ep);
+    uint16_t *wo = (uint16_t *)m->out;
+    for (int i = 0; i < W16MM_OUT_BYTES/2; ++i) {
+        int d = (int)g_live_leanbuf[i] - (int)wo[i]; if (d < 0) d = -d;
+        if (d) { ++g_live_nz; if (d > g_live_maxd) g_live_maxd = d; }
+        wo[i] = g_live_leanbuf[i];   /* restore lean output for the production solve */
+    }
+    ++g_live_n;
+}
+#endif
 static volatile int g_pdone;
 static const uint8_t *g_Ah; static uint8_t *g_Th; static int g_H, g_P;
 static char __attribute__((aligned(128))) g_stack[GP_NT][32768];
@@ -554,6 +575,9 @@ static void mm64(gp_ctx *c, const int16_t *a_cv, const int16_t *b_cv, int16_t *o
     if (c->slot < 0) {                                          /* single-thread: run inline */
         uint64_t t0 = gp_pcyc(); w16a16_mm_run(&c->mm); uint64_t t1 = gp_pcyc(); g_cbusy += t1 - t0;
         GP_EV(GP_NT, 3, t0, t1);                                /* MATMUL op (HMX) */
+#ifdef GP_LEANCHK_LIVE
+        gp_leanchk_live(&c->mm);
+#endif
     } else {                                                    /* producer: hand to main consumer */
         /* per-op events (QNN-granular): act-format(4) + wt-pack(5) are SEPARATE feed ops, like QNN's
          * q::ForceFormat_Crouton + q::ConvLayer.opt.weights_to_vtcm. MATMUL(3) is the consumer's own op. */
@@ -592,6 +616,9 @@ static void mm64_keepwt(gp_ctx *c, const int16_t *a_cv, int16_t *out_cv) {
     if (c->slot < 0) {
         uint64_t t0 = gp_pcyc(); w16a16_mm_run(&c->mm); uint64_t t1 = gp_pcyc(); g_cbusy += t1 - t0;
         GP_EV(GP_NT, 3, t0, t1);
+#ifdef GP_LEANCHK_LIVE
+        gp_leanchk_live(&c->mm);
+#endif
     } else {
         GP_EV(c->slot, 4, p0, g0);                              /* ACT_FORMAT only (no WT_PACK event) */
         GP_ARM(&g_job[c->slot]);
@@ -919,6 +946,49 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
         if (hvx == 0) qurt_hvx_unlock();
         FARF(ALWAYS, "GDN_PURE PACKCHK diff=%d (0 = HVX wt-pack byte-exact vs scalar)", packchk);
     }
+#ifdef GP_LEANCHK
+    {   /* LEANCHK (cron#82, Stage B): lean_mm64 must be BIT-EXACT to the native our_v73deep_kernel_i16 on
+         * the SOLVE quant contract (standalone control 0x00404420 from pack_bias; n_tiles=8 dense). Packs
+         * the same operands, runs native -> outA, runs lean -> outB, diffs u16-by-u16. max|d|==0 = PASS. */
+        int hvx = qurt_hvx_lock(QURT_HVX_MODE_128B);   /* for the scalar packers; HMX already powered+locked (run() L800/L816) */
+        w16a16_mm_t *m = &g_ctx[0].mm;
+        hmx_conv_out_desc_t *od = (hmx_conv_out_desc_t *)m->od; hmx_conv_act_desc_t *ad = (hmx_conv_act_desc_t *)m->ad;
+        uint8_t *act = (uint8_t *)m->act, *out = (uint8_t *)m->out;
+        for (int i = 0; i < 16; ++i) { m->atab[i] = (int32_t)(uintptr_t)(act + (size_t)(i & 3) * 2048);
+                                       m->otab[i] = (int32_t)(uintptr_t)(out + (size_t)(i & 3) * 2048); }
+        od->out_table_stride_dwords = 2u; od->out_y_stride_words = 4u; od->n_tiles_pow2 = 8u;
+        od->m_total_minus_step = 8u; od->k_total_bytes = 64u;
+        ad->n_act_pairs = 2u; ad->act_table_y_stride_words = 4u;
+        static uint16_t Aref[4096]; static int16_t Wq[4096];
+        static uint16_t outA[4096], outB[4096];   /* surface copies (4 tiles x 2KB = 4096 u16) */
+        int maxd = 0, nz = 0;
+        for (int v = 0; v < 2; ++v) {
+            for (int r = 0; r < 64; ++r) for (int c = 0; c < 64; ++c) {
+                unsigned a = (v==0)?(unsigned)(r*97+c*53):(unsigned)(r*61+c*29+7);
+                unsigned w = (v==0)?(unsigned)(r*131+c*71):(unsigned)(r*43+c*101+13);
+                Aref[r*64+c] = (uint16_t)(32768 + (int)(a % 30000u) - 15000);
+                Wq[r*64+c]   = w16a16_clip_q16((int)(w % 30000u) - 15000);
+            }
+            { uint16_t *ao = (uint16_t *)m->act; for (int r=0;r<64;++r) for (int c=0;c<64;++c) ao[CROUTON_POS(r,c)] = Aref[r*64+c]; }
+            w16a16_pack_wt_kmajor(Wq, m->wt, 64, 64);
+            w16a16_pack_bias(Wq, (int32_t *)m->bias, 64, 64);   /* SOLVE contract: standalone control 0x00404420 */
+            /* ---- native reference ---- */
+            memset(m->out, 0, W16MM_OUT_BYTES);
+            our_v73deep_kernel_i16((const hmx_conv_out_desc_t *)m->od, (const hmx_conv_act_desc_t *)m->ad,
+                                   m->wt, (const uint8_t *)m->bias, (const hmx_conv_mask_desc_t *)m->mb, m->ep);
+            { const uint16_t *so = (const uint16_t *)m->out; for (int i=0;i<4096;++i) outA[i] = so[i]; }
+            /* ---- lean ---- */
+            memset(m->out, 0, W16MM_OUT_BYTES);
+            lean_mm64(m);
+            { const uint16_t *so = (const uint16_t *)m->out; for (int i=0;i<4096;++i) outB[i] = so[i]; }
+            for (int i = 0; i < 4096; ++i) { int d = (int)outA[i] - (int)outB[i]; if (d<0) d=-d; if (d) { ++nz; if (d>maxd) maxd = d; } }
+        }
+        if (statsLen > 30) stats[30] = maxd;      /* LEANCHK max|d| */
+        if (statsLen > 31) stats[31] = 0x4C45414E; /* "LEAN" marker for host print */
+        FARF(ALWAYS, "GDN_PURE LEANCHK max|d|=%d nonzero=%d (0 = lean_mm64 bit-exact vs native our_v73deep_kernel_i16)", maxd, nz);
+        if (hvx == 0) qurt_hvx_unlock();
+    }
+#endif
 #ifdef GP_ALIGN
     {   /* BIT-EXACT vs NATIVE `ConvLayer_s1` (cron#66/67, 2026-06-14). dense n_tiles=8 native M=64 descriptor +
          * native control words + CLOSED-FORM crouton layout (no dumped tables). Output codes -> T; host
@@ -1967,6 +2037,9 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
                 if (GP_POLL(&g_job[t])) {
                     uint64_t k0 = gp_pcyc(); w16a16_mm_run(&g_ctx[t].mm); uint64_t k1 = gp_pcyc(); g_cbusy += k1 - k0;
                     GP_EV(GP_NT, 3, k0, k1);                    /* consumer MM (口径④ per-call wall) */
+#ifdef GP_LEANCHK_LIVE
+                    gp_leanchk_live(&g_ctx[t].mm);              /* cron#83: shadow-diff lean vs native, in-place */
+#endif
                     GP_DONE(&g_job[t]);
                 }
         }
@@ -2034,6 +2107,12 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
     if (statsLen > 19) stats[19] = (int)actcopy;              /* cron#79: 装料-act Σ (gp_cv_to_surf) <-> q::ForceFormat_Crouton */
     if (statsLen > 28) stats[28] = (int)outcopy;              /* cron#79: 卸料 Σ (gp_surf_to_cv) <-> q::*OutputSlice */
     if (statsLen > 29) stats[29] = (int)((uint32_t)H * 24u);  /* cron#79: N_conv = H*24 (Newton=0); per-conv basis */
+#ifdef GP_LEANCHK_LIVE
+    if (statsLen > 30) stats[30] = g_live_maxd;               /* cron#83 LIVE: max|d| lean vs native over ALL solve convs (0 = bit-exact) */
+    if (statsLen > 31) stats[31] = g_live_n;                  /* cron#83 LIVE: # matmuls checked (expect H*24) */
+    FARF(ALWAYS, "GDN_PURE LEANCHK_LIVE max|d|=%d nonzero=%d checked=%d (0 = lean bit-exact vs native over the FULL live solve)",
+         g_live_maxd, g_live_nz, g_live_n);
+#endif
     /* cron#79 QNN-ALIGNED breakdown (skill htp-cycle-metric): report by the THREE categories +
      * QNN op name + QNN field, so cross-impl compare is automatically same-category+same-field.
      *   真算-MAC (HMX) = consumer w16a16_mm_run     <-> q::ConvLayer_s1.opt          (field: cycles_used / per-call occupancy)
