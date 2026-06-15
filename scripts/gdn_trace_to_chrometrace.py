@@ -82,8 +82,9 @@ def to_chrometrace(wall, base, evs):
 # hardware counter. So "cycles_used / utilization" is op-duration OCCUPANCY (matmul + the op's own
 # feed), NOT pure MAC. The compute-ish number QNN exposes is per-op Dominant Path (= Duration for a
 # leaf op). Pure-MAC (~256) is BELOW QNN's op granularity — not in the optrace at all.
-QNN_BATCH_CYCLES_USED_PER_MM = 1430   # native [1,128,64,64] HMX cycles_used/mm — SAME 口径 as ours (Σ op-dur)
-MATMUL_LATENCY_FLOOR = 256            # 口径② dominant-path floor (below QNN op granularity; hw reference)
+# Reference numbers for the 真算-MAC comparison (cron#78/#79, device-measured, all in QNN `cycles`):
+NATIVE_SINGLE_CONV_CYCLES = 1970      # native SINGLE ConvLayer (mm_1x1x64x64) — THE apples-to-apples MAC
+NATIVE_BATCH_SUBOP_CYCLES = 263       # native batch (mm_64) ConvLayer HMX warm sub-op (canonical, cron#78; = cyc/pkt 2.04) — NOT a conv wall (fill overlap)
 
 
 def summarize(wall, evs, nmm_per_head, heads):
@@ -111,9 +112,9 @@ def summarize(wall, evs, nmm_per_head, heads):
     print("=== GDN baremetal — per-op trace, reported EXACTLY like QNN optrace (each op separate) ===")
     print("  >>> THE MATMUL OP (its own op, separate from feed — like QNN q::ConvLayer_s1.opt):")
     print(f"        {MATMUL_OP}  =  {mm_per} cyc/instance   (instances={md[1]}, total cycles_used={md[0]})")
-    print(f"        <-> QNN q::ConvLayer_s1.opt (native [1,128,64,64]) = {QNN_BATCH_CYCLES_USED_PER_MM} cyc/instance "
-          f" => {mm_per/QNN_BATCH_CYCLES_USED_PER_MM:.1f}x  (SAME 口径: per-op Duration on HMX thread; gap = batch amortization, A-warm)")
-    print(f"        (pure-MAC ~{MATMUL_LATENCY_FLOOR} is BELOW op granularity — absent from QNN's optrace too; this op = matmul + its mxmem-load)")
+    print(f"        APPLES-to-apples (cron#78/#79): compare to native SINGLE ConvLayer (`mm_1x1x64x64`) = "
+          f"1970 cyc/instance ({mm_per/1970:.2f}x). NOT to the batch warm sub-op 263 (= fill overlapping the")
+    print(f"        adjacent op, NOT a conv wall; native batch is HVX-bound, HMX Σbusy 8.6%). See skill htp-cycle-metric.")
     print("  per HTP-op-type (= QNN htp_op_types; EACH op separate; Duration/op is the per-instance cycle):")
     print(f"     {'op (HMX=matmul, HVX=feed/IO)':34s} {'unit':4s} {'instances':>9} {'Duration/op':>12} {'total cyc':>11}")
     for nm, (d, c) in sorted(by_op.items(), key=lambda kv: -kv[1][0]):

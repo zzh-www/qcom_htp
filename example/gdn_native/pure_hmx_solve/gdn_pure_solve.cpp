@@ -41,6 +41,9 @@
 #include "w16a16_mm.h"
 #include "hexagon_types.h"
 #include "hvx_hexagon_protos.h"
+#ifdef GP_PKTPROBE
+#include "qurt_pmu.h"
+#endif
 
 namespace gdn_pure {
 
@@ -172,13 +175,29 @@ static inline void gp_ev_push(uint32_t tid, uint32_t stage, uint64_t t0, uint64_
     if (i < (int)(sizeof(g_ev) / sizeof(g_ev[0]))) { g_ev[i].tid = tid; g_ev[i].stage = stage; g_ev[i].t0 = t0; g_ev[i].t1 = t1; }
 }
 #define GP_EV(tid, stage, t0, t1) gp_ev_push((tid), (stage), (t0), (t1))
+#define GP_EVT0() gp_pcyc()                 /* trace-only timestamp: zero overhead on the real path */
 #else
 #define GP_EV(tid, stage, t0, t1) ((void)0)
+#define GP_EVT0() ((uint64_t)0)
 #endif
 
 /* crouton LUT: linear 64x64 index (r*64+c) -> compact cv index (block*256 + intra), block<16. */
 static uint16_t g_lut[GP_BB];
 static int32_t g_diagmask[GP_BB] __attribute__((aligned(128)));   /* cron#74: -1 at the 64 diag acc-positions, 0 else -> vectorizes gp_acc_diag_add (was 64 scalar RMW; prereq for VTCM-resident acc) */
+
+/* cron#75 ([[feedback_vtcm_only_intermediates]] + user 2026-06-15): ALL heads resident in VTCM, processed
+ * VTCM-only. The per-head DDR<->VTCM head-load/store of cron#74 was a standalone-harness artifact (in the real
+ * GDN forward A arrives VTCM-resident from the upstream op, T stays VTCM for downstream — the DDR transfer
+ * "will miss"). So A/T live in shared VTCM buffers (lower-tri packed: solve touches only the 10 lower-tri+diag
+ * blocks), producers ALIAS into them (zero per-head copy), and the one-time bulk DDR<->VTCM transfer moves
+ * OUTSIDE the timed region (= setup/teardown, excluded from the 32-head wall; measured separately). */
+#ifndef GP_RESIDENT
+#define GP_RESIDENT 1
+#endif
+#define GP_NLT 10                         /* lower-tri+diag block count (of 16): bi>=bj */
+static uint8_t g_ltmap[16];               /* bi*4+bj -> lower-tri packed index 0..9 (upper-tri entries unused) */
+static int16_t *g_Avt, *g_Tvt;            /* VTCM-resident all-heads A / T (H * GP_NLT * GP_BB int16) */
+static int32_t *g_evt;                    /* VTCM-resident all-heads block exps (H * 16 int32) */
 static void gp_lut_init(void) {
 #if GP_CROUTON8
     /* CROUTON8 (cron#68): cv index = native crouton_pos(r,c). Everything (g_hw weight pack, g_il/g_fl
@@ -204,6 +223,8 @@ static void gp_lut_init(void) {
     for (int i = 0; i < GP_BB; ++i) g_diagmask[i] = 0;
     for (int d = 0; d < 64; ++d) { int i = g_lut[d * 65], off = i & 63;
         g_diagmask[(i >> 6) * 64 + (off & 1) * 32 + (off >> 1)] = -1; }
+    /* cron#75: lower-tri block packing map (bi*4+bj -> 0..9, row-major lower-tri). */
+    { int k = 0; for (int bi = 0; bi < 4; ++bi) for (int bj = 0; bj <= bi; ++bj) g_ltmap[bi * 4 + bj] = (uint8_t)k++; }
 }
 
 /* ---- HVX weight pack (O4b): replaces scalar gather + kmajor + bias (all scalar VTCM writes). ----
@@ -227,9 +248,12 @@ static void gp_hwlut_init(void) {
                             g_hw[h++] = (uint16_t)(2 * g_lut[(kt * 32 + row) * 64 + (nt * 32 + col)]);
                         }
 }
-static void gp_pack_wt_bias_hvx(const int16_t *w_cv, int16_t *stage /*VTCM 8KB+*/, uint8_t *wt, int32_t *bias) {
+static void gp_pack_wt_bias_hvx(const int16_t *w_cv, int16_t *stage /*VTCM 8KB+*/, uint8_t *wt, int32_t *bias,
+                                uint64_t *t_vec, uint64_t *t_bia) {
     /* cron#74: w_cv is VTCM-resident (all block operands live in VTCM) -> gather DIRECTLY from it; the old
-     * 64-vec cv->stage staging copy is gone. gtmp (gather output, 64 vec) goes at stage[0]. */
+     * 64-vec cv->stage staging copy is gone. gtmp (gather output, 64 vec) goes at stage[0].
+     * Sub-probes (cron#75): t_vec = vector gather+lo/hi-pack; t_bia = colsum + scalar bias/control writes. */
+    uint64_t _pb0 = gp_pcyc();
     HVX_Vector *gtmp = (HVX_Vector *)stage;
     const HVX_Vector *ofs = (const HVX_Vector *)g_hw;
     const HVX_Vector K128 = Q6_Vh_vsplat_R(128);
@@ -259,6 +283,7 @@ static void gp_pack_wt_bias_hvx(const int16_t *w_cv, int16_t *stage /*VTCM 8KB+*
         ((HVX_Vector *)wt)[v] = Q6_V_lo_W(il); ((HVX_Vector *)wt)[v + 1] = Q6_V_hi_W(il);
     }
 #endif
+    uint64_t _pb1 = gp_pcyc(); *t_vec += _pb1 - _pb0;   /* split: vector gather+pack done; colsum+bias below */
     static const int32_t ctrl[2] = { 0x00404420, 0x40000000 };   /* 1/32767 drain = the solve's scale model */
 #if GP_CROUTON8
     /* colsum GATHER-FREE (cron#68): exploit the crouton_pos cv structure directly (no extra vgather — feed
@@ -273,15 +298,37 @@ static void gp_pack_wt_bias_hvx(const int16_t *w_cv, int16_t *stage /*VTCM 8KB+*
             if ((v >> 4) & 1) { p1L = Q6_Vw_vadd_VwVw(p1L, Q6_V_lo_W(w)); p1H = Q6_Vw_vadd_VwVw(p1H, Q6_V_hi_W(w)); }
             else              { p0L = Q6_Vw_vadd_VwVw(p0L, Q6_V_lo_W(w)); p0H = Q6_Vw_vadd_VwVw(p0H, Q6_V_hi_W(w)); }
         }
+#ifndef GP_BIASVEC
+#define GP_BIASVEC 1   /* cron#75: 1 = fully-vectorized eff+bias store; 0 = old scalar (A/B toggle, same thermal window) */
+#endif
+#if GP_BIASVEC
+        /* cron#75: eff + bias store FULLY VECTORIZED. Was a 64-iter scalar union-read + scalar VTCM scatter
+         * (t_bia ~2300 cyc/wt-pack = 1.77M Σ, the #1 scalar-VTCM waste, flagged by feedback_vtcm_only_intermediates).
+         * eff[n]=(-cs)>>1, cs columns n=0..31 from p0L+p0H, n=32..63 from p1L+p1H. bias group g (2 vec): even
+         * vec = control (ctrl0/ctrl1 alternating), odd vec = interleave(eff[16g..16g+15], 0). vshuff(0,eff,-4)
+         * zips eff with zero at 4-byte (word) grain (same -4 grain as the wt pack above). PACKCHK = byte oracle. */
+        HVX_Vector effL = Q6_Vw_vasr_VwR(Q6_Vw_vsub_VwVw(Q6_V_vzero(), Q6_Vw_vadd_VwVw(p0L, p0H)), 1);
+        HVX_Vector effH = Q6_Vw_vasr_VwR(Q6_Vw_vsub_VwVw(Q6_V_vzero(), Q6_Vw_vadd_VwVw(p1L, p1H)), 1);
+        HVX_VectorPair eLp = Q6_W_vshuff_VVR(Q6_V_vzero(), effL, -4);   /* lo=[eff0,0,..,eff15,0] hi=[eff16,0,..] */
+        HVX_VectorPair eHp = Q6_W_vshuff_VVR(Q6_V_vzero(), effH, -4);
+        HVX_Vector ctrlv = Q6_V_lo_W(Q6_W_vshuff_VVR(Q6_V_vsplat_R(ctrl[1]), Q6_V_vsplat_R(ctrl[0]), -4));
+        HVX_Vector *bv = (HVX_Vector *)bias;
+        bv[0] = ctrlv; bv[1] = Q6_V_lo_W(eLp);
+        bv[2] = ctrlv; bv[3] = Q6_V_hi_W(eLp);
+        bv[4] = ctrlv; bv[5] = Q6_V_lo_W(eHp);
+        bv[6] = ctrlv; bv[7] = Q6_V_hi_W(eHp);
+#else
         union { HVX_Vector v; int32_t w[32]; } a0L, a0H, a1L, a1H;
         a0L.v = p0L; a0H.v = p0H; a1L.v = p1L; a1H.v = p1H;
         for (int n = 0; n < 64; ++n) {
             int cc = n & 31, c5 = n >> 5;
             int32_t cs = c5 ? (a1L.w[cc] + a1H.w[cc]) : (a0L.w[cc] + a0H.w[cc]);
-            int32_t eff = (-cs) >> 1;   /* == floor(-cs/2) for all cs (arith shift); was a per-elem /2 (cron#73) */
+            int32_t eff = (-cs) >> 1;
             int g = n >> 4, idx = n & 15;
             bias[g * 64 + 32 + idx * 2] = eff; bias[g * 64 + 32 + idx * 2 + 1] = 0;
         }
+        for (int g = 0; g < 4; ++g) for (int i = 0; i < 32; ++i) bias[g * 64 + i] = ctrl[i & 1];
+#endif
     }
 #else
     for (int nt = 0; nt < 2; ++nt) {
@@ -302,7 +349,10 @@ static void gp_pack_wt_bias_hvx(const int16_t *w_cv, int16_t *stage /*VTCM 8KB+*
         }
     }
 #endif
-    for (int g = 0; g < 4; ++g) for (int i = 0; i < 32; ++i) bias[g * 64 + i] = ctrl[i & 1];
+#if !GP_CROUTON8
+    for (int g = 0; g < 4; ++g) for (int i = 0; i < 32; ++i) bias[g * 64 + i] = ctrl[i & 1];   /* CROUTON8 path writes control vectorized (bv[0/2/4/6]) above */
+#endif
+    *t_bia += gp_pcyc() - _pb1;
 }
 
 /* ---- HVX int32 acc helpers (O4c). acc layout = interleaved {lo=even hw lanes, hi=odd} from vsxt;
@@ -467,6 +517,27 @@ static volatile int g_pdone;
 static const uint8_t *g_Ah; static uint8_t *g_Th; static int g_H, g_P;
 static char __attribute__((aligned(128))) g_stack[GP_NT][32768];
 
+#ifdef GP_PKTPROBE
+/* ---- SMT co-execution probe (cron#78): HVX-spinner threads that hammer the cluster with HVX work,
+ * to test whether the HMX consumer's per-conv thread-WAIT (PMU: ~1563/1576 cyc THREAD_IDLE) is the
+ * cluster being free during HMX pipeline latency (=> native hides it via SMT co-exec with HVX), vs a
+ * true single-conv HMX latency. The spinner just does VTCM-free HVX vadds in a loop. ---- */
+static volatile int g_spin_go, g_spin_stop, g_spin_ready;
+static char __attribute__((aligned(128))) g_spin_stack[5][16384];
+static void hvx_spinner(void *arg) {
+    (void)arg;
+    int hv = qurt_hvx_lock(QURT_HVX_MODE_128B);
+    __atomic_fetch_add(&g_spin_ready, 1, __ATOMIC_RELEASE);
+    while (!__atomic_load_n(&g_spin_go, __ATOMIC_ACQUIRE)) { /* wait for start */ }
+    HVX_Vector a = Q6_V_vsplat_R(1), b = Q6_V_vsplat_R(2), c;
+    while (!__atomic_load_n(&g_spin_stop, __ATOMIC_ACQUIRE)) {
+        for (int i = 0; i < 64; ++i) { c = Q6_Vw_vadd_VwVw(a, b); a = Q6_Vw_vadd_VwVw(c, b); b = Q6_Vw_vsub_VwVw(a, c); }
+    }
+    volatile int sink = Q6_R_vextract_VR(a, 0); (void)sink;
+    if (hv == 0) qurt_hvx_unlock();
+}
+#endif
+
 /* ---- one 64x64 cv matmul: out_cv = a_cv @ b_cv, e_out = e_a + e_b (out_code = a@b/32767). ----
  * act = a_cv direct into the padded surface (NO crouton repack); weight = b_cv LUT-linearized + kmajor;
  * out = surface direct into out_cv (NO depack). t_pack/t_depack probes split the two direct copies. */
@@ -478,7 +549,7 @@ static void mm64(gp_ctx *c, const int16_t *a_cv, const int16_t *b_cv, int16_t *o
     gp_cv_to_surf((uint16_t *)c->mm.act, a_cv);                  /* act: cv -> surface (HVX vxor) */
 #endif
     uint64_t g0 = gp_pcyc(); c->t_pack += g0 - p0;              /* act-copy only (HVX, ~0) */
-    gp_pack_wt_bias_hvx(b_cv, c->stage, c->mm.wt, c->mm.bias);   /* weight: HVX vgather + kmajor + bias -> VTCM */
+    gp_pack_wt_bias_hvx(b_cv, c->stage, c->mm.wt, c->mm.bias, &c->t_gather, &c->t_bias);   /* weight: HVX vgather + kmajor + bias -> VTCM */
     uint64_t k1 = gp_pcyc(); c->t_kmajor += k1 - g0;
     if (c->slot < 0) {                                          /* single-thread: run inline */
         uint64_t t0 = gp_pcyc(); w16a16_mm_run(&c->mm); uint64_t t1 = gp_pcyc(); g_cbusy += t1 - t0;
@@ -504,6 +575,38 @@ static void mm64(gp_ctx *c, const int16_t *a_cv, const int16_t *b_cv, int16_t *o
     if (c->slot >= 0) GP_EV(c->slot, 10, d0, d1);              /* OUT_COPY (HVX) = q::*OutputSlice */
 }
 
+/* cron#77 WTREUSE: same-weight matmul WITHOUT re-packing the weight. The diag inverse computes A^2 = A@A
+ * and A^3 = AA@A — BOTH use weight=A. The weight pack (cv->kmajor 64-vgather + lo/hi split + bias) is the #1
+ * producer cost (wt_vec 2.51M Σ, the binding constraint via slowest-prod-life). Packing A once and reusing it
+ * for the 2nd matmul is byte-identical (same weight bytes -> same c->mm.wt/bias). The synchronous producer
+ * handoff (pack->arm->spin->use) means c->mm.wt/bias are stable between two consecutive same-weight arms. */
+#ifndef GP_WTREUSE
+#define GP_WTREUSE 1
+#endif
+#if GP_WTREUSE
+static void mm64_keepwt(gp_ctx *c, const int16_t *a_cv, int16_t *out_cv) {
+    uint64_t p0 = gp_pcyc();
+    gp_cv_to_surf((uint16_t *)c->mm.act, a_cv);                  /* act: cv -> surface (HVX vxor) */
+    uint64_t g0 = gp_pcyc(); c->t_pack += g0 - p0;
+    /* weight (c->mm.wt) + bias (c->mm.bias) are UNCHANGED from the previous mm64 (same weight) — no re-pack. */
+    if (c->slot < 0) {
+        uint64_t t0 = gp_pcyc(); w16a16_mm_run(&c->mm); uint64_t t1 = gp_pcyc(); g_cbusy += t1 - t0;
+        GP_EV(GP_NT, 3, t0, t1);
+    } else {
+        GP_EV(c->slot, 4, p0, g0);                              /* ACT_FORMAT only (no WT_PACK event) */
+        GP_ARM(&g_job[c->slot]);
+        uint64_t s0 = gp_pcyc();
+        GP_WAIT(&g_job[c->slot]); GP_RESET(&g_job[c->slot]);
+        uint64_t s1 = gp_pcyc(); c->spin += s1 - s0;
+        GP_EV(c->slot, 11, s0, s1);
+    }
+    uint64_t d0 = gp_pcyc();
+    gp_surf_to_cv(out_cv, (const uint16_t *)c->mm.out);
+    uint64_t d1 = gp_pcyc(); c->t_depack += d1 - d0;
+    if (c->slot >= 0) GP_EV(c->slot, 10, d0, d1);
+}
+#endif
+
 #if GP_DENSE_SURF || GP_DENSE_PERM
 /* cron#65: dense n_tiles=8 mis-computes when the ACT has large hi-byte deviation × full weight (data-dep).
  * Compute out = a@b via the working operand order (a@b = (b^T@a^T)^T); transposes via g_tr (HVX vgather).
@@ -522,11 +625,17 @@ static void mm64T(gp_ctx *c, const int16_t *a_cv, const int16_t *b_cv, int16_t *
 /* ---- diag block inverse: X = (I - A)^-1, A strictly-lower 64x64 (e=0), all in cv. Returns eX.
  * acc/renorm all HVX (interleaved layout). ---- */
 static int diag_inv(gp_ctx *c, const int16_t *A, int16_t *X) {
-    mm64(c, A, A, c->AA);                                       /* A^2 (benign act=A) */
+    mm64(c, A, A, c->AA);                                       /* A^2 (benign act=A); packs weight=A */
+#if GP_WTREUSE && !(GP_DENSE_SURF || GP_DENSE_PERM)
+    mm64_keepwt(c, c->AA, c->A3);                               /* A^3 = AA@A: REUSE A's packed weight (cron#77) */
+#else
     MM64(c, c->AA, A, c->A3);                                   /* A^3 (act=AA can be extreme -> transpose under dense) */
+#endif
+    uint64_t _da0 = GP_EVT0();
     gp_acc3(c->acc, A, c->AA, c->A3);
     gp_acc_diag_add(c->acc, 32767);                             /* X0 = I + A + A^2 + A^3 (Taylor p=3) */
     int eX = gp_renorm(c->acc, X);
+    GP_EV(c->slot, 6, _da0, GP_EVT0());                         /* ACC (acc3+diag+renorm) */
 #if GP_NEWTON > 0
     gp_acc_negw(c->acc, A);
     gp_acc_diag_add(c->acc, 32767);                            /* M = I - A */
@@ -561,9 +670,17 @@ static int diag_inv(gp_ctx *c, const int16_t *A, int16_t *X) {
  * head-store (T cv-block out). The whole solve runs in VTCM — no per-matmul DDR staging, no DDR round-trip
  * for the repeated T-block reads in the merge. ABLK/TBLK are macros (not local arrays) to keep the P=1
  * inline path's stack small. */
+#if GP_RESIDENT
+#define ABLK(i) (c->A[g_ltmap[i]])   /* c->A aliases head's lower-tri-packed resident slice (10 blocks) */
+#define TBLK(i) (c->T[g_ltmap[i]])
+#else
 #define ABLK(i) (c->A[i])
 #define TBLK(i) (c->T[i])
+#endif
 static void solve_head(gp_ctx *c, const int16_t *Aq, int16_t *To) {
+#if GP_RESIDENT
+    (void)Aq;   /* cron#75: c->A/c->T already alias this head's resident VTCM slice (no per-head DDR load) */
+#else
     uint64_t us0 = gp_pcyc();
 #if GP_CVIO
     for (int bi = 0; bi < GP_NB; ++bi)                          /* head-load: A cv-blocks rpcmem(DDR) -> c->A VTCM */
@@ -580,25 +697,35 @@ static void solve_head(gp_ctx *c, const int16_t *Aq, int16_t *To) {
             c->t_pm += gp_pcyc() - m1;
         }
 #endif
-    c->t_scatter += gp_pcyc() - us0;
+    uint64_t uld = gp_pcyc(); c->t_scatter += uld - us0; GP_EV(c->slot, 12, us0, uld);   /* HEAD_LOAD */
+#endif  /* !GP_RESIDENT */
     for (int b = 0; b < GP_NB; ++b) c->e[b * 5] = diag_inv(c, ABLK(b * 5), TBLK(b * 5));
     for (int d = 1; d < GP_NB; ++d)
         for (int i = d; i < GP_NB; ++i) {
             int j = i - d, eAcc = 0;
-            gp_acc_zero(c->acc);
+            uint64_t _m0 = GP_EVT0(); gp_acc_zero(c->acc); GP_EV(c->slot, 6, _m0, GP_EVT0());
             for (int k = j; k < i; ++k) {                      /* acc = sum_k A_ik @ T_kj (exp-aligned) */
                 mm64(c, ABLK(i * 4 + k), TBLK(k * 4 + j), c->prod);   /* benign act=A_ik; weight may be extreme (ok via :dilate) */
+                uint64_t _ka = GP_EVT0();
                 int ep = c->e[k * 4 + j];
                 if (k == j) eAcc = ep;
                 else if (ep > eAcc) { gp_acc_shr(c->acc, ep - eAcc); eAcc = ep; }
                 int sh = eAcc - ep;
                 if (sh < 31) gp_acc_addsh(c->acc, c->prod, sh);
+                GP_EV(c->slot, 6, _ka, GP_EVT0());            /* ACC (exp-align/addsh) */
             }
+            uint64_t _r0 = GP_EVT0();
             int eS = eAcc + gp_renorm(c->acc, c->prod);
+            GP_EV(c->slot, 6, _r0, GP_EVT0());                /* ACC (renorm->S) */
             MM64(c, TBLK(i * 4 + i), c->prod, TBLK(i * 4 + j));   /* T_ij = T_ii @ S (dense: working operand order) */
+            uint64_t _f0 = GP_EVT0();
             gp_acc_from_cv(c->acc, TBLK(i * 4 + j));
             c->e[i * 4 + j] = c->e[i * 4 + i] + eS + gp_renorm(c->acc, TBLK(i * 4 + j));
+            GP_EV(c->slot, 6, _f0, GP_EVT0());                /* ACC (from_cv+renorm->T_ij) */
         }
+#if GP_RESIDENT
+    (void)To;   /* cron#75: T written in place to resident slice; exps copied to g_evt by the producer (knows h) */
+#else
     uint64_t us1 = gp_pcyc();
 #if GP_CVIO
     /* head-store: c->T VTCM -> To cv-blocks rpcmem(DDR) (10 lower-tri+diag; 6 upper-tri never read).
@@ -610,7 +737,7 @@ static void solve_head(gp_ctx *c, const int16_t *Aq, int16_t *To) {
             for (int v = 0; v < 64; ++v) d[v] = s[v];
         }
     memcpy((uint8_t *)&To[1 * GP_BB], c->e, 64);              /* 16 block exps in unused upper-tri block (0,1) */
-    c->t_scatter += gp_pcyc() - us1;
+    uint64_t ust = gp_pcyc(); c->t_scatter += ust - us1; GP_EV(c->slot, 13, us1, ust);   /* HEAD_STORE */
 #else
 #if GP_GPIPE
     /* cron#72: zero ONLY the 6 strict-upper blocks (bj>bi). The lower-tri + diagonal blocks are fully
@@ -634,6 +761,7 @@ static void solve_head(gp_ctx *c, const int16_t *Aq, int16_t *To) {
     memcpy((uint8_t *)To + 128, c->e, 64);                     /* 16 block exps in unused upper-tri */
     c->t_scatter += gp_pcyc() - us1;
 #endif
+#endif  /* !GP_RESIDENT */
 }
 #undef ABLK
 #undef TBLK
@@ -645,9 +773,18 @@ static void producer(void *arg) {
     int hvx = qurt_hvx_lock(QURT_HVX_MODE_128B);
     uint64_t L0 = gp_pcyc();
     for (int h = slot; h < g_H; h += g_P) {                    /* static interleave */
+#if GP_RESIDENT
+        /* alias this head's lower-tri-packed resident A/T slice (zero per-head copy; bulk DDR<->VTCM is
+         * one-time setup outside the timed region). c->A[ltidx]/c->T[ltidx] via g_ltmap. */
+        c->A = (int16_t (*)[GP_BB])(g_Avt + (size_t)h * GP_NLT * GP_BB);
+        c->T = (int16_t (*)[GP_BB])(g_Tvt + (size_t)h * GP_NLT * GP_BB);
+        solve_head(c, 0, 0);
+        for (int i = 0; i < 16; ++i) g_evt[(size_t)h * 16 + i] = c->e[i];   /* save block exps -> resident */
+#else
         const int16_t *Aq = (const int16_t *)(g_Ah + (size_t)h * 131072);
         int16_t *To = (int16_t *)(g_Th + (size_t)h * 131072);
         solve_head(c, Aq, To);
+#endif
     }
     c->t_life = gp_pcyc() - L0;
     if (hvx == 0) qurt_hvx_unlock();
@@ -662,10 +799,15 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
     HAP_power_set_core_corner(pctx, HAP_DCVS_VCORNER_TURBO, HAP_DCVS_VCORNER_TURBO, HAP_DCVS_VCORNER_MAX);
     { HAP_power_request_t r; memset(&r, 0, sizeof(r)); r.type = HAP_power_set_HMX; r.hmx.power_up = TRUE; HAP_power_set(pctx, &r); }
     compute_res_attr_t va; HAP_compute_res_attr_init(&va);
-#if GP_DENSE_SURF || GP_DENSE_PERM
-    HAP_compute_res_attr_set_vtcm_param(&va, (unsigned)P * GP_VSTRIDE + 0xC000u, 0);   /* +48KB: g_hw/g_il/g_fl/g_qa/g_qo/g_tr */
+#if GP_RESIDENT
+    size_t res_bytes = (size_t)2 * H * GP_NLT * GP_BB * 2 + (size_t)H * 16 * 4;   /* all-heads A+T (lower-tri) + exps */
 #else
-    HAP_compute_res_attr_set_vtcm_param(&va, (unsigned)P * GP_VSTRIDE + 0xA000u, 0);   /* +40KB: g_hw/g_il/g_fl/g_qa/g_qo */
+    size_t res_bytes = 0;
+#endif
+#if GP_DENSE_SURF || GP_DENSE_PERM
+    HAP_compute_res_attr_set_vtcm_param(&va, (unsigned)((size_t)P * GP_VSTRIDE + 0xC000u + res_bytes), 0);   /* +48KB LUTs + resident */
+#else
+    HAP_compute_res_attr_set_vtcm_param(&va, (unsigned)((size_t)P * GP_VSTRIDE + 0xA000u + res_bytes), 0);   /* +40KB LUTs + resident */
 #endif
     unsigned int vctx = HAP_compute_res_acquire(&va, 2000000);
     uint8_t *vbase = (uint8_t *)HAP_compute_res_attr_get_vtcm_ptr(&va);
@@ -681,6 +823,12 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
     g_fl = (uint16_t *)(vbase + (size_t)P * GP_VSTRIDE + 0x4000u);          /* cv->linear (T-pack) */
     gp_hwlut_init();
     for (int i = 0; i < GP_BB; ++i) { g_il[g_lut[i]] = (uint16_t)(2 * i); g_fl[i] = (uint16_t)(2 * g_lut[i]); }
+#if GP_RESIDENT
+    /* all-heads resident A/T/exps, placed after the shared LUTs (0xA000). */
+    g_Avt = (int16_t *)(vbase + (size_t)P * GP_VSTRIDE + 0xA000u);
+    g_Tvt = g_Avt + (size_t)H * GP_NLT * GP_BB;
+    g_evt = (int32_t *)(g_Tvt + (size_t)H * GP_NLT * GP_BB);
+#endif
 #if GP_DENSE_SURF || GP_DENSE_PERM
     /* cv transpose gather LUT (cron#65): dst_cv[g_lut[c*64+r]] = src_cv[g_lut[r*64+c]] => g_tr[g_lut[c*64+r]]=2*g_lut[r*64+c].
      * used to compute the merge's T_ii@S as (S^T @ T_ii^T)^T (working operand order under dense n_tiles=8). */
@@ -760,7 +908,8 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
         for (int i = 0; i < GP_BB; ++i) { int v = (int)((i * 2654435761u >> 15) & 0xffff) - 32768;
             wcv[i] = (int16_t)(v > 32639 ? 32639 : (v < -32639 ? -32639 : v)); }
         for (int i = 0; i < GP_BB; ++i) g_ctx[0].AA[i] = wcv[i];   /* cron#74: wt-pack gathers from VTCM-resident w_cv -> stage test cv into VTCM */
-        gp_pack_wt_bias_hvx(g_ctx[0].AA, g_ctx[0].stage, wA, bA);
+        uint64_t _dmy = 0;
+        gp_pack_wt_bias_hvx(g_ctx[0].AA, g_ctx[0].stage, wA, bA, &_dmy, &_dmy);
         for (int i = 0; i < GP_BB; ++i) g_ctx[0].lin[i] = wcv[g_lut[i]];
         w16a16_pack_wt_kmajor(g_ctx[0].lin, wB, W16MM_K, W16MM_N);
         w16a16_pack_bias(g_ctx[0].lin, bB, W16MM_K, W16MM_N);
@@ -916,6 +1065,306 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
         FARF(ALWAYS, "GDN_PURE DISTINCT-TILE nt8 32-distinct=%llu cyc (vs 4-reused; native 370)",
              (unsigned long long)per);
     }
+#ifdef GP_PKTPROBE
+    /* cron#80 gap#2: stamp the EXPLICIT PKTPROBE-build marker FIRST (before any probe sub-block that could
+     * fault, e.g. the M-FANOUT carrier), so host/scripts disambiguate this build from production regardless
+     * of whether a later sub-block completes. Production NEVER writes stats[31] (its tail stops at stats[29]),
+     * and a PKTPROBE build returns BEFORE the production stats are set — so the magic is unambiguous. */
+    if (statsLen > 31) stats[31] = (int)0x504B5450;   /* "PKTP" = GP_PKTPROBE build marker */
+    {   /* PACKET-COUNT PROBE (cron#76, #1 lever): settle packets-vs-stalls. native 64^3 conv = 130 HMX
+         * packets @ ~2 cyc/pkt = ~264 cyc. Our identical kernel + identical n_tiles=8 descriptor back-to-back
+         * = 1577 cyc/call. If our packets ≈ 130 -> the gap is cyc/packet (STALLS); if our packets ≈ 587 ->
+         * the gap is packet count (over-walk / different code path). Read COMMITTED_PKT_ANY (PMU 0x03) around
+         * one n_tiles=8 kernel. main holds HMX lock, single-threaded pre-spawn, data-independent. */
+        hmx_conv_out_desc_t *od = (hmx_conv_out_desc_t *)g_ctx[0].mm.od;
+        uint32_t save_nt = od->n_tiles_pow2;
+        const int B = 500;
+        qurt_pmu_enable(1);
+        qurt_pmu_set(QURT_PMUEVTCFG, (0x03u<<24)|(0x03u<<16)|(0x03u<<8)|0x03u);
+        /* sweep n_tiles = 8/16/32/64: packets & cyc per call. NTSWEEP shows +165 cyc/walk linear; this adds
+         * +packets/walk. cyc/pkt = stall per packet. native 64^3 = 130 pkt @ ~2.0 cyc/pkt. */
+        const uint32_t NTS[4] = { 8u, 16u, 32u, 64u };
+        for (int s = 0; s < 4; ++s) {
+            od->n_tiles_pow2 = NTS[s];
+            for (int w = 0; w < 64; ++w) w16a16_mm_run(&g_ctx[0].mm);
+            unsigned int pk0 = qurt_pmu_get(QURT_PMUCNT0);
+            uint64_t c0 = gp_pcyc();
+            for (int i = 0; i < B; ++i) w16a16_mm_run(&g_ctx[0].mm);
+            uint64_t c1 = gp_pcyc();
+            unsigned int pk1 = qurt_pmu_get(QURT_PMUCNT0);
+            uint64_t cyc_v = (c1 - c0) / B, pkt_v = (uint64_t)(pk1 - pk0) / B;
+            FARF(ALWAYS, "GDN_PURE PKTPROBE nt%-2u: %llu cyc/call, %llu packets/call -> %llu cyc/pkt (native nt8: 130pkt @~2.0)",
+                 NTS[s], (unsigned long long)cyc_v, (unsigned long long)pkt_v,
+                 (unsigned long long)(pkt_v ? cyc_v / pkt_v : 0));
+            /* stats[28..30] = packets at nt 8/16/32 (nt64 stays FARF-only so stats[31] is free for the
+             * cron#80 gap#2 PKTPROBE magic — see early-return below). */
+            if (s < 3 && statsLen > 28 + s) stats[28 + s] = (int)pkt_v;
+        }
+        qurt_pmu_enable(0);
+        od->n_tiles_pow2 = save_nt;
+    }
+    {   /* STALL BREAKDOWN (cron#78): WHY 13 cyc/pkt (ours) vs 2.0 (native), SAME kernel? PVIEW counters
+         * partition "cycles the cluster cannot commit" by reason (PRM Table 9-1, raw 8-bit codes):
+         *   0xed COPROC_BUSY  = HMX coprocessor busy (mxmem back-pressure)   <- if this dominates, the
+         *                       gap is HMX pipeline serialization, NOT recoverable by double-buffer.
+         *   0xeb CU_BUSY      = register interlock / port conflict / tc_3stall bubbles / HVX-FIFO
+         *   0xe8 IU_NO_PKT    = issue queue empty (DSP waiting, nothing to issue)
+         *   0xea DU_BUSY_OTHER= DU replay/bubble/DTLB
+         *   0xe7 REDIRECT     = branch mispredict
+         *   0x03 COMMITTED_PKT_ANY (normalizer)
+         * Single-thread (main holds HMX lock, pre-spawn). n_tiles=8 (the solve descriptor). 500 back-to-back. */
+        const int B = 500;
+        uint64_t cyc_tot = 0; unsigned int pk=0, run1=0, idle=0, coproc=0, cu=0, iunp=0, du=0, sysb=0;
+        qurt_pmu_enable(1);
+        /* pass 1 — WHERE do the cycles go? cnt0=COMMITTED_PKT_ANY(0x03) cnt1=CYCLES_1_THREAD_RUNNING(0x3b)
+         *           cnt2=THREAD_IDLE_PVIEW(0xe5) cnt3=COPROC_BUSY_PVIEW(0xed) */
+        qurt_pmu_set(QURT_PMUEVTCFG, (0xedu<<24)|(0xe5u<<16)|(0x3bu<<8)|0x03u);
+        for (int w = 0; w < 64; ++w) w16a16_mm_run(&g_ctx[0].mm);
+        { unsigned a0=qurt_pmu_get(QURT_PMUCNT0),b0=qurt_pmu_get(QURT_PMUCNT1),c0=qurt_pmu_get(QURT_PMUCNT2),d0=qurt_pmu_get(QURT_PMUCNT3);
+          uint64_t t0=gp_pcyc(); for (int i=0;i<B;++i) w16a16_mm_run(&g_ctx[0].mm); cyc_tot=(gp_pcyc()-t0);
+          pk=qurt_pmu_get(QURT_PMUCNT0)-a0; run1=qurt_pmu_get(QURT_PMUCNT1)-b0; idle=qurt_pmu_get(QURT_PMUCNT2)-c0; coproc=qurt_pmu_get(QURT_PMUCNT3)-d0; }
+        /* pass 2 — commit-stall reasons: cnt1=CU_BUSY(0xeb) cnt2=IU_NO_PKT(0xe8) cnt3=SYSTEM_BUSY(0xef) */
+        qurt_pmu_set(QURT_PMUEVTCFG, (0xefu<<24)|(0xe8u<<16)|(0xebu<<8)|0x03u);
+        for (int w = 0; w < 64; ++w) w16a16_mm_run(&g_ctx[0].mm);
+        { unsigned b0=qurt_pmu_get(QURT_PMUCNT1),c0=qurt_pmu_get(QURT_PMUCNT2),d0=qurt_pmu_get(QURT_PMUCNT3);
+          for (int i=0;i<B;++i) w16a16_mm_run(&g_ctx[0].mm);
+          cu=qurt_pmu_get(QURT_PMUCNT1)-b0; iunp=qurt_pmu_get(QURT_PMUCNT2)-c0; sysb=qurt_pmu_get(QURT_PMUCNT3)-d0; }
+        qurt_pmu_enable(0);
+        uint64_t cyc_pc = cyc_tot / B;
+        FARF(ALWAYS, "GDN_PURE STALLBRK nt8: %llu cyc/call %u pkt (%llu c/pkt) | RUN1=%llu IDLE=%llu COPROC=%llu | CU=%llu IU_NOPKT=%llu SYSBUSY=%llu",
+             (unsigned long long)cyc_pc, pk/B, (unsigned long long)(pk?cyc_tot/pk:0),
+             (unsigned long long)(run1/B), (unsigned long long)(idle/B), (unsigned long long)(coproc/B),
+             (unsigned long long)(cu/B), (unsigned long long)(iunp/B), (unsigned long long)(sysb/B));
+        if (statsLen > 12) stats[12] = (int)(run1/B);
+        if (statsLen > 13) stats[13] = (int)(idle/B);
+        if (statsLen > 14) stats[14] = (int)(coproc/B);
+        if (statsLen > 15) stats[15] = (int)(cu/B);
+        if (statsLen > 16) stats[16] = (int)(iunp/B);
+        if (statsLen > 17) stats[17] = (int)(sysb/B);
+        if (statsLen > 18) stats[18] = (int)cyc_pc;
+        if (statsLen > 19) stats[19] = (int)(pk/B);
+    }
+    {   /* SMT CO-EXEC PROBE (cron#78): is the per-conv thread-WAIT (1563/1576) the cluster idling during
+         * HMX latency (=> native hides it under HVX threads), or true HMX-op latency? Spawn 1..4 HVX
+         * spinners, measure conv retire WHILE they run. If retire stays ~1576 -> the WAIT is THIS thread's
+         * HMX pipeline latency (un-hideable from the consumer thread); other threads' work overlaps in
+         * WALL but does NOT speed THIS conv. If retire drops -> contention model wrong. main holds HMX. */
+        const int B = 500;
+        int sm[5]; for (int i = 0; i < 5; ++i) sm[i] = 0;
+        for (int ns = 0; ns <= 4; ++ns) {
+            qurt_thread_t stid[4]; int started = 0;
+            g_spin_go = 0; g_spin_stop = 0; g_spin_ready = 0;
+            for (int t = 0; t < ns; ++t) {
+                qurt_thread_attr_t a; qurt_thread_attr_init(&a); qurt_thread_attr_set_name(&a, (char *)"gp_spin");
+                qurt_thread_attr_set_stack_addr(&a, g_spin_stack[t]); qurt_thread_attr_set_stack_size(&a, sizeof(g_spin_stack[t]));
+                if (qurt_thread_create(&stid[t], &a, hvx_spinner, 0) == QURT_EOK) started++;
+            }
+            while (__atomic_load_n(&g_spin_ready, __ATOMIC_ACQUIRE) < started) { /* wait HVX lock */ }
+            __atomic_store_n(&g_spin_go, 1, __ATOMIC_RELEASE);
+            for (int w = 0; w < 64; ++w) w16a16_mm_run(&g_ctx[0].mm);   /* warmup w/ spinners live */
+            uint64_t t0 = gp_pcyc();
+            for (int i = 0; i < B; ++i) w16a16_mm_run(&g_ctx[0].mm);
+            uint64_t per = (gp_pcyc() - t0) / B;
+            __atomic_store_n(&g_spin_stop, 1, __ATOMIC_RELEASE);
+            for (int t = 0; t < started; ++t) { int st; qurt_thread_join(stid[t], &st); }
+            sm[ns] = (int)per;
+            FARF(ALWAYS, "GDN_PURE SMTPROBE spinners=%d: conv retire = %llu cyc (solo=1576; native warm~290)", ns, (unsigned long long)per);
+        }
+        if (statsLen > 20) stats[20] = sm[0];   /* NOTE: overwrites NTSWEEP nt8 in stats[20]; SMTPROBE only meaningful in this build */
+        if (statsLen > 21) stats[21] = sm[1];
+        if (statsLen > 22) stats[22] = sm[2];
+        if (statsLen > 23) stats[23] = sm[4];   /* 4 spinners */
+    }
+    {   /* ===== DOUBLE-BUFFER CROSS-CONV PIPELINE PROBE (cron#78, THE decisive experiment) =====
+         * native single 64^3 = 1970 cyc (15 c/pkt); native 32-BATCH each = 263 cyc (2.1 c/pkt) — 7x from
+         * pipelining SEPARATE consecutive convs (fill[i+1] || drain[i]). Our w16a16_mm_run loop = 1576 each
+         * (NO pipeline). Q: can a CONTINUOUS instruction stream overlap conv[i+1] fill with conv[i] drain?
+         *
+         * Clean int8-deep micro-kernel (documented mxmem; int32 acc + mxclracc — same acc family as w16a16
+         * convhhh; this isolates the HW pipeline capability without touching the fragile convhhh asm).
+         * Each "conv" = mxclracc; activation.ub=mxmem(a,lim):deep:cm; weight.b=mxmem(w,lim):deep; cvt.ub=acc;
+         * mxmem(o,0):cm=cvt   (1 output tile, K=KT tiles deep). N independent convs (distinct a/w/o slots).
+         * THREE schedules, timing-only (data-independent — answers the throughput-capability question):
+         *   (A) SERIAL   : per conv {clear; load:deep; cvt; store} fully before next (our current shape).
+         *   (B) PIPE-FILL: software-pipeline — issue conv[i+1] {clear; load:deep} BEFORE conv[i] {cvt; store}
+         *                  so the next fill overlaps this drain/store (the native cross-conv overlap).
+         *   (C) BIGDEEP  : ONE clear + ONE load:deep of N*KT tiles (max HMX autonomous fanout) — the deep
+         *                  engine's own pipelining ceiling (no per-conv clear/drain between).
+         * cyc/conv: A vs B vs C tells us (1) does fill||drain overlap help (B<A?), (2) the deep-engine floor (C). */
+        const int NT_K = 4;              /* deep tile-MACs/conv (fp16 deep limit ~ ≤4-tile on this build; >4 faults) */
+        const int NC = 16;              /* independent convs (NC*NT_K*2048*2 + NC*OUT_T*2048 < g_Avt 1.3MB @ H=8) */
+        const int TILE = 2048;          /* 32x32 int8 act/wt tile bytes; int32 acc readback tile = also 2048 (uh:2x2) */
+        /* carve scratch in the RESIDENT region g_Avt (allocated, valid, unused in this solve-less probe;
+         * VTCM-bumped; round to 2048 tile alignment). act[NC*KT] + wt[NC*KT] + out[NC] = 32*2*2K*2 + 32*2K = 288KB. */
+        uint8_t *aA = (uint8_t *)(((uintptr_t)g_Avt + 4095) & ~(uintptr_t)4095);
+        uint8_t *wA = aA + (size_t)NC * NT_K * TILE;
+        uint8_t *oA = wA + (size_t)NC * NT_K * TILE;
+        /* zero the scratch (data-independent timing, but valid bytes avoid any denormal/uninit weirdness). */
+        for (size_t i = 0; i < (size_t)NC * NT_K * TILE * 2 + (size_t)NC * TILE; i += 4) *(uint32_t *)(aA + i) = 0x01010101u;
+        /* fp16 DEEP idiom (DOCUMENTED + ch05-proven; byte-limit, xfp acc). The pipeline-feasibility question
+         * (can fill[i+1] overlap drain[i]) is dtype-independent; fp16 avoids the int8 :deep:cm mask pitfall. */
+        asm volatile("{ bias = mxmem2(%0) }" :: "r"((uint8_t *)g_ctx[0].mm.bias) : "memory");
+        const uint32_t lim = (uint32_t)(NT_K * TILE - 1);    /* :deep loads NT_K consecutive tile-pairs */
+        const int B = 1000;
+        /* (A) SERIAL: per conv {clear; load:deep(NT_K); store_acc} fully before next. */
+        uint64_t serial;
+        { for (int w = 0; w < 8; ++w) for (int c = 0; c < NC; ++c) {
+              uint8_t *a=aA+(size_t)c*NT_K*TILE,*wt=wA+(size_t)c*NT_K*TILE,*o=oA+(size_t)c*TILE;
+              asm volatile("mxclracc.hf\n{ activation.hf=mxmem(%0,%2):deep; weight.hf=mxmem(%1,%2) }\ncvt.hf=acc(%3)\nmxmem(%4,%5)=cvt\n"
+                           :: "r"(a),"r"(wt),"r"(lim),"r"(2),"r"(o),"r"(0):"memory"); }
+          uint64_t t0=gp_pcyc();
+          for (int it=0; it<B; ++it) for (int c=0;c<NC;++c) {
+              uint8_t *a=aA+(size_t)c*NT_K*TILE,*wt=wA+(size_t)c*NT_K*TILE,*o=oA+(size_t)c*TILE;
+              asm volatile("mxclracc.hf\n{ activation.hf=mxmem(%0,%2):deep; weight.hf=mxmem(%1,%2) }\ncvt.hf=acc(%3)\nmxmem(%4,%5)=cvt\n"
+                           :: "r"(a),"r"(wt),"r"(lim),"r"(2),"r"(o),"r"(0):"memory"); }
+          serial=(gp_pcyc()-t0)/((uint64_t)B*NC); }
+        /* (B) PIPE-FILL: software-pipeline — issue conv[i+1] {clear; load:deep} BEFORE conv[i] {cvt;store}
+         * so the next fill overlaps this drain/store (the native cross-conv fill||drain overlap). */
+        uint64_t pipe;
+        { for (int w=0; w<8; ++w) {
+              asm volatile("mxclracc.hf\n{ activation.hf=mxmem(%0,%2):deep; weight.hf=mxmem(%1,%2) }\n"::"r"(aA),"r"(wA),"r"(lim):"memory");
+              for (int c=0;c<NC;++c){ uint8_t *o=oA+(size_t)c*TILE;
+                  if (c+1<NC){ uint8_t *a=aA+(size_t)(c+1)*NT_K*TILE,*wt=wA+(size_t)(c+1)*NT_K*TILE;
+                      asm volatile("cvt.hf=acc(%0)\nmxmem(%1,%2)=cvt\nmxclracc.hf\n{ activation.hf=mxmem(%3,%5):deep; weight.hf=mxmem(%4,%5) }\n"
+                                   ::"r"(2),"r"(o),"r"(0),"r"(a),"r"(wt),"r"(lim):"memory"); }
+                  else asm volatile("cvt.hf=acc(%0)\nmxmem(%1,%2)=cvt\n"::"r"(2),"r"(o),"r"(0):"memory"); } }
+          uint64_t t0=gp_pcyc();
+          for (int it=0; it<B; ++it){
+              asm volatile("mxclracc.hf\n{ activation.hf=mxmem(%0,%2):deep; weight.hf=mxmem(%1,%2) }\n"::"r"(aA),"r"(wA),"r"(lim):"memory");
+              for (int c=0;c<NC;++c){ uint8_t *o=oA+(size_t)c*TILE;
+                  if (c+1<NC){ uint8_t *a=aA+(size_t)(c+1)*NT_K*TILE,*wt=wA+(size_t)(c+1)*NT_K*TILE;
+                      asm volatile("cvt.hf=acc(%0)\nmxmem(%1,%2)=cvt\nmxclracc.hf\n{ activation.hf=mxmem(%3,%5):deep; weight.hf=mxmem(%4,%5) }\n"
+                                   ::"r"(2),"r"(o),"r"(0),"r"(a),"r"(wt),"r"(lim):"memory"); }
+                  else asm volatile("cvt.hf=acc(%0)\nmxmem(%1,%2)=cvt\n"::"r"(2),"r"(o),"r"(0):"memory"); } }
+          pipe=(gp_pcyc()-t0)/((uint64_t)B*NC); }
+        /* (C) BIGDEEP: one clear + one load:deep over min(NT_K,32) tiles, one drain — deep streaming ceiling. */
+        uint64_t bigdeep;
+        { const int BIGT = NT_K<32?NT_K:32; const uint32_t biglim=(uint32_t)((size_t)BIGT*TILE-1);
+          for (int w=0;w<8;++w) asm volatile("mxclracc.hf\n{ activation.hf=mxmem(%0,%2):deep; weight.hf=mxmem(%1,%2) }\ncvt.hf=acc(%3)\nmxmem(%4,%5)=cvt\n"::"r"(aA),"r"(wA),"r"(biglim),"r"(2),"r"(oA),"r"(0):"memory");
+          uint64_t t0=gp_pcyc();
+          for (int it=0;it<B;++it) asm volatile("mxclracc.hf\n{ activation.hf=mxmem(%0,%2):deep; weight.hf=mxmem(%1,%2) }\ncvt.hf=acc(%3)\nmxmem(%4,%5)=cvt\n"::"r"(aA),"r"(wA),"r"(biglim),"r"(2),"r"(oA),"r"(0):"memory");
+          bigdeep=(gp_pcyc()-t0)/((uint64_t)B); }   /* per BIGDEEP-call (=BIGT tile-MACs in one deep load) */
+        FARF(ALWAYS, "GDN_PURE DBLBUF (fp16 deep, %d-tile-deep conv, NC=%d): SERIAL=%llu PIPE-FILL=%llu BIGDEEP(%d-tile)=%llu cyc/conv (native 64^3 single=1970 batch=263; ours convhhh=1576)",
+             NT_K, NC, (unsigned long long)serial, (unsigned long long)pipe, NT_K<32?NT_K:32, (unsigned long long)bigdeep);
+        if (statsLen > 24) stats[24] = (int)serial;
+        if (statsLen > 25) stats[25] = (int)pipe;
+        if (statsLen > 26) stats[26] = (int)bigdeep;
+        /* ===== DILATE micro-kernel = the ACTUAL w16a16 convhhh MAC form (per-tile, NO :deep) =====
+         * conv = DK per-tile dilate MACs into one acc, then cvt.uh:2x2 drain. THIS is what convhhh does
+         * (per-walk=165). Q: can software-pipelining conv[i+1]'s dilate-fills over conv[i]'s drain hide the
+         * per-tile WAIT? (S) serial vs (P) issue next conv's first dilate-MAC right after this conv's drain. */
+        /* FAITHFUL 64^3: 4 output tiles (M_t×N_t = 2×2), each = KMAC dilate MACs (K_t=2 × 2 byte-pass = 4),
+         * each output tile drained separately. Total = 4 out × 4 = 16 tile-MACs + 4 drains (= a real 64^3). */
+        const int OUT_T = 4, KMAC = 4;
+        const uint32_t ART=0x71fu, WRT=0x3ffu, CRT=0x3ffu;
+        uint64_t dser, dpipe;
+        { for (int w=0;w<8;++w) for (int c=0;c<NC;++c){
+              uint8_t *a=aA+(size_t)c*NT_K*TILE,*wt=wA+(size_t)c*NT_K*TILE;
+              for(int ot=0;ot<OUT_T;++ot){ uint8_t *o=oA+(size_t)((c*OUT_T+ot)% (NC*OUT_T))*512;
+                  asm volatile("mxclracc\n":::"memory");
+                  for(int k=0;k<KMAC;++k){ uint8_t *ak=a+((size_t)(k%NT_K))*TILE,*wk=wt+((size_t)(k%NT_K))*TILE;
+                      asm volatile("{ activation.ub=mxmem(%0,%2); weight.b=mxmem(%1,%3):dilate }\n"::"r"(ak),"r"(wk),"r"(ART),"r"(WRT):"memory"); }
+                  asm volatile("cvt.uh=acc(%0):2x2\nmxmem(%1,%2):2x2=cvt\n"::"r"(CRT),"r"(o),"r"(0):"memory"); } }
+          uint64_t t0=gp_pcyc();
+          for(int it=0;it<200;++it) for(int c=0;c<NC;++c){
+              uint8_t *a=aA+(size_t)c*NT_K*TILE,*wt=wA+(size_t)c*NT_K*TILE;
+              for(int ot=0;ot<OUT_T;++ot){ uint8_t *o=oA+(size_t)((c*OUT_T+ot)%(NC*OUT_T))*512;
+                  asm volatile("mxclracc\n":::"memory");
+                  for(int k=0;k<KMAC;++k){ uint8_t *ak=a+((size_t)(k%NT_K))*TILE,*wk=wt+((size_t)(k%NT_K))*TILE;
+                      asm volatile("{ activation.ub=mxmem(%0,%2); weight.b=mxmem(%1,%3):dilate }\n"::"r"(ak),"r"(wk),"r"(ART),"r"(WRT):"memory"); }
+                  asm volatile("cvt.uh=acc(%0):2x2\nmxmem(%1,%2):2x2=cvt\n"::"r"(CRT),"r"(o),"r"(0):"memory"); } }
+          dser=(gp_pcyc()-t0)/((uint64_t)200*NC); }
+        const int DK = OUT_T*KMAC;
+        /* packet count of the clean dilate conv (vs convhhh 113) — proves lever-A (fewer packets). */
+        uint64_t dpkt = 0;
+        { qurt_pmu_enable(1); qurt_pmu_set(QURT_PMUEVTCFG, (0x03u<<24)|(0x03u<<16)|(0x03u<<8)|0x03u);
+          for (int c=0;c<NC;++c){ uint8_t *a=aA+(size_t)c*NT_K*TILE,*wt=wA+(size_t)c*NT_K*TILE;
+              for(int ot=0;ot<OUT_T;++ot){ uint8_t *o=oA+(size_t)((c*OUT_T+ot)%(NC*OUT_T))*512; asm volatile("mxclracc\n":::"memory");
+                  for(int k=0;k<KMAC;++k){ uint8_t *ak=a+((size_t)(k%NT_K))*TILE,*wk=wt+((size_t)(k%NT_K))*TILE;
+                      asm volatile("{ activation.ub=mxmem(%0,%2); weight.b=mxmem(%1,%3):dilate }\n"::"r"(ak),"r"(wk),"r"(ART),"r"(WRT):"memory"); }
+                  asm volatile("cvt.uh=acc(%0):2x2\nmxmem(%1,%2):2x2=cvt\n"::"r"(CRT),"r"(o),"r"(0):"memory"); } }
+          unsigned p0=qurt_pmu_get(QURT_PMUCNT0);
+          for (int it=0;it<100;++it) for (int c=0;c<NC;++c){ uint8_t *a=aA+(size_t)c*NT_K*TILE,*wt=wA+(size_t)c*NT_K*TILE;
+              for(int ot=0;ot<OUT_T;++ot){ uint8_t *o=oA+(size_t)((c*OUT_T+ot)%(NC*OUT_T))*512; asm volatile("mxclracc\n":::"memory");
+                  for(int k=0;k<KMAC;++k){ uint8_t *ak=a+((size_t)(k%NT_K))*TILE,*wk=wt+((size_t)(k%NT_K))*TILE;
+                      asm volatile("{ activation.ub=mxmem(%0,%2); weight.b=mxmem(%1,%3):dilate }\n"::"r"(ak),"r"(wk),"r"(ART),"r"(WRT):"memory"); }
+                  asm volatile("cvt.uh=acc(%0):2x2\nmxmem(%1,%2):2x2=cvt\n"::"r"(CRT),"r"(o),"r"(0):"memory"); } }
+          dpkt=(uint64_t)(qurt_pmu_get(QURT_PMUCNT0)-p0)/((uint64_t)100*NC); qurt_pmu_enable(0); }
+        /* (P) PIPE: software-pipeline the OUTPUT-TILE drains — issue out-tile[ot+1]'s clear+first MAC adjacent
+         * to out-tile[ot]'s drain/store (no scalar gap), so the next tile's fill overlaps this tile's drain.
+         * If the per-tile WAIT is the MAC pipeline latency, interleaving the next tile's fill should hide it. */
+        { for (int w=0;w<8;++w) for(int c=0;c<NC;++c){
+              uint8_t *a=aA+(size_t)c*NT_K*TILE,*wt=wA+(size_t)c*NT_K*TILE;
+              for(int ot=0;ot<OUT_T;++ot){ uint8_t *o=oA+(size_t)((c*OUT_T+ot)%(NC*OUT_T))*512;
+                  asm volatile("mxclracc\n":::"memory");
+                  for(int k=0;k<KMAC;++k){ uint8_t *ak=a+((size_t)(k%NT_K))*TILE,*wk=wt+((size_t)(k%NT_K))*TILE;
+                      asm volatile("{ activation.ub=mxmem(%0,%2); weight.b=mxmem(%1,%3):dilate }\n"::"r"(ak),"r"(wk),"r"(ART),"r"(WRT):"memory"); }
+                  asm volatile("cvt.uh=acc(%0):2x2\nmxmem(%1,%2):2x2=cvt\n"::"r"(CRT),"r"(o),"r"(0):"memory"); } }
+          uint64_t t0=gp_pcyc();
+          for(int it=0;it<200;++it) for(int c=0;c<NC;++c){
+              uint8_t *a=aA+(size_t)c*NT_K*TILE,*wt=wA+(size_t)c*NT_K*TILE;
+              asm volatile("mxclracc\n{ activation.ub=mxmem(%0,%2); weight.b=mxmem(%1,%3):dilate }\n"::"r"(a),"r"(wt),"r"(ART),"r"(WRT):"memory");
+              for(int ot=0;ot<OUT_T;++ot){ uint8_t *o=oA+(size_t)((c*OUT_T+ot)%(NC*OUT_T))*512;
+                  for(int k=1;k<KMAC;++k){ uint8_t *ak=a+((size_t)(k%NT_K))*TILE,*wk=wt+((size_t)(k%NT_K))*TILE;
+                      asm volatile("{ activation.ub=mxmem(%0,%2); weight.b=mxmem(%1,%3):dilate }\n"::"r"(ak),"r"(wk),"r"(ART),"r"(WRT):"memory"); }
+                  if(ot+1<OUT_T) /* drain THIS + clear&first-MAC of NEXT in one window */
+                      asm volatile("cvt.uh=acc(%0):2x2\nmxmem(%1,%2):2x2=cvt\nmxclracc\n{ activation.ub=mxmem(%3,%4); weight.b=mxmem(%5,%6):dilate }\n"
+                                   ::"r"(CRT),"r"(o),"r"(0),"r"(a),"r"(ART),"r"(wt),"r"(WRT):"memory");
+                  else asm volatile("cvt.uh=acc(%0):2x2\nmxmem(%1,%2):2x2=cvt\n"::"r"(CRT),"r"(o),"r"(0):"memory"); } }
+          dpipe=(gp_pcyc()-t0)/((uint64_t)200*NC); }
+        FARF(ALWAYS, "GDN_PURE DBLBUF-DILATE (w16a16 form, DK=%d tile-MACs/conv, NC=%d): SERIAL=%llu PIPE=%llu cyc/conv, %llu pkt/conv (convhhh=1576cyc/113pkt; native batch 263; our deep micro=%llu/conv)",
+             DK, NC, (unsigned long long)dser, (unsigned long long)dpipe, (unsigned long long)dpkt, (unsigned long long)serial);
+        if (statsLen > 18) stats[18] = (int)dser;   /* reuse stats[18]: dilate SERIAL cyc/conv */
+        if (statsLen > 19) stats[19] = (int)dpipe;  /* dilate PIPE cyc/conv */
+        if (statsLen > 27) stats[27] = (int)dpkt;   /* dilate packets/conv (overwrites DISTINCT-TILE; this build only) */
+    }
+    {   /* M-FANOUT OVERLAP PROBE (cron#77): does batching B independent 64-row blocks (SHARED weight) into
+         * ONE kernel invocation drop per-64^3 below the single 1577? If per-block keeps dropping with B ->
+         * the kernel DOES overlap consecutive blocks' fill/drain (= native's cross-conv pipeline, the path
+         * to ~290). If it plateaus -> no cross-block overlap, the carrier only amortizes the prologue.
+         * Carrier layout: act = pack_act_crouton16(M,K) (M row-blocks contiguous), out_y=M, m_total=1,
+         * n_tiles = ceil(M/32)*2*2 (the shape-min). atab/otab = mm_init's 0..(2*rowgroups). */
+        w16a16_mm_t *m = &g_ctx[0].mm;
+        hmx_conv_out_desc_t *od = (hmx_conv_out_desc_t *)m->od; hmx_conv_act_desc_t *ad = (hmx_conv_act_desc_t *)m->ad;
+        hmx_conv_out_desc_t od_save = *od; hmx_conv_act_desc_t ad_save = *ad;
+        static int32_t a_save[128], o_save[128];
+        for (int i = 0; i < 128; ++i) { a_save[i] = m->atab[i]; o_save[i] = m->otab[i]; }
+        /* restore mm_init's carrier atab/otab (rg&7 wrap, ×2048) for the M-fanout act layout. */
+        uint8_t *act = (uint8_t *)m->act, *out = (uint8_t *)m->out;
+        for (int rg = 0; rg < 64; ++rg) for (int t = 0; t < 2; ++t) {
+            m->atab[rg * 2 + t] = (int32_t)(uintptr_t)(act + (((rg & 7) * 2 + t) * 2048));
+            m->otab[rg * 2 + t] = (int32_t)(uintptr_t)(out + (((rg & 7) * 2 + t) * 2048));
+        }
+        ad->act_ptr_pairs = m->atab; ad->n_act_pairs = 2u; ad->act_table_y_stride_words = 128u;
+        od->out_tile_ptr_table = m->otab; od->out_table_stride_dwords = 2u; od->m_total_minus_step = 1; od->k_total_bytes = 64u;
+        const int Ms[4] = { 64, 128, 256, 512 };   /* B = 1/2/4/8 row-blocks (act buffer = 96KB up to M=768) */
+        const int B = 200;
+        for (int mi = 0; mi < 4; ++mi) {
+            int M = Ms[mi];
+            od->out_y_stride_words = (uint32_t)M;
+            od->n_tiles_pow2 = (uint32_t)(((M + 31) / 32) * 2 * 2);   /* shape-min walks */
+            for (int w = 0; w < 32; ++w) w16a16_mm_run(m);
+            uint64_t b0 = gp_pcyc();
+            for (int i = 0; i < B; ++i) w16a16_mm_run(m);
+            uint64_t per = (gp_pcyc() - b0) / B;
+            uint64_t per64 = per / (uint32_t)(M / 64);
+            FARF(ALWAYS, "GDN_PURE FANOUT M=%-4d: %llu cyc/call, %llu cyc/64^3-block (single=1577; native warm=~290)",
+                 M, (unsigned long long)per, (unsigned long long)per64);
+            if (statsLen > 8 + mi) stats[8 + mi] = (int)per64;   /* stats[8..11] = per-64^3 at M 64/128/256/512 */
+        }
+        *od = od_save; *ad = ad_save;
+        for (int i = 0; i < 128; ++i) { m->atab[i] = a_save[i]; m->otab[i] = o_save[i]; }
+    }
+    /* GP_PKTPROBE = diagnostic build: skip the solve so the probe stats survive (the solve clobbers stats).
+     * cron#80 gap#2: stamp an EXPLICIT magic so host/scripts disambiguate this build from production WITHOUT
+     * relying on an implicit "stats[30]!=0" overload (production never writes stats[31]; the early return
+     * here means the production tail's stats[28]=outcopy/[29]=N_conv are NEVER set in a PKTPROBE build, so
+     * the same index segment means PMU/packets here vs IO/N_conv there. The magic (stats[31], stamped at the
+     * top of this block) makes that unambiguous even if a later sub-block faults. */
+    if (hl == 0) HAP_compute_res_hmx_unlock(hctx); if (hctx) HAP_compute_res_release(hctx);
+    if (vctx) HAP_compute_res_release(vctx);
+    return 0;
+#endif
 #if defined(GP_MMBATCH) && defined(GP_TRACE)
     {   /* PURE-MATMUL BATCH DEMO (-DGP_MMBATCH -DGP_TRACE): N independent 64³ w16a16 matmuls back-to-back
          * on resident VTCM operands — NO solve, NO producer/consumer glue. Each = one MATMUL op (stage 3,
@@ -1465,6 +1914,24 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
 #endif
     g_Ah = A; g_Th = (uint8_t *)T; g_H = H; g_P = P;
 
+    uint64_t bulk_ld = 0, bulk_st = 0;
+#if GP_RESIDENT
+    {   /* one-time bulk DDR->VTCM load of ALL heads' A, lower-tri packed (upper-tri 6 blocks skipped). OUTSIDE
+         * the timed region: in the real GDN forward A is already VTCM-resident (this transfer "will miss"). */
+        uint64_t b0 = gp_pcyc();
+        int hvx = qurt_hvx_lock(QURT_HVX_MODE_128B);
+        for (int h = 0; h < H; ++h)
+            for (int bi = 0; bi < GP_NB; ++bi)
+                for (int bj = 0; bj <= bi; ++bj) {
+                    const HVX_Vector *s = (const HVX_Vector *)(A + (size_t)h * 131072 + (size_t)(bi * 4 + bj) * GP_BB * 2);
+                    HVX_Vector *d = (HVX_Vector *)(g_Avt + ((size_t)h * GP_NLT + g_ltmap[bi * 4 + bj]) * GP_BB);
+                    for (int v = 0; v < 64; ++v) d[v] = s[v];
+                }
+        if (hvx == 0) qurt_hvx_unlock();
+        bulk_ld = gp_pcyc() - b0;
+    }
+#endif
+
     uint64_t us0 = HAP_perf_get_time_us(), t0 = gp_pcyc();
     /* ⚠️ P==1 (single-thread) is BROKEN under the crouton8/cv-block regime (since cron#68, never re-tested —
      * the metric is P=4): the inline path runs the whole solve_head->diag_inv->mm64 chain on the small main
@@ -1474,9 +1941,17 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
         g_ctx[0].slot = -1;
         int hvx = qurt_hvx_lock(QURT_HVX_MODE_128B);            /* main does HVX copies inline (+ HMX) */
         uint64_t L0 = gp_pcyc();
-        for (int h = 0; h < H; ++h)
+        for (int h = 0; h < H; ++h) {
+#if GP_RESIDENT
+            g_ctx[0].A = (int16_t (*)[GP_BB])(g_Avt + (size_t)h * GP_NLT * GP_BB);
+            g_ctx[0].T = (int16_t (*)[GP_BB])(g_Tvt + (size_t)h * GP_NLT * GP_BB);
+            solve_head(&g_ctx[0], 0, 0);
+            for (int i = 0; i < 16; ++i) g_evt[(size_t)h * 16 + i] = g_ctx[0].e[i];
+#else
             solve_head(&g_ctx[0], (const int16_t *)(A + (size_t)h * 131072),
                        (int16_t *)((uint8_t *)T + (size_t)h * 131072));
+#endif
+        }
         g_ctx[0].t_life = gp_pcyc() - L0;
         if (hvx == 0) qurt_hvx_unlock();
     } else {
@@ -1499,18 +1974,44 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
     }
     uint64_t t1 = gp_pcyc(), us1 = HAP_perf_get_time_us();
 
+#if GP_RESIDENT
+    {   /* one-time bulk VTCM->DDR store of ALL heads' T (lower-tri) + exps -> block(0,1). OUTSIDE timed region. */
+        uint64_t b0 = gp_pcyc();
+        int hvx = qurt_hvx_lock(QURT_HVX_MODE_128B);
+        for (int h = 0; h < H; ++h) {
+            for (int bi = 0; bi < GP_NB; ++bi)
+                for (int bj = 0; bj <= bi; ++bj) {
+                    const HVX_Vector *s = (const HVX_Vector *)(g_Tvt + ((size_t)h * GP_NLT + g_ltmap[bi * 4 + bj]) * GP_BB);
+                    HVX_Vector *d = (HVX_Vector *)((uint8_t *)T + (size_t)h * 131072 + (size_t)(bi * 4 + bj) * GP_BB * 2);
+                    for (int v = 0; v < 64; ++v) d[v] = s[v];
+                }
+            memcpy((uint8_t *)T + (size_t)h * 131072 + (size_t)GP_BB * 2, g_evt + (size_t)h * 16, 64);   /* exps -> block(0,1) */
+        }
+        if (hvx == 0) qurt_hvx_unlock();
+        bulk_st = gp_pcyc() - b0;
+    }
+#endif
+
     if (hl == 0) HAP_compute_res_hmx_unlock(hctx); if (hctx) HAP_compute_res_release(hctx);
     if (vctx) HAP_compute_res_release(vctx);
     { HAP_power_request_t off; memset(&off, 0, sizeof(off)); off.type = HAP_power_set_HMX; off.hmx.power_up = FALSE; HAP_power_set(pctx, &off); }
 
     uint64_t wall = t1 - t0, spin = 0, actcopy = 0, kmajor = 0, scatter = 0, outcopy = 0, life = 0, lmax = 0;
     uint64_t sc_mc = 0, sc_pm = 0, sc_ms = 0;   /* O5 scatter split Σ */
+    uint64_t wt_vec = 0, wt_bia = 0;            /* cron#75 wt-pack split: vector gather+pack vs colsum+scalar-bias */
     for (int t = 0; t < P; ++t) { spin += g_ctx[t].spin; actcopy += g_ctx[t].t_pack; kmajor += g_ctx[t].t_kmajor;
         scatter += g_ctx[t].t_scatter; outcopy += g_ctx[t].t_depack;
         sc_mc += g_ctx[t].t_mc; sc_pm += g_ctx[t].t_pm; sc_ms += g_ctx[t].t_ms;
+        wt_vec += g_ctx[t].t_gather; wt_bia += g_ctx[t].t_bias;
         life += g_ctx[t].t_life; if (g_ctx[t].t_life > lmax) lmax = g_ctx[t].t_life; }
     uint64_t other = life - spin - actcopy - kmajor - scatter - outcopy;   /* HVX renorm+acc (mm-level) */
-    uint32_t nmm = (uint32_t)H * 40u;                          /* 24 diag + 16 merge per head */
+    /* per-head w16a16_mm_run count at the PRODUCTION default (GP_NEWTON=0, GP_DENSE_*=0, MM64==mm64):
+     *   diag_inv ×4 blocks: each = mm64(A²=A@A) + mm64_keepwt(A³=AA@A) = 2 mm  -> 4×2 = 8
+     *   merge (4×4 strict-lower forward-subst, 6 off-diag blocks): inner Σ_k A_ik@T_kj = 1+1+1+2+2+3 = 10,
+     *                                                              plus 6× (T_ii@S) = 6              -> 10+6 = 16
+     *   => 8 + 16 = 24 mm/head == N_conv (they coincide because Newton=0 adds no extra mm; A²/A³ are the diag's 2).
+     * (Newton>0 or the dense-transpose MM64 path would add more mm; this counter assumes the shipped config.) */
+    uint32_t nmm = (uint32_t)H * 24u;                          /* 8 diag (A²,A³ ×4) + 16 merge per head */
     if (statsLen > 0) stats[0] = (int)wall;                    /* ① graph wall (PCYCLE) */
     if (statsLen > 1) stats[1] = P;
     if (statsLen > 2) stats[2] = H;
@@ -1526,10 +2027,49 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
     if (statsLen > 12) stats[12] = (int)sc_mc;                 /* O5 scatter split: linear↔block memcpy Σ */
     if (statsLen > 13) stats[13] = (int)sc_pm;                 /* O5 scatter split: gp_perm vgather Σ */
     if (statsLen > 14) stats[14] = (int)sc_ms;                 /* O5 scatter split: memset(To,128KB) Σ */
-    FARF(ALWAYS, "GDN_PURE(cv) P=%d H=%d wall=%llu packchk=%d | PROD-Σ actcopy=%llu kmajor=%llu scatter=%llu renorm/acc=%llu outcopy=%llu spin=%llu | CONS kernel=%llu",
-         P, H, (unsigned long long)wall, packchk, (unsigned long long)actcopy, (unsigned long long)kmajor,
+    if (statsLen > 15) stats[15] = (int)bulk_ld;             /* cron#75 one-time bulk DDR->VTCM A load (excluded from wall) */
+    if (statsLen > 16) stats[16] = (int)bulk_st;             /* cron#75 one-time bulk VTCM->DDR T store (excluded from wall) */
+    if (statsLen > 17) stats[17] = (int)wt_vec;               /* cron#75 wt-pack split: vector gather+pack Σ */
+    if (statsLen > 18) stats[18] = (int)wt_bia;               /* cron#75 wt-pack split: colsum+scalar-bias Σ */
+    if (statsLen > 19) stats[19] = (int)actcopy;              /* cron#79: 装料-act Σ (gp_cv_to_surf) <-> q::ForceFormat_Crouton */
+    if (statsLen > 28) stats[28] = (int)outcopy;              /* cron#79: 卸料 Σ (gp_surf_to_cv) <-> q::*OutputSlice */
+    if (statsLen > 29) stats[29] = (int)((uint32_t)H * 24u);  /* cron#79: N_conv = H*24 (Newton=0); per-conv basis */
+    /* cron#79 QNN-ALIGNED breakdown (skill htp-cycle-metric): report by the THREE categories +
+     * QNN op name + QNN field, so cross-impl compare is automatically same-category+same-field.
+     *   真算-MAC (HMX) = consumer w16a16_mm_run     <-> q::ConvLayer_s1.opt          (field: cycles_used / per-call occupancy)
+     *   装料-wt  (HVX) = gp_pack_wt_bias vec        <-> convert_weights_to_signed+Cast
+     *   装料-bias(HVX) = gp_pack_wt_bias bias       <-> bias_weight_update+bias_scale_shuff
+     *   装料-act (HVX) = gp_cv_to_surf              <-> q::ForceFormat_Crouton
+     *   装料-alg (HVX) = renorm/acc (solve-only; NO native op — honestly flagged)
+     *   卸料-IO  (HVX) = gp_surf_to_cv              <-> q::*OutputSlice
+     *   输入/卸料(DMA) = bulk DDR<->VTCM (excl)     <-> q::*InputSlice + q::*OutputSlice
+     *   waste          = SPIN (idle-wait; a GAP, not an op)
+     * Σ = work over P threads; per-conv = Σ / (H*24). THROUGHPUT = graph-wall/N_conv, NEVER cycles_used/N (trap#6). */
+    uint32_t nconv = (uint32_t)H * 24u;
+    /* Throughput denominator = N_conv = H*24 (the 24 q::ConvLayer_s1 per head @ Newton=0: 8 diag + 16 merge);
+     * THROUGHPUT = graph-wall/N_conv. At the shipped config (Newton=0, MM64==mm64) the actual w16a16_mm_run
+     * call count nmm == N_conv == H*24 — A²/A³ are the diag's 2 mm, there are NO extra intermediate matmuls.
+     * (nmm is tracked separately only because Newton>0 / the dense-transpose MM64 path would add mm beyond
+     * N_conv; under those configs nmm>N_conv and N_conv stays the throughput basis. Don't divide cycles_used/N
+     * for throughput — trap#6.) */
+    FARF(ALWAYS, "GDN_PURE QNN-ALIGN P=%d H=%d | N_conv=H*24=%u (throughput denom) | nmm=H*24=%u (actual mm calls @Newton=0; ==N_conv) | graph-wall=%llu (%llu/conv) lmax=%llu PACKCHK=%d",
+         P, H, nconv, nmm, (unsigned long long)wall, (unsigned long long)(wall / (nconv ? nconv : 1)),
+         (unsigned long long)lmax, packchk);
+    FARF(ALWAYS, "GDN_PURE QNN-ALIGN 真算-MAC(HMX,q::ConvLayer_s1.opt) Σcyc=%llu per-conv=%llu (per-call occupancy=%d; native single ConvLayer=1970, batch warm sub-op=263)",
+         (unsigned long long)g_cbusy, (unsigned long long)(g_cbusy / (nconv ? nconv : 1)),
+         (statsLen > 5 ? stats[5] : 0));
+    FARF(ALWAYS, "GDN_PURE QNN-ALIGN 装料(HVX) wt-vec(conv_wt+Cast)=%llu wt-bias(bias_wu+scale_shuff)=%llu act(ForceFormat)=%llu renorm/acc(solve-only)=%llu | per-conv wt-vec=%llu act=%llu",
+         (unsigned long long)wt_vec, (unsigned long long)wt_bia, (unsigned long long)actcopy, (unsigned long long)other,
+         (unsigned long long)(wt_vec / (nconv ? nconv : 1)), (unsigned long long)(actcopy / (nconv ? nconv : 1)));
+    FARF(ALWAYS, "GDN_PURE QNN-ALIGN 卸料/IO(q::*OutputSlice/InputSlice) outcopy=%llu bulk-DDR<->VTCM(excl)=%llu(ld=%llu st=%llu) | waste SPIN(idle gap)=%llu",
+         (unsigned long long)outcopy, (unsigned long long)(bulk_ld + bulk_st),
+         (unsigned long long)bulk_ld, (unsigned long long)bulk_st, (unsigned long long)spin);
+    /* legacy PROD-Σ line kept verbatim (timeline/old parsers depend on its exact text). */
+    FARF(ALWAYS, "GDN_PURE(cv) P=%d H=%d wall=%llu lmax=%llu packchk=%d | PROD-Σ actcopy=%llu kmajor=%llu(vec=%llu bias=%llu) scatter=%llu renorm/acc=%llu outcopy=%llu spin=%llu | CONS kernel=%llu | bulk(ld=%llu st=%llu,excl)",
+         P, H, (unsigned long long)wall, (unsigned long long)lmax, packchk, (unsigned long long)actcopy, (unsigned long long)kmajor,
+         (unsigned long long)wt_vec, (unsigned long long)wt_bia,
          (unsigned long long)scatter, (unsigned long long)other, (unsigned long long)outcopy,
-         (unsigned long long)spin, (unsigned long long)g_cbusy);
+         (unsigned long long)spin, (unsigned long long)g_cbusy, (unsigned long long)bulk_ld, (unsigned long long)bulk_st);
 #ifdef GP_TRACE
     {   /* serialize the event trace into T (overwrites the result; trace runs are timeline-only).
          * [magic][n][wall u64][base u64=t0] then n*{tid u32, stage u32, t0 u64, t1 u64}. */

@@ -4,17 +4,20 @@
 
 ## 口径（强制,违反 = 结论作废）
 
-- **任何性能数走 skill `htp-cycle-metric`**;每数 = value + 口径 + context。四口径分清:**① graph-wall**(全程 span = 最终裁决)·**② op-latency**(`N_mm×256`,HMX 纯算力下限)·**③ unit-busy**(occupancy)·**④ per-call wall**(kernel-call,含字节 feed)。
+- **任何性能数走 skill `htp-cycle-metric`**;每数 = value + QNN 字段 + shape + scenario。**唯一合法分类 = QNN 三类(cron#79):真算(MAC,HMX,`q::ConvLayer_s1.opt`)/ 装料(prep,HVX,wt-pack/act-format/renorm)/ 卸料+输入(IO,DMA,`q::*Input/OutputSlice`);SPIN=waste 单列不并类。** 每段带 QNN 字段:cycles(HMX=cycles_used 占用)、packets(`-DGP_PKTPROBE`)、cyc/pkt、(native)num_dominant_path。**三类必须分开报,绝不混成一个数** —— 这就是 native-263-vs-我们-1577 错比的根。被删词汇 ①②③④ / op-latency / unit-busy / per-call wall 一律不用,说 QNN 字段名。
 - 全 PCYCLE(`C15:14`);**时钟自检 `wall/µs ≈ 1594`**(本设备 TURBO;≫此 = 读错计数器,作废重测)。
-- **跨实现比 native 只用 graph-wall÷N(口径①)**;optrace per-op(②③)**绝不**对 baremetal per-call wall(④)比 —— 跨口径必造假差。native 锚:单 64³ ≈11,034 wall ≈ 我们;批 ~2,020 wall/matmul。
-- **不把 per-call feed-inclusive(④)当 HMX 算力(②)**;`stats[5]` 含 ~10K mxmem feed 是正确 wall,不是 bug。
+- **跨实现比同类同字段同 scenario**:真算比真算(我们 1577/111pkt/14cyc-pkt ≈ native SINGLE ConvLayer 1970/130/15,**不比批 warm 子-op 263**),装料比装料。throughput = graph-wall÷N 或 retire 间隔,**绝不 cycles_used/N**(OVERSTATE,trap#6)。
+- **统一汇报工具**:`scripts/gdn_solve_qnn_aligned_report.py`(读 native optrace + 我们设备 stdout,并排同口径三类表);设备侧 = host 打印 `[真算-MAC]/[装料-*]/[卸料-IO]` + FARF `GDN_PURE QNN-ALIGN`。权威映射 = `docs/cycle_metric_alignment.md` §"Canonical 口径 map"。探针复用常开 gp_pcyc,**生产 bit-exact**(oc 4.238e-3/PACKCHK=0,cron#79 验)。
+- **不把 per-call feed-inclusive 当 HMX 纯算**;`stats[5]`(真算 per-call occupancy)含 mxmem feed 是正确 cycles_used,不是 bug。
 
 ## OBJECTIVE
 
 **最小化 32-head TOTAL wall(standalone metric),硬门 `oc < 4e-2`(每轮重测,绝对门)。**
-- **本质目标(用户裁定 2026-06-15):wall → HMX 理论 MAC 峰值地板。** 即 wall 只剩"这组固定 matmul 在 HMX 上的纯 MAC 计算时间",其余一切——producer feed、握手/sync、**每 matmul 的 fill/drain**、DDR↔VTCM、startup——全算 **waste**,要清零或完全藏在 HMX 计算之下。**连"matmul 数本身的冗余 + fill/drain 不摊销"也算 waste**(地板锚在 MAC 峰值,不是当前实现的 HMX 占用)。
-  - **地板值(推导,非猜测)≈ 284K cyc** = N_mm 768(24/head×32:diag 8 + merge 16)× native dominant-path ~370/64³-matmul(8 mxmem walk 完美流水、零 fill/drain 的 MAC-bound 关键链,`reference_64cube_conv_occupancy_vs_latency`)。单 HMX 串行 ⇒ 768×370≈284K。
-  - **当前 wall 2.32M(cron#74)⇒ 距 MAC-峰值地板 ~8.2× 余量。** ⚠️ 注意 consumer-busy ~1.34M ≠ 地板:那是含每-matmul fill/drain 的 occupancy(1388/matmul 级),比 MAC 峰值(370/matmul)高 ~3.7×;**摊销 fill/drain(批处理)能把 HMX 时间本身从 1.34M 拉向 ~284K**,所以地板远低于 consumer-busy。
+- **本质(用户裁定 2026-06-15,目标驱动 [[feedback_goal_driven_not_guessed_direction]]):这个任务唯一不可约的工作 = HMX 把"求逆所需的 MAC"算完。** 其余一切——producer feed、握手/sync、SPIN、每-matmul fill/drain、startup、DDR↔VTCM——**全是 waste**,要清零或完全藏在 HMX 之下。⇒ **wall 的下界 = (求逆所需 MAC 总数) / (HMX MAC 峰值速率)。** 目标 = 让实测 wall 逼到这个下界。
+  - **✅ floor 已 cron#78 决定性钉死(PMU 周期账 + native single-vs-batch + 从零 micro-kernel;以此为准,推翻 cron#76/#77 的下列措辞):**
+    - **我们 consumer per-conv ≈ native,NOT 慢。** native 同核 single `mm_1x1x64x64`=1970 cyc vs 我们 1576(我们略快)。**"native 290" 只是批 `mm_64` 里 ConvLayer 的 HMX 子-op `cycles`,不是 conv-wall**(native 批整图 HVX-bound,每-conv 真 wall ≈ graph-span/32 ≈ 4087)。⇒ cron#76/#77 的 "我们慢 native 4.5-5.4× / 复现 walk-流水到 230K" 是拿我们单 conv 比 native 批子-op 的**错比,撤回**。
+    - **consumer 真杠杆 = 精简核,不是流水:** 跨-conv fill/drain 双缓冲流水 **UNFEASIBLE**(HMX 单 int32 acc 无 bank,from-scratch 原型 PIPE==SERIAL + SMT spinner 实证)。但 convhhh 比干净 dilate 核**臃肿 4.3×**(1576cyc/113pkt/14cyc-pkt vs 363/81/4.5)⇒ 写精简流式核可把 consumer **1576→~363/conv**(减 packet+减 stall)。
+    - **总账(关键):pure-HMX = producer-bound**(slowest-prod-life 1.53M > consumer 1.30M)。consumer 即便 →~0.30M,wall ≈ max(producer 1.53M, consumer) ≈ **1.74M→~1.55M(仅 ~11%)**,然后纯 producer-bound。⇒ **#1 杠杆 = producer feed(wt-pack vgather ~2.0M Σ)**;精简 consumer 核是解锁后第二档。详见 ④f-cron#78。
 - oc = device 输出 vs fp64 真值 inv,32-head aggregate(`run_w16a16_head_phase4.py` 输出)。任何让 oc≥4e-2 的改动否决。
 - wall 判定**一律同热窗 ACAC 交替环比配对中位**(`GDNBM_REPS=8` 取 reps2-4 median,绝不取 min,~6 配对轮),不跟固定常数比(绝对值随热漂 ±10%)。
 - 不以"比别的实现快"为目标;目标 = 本实现做到设备极限 + 学清 w16a16 怎么用。真代码 / 真设备 / 真数据。
@@ -23,12 +26,12 @@
 
 | 项 | 值 |
 |---|---|
-| **当前 best wall**(QNN graph wall = 32-head TOTAL) | **steady ~2.32M cyc**(≈1.46ms @1.59GHz;cron#74 = 全 VTCM 常驻,中间态 0 次 DDR)。**reps2-8 median 链:baseline 4.97M → cron#72 4.04M → cron#73 2.36M → cron#74 2.32M = 总 2.14×**,全程 bit-exact。cron#74 wall ~neutral vs cron#73 但 **架构铁律达成(中间态全 VTCM)+ slowest-prod-life 2.25M→1.72M**;瓶颈转单-HMX consumer + sync(见 ④)。 |
-| **oc** | synthetic0.05 **4.238e-3**(cron#72/73 全程逐位不变)· 真 GDN(A_u16_h32)**1.107e-2**(均 < 4e-2) |
-| **口径** | 全用 QNN 字段(`gdn_solve.md` §5.1):graph wall = `cycles_used`(单元) + `num_dominant_path`(关键链)。**32-head TOTAL graph wall = 唯一终指标。** wall 自测 = `GDNBM_REPS=8` reps2-8 median(高方差,单轮 ±15%)。 |
-| **⚠️ 瓶颈定论(cron#72,实测推翻 cron#71 "同步握手" framing)** | wall = **HVX-bound,卡在 4-HVX-unit 天花板**,非"调度气泡/同步握手"。per-producer-life ≈ wall(4 线程并发);consumer HMX **已经**在 producer spin 里重叠掉(spin 仅 ~10%)。⇒ 唯一杠杆 = **砍 HVX feed 工作量** 或挪出 DSP。**测瓶颈用 FARF 全量 PROD-Σ 分解(actcopy/kmajor/scatter/renorm/spin/outcopy + lmax),别只信 GP_TRACE 的 traced stage(漏算 scatter/wtpack/renorm)。** |
-| **feed 分解(cron#73-alias 实测,Σ over 4 threads / per-producer)** | **wt-pack 3.33M / 0.83M(#1,vgather+dilated pack+colsum)** · renorm/acc **1.64M / 0.41M** · scatter **~0(已消除)** · act/out copy ~0.5M · spin ~0.5M · **consumer HMX-busy 1.37M = wall 的 58%(单 HMX,已重叠)** ⇒ producer feed 与单-HMX consumer 渐趋平衡,继续砍 feed 边际递减(再砍 producer 后 wall 会塌到 max(producer-life, consumer-drain))。 |
-| **matmul 现状(✅ NEXT① 已做 + cron#71 optrace 实证)** | solve 每 matmul = 单 64³ `crouton_pos` n_tiles=8。**HMX kernel = native parity:单 [1,1,64,64] 我们 `num_dominant_path`3789/`cycles_used`11152 vs native 3543/11176**。⚠️ consumer-busy 1.34M = occupancy(含每-matmul fill/drain ~1388/matmul),**不是地板**;MAC-峰值地板 = 768×370≈284K(摊销 fill/drain 后),见 OBJECTIVE。 |
+| **当前 best wall**(QNN graph wall = 32-head TOTAL, **VTCM-only**) | **steady ~1.738M cyc**(cron#77 WTREUSE,reps2-8 median,3 轮配对一致 -44K vs 1.783M 基线,±2-3%)。链:cron#75 VTCM-only 1.78M → **cron#77 diag 权重复用 1.738M(2.5%)**,全程 bit-exact(oc 4.238e-3,PACKCHK=0)。当前瓶颈 = **producer-bound**:slowest-prod-life **1.53M** > consumer **1.30M**;wt-pack(WTREUSE 后 3.03M→2.52M Σ)仍是 #1 producer 成本。**metric = VTCM-only**(用户裁定 2026-06-15):DDR↔VTCM head-load/store 是 standalone-harness artifact,一次性 bulk 移出计时窗(bulk_ld~1.19M/bulk_st~0.26M,排除)。 |
+| **oc** | synthetic0.05 **4.238e-3**(cron#72-75 全程逐位不变)· 真 GDN(A_u16_h32)**1.107e-2**(均 < 4e-2) |
+| **口径** | 全用 QNN 字段(`gdn_solve.md` §5.1):graph wall = `cycles_used`(单元) + `num_dominant_path`(关键链)。**32-head TOTAL graph wall(VTCM-only)= 唯一终指标**;DDR↔VTCM bulk 单独报、不计入(artifact)。wall 自测 = `GDNBM_REPS=8` reps2-8 median(VTCM-only 后方差 ±3%)。 |
+| **⚠️ 瓶颈定论(cron#77 二次大修正,设备 PMU+FANOUT 实测)** | **producer-bound:slowest-prod-life 1.53M > consumer 1.30M。** wt-pack(2.52M Σ / 0.63M/thread,WTREUSE 后)= #1 producer 成本(其中 wt_vec 64-vgather ~2.0M Σ),renorm/acc 1.27M Σ 第二,spin 1.63M Σ(等 consumer)。**❌ 推翻 cron#76 的 "consumer 慢 native 4.5× / 复现 walk-流水到 230K":(1) packet 数我们 NOT 多 —— n_tiles=8 实测 111 packets < native 130(587 是 chain_qdq 的 n_tiles=64 过切);(2) 真根因 = cyc/packet stall(我们 14 vs native 2.0);(3) native 290 经 FANOUT 实测 UNREACHABLE —— M-fanout 批 1/2/4/8 块 per-64³=1574/1454/1387/1354 收敛到 ~1320(walk floor)NOT 290,即批处理只摊 prologue 不能让我们的 convhhh kernel walk 跨 conv 流水。native 290 靠 QNN supertile 的连续 fill/drain 重叠,我们单-conv-invocation 复现不了。** ⇒(此处旧写 "consumer 地板 ≈1.01M" 已被 **cron#78 精修**:精简流式核可把 consumer 1576→~363/conv≈0.28M,convhhh 比干净 dilate 臃肿 4.3×;且我们单 conv 1576 ≈ native single 1970,**NOT 慢**,"290" 是批子-op 非 conv-wall;双缓冲流水 UNFEASIBLE 单 acc。但 producer-bound ⇒ consumer 提速仅值 ~11%。)**真杠杆 = producer feed(wt-pack vgather)。详见 ④f-cron#78。** |
+| **feed 分解(cron#75 实测,Σ over 4 threads / per-producer)** | **wt-pack 3.04M / 0.76M(#1;vec=gather+pack 2.48M/0.62M + bias 0.55M/0.14M)** · renorm/acc **1.31M / 0.33M** · act/out copy ~0.5M / 0.13M · spin 1.61M / 0.40M · scatter **0(head-load/store 出计时窗)** · **consumer HMX-busy 1.30M(单 HMX)= 768×~1693**(⚠️ cron#78:我们 per-conv 1576 ≈ native single,**NOT 慢**;"290" 是批 HMX 子-op 非 conv-wall)。这些是 ④f 推导的输入(各段量级),**不是照着砍的清单**——**#1 杠杆 = producer feed(wt-pack vgather);consumer 第二档 = 精简核(非流水),见 ④f-cron#78。** |
+| **matmul 吞吐(cron#78 定论:我们 ≈ native single,NOT 慢)** | solve 每 matmul = 单 64³ `crouton_pos` n_tiles=8 = **我们 1576 per-call / 111 packets / 14 cyc-pkt(PMU 实测)**。**同口径比 = native 同核 SINGLE conv `mm_1x1x64x64` 1970 cyc —— 我们略快,不慢。**(native 批 `mm_64` 报的 ~290 是 ConvLayer 的 HMX 子-op `cycles`,不是 conv-wall;别拿它比我们 per-call —— 那是 cron#76 错比,已撤。)consumer 仍可降 = 精简流式核 1576→~363/conv(convhhh 比干净 dilate 臃肿 4.3×,减 packet/stall;**双缓冲流水 UNFEASIBLE 单 acc**),但 producer-bound ⇒ 仅值 ~11%。**#1 杠杆 = producer feed,见 ④f-cron#78。** |
 | 唯一真路径 | `example/gdn_native/pure_hmx_solve/gdn_pure_solve.cpp`(`-DGDNBM_GDN_PURE_SOLVE`),改这里 |
 
 ## NEXT（后续方向）
@@ -53,42 +56,67 @@
   - **结果:wall ~neutral(~2.32M ≈ cron#73 的 2.36M)**,但 **slowest-prod-life 2.25M→1.72M(producer feed 真降了)**。**架构铁律已满足(中间态全 VTCM)**。wall 没跟着降 = 瓶颈转移:producers 1.72M 完成但 wall 2.32M,**单-HMX consumer(1.34M)+ sync/drain 成了 limiter**(producer 做 head-load 时不 arm matmul → consumer starve → 串行尾巴,wall−lmax 缺口 0.18M→0.6M)。
   - **教训(写进 STATE)**:VTCM 常驻对 wall **不是**直接增益 —— scheduling-skill "VTCM 不比 DDR 快(单条顺序 HVX pass,L2 prefetch 已饱和)" 在此应验;常驻的价值 = 架构正确(铁律)+ 降 producer feed + 为 ④c 解锁(consumer 成瓶颈后,批处理才有意义)。
 
-**cron#74 ④c 前基线 timeline**(`GP_TRACE` build,H=8 P=4,wall=736244 cyc / 110 列 ≈ 6.7K cyc/列;复现见 REPRODUCE):
-```
-P0   |                psxs  pxpxxssspspspxxspppxxxssssp           pss psspspppxssspppxxxsxssssp   | busy=38% [PREP=33% SPIN=23%]
-P1   |                 pss  pxxsspspxsxsxsssxxxsssspsppx           pxxpsspxxxsspxxxssssppppxxxxs  | busy=40% [PREP=32% SPIN=27%]
-P2   |                   px psxsspxxspxspppxsspppxxxxss           pss psxxsspxpsssssspppxxxsssssx | busy=39% [PREP=34% SPIN=25%]
-P3   |                    psssspxxsxxsppxsspxsssssppxxxs            pxpsxssxxsssppxxxxsssssppxxxsx| busy=41% [PREP=33% SPIN=27%]
-CONS |                  mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm           mmm mmmmmmmmmmmmmmmmmmmmmmmmmm  | busy=47% [MM=70%]
-   p=PREP(wt-pack) m=matmul(HMX) s=SPIN(producer等consumer) x=DEPACK; Σ: MM=346K PREP=644K SPIN=501K DEPACK=28K
-```
-- **三段全员空闲 gap = 关键**:① 起始 ~16 列(spawn + 第1个 head-load,未 trace);② 中段全断 = head1→head2 边界的 head-store+head-load(VTCM↔DDR,未 trace),切 head 时不 arm → CONS 也饿死;③ 尾部 drain。
-- **⚠️ 口径**:timeline 只画 traced stage;producer busy 仅 38-41% 是因 **head-load/store(scatter)+renorm/acc+act-format 没被 trace**(就是那些空白)。真账看 FARF PROD-Σ(Σ producer=4×wall,traced 仅 1.17M,未 trace ~1.77M)。**别把空白当"idle 可重叠",得 packet 核对**(feedback_perf_gap_must_check_trace)。
-- **两个 wall 杀手 → 正是 ④c 的靶**:SPIN 23-27%(4 producer 抢 1 HMX,排队)+ head 边界 gap(head-load/store 串关键路、CONS 饿死)。
+- **④d ✅ DONE(cron#75):wt-pack bias 构建全向量化**(`GP_BIASVEC`=默认1)= 砍 #1 scalar-VTCM waste。原 colsum 后 64-iter 标量 union 读 + 256 个标量 VTCM 写(bias scatter + control 字),实测 **t_bia 1.77M Σ / 0.44M per-prod = wt-pack 的 42%**。改:`eff=(-(p0L+p0H))>>1` 向量算 + `vshuff(0,eff,-4)` 把 eff 与 0 按 4字节粒度交织成 bias 奇 vec + 向量建 control 写偶 vec → 8 个向量 store。**t_bia 1.77M→0.56M(剩的是 colsum 向量本身)**,PACKCHK=0 逐字节等价,oc 不变。
+- **④e ✅ DONE(cron#75,用户裁定:DDR→VTCM 是 harness artifact,真 forward 不发生):全 head VTCM 常驻 + 零拷贝 alias**(`GP_RESIDENT`=默认1)。所有 head 的 A/T 下三角 packed(10/16 block,solve 只碰下三角)常驻 VTCM(`g_Avt`/`g_Tvt`/`g_evt`,~5.2MB;+working 2.2MB <8MB),producer 每 head 把 `c->A`/`c->T` **直接 alias 进常驻 slice(零 per-head 拷贝)**,`g_ltmap` 做 bi*4+bj→packed。DDR↔VTCM 改 **一次性 bulk 传输移出计时窗**(t0 前 bulk-load A、t1 后 bulk-store T;DDR 侧仍 16-block,host 零改)。
+  - **结果:wall ~2.3-2.6M(with-DDR)→ 1.78M(VTCM-only),scatter 471K→0、lmax 2.45M→1.59M、方差 ±15%→±3%。** head-load 实心块(每 head 开头饿死 consumer)消失。bit-exact + PACKCHK=0。bulk_ld~1.19M/bulk_st~0.26M 排除(artifact)。
 
-**④c ☞ 目标([[feedback_goal_driven_not_guessed_direction]]):wall 2.32M → HMX MAC-峰值地板 ~284K(见 OBJECTIVE),~8× 余量。** 一切非-MAC 时间(feed/sync/fill-drain/startup)= waste,逐项清零或藏到 HMX 之下。**方法 = 数据挑杠杆,不押手法。**
-> **先 instrument 把 wall 的去向量化全**(当前未解释的 wall−lmax≈0.6M 拆成 startup/consumer-drain/join;producer 未 trace 段 ~1.77M = head-load/store+renorm+act-format 要 trace 进 timeline → 显真相,别拿空白当可重叠 idle,见 [[feedback_perf_gap_must_check_trace]])。再逐个实测候选、留有效砍无效(≤2-3 零增益就下结论)。
->
-> **待实测候选假设(平行,数据决定,勿预设排序 / 勿当"计划步骤"执行):**
-> - 摊销 fill/drain:地板 284K vs consumer-busy 1.34M 的 ~3.7× 差 = 每-matmul fill/drain 没摊销;批/连发 matmul 让 HMX 跑到 dominant-path(370)而非 occupancy(1388)级 —— **这是逼近 MAC 峰值的核心**。
-> - matmul 数冗余:768 是否真最小?(算法锁定前提下)有无重复/可合并的 matmul。
-> - feed 藏到 HMX 之下:producer feed(wt-pack/renorm/head-load)与 consumer matmul 重叠(预取下一独立链 / 消 head 边界 gap)。
-> - sync:减/改握手(批多 matmul 一次 arm、双 job-slot、lock-free),砍 SPIN 23-27%。
-> - rebalance:producer/consumer 配比;consumer 空闲时帮 feed。
-> - feed 绝对量:wt-pack 剩余 scalar-VTCM bias 写向量化(注意 INVARIANT#6)、renorm/acc 工作量。
-> - 判据:每候选 `GDNBM_REPS=8` reps2-8 median 配对 + oc(硬门 4e-2,P≥2);FARF PROD-Σ 全量分解 + 重渲 timeline 定位。
+**cron#75 timeline**(`GP_TRACE` build,H=8 P=4,wall≈633K / 120 列 ≈ 5.3K/列;复现见 REPRODUCE):
+```
+P*   |          qpsssxsaaaqsxsqssqssasqsas...(满铺,无 head-load 白块) | busy 62-66% [PREP 43% ACC 20% SPIN 27%]
+CONS |             mmmmm mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm...        | busy 51% [MM 78%]
+   q=ACT p=WT-pack a=ACC s=SPIN(等HMX) m=matmul x=OUT; Σ(H=8): MM 329K PREP 758K ACC 348K SPIN 472K
+```
+- head-load/store 已出计时窗 ⇒ 无中段全断 gap。剩:① 起始 ~110K startup(spawn + 首 prep,H=32 摊薄);② **SPIN 27%(producer 抢单 HMX)+ CONS 49% idle = 链内依赖气泡**(producer-feed 1.23M ≈ consumer 1.30M 已平衡,但单 HMX + chain 依赖留 bubble)。
+
+**④f-cron#78 ✅✅✅ 决定性钉死(PMU 周期账 + native single-vs-batch + 从零 dilate/deep micro-kernel,设备实测,大幅修正 cron#76/#77 的 "native 290 不可达 / consumer 是地板 1.01M"):**
+
+- **决定性 Rosetta(native 同核 single vs batch,两个现成 optrace):`mm_1x1x64x64`(单 conv)= ConvLayer_s1.opt **1970 cyc / 15.1 cyc-pkt**;`mm_64`([1,32,64,64] 批)= warm **263 cyc / 2.1 cyc-pkt**(7.5×)。同一 `convhhh1x1_stride1` 核(w16a16 无 deep 变体,INVARIANT 3 实证:objdump 只有 convbbb/convbnb/convhbh 有 deep,convhhh 没有 → native 批必用此核)。⇒ **我们 1576 ≈ native SINGLE 1970(我们还略快),不慢。"native 290" 只是批里 ConvLayer 的 HMX 子-op `cycles`,不是 conv wall。** 把 cron#76 的 "我们慢 native 4.5-5.4×" 彻底证伪 —— 那是拿我们单 conv 比 native 批子-op。**native 批整图 HVX-bound**(HVX Σ busy 260930 / 4 线程 ≈ 65K wall ≈ graph span;HMX Σ busy 仅 11176 = 8.6%);native 每-conv 真 wall ≈ graph-span/32 ≈ 4087,不是 290。**我们 solve 2266/conv,比 native mm_64 整管线 4087/conv 还快(workload 不同,但量级证我们不落后)。**
+- **PMU 周期账(`-DGP_PKTPROBE` 扩 PVIEW counters,PRM Table 9-1 raw 8-bit 码:COPROC_BUSY=0xed/THREAD_IDLE=0xe5/CYCLES_1T=0x3b/CU_BUSY=0xeb/IU_NO_PKT=0xe8):** 我们 convhhh 1576 cyc/call 里 **THREAD_IDLE(0xe5,Wait 态)≈1564**(几乎全程),**COPROC_BUSY=0、CU_BUSY=31、IU_NO_PKT=0**。⇒ 线程发一个 mxmem 就进 **WAIT 等 HMX**(不是 spin),每 packet 等 ~14 cyc;这是 convhhh 核结构把 HMX latency 逐 packet 暴露。
+- **SMT 不能藏(决定性):** 起 0/1/2/4 个 HVX-spinner 线程并发,conv retire = 1576/1576/1577/1664(4 spinner 反而**更慢**=争用)。⇒ **这 1564 WAIT 是本线程等 HMX 的真延迟,别的线程并发只占 wall 不缩本 conv**(推翻 "native 靠 SMT co-exec 把 fill latency 藏起来" 的猜测)。
+- **❌❌ 软件流水 fill‖drain 无效(直接回答用户问题,从零 micro-kernel 设备实测):** 写两个干净 from-scratch micro-kernel(documented mxmem,scratch 进 g_Avt 常驻):**(a) dilate(= w16a16 convhhh 的 MAC 形式 `weight.b=mxmem():dilate`+`cvt.uh:2x2`)忠实 64³(4 out-tile×4 K-MAC+4 drain)= SERIAL 363 / PIPE 363 cyc/conv**(PIPE = 把 out-tile[i+1] 的 clear+首 MAC 紧贴 out-tile[i] 的 drain 发);**(b) fp16 deep(`:deep` 一 packet 流多 tile)= SERIAL≈PIPE≈BIGDEEP**(NT_K=2:36/36/36;NT_K=4:58/57/57)。⇒ **显式 fill‖drain 双缓冲流水 ZERO 增益**(两种核都 SERIAL==PIPE);单 acc(HMX 只 1 个 int32 累加器,无 bank,reference_hmx_arch 实证)使 conv[i+1] MAC 必等 conv[i] drain+clear,fill 重叠 drain 省不出。
+- **✅✅ 但真杠杆找到了 = convhhh 核本身臃肿(~4.3× off 干净核),不是流水也不是 HW:** 干净 dilate micro 做**同样 16 tile-MAC**只要 **363 cyc / 81 packets / 4.5 cyc-pkt**;convhhh 1576 cyc / 113 packets / 14 cyc-pkt。**同样 MAC,convhhh 多 ~40% packets 且 cyc/pkt 3× 高**(bias staircase 逐 drain `bias=mxmem2` 依赖 + M-loop 控制流在 MAC packet 间制造 stall/WAIT)。⇒ **一个精简的流式 w16a16 核(≤~400 cyc/64³)能把 consumer 从 1576→~363/conv(4.3×),逼近 native 批 263**——靠**减 packet + 减 packet 间 stall**,不是靠跨-conv 双缓冲。
+- **⇒ 结论修正:consumer **能**大幅降(1576→~363,4.3×),途径 = 写精简流式核(lever-A 减 packet/stall),**不是** cron#77 说的 "1.01M 地板/不可达"。但 ⚠️ **总账杠杆有限**:pure-HMX producer-bound(slowest-prod-life 1.53M > consumer 1.30M),consumer 即便 1.30M→~0.30M,wall = max(producer 1.53M, consumer) + 残余 spin ≈ **1.74M→~1.55M(~11%)**,然后**完全 producer-bound**。⇒ **先攻 producer feed(wt-pack vgather)仍是 #1**;精简 consumer 核是第二档(解锁后 producer 成唯一瓶颈)。**
+
+**④f ✅✅ (cron#77,PMU+FANOUT 设备实测;部分被 cron#78 修正——见上):consumer 不是当前瓶颈(对),native 290 "不可达" 的措辞 cron#78 修正为 "290 是 HMX 子-op 非 conv-wall;consumer 经精简核能到 ~363",真瓶颈 = producer feed(对)。**
+
+- **packet 不是问题(PMU 实测):** `-DGP_PKTPROBE` 量 COMMITTED_PKT_ANY:我们 n_tiles=8 = **111 packets/call**(< native 130)。sweep nt8/16/32/64 = 111/177/311/572 = ~8.3 packets/walk。**cron#76 的 "587 packets = 4.5× more" 错 —— 587 = chain_qdq 的 n_tiles=64(8× 过切),不是 n_tiles=8。** 真根因 = cyc/packet:我们 1577/111=**14 cyc/pkt**,native 264/130=**2.0 cyc/pkt**(~7× stall)。
+- **(↓cron#78 精修:290=批 warm 子-op 非 conv-wall,见 ④f-cron#78)~~native 290 经 FANOUT 实测 UNREACHABLE(决定性)~~:** `-DGP_PKTPROBE` 的 FANOUT 探针(M-fanout 批 B 个独立 64-row block,SHARED weight,ONE invocation):per-64³ = M64:1574 / M128:1454 / M256:1387 / M512:1354。**收敛到 ~1320(NTSWEEP walk floor)NOT 290。** ⇒ 批处理只摊 per-call prologue(257→~30/conv),**不能让 convhhh kernel 的 walk 跨 conv 流水**。native 290 = QNN supertile 把连续 ConvLayer op 的 fill/drain 重叠(mm_64 timeline:conv0 cold=2725,conv1-7=279-337 each,SEPARATE op,retire 290 < dominant 370 ⇒ fill[i+1]||drain[i]),我们每个 `our_v73deep_kernel_i16` call = 完整 fill→MAC→drain→mxclracc→return,call 之间不重叠(distinct-buffer 8 rotating 也 1720 没帮)。**⚠️ cron#78 精修:此 "1.01M 地板" 仅指 unchanged convhhh kernel;精简流式核可把 consumer 1576→~363/conv(≈0.28M,见 ④f-cron#78)。当前 consumer 1.30M。**
+- **⇒ 真杠杆 = producer feed(wt-pack vgather,binding constraint slowest-prod-life 1.53M > consumer 1.30M):**
+  - **✅ cron#77 DONE:diag 权重复用(`GP_WTREUSE`=默认1)。** A²=A@A 与 A³=AA@A 都用 weight=A,`mm64_keepwt` 跳过第 2 次 weight pack(同 weight bytes,bit-exact)。wt-pack 3.03M→2.52M Σ(省 4 pack/head × 32 = 128 pack),wall 1.783M→1.738M(2.5%,3 轮配对一致)。
+  - **下一杠杆(未做,producer-bound):** ① merge 权重复用(T_kk diag block 作 weight 在列内复用 3+2+1=6 次,现每次重 pack;T_kj off-diag 也复用 —— 需 merge 循环按 weight 重组 + exp 重对齐,~3 pack/head 量级);② wt_vec 64-vgather(~2.0M Σ)是 cv→kmajor reorder,结构 = 2-2 interleave 模板(每 output vec = interleave(cv[base..31], cv[base+64..95]),scattered base)—— 理论可 vshuff 替 vgather 但 half-vector 跨 64 输入 scattered,实现高风险(PACKCHK 守);③ consumer 批(M-fanout)把 1577→1354/conv(FANOUT 实测)= consumer 1.30M→~1.04M + 减 spin —— 但 solve matmul 多数 weight 不同 + A²→A³ 数据依赖不能批,仅 prologue 摊销有限。
+- **❌ 不要再做:** 复现 native walk-流水到 230K(FANOUT 证明此 kernel 做不到);把 587 packet 当真因(是 n_tiles=64 过切);把 cycles_used/N 当吞吐(OVERSTATE)。
+- **远端:减 matmul/walk 总数(换分解 / 合并冗余 matmul;precision 锁 w16a16,Newton 锁 0)。**
+
+**④f-step1 ✅✅ 根因钉死(cron#77,设备 PMU 实测,推翻 cron#76 的 "587 packets / 4.5× packet" 前提):**
+- **packet 数 NOT 多,反而少。** baremetal PMU(`COMMITTED_PKT_ANY`=0x03,`-DGP_PKTPROBE`)实测我们 op **n_tiles=8 = 111 packets/call**(< native 130!),sweep nt8/16/32/64 = 111/177/311/572 packets ⇒ ~8.3 packets/walk。**cron#76 的 587 = chain_qdq 的 n_tiles=64(572 packets,8× 过切),不是 n_tiles=8。** 我们实际 n_tiles=8(solve consumer descriptor 确认 = native M=64 {out_y=4,n_tiles=8,m_total=8,act_y=4})= 111 packets。
+- **真根因 = cyc/packet(STALL),不是 packet 数。** 我们 1577 cyc / 111 packets = **~14 cyc/packet**;native 264 cyc / 130 packets = **~2.0 cyc/packet**。⇒ **~7× stall per packet。** 同 byte-identical kernel @0x2fa740 + 同 n_tiles=8 descriptor,packet 更少,但每 packet stall 7×。
+- **机理 = 连续 conv 的 fill/drain 重叠(native 有,我们没有)。** native mm_64 timeline(`chrometrace_qnn_htp_analysis_summary.json` 按 start_cycle 排序):8 个 `q::ConvLayer_s1.opt` 全 SEPARATE op,tid256(HMX),back-to-back;**conv0=2725 cyc(cold,首个吃 fill latency),conv1..7=279-337 cyc each(warm,≈dominant_path 370,< occupancy 1388)。** retire 290 < dominant 370 ⇒ **conv[i+1] 的 fill 重叠 conv[i] 的 drain/tail**(单 HMX 仍串行 MAC,但 fill||drain 跨 conv 重叠)。HVX(bias_scale_shuff/Reshape)在 tid512-515 并行跑下个 cluster 的 prep。
+- **我们为何不重叠:** 每个 `our_v73deep_kernel_i16` call = 完整 fill→MAC→drain→`mxclracc`→`jumpr r31`(函数边界 + accumulator flush),back-to-back loop 在 call 之间无重叠 ⇒ 每 conv 吃满 ~1320(8 walk × 165,NTSWEEP intercept 257=prologue/epilogue)。⚠️ 但 **mxclracc/prologue 不是主因**:M=256 carrier(4 conv ONE invocation,1 prologue/1 mxclracc)= 1387/conv 仅比单 1577 好 1.14×,远不到 290。distinct-buffer(8 rotating)= 1720 也没帮(call-to-call 不重叠)。
+- **⇒ #1 杠杆精确化:复现 native 的 cross-conv fill/drain 重叠**(把多个独立 conv 喂进一个连续 HMX 指令流,让 conv[i+1] fill 重叠 conv[i] drain),目标 1320/walk-bound → ~290。**待验:这是 kernel 内 multi-conv 循环结构(native ConvLayer 的 supertile 怎么连发)还是 driver 连发方式。决定性实验 = 我们 op 跑 mm_64 的 [1,32,64,64] 在 QNN optrace 下看是否也 retire ~290(若是 = kernel OK,杠杆在 driver 连发;若仍 1577 = kernel/descriptor 差异)。**
+- 复现 packet:`EXTRA_DEFS="-DGDNBM_GDN_PURE_SOLVE -DGP_PKTPROBE"` build → run → host 打印 `PKTPROBE packets/call: nt8=111 ...`(PMU cnt0 COMMITTED_PKT_ANY)。
+
+**(原 ④f-step1 计划,保留作 device-RE 路径参考):**
+- **已确立(现有 optrace,免跑):我们 custom op `HmxU16I16ToU16MatMul` 单 [1,1,64,64] = `cycles_used` 12180 ≈ native 11176 = 单-op parity。但单-op cycles_used 是 setup/weight-load 主导,NOT 隔离 walk-compute ⇒ 不能由它下"kernel 不慢"结论。** 所有现存 custom-op optrace(chain_qdq_64/96/128/256)都是单实例(n_HMX=1),拿不到 batch retire。256³ 单大块 our 75549≈native 74670(大块 latency≈occupancy,parity)。
+- **决定性实验(待跑,recipe 已钉):我们 op 编成独立 32-conv batch 跑 optrace,读 `start_cycle` retire 间隔 vs native 290/conv。** ✅ **现成输入:native `mm_64/mm.onnx` = 单 `MatMul` 节点 A/B=[1,32,64,64](就是 32-batch)** ⇒ 用我们 converter op 包重 convert 这个 onnx 即得"我们 op × 32 独立实例"同构图。✅ **op 包已 build**(`example/qnn_hmx_matmul_w16a16/build/{x86_64-linux-clang,hexagon-v75,aarch64}/*.so`)—— ⚠️ 但用的是默认 `profile: skip`;64³ optrace 必须 `W16A16_KERNEL_PROFILE=native_record_256` 重 build(否则 descriptor 硬写 256→64³ 越界崩,cron#71)。
+  - **⚠️ blocker(为何非一条命令):** `run_w16a16_chain.sh` 自己 gen 单实例 onnx(1,1,m,k),且 64³-optrace 必需的 `chain_qdq+native_record_256+oracle` 路径**只支持 chain=1**(gen `--case-dir`/oracle 限制,gen_quant_chain.py:1003)。⇒ 需**绕开 gen,手动把 mm_64.onnx 喂 qairt-converter(带 `--converter_op_package_lib ConverterOpPackage.so` + quant overrides:act u16 zp32768 / wt i16 / out u16)→ quantizer → ctxgen(`--op_packages ...:HTP`)→ device net-run `--profiling_option optrace` → decode**。quant overrides 是易错点,要迭代。
+  - **替代/兼做 fix 的更直接测法:** 在 baremetal consumer 里把 mxmem **双缓冲**(conv N+1 的 fill 与 conv N 的 MAC/drain 重叠,而非现在 `w16a16_mm_run` 同步逐 conv)→ 直接测 retire 能否 <1577。这同时是 H2 的验证 + 杠杆本身(若 <1577 则 kernel 能流水,我们同步驱动是因)。
+- **判据(H1 vs H2):** retire ~290 ⇒ **H2**:kernel 能流水,我们 baremetal solve 的 HVX-喂/HMX-驱动(r17 软件 M-loop、同步握手)没让它流水 ⇒ 杠杆在 solve 的 consumer 驱动(改成 QNN-style descriptor 连发);retire ~1577 ⇒ **H1**:kernel/descriptor 本身不流水,native 批走的是别的 supertile kernel ⇒ 杠杆在 RE native supertile 的 mxmem-issue。doc 关键定论#3 "kernel 逐字节同源 native convhhh + 无 w16a16 fan-out" 偏向 H2,但 native 批可能用了不同 kernel,**未证,这步定**。
+
+**方法(不变,铁律):先 instrument 到 wall 无白块(FARF PROD-Σ 全量 + 重渲 timeline,[[feedback_perf_gap_must_check_trace]])→ 多假设并行、数据挑杠杆、≤2-3 零增益就下结论 → 每改 `GDNBM_REPS=8` reps2-8 median(VTCM-only)+ oc 硬门 4e-2(P≥2)。吞吐口径:看 start_cycle retire 间隔 / graph-wall÷N,绝不用 cycles_used/N(会 overstate)。**
+
+> **推导起点的已知数据点(自己判断哪层、哪个是本质杠杆,别随手挑一个就做):** NTSWEEP per-walk=165 / 8walk=1320 / fixed=257 / 对 nt 线性(walk 不流水)· consumer 1.30M=768×~1700(1320+257+握手)· **native mm_64 batch:start_cycle retire 间隔 ~290/conv(=真吞吐,284K REACHABLE);cycles_used/N=1690 是 OVERSTATE 别用(skill trap#6)**· cron#42 M=256 载体 1387/matmul(= 257 摊到 1/4 + 32×165,"批只摊 fixed 不摊 walk;但 native 把 walk 也流水了")· DISTINCT-TILE 1577=1577(tile 布局非 walk-流水之因)· wt-pack 同 weight 多次 pack(diag A 2×、merge T_kj 跨 i,= 减 matmul 的一个抓手)· htp-cycle-metric trap#6(吞吐看 start_cycle retire 间隔,别用 cycles_used/N)。
 
 **禁**:❌ 降精度 / 低位 dtype(w8a16/u8i8,**需明确要求才加**)· ❌ 改数值算法(Newton 锁 0)· ❌ thread HMX(HMX=1,SSR)· ❌ 旧 compact 单-64³ 描述符猜测(死;真布局 = `crouton_pos`,已 dump 实证)· ❌ w16a16 fan-out 核(不存在)。
 
 ## 历史（压缩;细节见 git log + LEDGER 各 cron commit）
 
 干净重写 `gdn_pure_solve.cpp`(单路径,替代旧 6 套迷宫)逐步优化:
-**v1 1.354B → O1 4HVX+1HMX 线程 433M(3.13×)→ O2 cv 域+64³ 179.9M → O4a–d 全 feed 转 HVX**(copy/wt-pack/acc/renorm/scatter)**18.68M(72.5× vs v1,超旧参考 18.7M)→ Newton 2→0**(Taylor3 甜点,设备上 Newton 反效)**12.2M → cron#42 n_tiles 64→32**(切冗余 MAC walk,bit-exact,1.64×)**≈6.5M → cron#68 `GP_CROUTON8` n_tiles=8**(`crouton_pos` compact,consumer 4.9M→1.5M,1.39× wall)**≈4.79M → cron#72 `GP_GPIPE` gather 全流水 + memset 砍上三角**(scatter/wtpack 的 vgather 从串行读回改 64-distinct-slot 批读回,1.23× wall)**≈4.04M → cron#73 `GP_CVIO` cv-block I/O 契约 + 零拷贝 alias**(scatter 彻底消除,1.71× wall)**≈2.36M → cron#74 全 VTCM 常驻**(中间态 0 次 DDR,铁律;wall ~neutral 但 producer-feed lmax 2.25M→1.72M,瓶颈转 consumer)**≈2.32M**。全程 oc 不变(4.238e-3),PACKCHK=0。**本 session(cron#72-74)合计 4.97M→2.32M = 2.14×,全 bit-exact。**
+**v1 1.354B → O1 4HVX+1HMX 线程 433M(3.13×)→ O2 cv 域+64³ 179.9M → O4a–d 全 feed 转 HVX**(copy/wt-pack/acc/renorm/scatter)**18.68M(72.5× vs v1,超旧参考 18.7M)→ Newton 2→0**(Taylor3 甜点,设备上 Newton 反效)**12.2M → cron#42 n_tiles 64→32**(切冗余 MAC walk,bit-exact,1.64×)**≈6.5M → cron#68 `GP_CROUTON8` n_tiles=8**(`crouton_pos` compact,consumer 4.9M→1.5M,1.39× wall)**≈4.79M → cron#72 `GP_GPIPE` gather 全流水 + memset 砍上三角**(scatter/wtpack 的 vgather 从串行读回改 64-distinct-slot 批读回,1.23× wall)**≈4.04M → cron#73 `GP_CVIO` cv-block I/O 契约 + 零拷贝 alias**(scatter 彻底消除,1.71× wall)**≈2.36M → cron#74 全 VTCM 常驻**(中间态 0 次 DDR,铁律;wall ~neutral 但 producer-feed lmax 2.25M→1.72M,瓶颈转 consumer)**≈2.32M(with-DDR)** → cron#75 bias 向量化(`GP_BIASVEC`,t_bia 1.77M→0.56M)+ 全 head VTCM 常驻 alias(`GP_RESIDENT`,DDR↔VTCM 移出计时窗=artifact)**≈1.78M(VTCM-only metric,方差 ±3%,lmax 1.59M≈consumer 1.30M 平衡)**。全程 oc 不变(4.238e-3),PACKCHK=0。**metric 自 cron#75 = VTCM-only(用户裁定 DDR↔VTCM 是 harness artifact)。** → **cron#76(RE,无代码改):用 native `mm_64` start_cycle retire 间隔实测 ~290/conv,推翻 cron#70/#75 的 "parity / 284K 幻影"。但 cron#76 自己又错判 "587 packet=4.5× / 复现 walk-流水到 230K"。** → **cron#77(PMU+FANOUT 设备实测 + WTREUSE 代码改):(a) 推翻 cron#76 packet 论 —— PMU 实测 n_tiles=8 = 111 packets < native 130(587 是 chain_qdq n_tiles=64 过切),真根因 = cyc/packet stall(14 vs 2);(b) FANOUT 实测 native 290 UNREACHABLE —— M-fanout 批 1/2/4/8 块 per-64³ 收敛 1320 walk-floor NOT 290(批只摊 prologue,convhhh walk 跨 conv 不流水);(c) 真瓶颈 = producer feed(slowest-prod-life 1.53M > consumer 1.30M),wt-pack #1;(d) DONE diag 权重复用 `GP_WTREUSE` = wall 1.783M→1.738M(2.5%,bit-exact,3 轮配对)。** → **cron#78(RE,无生产代码改;探针全 `#ifdef GP_PKTPROBE`):决定性钉死 consumer 问题。(a) native 同核 single(`mm_1x1x64x64` 1970)vs batch(`mm_64` 263)= 我们 1576 ≈ native single,不慢;"290" 是批里 HMX 子-op 非 conv-wall(native 整图 HVX-bound)。(b) PMU 周期账:1576 里 THREAD_IDLE≈1564(线程 WAIT 等 HMX),COPROC_BUSY=0;SMT spinner 0-4 不缩 conv(WAIT 是本线程真延迟)。(c) from-scratch dilate+deep micro:双缓冲 fill‖drain 软件流水 ZERO 增益(SERIAL==PIPE;HMX 单 acc 无 bank)。(d) 但找到真杠杆:干净流式 dilate 核做同 16 tile-MAC = 363cyc/81pkt/4.5cyc-pkt,convhhh 1576/113pkt/14cyc-pkt(核臃肿 4.3×);精简核可把 consumer 1576→~363。(e) 总账:producer-bound,consumer 提速 wall 仅 ~11%。**
 
 **关键定论(别再翻烧饼):**
-1. 瓶颈是 **producer HVX feed(字节流量)**,非 HMX 算力(HMX ~7% busy,真 matmul latency ~256/call)。
+1. **瓶颈演化:cron#73 前 = producer HVX feed;cron#75 = 平衡;cron#76 误判 consumer 慢 native 4.5×;cron#77 PMU+FANOUT 定 producer-bound;cron#78 终钉死(见 ④f-cron#78):** (a) 我们 consumer convhhh 1576 ≈ **native SINGLE conv 1970(不慢)**;"native 290" 是批里 HMX 子-op `cycles` 非 conv-wall(native 整图 HVX-bound,每-conv 真 wall ~4087)。(b) **双缓冲 fill‖drain 流水 ZERO 增益**(from-scratch dilate+deep micro 实测 SERIAL==PIPE;HMX 单 acc 无 bank)。(c) **但 consumer 能降 4.3×**:convhhh 核臃肿(同 16 tile-MAC,convhhh 1576cyc/113pkt/14cyc-pkt vs 干净 dilate micro 363cyc/81pkt/4.5cyc-pkt),精简流式核 →~363/conv。(d) ⚠️ **总账杠杆有限**:producer-bound(1.53M>consumer 1.30M),consumer 即便 →0.3M,wall 1.74M→~1.55M(~11%)后纯 producer-bound。**⇒ #1 仍是 producer feed(wt-pack vgather);精简 consumer 核是第二档。** (旧"复现 walk-流水到 230K"/"consumer 地板 1.01M" 均撤。)
 2. **Newton=0 是真最优**:每 Newton 步加的 w16a16 quant 噪声 > 截断收益,真 scale(‖A‖~0.6/max1.1)也成立(N0 1.1e-2 < N1 3.2e-2 < N2 3.35e-2)。Taylor 3→2 在真 scale 会爆(A³ 发散)。
-3. **w16a16 无 descriptor-driven fan-out**(只 byte-weight 的 deep 核有;`convhhh`@0x2fdcc0 = 我们核逐字节同源,r17 软件 M-loop)。native 单 64³ wall≈我们;native 批的优势 = n_tiles 卡最小 + 批摊销,**我们 n_tiles=32 已达同 per-matmul 地板**(cron#67 实测,详见末节对比表)。
+3. **w16a16 无 descriptor-driven deep 核**(objdump 实证:只 convbbb/convbnb/convhbh 有 `deep` 变体,convhhh 无;`convhhh1x1_stride1`@0x2fdcc0 = 我们核逐字节同源,MAC 用 `:dilate`)。**⚠️⚠️ cron#78 终修正(推翻 cron#77 的 "native 290 UNREACHABLE / consumer 地板 1.01M"):** native 用**同一** convhhh 核,**单 conv `mm_1x1x64x64` = 1970 cyc / 15cyc-pkt ≈ 我们 1576(不慢)**;批 `mm_64` warm = 263/2.1cyc-pkt(7.5× = 批里 fill latency 重叠到相邻 op,optrace 占用账变小;native 整图 HVX-bound,HMX Σbusy 仅 8.6%,每-conv 真 wall~4087)。**"290 UNREACHABLE" 撤** —— 290 是 HMX 子-op `cycles` 非 conv-wall;cron#77 的 FANOUT(M-fanout 共享 weight 一次 invocation)测的不是跨-conv 流水。**双缓冲 fill‖drain 软件流水实测 ZERO 增益**(from-scratch dilate+deep micro,SERIAL==PIPE;HMX 单 acc 无 bank,reference_hmx_arch)。consumer 真地板 ≈ **干净流式 dilate 核 363/conv(81pkt/4.5cyc-pkt)**;convhhh 1576 = 核臃肿(113pkt/14cyc-pkt,bias staircase+M-loop 在 MAC packet 间 stall=THREAD_IDLE/WAIT),精简核可 4.3×。但总账 producer-bound,consumer 提速 wall 仅 ~11%(然后纯 producer-bound)。
 4. **matmul bit-exact to native + 输入构造闭式已掌握**(cron#66–67,末节)。
 
 ## INVARIANTS（grounded,禁止凭记忆改）
@@ -115,10 +143,28 @@ CONS |                  mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm           mmm mmmmmmmmm
 > `phase3` 已改 P=2。修它(非 metric,低优先):减 colsum 栈(4 union 挪进 gp_ctx scratch)或修 threaded-P=1。
 > **I/O 默认 = cv-block 契约(`GP_CVIO=1`);host 脚本默认 cv-block,`--linear` 走旧 linear(需 `-DGP_CVIO=0` build)。**
 
+# ✅ 设备硬证据(cron#80):生产构建完整 host 日志 = `Agent/current/perf_baseline_cron77.txt`
+#   (build flags + 日期 + 设备 + reps2-8 median + oc 4.238e-3 + PACKCHK=0;reporter 可逐项复核)。
 ```bash
-# 当前 best(32-head wall + oc)。GP_CVIO=1(默认)= cv-block I/O 契约;脚本默认匹配。
-uv run python scripts/run_w16a16_head_phase4.py --deploy --threads 4 --heads 32 --scale 0.05
-# wall 稳态自测(reps2-8 median):GDNBM_REPS=8 直跑设备二进制(per-rep 打印 wall/scatter/wtpack/cons)
+# 当前 best(32-head wall + oc)。GP_CVIO=1 + GP_WTREUSE=1(默认)。脚本默认匹配。
+# cron#80: --reps N 透传 GDNBM_REPS,N>1 自动解析 per-rep wall 并打印 "WALL reps2-N MEDIAN=..."(稳态口径,never min)。
+uv run python scripts/run_w16a16_head_phase4.py --deploy --threads 4 --heads 32 --scale 0.05 --reps 8
+# A/B 配对(同热窗):build GP_WTREUSE=0(基线)与 =1,交替跑 --reps 8 取 reps2-8 median(见 cron#77,差 -44K ~2.5%)
+# 诊断探针(cron#77-78,默认 OFF):GP_PKTPROBE = PMU 周期账 + packet + SMT + 从零 micro-kernel。该 build SKIP solve。
+#   cron#80 gap#2: PKTPROBE build 现写显式 magic stats[31]=0x504B5450("PKTP",在块首,faulta 前),host 据此明确分辨
+#     生产 vs PKTPROBE(不再靠隐式 stats[30]!=0);生产 oc/PACKCHK 不变(bit-exact 已验)。packet 写 nt8/16/32(stats[28..30]),
+#     nt64 退 FARF-only 腾出 stats[31] 给 magic。⚠️ PKTPROBE 的 DILATE/fp16/FANOUT 子块在当前 from-scratch micro-kernel
+#     下设备 fault(rc=0x8000040d)。⚠️ 此 fault 是 `GP_PKTPROBE` 诊断 build 专有(DILATE/fp16/FANOUT 子块由 cron#77-78
+#     引入、未提交、生产从不编译/执行),不是落库既有代码的缺陷;生产路径不含这些子块、不受影响(bit-exact 已验)。
+#     → 这些数读 on-device FARF;PMU/packet/SMT 不受影响照常打印。
+#   stats[5]=convhhh per-call(1577) · stats[8..11]=FANOUT M64/128/256/512(1591/1454/1387/1355 plateau=批不流水)
+#   stats[12..17]=PMU(RUN1≈1550/THREAD_IDLE≈1564/COPROC_BUSY=0/CU_BUSY=31/IU_NO_PKT=0 → 线程 WAIT 等 HMX,非 spin)
+#   stats[18/19]=DILATE micro SERIAL/PIPE(363/363,from-scratch 干净 dilate 64³;PIPE 软件流水 ZERO 增益)
+#   stats[20..23]=SMT spinner 0/1/2/4(1576/1576/1577/1664;并发不缩 conv = WAIT 是本线程真延迟)
+#   stats[24..26]=fp16 deep micro SERIAL/PIPE/BIGDEEP(NT_K=4:58/57/57)· stats[27]=dilate micro packets/conv(81<convhhh113)
+# 决定性对照(现成 optrace,免跑):native 同核 convhhh single `mm_1x1x64x64`=1970/15.1cyc-pkt vs 批 `mm_64`=263/2.1cyc-pkt;
+#   我们 1576≈native single。读法见 §"64³ conv 口径定论"。
+EXTRA_DEFS="-DGDNBM_GDN_PURE_SOLVE -DGP_PKTPROBE" bash example/gdn_native/baremetal/build.sh   # host stats[12..27] = cron#78 probes
 # QNN-对齐 perf 汇报:GP_TRACE → Perfetto chrometrace(HMX tid256/HVX tid512+,QNN 同 schema)
 EXTRA_DEFS="-DGDNBM_GDN_PURE_SOLVE -DGP_TRACE" bash example/gdn_native/baremetal/build.sh
 uv run python scripts/gdn_trace_to_chrometrace.py T.raw chrometrace.json   # decode_qnn_optrace.py 可直读
@@ -130,7 +176,7 @@ GDN_TL_COARSE=1 uv run python scripts/gdn_pipe_timeline.py T.raw 120        # AS
 
 ## 对齐 native 64³ matmul（cron#43–67 ✅ SOLVED + 闭式掌握）
 
-> **✅ 目标达成(cron#66–67, 2026-06-14):dense n_tiles=8 64³ w16a16 matmul = QNN native `ConvLayer_s1.opt` BIT-EXACT(max|d|=0)+ per-call 1577 cyc(native parity)。** 全程 native-direct(零 CPU)。**输入构造 = 闭式 `crouton_pos(r,c)`(纯 bit-置换),无表;跨 4 个差异 case(3 大值 pattern + strictly-lower)全 max|d|=0。** probe = `-DGP_ALIGN -DGP_ALIGN_NCASE=4`(gdn_pure_solve.cpp,自含)。
+> **✅ 目标达成(cron#66–67, 2026-06-14):dense n_tiles=8 64³ w16a16 matmul = QNN native `ConvLayer_s1.opt` BIT-EXACT(max|d|=0)+ per-call 1577 cyc(=我们单 call occupancy;**⚠️ cron#76:这 NOT native 吞吐——native 批 retire ~290/conv,我们 walk 没流水,见 §"64³ conv 口径定论"**)。** 全程 native-direct(零 CPU)。**输入构造 = 闭式 `crouton_pos(r,c)`(纯 bit-置换),无表;跨 4 个差异 case(3 大值 pattern + strictly-lower)全 max|d|=0。** probe = `-DGP_ALIGN -DGP_ALIGN_NCASE=4`(gdn_pure_solve.cpp,自含)。
 
 ### 🔑 输入构造闭式（掌握的核心方法）
 native M=64 的 act/out crouton tile 布局 = **一个纯 bit-置换 `crouton_pos(r,c)`**(act pack 与 out untile **共用**):
@@ -141,12 +187,15 @@ crouton_pos(r,c) bits (lo→hi) = [ r0, c0,c1,c2,c3,c4, r1, r3,r4,r5, c5, r2 ]
 (ri=(r>>i)&1, ci=(c>>i)&1。act: `act[crouton_pos(r,c)]=Aref[r,c]`;untile: `outlin[r*64+c]=raw_out[crouton_pos(r,c)]`。
 逆出自 ramp-dump,python 验逐位复现 dump 表。语义:bit0=r0=行对(row0/row1 相邻),bit1-5=col 低 5 位,bit10=c5=哪个 32 列半,其余=行高位散布。)
 
-### ⚠️ 64³ conv 口径定论（cron#70,关键,别再翻烧饼）
-**我们 n_tiles=8 64³ kernel 的 HMX occupancy 已 = native ConvLayer,持平(0.95×)。** 一度以为"3.6× 慢"是口径错配:
-- native `ConvLayer_s1` 在 mm_cmp `[1,32,64,64]` 是**唯一**在 HMX(tid256)的 op(`htp_op_instances[].hmx=1` 仅它)⇒ HMX 单元 busy 44423/32 = **1388/conv 全是它的 occupancy**;它报的 **370 = dominant-path latency**(`num_dominant_path` 字段,非 occupancy)。
-- 我们(NTSWEEP 自测,baremetal C15:14,无 QNN):`wall=255+n_tiles×165`,pure-mxmem(8 walk)= **1320**,per-call = 1576。
-- **正确同口径对比 = occupancy:我们 1320 vs native 1388 = 0.95×(持平略优)。** `370` 谁都吃不到 occupancy 级(native 自己 HMX 也 busy 1388/conv);它是"8 walk 完美流水、零 fill/drain 开销"的理论关键路径。
-- 旁证:256³ custom op 我们 kernel 74670 ≈ native 75432(大块上 latency≈occupancy,持平)。**别再拿 optrace 单 op 的 dominant-path(②)比我们的 per-call wall(④)——必造假差(skill `htp-cycle-metric` trap#4/cross-impl 禁令)。** DISTINCT-TILE 测:act/out tile 复用 vs 32-distinct per-walk 一样(1576),tile 布局非因。
+### ⚠️ 64³ conv 口径定论（cron#78 终修正:推翻 cron#76 的 "native 290 = 我们慢 4.5×")
+**cron#78 终定(native 同核 single vs batch + PMU + from-scratch micro,设备实测):** "native 290/conv" 只是**批里 ConvLayer 的 HMX 子-op `cycles`**(`mm_64` warm 263),**不是 conv wall**。同一 `convhhh1x1_stride1` 核 **单 conv(`mm_1x1x64x64`)= 1970 cyc / 15.1 cyc-pkt ≈ 我们 1576(我们略快)**;批 = 263 / 2.1 cyc-pkt(7.5× = optrace 把 fill latency 在批里重叠到相邻 op,占用账上变小)。**native 批整图 HVX-bound(HVX Σbusy 260930/4≈65K≈graph span;HMX Σbusy 仅 11176=8.6%),每-conv 真 wall≈graph-span/32≈4087。** ⇒ **我们 consumer 不慢 native;cron#76 的 "慢 4.5-5.4×" 是拿我们单 conv 比 native 批子-op,错。** 真杠杆 = convhhh 核臃肿(同 16 tile-MAC:convhhh 1576cyc/113pkt/14cyc-pkt vs 干净 dilate micro 363cyc/81pkt/4.5cyc-pkt),精简流式核可 1576→~363(4.3×)。**双缓冲 fill‖drain 流水实测 ZERO 增益(SERIAL==PIPE,单 acc 无 bank);不是流水问题。**
+
+**[以下 cron#76 原文保留作"如何错"记录] ~~真相:native 64³ conv HMX 吞吐 ≈ 290/conv,我们 1320-1577,慢 4.5-5.4×~~** ← cron#78 证伪:290 是子-op 非 wall;我们 1576≈native single 1970。cron#70/#75 把 `cycles_used`/N 当吞吐错;cron#76 把 native 批子-op(290)当 conv wall 比我们单 conv(1576)也错。
+- **❌ 错在哪(教训,写进 skill):`cycles_used` 是资源占用聚合,**OVERSTATE 吞吐**(含 walk-overlap / reserved-idle),且与逐 op 时间线对不上(`mm_64`:cycles_used=54076 ≠ Σ per-op cycles=11176)。吞吐的地面真值 = 同一单元相邻 op 的 `start_cycle` retire 间隔,或 graph-wall÷N —— 绝不用 cycles_used/N。**
+- **✅ 正确读法(`mm_64`=[1,32,64,64]=32×64³ 的 QNN optrace):32 个 `q::ConvLayer_s1.opt` 的 start_cycle,cluster 内连发 24 个间隔 p50=296、per-op cycles≈280、back-to-back 无 overlap ⇒ native 喂饱 ~290/conv。** cluster 间大 gap(15K/8K/10K…)= native 自己 HVX 喂数停顿(feed-limited),非 HMX 成本。复现:读 `solve_op/standalone/mm_64/out/optrace/chrometrace_qnn_htp_analysis_summary.json` 的 htp_op_instances[hmx].start_cycle 排序求相邻差。
+- **我们(NTSWEEP,baremetal C15:14):`wall=257+n_tiles×165`,pure-mxmem(8 walk)=1320,per-call=1577,165-per-walk;对 n_tiles 线性 ⇒ walk 串行不流水。** native 8 walk 在 ~290 = ~36/walk = **流水**。差距全在 walk-流水(非 tile 布局:DISTINCT-TILE 1577=1577;非 n_tiles)。
+- **⇒ 284K(768×370)≈ native 实测吞吐(768×290≈230K)同量级,REACHABLE,是真目标。** #1 杠杆 = RE native 的 walk-流水机理并复现(④f)。
+- (256³ custom op 74670≈native 75432 那条:大块 conv 上 latency≈occupancy 仍成立,但**不能外推到 64³**——64³ 上 native 靠 walk-流水把吞吐压到 dominant-path 级,我们没复现。)
 
 ### 📊 M=64 dense vs M=256 载体 对比（口径④ per-call,resident,本机实测）
 | 实现 | M | 描述符 | act/out 布局 | per-call | per-64³ | bit-exact 怎么证 |

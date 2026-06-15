@@ -1,0 +1,83 @@
+================================================================================
+PURE-HMX w16a16 三角求逆 — 生产构建设备硬证据 (cron#77 best = WTREUSE)
+  注: 文件名带 cron77, 但内容含 cron#80 复验段 (--reps 透传 + reps2-N MEDIAN 稳态口径)。
+================================================================================
+DATE        : 2026-06-15
+DEVICE      : oneplus (termux sshd; v75 cDSP TURBO; clock self-check wall/us = 1593.1 ≈ 1594)
+BUILD FLAGS : EXTRA_DEFS="-DGDNBM_GDN_PURE_SOLVE" bash example/gdn_native/baremetal/build.sh
+              (默认门控全开: GP_CVIO=1 GP_WTREUSE=1 GP_RESIDENT=1 GP_BIASVEC=1 GP_CROUTON8=1
+               GP_GPIPE=1 GP_NEWTON=0; GP_PKTPROBE 关, GP_TRACE 关 = 纯生产数值路径)
+RUN         : H=32 P=4 scale=0.05 seed=1 GDNBM_REPS=8
+口径(metric): 32-head TOTAL graph wall, VTCM-only (bulk DDR<->VTCM 出计时窗=artifact);
+              steady = reps2-8 median, 绝不取 min (loop doc §口径)。
+
+REPRODUCE
+---------
+# 1) build 生产二进制 (GDNBM_GDN_PURE_SOLVE 不在默认 HEXFLAGS, 必须经 EXTRA_DEFS):
+EXTRA_DEFS="-DGDNBM_GDN_PURE_SOLVE" bash example/gdn_native/baremetal/build.sh
+# 2) 部署 + 跑 + 算 oc (reps2-8 median 由 --reps 触发, cron#80):
+uv run python scripts/run_w16a16_head_phase4.py --deploy --threads 4 --heads 32 --scale 0.05 --reps 8
+
+VERDICT (本次实测)
+------------------
+oc       : mean 4.238e-3  max 4.523e-3  min 4.076e-3   (硬门 < 4e-2 ✅; 与历史逐位一致)
+PACKCHK  : 0  (HVX wt-pack byte-exact self-check; 0 = bit-exact ✅)
+wall     : reps2-8 = [1735607,1729493,1740174,1696375,1737681,1742638,1652054]
+           reps2-8 MEDIAN = 1,735,607 cyc ≈ 1.736M  (≈1.09ms @1594/µs)
+           spread 5.2% (热漂 ±, 同热窗); 与 loop doc STATE 的 ~1.738M 一致 (-0.1%)。
+consumer : per-call occupancy = 1574 cyc (≈ native single ConvLayer 1970, 不慢);
+           HMX Σ cycles_used = 1.309M
+producer : slowest-prod-life (lmax) = 1.540M  (> consumer 1.309M ⇒ producer-bound, 印证 cron#77)
+           wt-pack Σ = 2.521M (wt-vec 2.054M + wt-bias 0.456M)
+
+完整 stdout (reps2-8 median 热窗, 同一 FastRPC session)
+=======================================================
+gdnbm_open rc=0x0
+gdnbm_solve rc=0x0  P=4  H=32  rep=1/8  wall=1680703 scatter=0 wtpack=2540396 cons=1312319
+gdnbm_solve rc=0x0  P=4  H=32  rep=2/8  wall=1735607 scatter=0 wtpack=2519843 cons=1307413
+gdnbm_solve rc=0x0  P=4  H=32  rep=3/8  wall=1729493 scatter=0 wtpack=2541187 cons=1307626
+gdnbm_solve rc=0x0  P=4  H=32  rep=4/8  wall=1740174 scatter=0 wtpack=2546478 cons=1309640
+gdnbm_solve rc=0x0  P=4  H=32  rep=5/8  wall=1696375 scatter=0 wtpack=2552831 cons=1308197
+gdnbm_solve rc=0x0  P=4  H=32  rep=6/8  wall=1737681 scatter=0 wtpack=2529470 cons=1321097
+gdnbm_solve rc=0x0  P=4  H=32  rep=7/8  wall=1742638 scatter=0 wtpack=2563606 cons=1310767
+gdnbm_solve rc=0x0  P=4  H=32  rep=8/8  wall=1652054 scatter=0 wtpack=2521078 cons=1309389
+  ===== QNN-ALIGNED breakdown (真算 / 装料 / 卸料·IO ; QNN op + field; same-category compare only) =====
+  graph-wall (THE verdict, 32-head TOTAL, field=timeline span) = 1652054 cyc  = 2151 cyc/conv (N_conv=768)
+     clock self-check wall/us = 1652054/1037 = 1593.1  (TURBO ~1594; >> => wrong counter, re-measure)
+  [真算-MAC] q::ConvLayer_s1.opt (HMX): Σcyc(cycles_used)=1309389  per-conv=1704  | per-call occupancy=1574 cyc
+            apples-to-apples: native SINGLE ConvLayer cycles=1970 (we=1574, NOT slower); batch sub-op cycles=349 is NOT a conv wall (cron#78).
+  [装料-wt] convert_weights_to_signed+Cast (HVX): Σcyc=2053681  per-conv=2674   (native batch per-conv 装料-wt=3425)
+  [装料-bias] bias_weight_update+bias_scale_shuff (HVX): Σcyc=456480  per-conv=594   (native batch per-conv 装料-bias=1703)
+  [装料-act] q::ForceFormat_Crouton (HVX): Σcyc=111724  per-conv=145   (native batch per-conv 装料-act=3024)
+  [装料-alg] renorm/acc (solve-only; NO native op — honestly flagged): Σcyc=1255093  per-conv=1634
+  [卸料-IO] q::*OutputSlice (HVX vxor here): Σcyc=139259  | bulk DDR<->VTCM (q::*Input/OutputSlice, EXCL from wall)=1025977
+  [waste]   SPIN idle-wait (a GAP, not an op): Σcyc=2007041   slowest-prod-life(lmax)=1540363  PACKCHK=0(0=ok)
+  THROUGHPUT 口径: graph-wall/N_conv = 2151 cyc/conv (NEVER cycles_used/N — that OVERSTATES, trap#6).
+     packets/cyc-per-pkt: build -DGP_PKTPROBE (consumer MAC packets=130 native @2.04 cyc/pkt; ours nt8 below).
+  raw stats[0..11]: 1652054 4 32 1309389 2007041 1574 1037 2521078 0 0 1255093 1540363
+  raw stats[12..19]: 0 0 0 833443 192534 2053681 456480 111724
+  NTSWEEP nt8=1575 nt16=2906 nt32=5547 nt64=10838 | per-walk=165 pure-conv(8walk)=1320 fixed-feed=255
+  DISTINCT-TILE nt8 32-distinct=1574 (vs 4-reused nt8=1575; native 370)
+wrote w16p4_T.raw (4194304 bytes)
+H=32 oc mean=4.238e-03 max=4.523e-03 min=4.076e-03
+
+cron#80 最终复核 (gap#2/#3/#4 落地后, 生产构建重验, 同设备)
+==========================================================
+build: EXTRA_DEFS="-DGDNBM_GDN_PURE_SOLVE" (gap 改动后重 build, PKTPROBE 关)
+run  : --deploy --threads 4 --heads 32 --scale 0.05 --reps 8
+per-rep wall: rep1=1716603 rep2=1718526 rep3=1722883 rep4=1725742 rep5=1725213
+              rep6=1717025 rep7=1729832 rep8=1654620
+WALL reps2-8 MEDIAN = 1,722,883 cyc  (spread 4.4%, never min) — 与上方首测 1,735,607 一致 (-0.7%, 同热窗热漂内)
+oc      = 4.238e-3 (mean) / 4.523e-3 (max) / 4.076e-3 (min)   硬门 < 4e-2 ✅ 逐位不变
+PACKCHK = 0 ✅
+basis 行 (gap#4): "per-conv N_conv=H*24=768 (throughput denom) | per-matmul nmm=H*40=1280 (NOT denom)" ✅
+--reps 行 (gap#3): "WALL reps2-8 MEDIAN=1722883 ... never min" ✅ 脚本自动打印
+⇒ 生产构建 gap 改动后仍 BIT-EXACT, wall 不变。
+
+注 (cron#79/#80 口径)
+---------------------
+- 末尾 QNN-ALIGNED breakdown 反映的是 LAST rep (rep8, wall=1652054), 因 stats[] 每 rep 覆写;
+  steady wall verdict 取 reps2-8 MEDIAN=1,735,607 (上行 per-rep 表), 不是 breakdown 行的 1652054。
+- bulk DDR<->VTCM (1.03M 此 rep) 是 standalone-harness artifact, 出计时窗, 不计入 VTCM-only wall。
+- per-conv 双基准 (cron#80 gap#4): N_conv = H×24 = 768 (per-conv basis, Newton=0: 8 diag + 16 merge);
+  实际 matmul 数 nmm = H×40 = 1280 (含中间 A²/A³ 等). graph-wall/N_conv = per-conv 吞吐口径。

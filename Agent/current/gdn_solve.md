@@ -170,7 +170,7 @@ w16a16 ≈ 2×w8a16 + drain（证实"w16a16 = 2×w8a16 + 排空"）。**全 int1
 （peak 1.9e13）→ **未预条件时对角必须 w16a16**。注意这是**非正规瞬态**（谱 ρ=0，不是真发散）：对角均衡
 `D⁻¹AD`（D=diag(sⁱ)）把 ‖Ã‖<1 即可令 `Ã^k` 有界 → 换 u8i8/w8a16 对角。这是 §6 杠杆 4 的数值前提，待 probe 验。
 
-**当前实测**：纯 HMX solve（`gdn_pure_solve.cpp`）= **~2.36M graph wall**（cron#73,2026-06-15;干净重写后 4.97M→2.36M=2.10× 本 session,全 bit-exact,oc 4.238e-3/真GDN 1.107e-2）。瓶颈 = **HVX-bound 在 4-unit 天花板**（wt-pack producer feed + 单-HMX-consumer 1.37M 渐平衡),非 HMX 算力。完整 loop 状态/分解/NEXT = `pure_hmx_solve_build.md`。(旧 "18.7M 欠流水" 已被 cron#42→68→72→73 一系列 feed 优化取代。)
+**当前实测**：纯 HMX solve（`gdn_pure_solve.cpp`）= **~1.738M graph wall（VTCM-only metric,cron#77,2026-06-15）**（cron#75 bias 向量化 + 全 head VTCM 常驻 alias + cron#77 diag 权重复用 `GP_WTREUSE`;DDR↔VTCM head-load/store 移出计时窗=harness artifact。bit-exact,oc 4.238e-3/真GDN 1.107e-2,3 轮配对 -44K ~2.5% vs 1.783M）。**瓶颈 = producer-bound:slowest-prod-life 1.53M > consumer 1.30M,wt-pack(2.52M Σ)#1。** ⚠️ **cron#77 PMU+FANOUT 终定(推翻 cron#76 的 "复现 walk-流水到 230K"):(1) packet 不是问题 —— n_tiles=8 实测 111 packets < native 130(587 是 chain_qdq n_tiles=64 过切);(2) 真根因 cyc/packet stall(14 vs 2);(3) **(↓cron#78 推翻)** ~~native 290 经 M-fanout 实测 UNREACHABLE —— 批 1/2/4/8 块 per-64³ 收敛 1320 walk-floor NOT 290(批只摊 prologue,convhhh kernel 单次 invocation 内 walk 不能跨 conv 流水)~~ → **cron#78 证伪:290 是批里 ConvLayer 的 HMX 子-op `cycles`(warm 263)非 conv-wall;我们单 conv 1576 ≈ native single 1970,不慢;FANOUT 测的不是跨-conv 流水。** ⚠️ **cron#78 终修正(权威细节见 `pure_hmx_solve_build.md` ④f-cron#78):(a) 我们单 conv convhhh 1576 ≈ native SINGLE conv `mm_1x1x64x64` 1970,NOT 慢;"native 290" 是批 `mm_64` 里 ConvLayer 的 HMX 子-op `cycles`,不是 conv-wall(native 批整图 HVX-bound,每-conv 真 wall ~4087)。(b) consumer 真杠杆 = 写精简流式核 1576→~363/conv(convhhh 比干净 dilate 臃肿 4.3×),NOT "流水"——双缓冲 fill‖drain 跨-conv 流水实测 ZERO 增益(HMX 单 acc 无 bank);cron#77 的 "290 UNREACHABLE / consumer 地板 1.01M" 措辞均撤。(c) 但 producer-bound(slowest-prod-life 1.53M > consumer 1.30M)⇒ consumer 提速对 wall 仅值 ~11%。** #1 杠杆 = producer feed(wt-pack vgather)。** 完整 loop 状态/分解/NEXT = `pure_hmx_solve_build.md`。(链:18.7M→cron#42/68/72/73 feed→cron#74 全 VTCM 2.32M→cron#75 VTCM-only 1.78M→cron#77 WTREUSE 1.738M。)
 
 ---
 
@@ -210,8 +210,10 @@ w16a16 ≈ 2×w8a16 + drain（证实"w16a16 = 2×w8a16 + 排空"）。**全 int1
 |---|---|---|---|---|
 | 单 [1,1,64,64]（QNN optrace 两边） | num_dominant_path | 3789 | 3543 | 1.07× |
 | 单 [1,1,64,64] | cycles_used | 11152 | 11176 | **0.998×** |
-| 批 n_tiles=8 摊销 | cycles_used | 1320(baremetal C15:14) | 1388 | 0.95× |
-结论：**HMX 计算两边持平，已到地板，榨不动**；solve wall 真瓶颈 = producer feed（HMX 仅 ~7-8% busy）。
+| 批 n_tiles=8 ~~摊销~~ | cycles_used | 1320(baremetal) | 1388 | ~~0.95×~~ |
+| **单 conv(同核同口径,cron#78)** | **per-call cyc** | **1576/conv(convhhh)** | **1970(`mm_1x1x64x64` single)** | **0.80× 我们略快,NOT 慢** |
+| ~~批吞吐 5.4× 慢~~(cron#76/77 错比,cron#78 撤) | ~~start_cycle retire~~ | ~~1577~~ | ~~290(mm_64 子-op)~~ | ~~5.4×~~ ← 290 是 HMX 子-op `cycles` 非 conv-wall |
+**⚠️ 结论终定(cron#78 PMU+native single-vs-batch+从零 micro-kernel;权威细节见 `pure_hmx_solve_build.md` ④f-cron#78,推翻 cron#76/#77 的 "我们慢 5.4× / 290 UNREACHABLE / consumer 地板 1.01M"):** 单孤立 op cycles_used 持平(11152≈11176)真。**(a) 我们 consumer convhhh 单 conv 1576 ≈ native 同核 SINGLE conv `mm_1x1x64x64` 1970(我们略快,NOT 慢);"native 290" = 批 `mm_64` 里 ConvLayer 的 HMX 子-op `cycles`(warm 263),不是 conv-wall** —— native 批整图 HVX-bound(HVX Σbusy≈graph span;HMX Σbusy 仅 8.6%),每-conv 真 wall≈graph-span/32≈4087;cron#76 拿我们单 conv 1576 比 native 批子-op 290 = 错比,撤。**(b) consumer 真杠杆 = 写精简流式核 1576→~363/conv(同 16 tile-MAC:convhhh 1576cyc/113pkt/14cyc-pkt vs 干净 dilate micro 363cyc/81pkt/4.5cyc-pkt,核臃肿 4.3×),NOT "流水"** —— 双缓冲 fill‖drain 跨-conv 软件流水实测 ZERO 增益(SERIAL==PIPE;HMX 单 acc 无 bank);cron#77 的 "290 UNREACHABLE/consumer 地板 1.01M" 与旧 "复现 walk-流水到 230K" 均撤。**(c) 但 producer-bound(slowest-prod-life 1.53M > consumer 1.30M)⇒ consumer 提速对 wall 仅值 ~11%,#1 杠杆 = producer feed(wt-pack vgather)。**
 
 **64³ custom op 进 optrace 的正确流程（cron#71；错过一次的教训）**：
 - ✅ `native_record_256` profile（FORMULA_DESC 按 shape 算 descriptor）+ `MODE=chain_qdq` + `W16A16_NATIVE_ORACLE_DIR`（native 64³ oracle 出 weight sidecar）+ 设备 **HTP-only** op package（CPU package 注册失败）。一键：`SHAPES="64,64,64" bash scripts/w16a16_shape_sweep.sh`（CI 覆盖）。

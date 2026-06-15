@@ -7,13 +7,13 @@ Usage: gdn_pipe_timeline.py T.raw [width]
 """
 import sys, struct, collections
 
-STAGE = {0: "HEAD", 1: "DIAG", 2: "MERGE", 3: "MM", 4: "QUANT", 5: "PREP", 6: "ACC", 7: "REQ", 8: "PACK", 9: "EFF", 10: "DEPACK", 11: "SPIN", 12: "BIAS", 13: "SIG", 14: "POST", 15: "TABS"}
-CH = {1: "D", 3: "m", 4: "q", 5: "p", 6: "a", 7: "r", 8: "K", 9: "e", 10: "x", 11: "s"}   # s=SPIN(producer wait); +DEPACK(sub-leaf of MM; agg only)
+STAGE = {0: "HEAD", 1: "DIAG", 2: "MERGE", 3: "MM", 4: "ACT", 5: "PREP", 6: "ACC", 7: "REQ", 8: "PACK", 9: "EFF", 10: "DEPACK", 11: "SPIN", 12: "LOAD", 13: "STORE", 14: "POST", 15: "TABS"}
+CH = {1: "D", 3: "m", 4: "q", 5: "p", 6: "a", 7: "r", 8: "K", 9: "e", 10: "x", 11: "s", 12: "L", 13: "S"}   # q=ACT-format p=WT-pack a=ACC/renorm m=matmul s=SPIN x=OUT-copy L=head-LOAD S=head-STORE
 import os
 # coarse view (GDN_TL_COARSE=1): PREP(5) is a leaf, skip the fine QUANT/PACK/EFF (4/8/9) — for the int16
 # driver which only emits coarse DIAG/PREP/MM/ACC/REQ (its getters don't push fine leaves).
 if os.environ.get("GDN_TL_COARSE"):
-    CONTAINER = {0, 2, 4, 8, 9}
+    CONTAINER = {0, 2}   # pure-HMX solve: emit ACT(4)/PREP(5)/ACC(6)/OUT(10)/SPIN(11)/LOAD(12)/STORE(13) as leaves -> full producer life, no white gaps
 else:
     CONTAINER = {0, 2, 5}   # fine view: HEAD/MERGE/PREP containers (QUANT/PACK leaves below PREP)
 
@@ -54,7 +54,7 @@ def main():
         span = (span_hi - span_lo) or 1
         bd = " ".join(f"{STAGE[s]}={busy[s]*100//span}%" for s in sorted(busy))
         print(f"{label:5s}|{''.join(row)}| busy={tot_busy*100//wall}%wall  [{bd}]")
-    print("\nlegend: D=diag  q=QUANT(fold+quant+eff)  K=PACK(crouton/kmajor)  m=matmul  a=acc  r=requant+widen")
+    print("\nlegend: L=head-LOAD  q=ACT-format  p=WT-pack  s=SPIN(wait HMX)  m=matmul(HMX)  x=OUT-copy  a=ACC/renorm  S=head-STORE")
     # aggregate
     agg = collections.Counter()
     for (t, stage, t0, t1) in evs:

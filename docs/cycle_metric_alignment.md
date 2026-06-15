@@ -168,3 +168,85 @@ PY
   compute-only figure.
 - Cross-check the clock once: graph PCYCLE span / `QNN accelerator (execute) time` µs ≈ 1.42e3 cyc/µs
   (v75 TURBO). If `cycles/µs` ≫ that, you are reading an aggregate/other counter.
+
+---
+
+# Canonical 口径 map: our pure-HMX solve ↔ QNN optrace (cron#79)
+
+**The bug this kills.** Our solve's instrumentation used an ad-hoc taxonomy
+(`actcopy/kmajor/scatter/renorm/spin/outcopy + lmax`; the host print even used the DELETED
+`①②③④` names) that did NOT map to QNN's op categories or fields — so numbers got cross-compared
+(the canonical example: native `mm_64`'s ConvLayer **batch warm sub-op `cycles`=263** vs our **per-call
+occupancy 1577** — a phantom 4.5× "gap" that is a cross-scenario error; the real apples-to-apples is
+native SINGLE ConvLayer `mm_1x1x64x64` = **1970 cyc / 15.15 cyc-pkt ≈ our 1577**). From cron#79 every
+solve perf number is reported in the **three QNN categories**, each tagged with its **QNN op name +
+QNN field**, so a comparison is automatically same-category + same-field.
+
+## The three categories (the only legal grouping)
+
+| category | meaning | unit | native ops (mm_64) | our solve segment |
+|---|---|---|---|---|
+| **真算 (MAC)** | the only irreducible work | **HMX** (tid256) | `q::ConvLayer_s1.opt` | consumer `w16a16_mm_run` (`g_cbusy`) |
+| **装料 (prep)** | feed: weight/act/bias format | **HVX** (tid512-515) | `convert_weights_to_signed`,`Cast`,`ForceFormat_Crouton`,`Reshape`,`bias_weight_update`,`bias_scale_shuff`,`Slice_contig.tcm` | `gp_pack_wt_bias` (vec+bias), `gp_cv_to_surf`, renorm/acc |
+| **卸料 + 输入 (IO)** | DMA in/out | **DMA** (tid256) | `q::*InputSlice`, `q::*OutputSlice` | `gp_surf_to_cv` (卸料), bulk DDR↔VTCM (输入/卸料, EXCL from wall) |
+| *(waste)* | idle, NOT a category | — | *(scheduling gap)* | `SPIN` (producer waits the 1 HMX) |
+
+## Segment ↔ QNN op ↔ field (exact)
+
+| our segment (stat) | QNN op | category | QNN field we report | field we CAN'T (and why) |
+|---|---|---|---|---|
+| `gp_cv_to_surf` (`t_pack`→stats[19] actcopy) | `q::ForceFormat_Crouton` | 装料-act | cycles (Σ, per-conv) | per-instance / cyc-pkt: bare-metal has no per-op DMA split |
+| `gp_pack_wt_bias` vec (`t_gather`→stats[17] wt_vec) | `convert_weights_to_signed`+`Cast` | 装料-wt | cycles (Σ, per-conv) | cyc-pkt (HVX feed not PMU-split per segment) |
+| `gp_pack_wt_bias` bias (`t_bias`→stats[18] wt_bia) | `bias_weight_update`+`bias_scale_shuff` | 装料-bias | cycles (Σ, per-conv) | — |
+| consumer `w16a16_mm_run` (`g_cbusy`→stats[3]) | `q::ConvLayer_s1.opt` | **真算-MAC** | **cycles_used** (Σ); per-call occupancy stats[5]; **packets/cyc-pkt** via `-DGP_PKTPROBE` | `num_dominant_path`: bare-metal C15:14 = occupancy, not dominant-path |
+| renorm/acc (`other`→stats[10]) | *(none — solve-specific)* | 装料-alg | cycles (Σ) | no native counterpart (honestly flagged) |
+| `gp_surf_to_cv` (`t_depack`→stats[28] outcopy) | `q::*OutputSlice` | 卸料-IO | cycles (Σ) | — |
+| bulk DDR↔VTCM (`bulk_ld`/`bulk_st`→stats[15/16]) | `q::*InputSlice`+`q::*OutputSlice` | 输入/卸料 | cycles (one-time, **EXCL from wall**) | — |
+| `SPIN` (`spin`→stats[4]) | *(gap, not an op)* | waste | cycles (Σ) | — |
+
+## The fields, and how to read each (skill `htp-cycle-metric`)
+
+- **cycles** — per-op-type `cycles` on the HVX/DMA side; for HMX = `cycles_used` (occupancy of ONE op,
+  incl. fill). Bare-metal C15:14 back-to-back = this. **Per-conv = Σ ÷ N_conv** (N_conv = H×24 @ Newton=0).
+- **num_dominant_path_cycles** — critical chain after ideal overlap (a lower bound). Native exposes it;
+  bare-metal C15:14 is occupancy, so we report occupancy and **never** compare our occupancy to native's
+  dominant-path.
+- **cyc/pkt** (`cycles_per_packet`) — stall indicator. Our MAC = **14 cyc/pkt** (111 pkt/call, `-DGP_PKTPROBE`)
+  vs native ConvLayer SINGLE **15.15** / batch **2.04**. Same packets, same kernel; the batch's 2.04 is fill
+  overlapping the adjacent op, not a cheaper MAC.
+- **THROUGHPUT** — `graph-wall ÷ N` or the `start_cycle` retire interval. **NEVER `cycles_used`/N** — it
+  OVERSTATES (trap #6: native HMX `cycles_used`/32 = 1690 ≠ retire ~290).
+- Every number = **value + QNN field + shape + scenario** (single conv vs batch; wall vs HMX-busy).
+
+## Apples-to-apples 真算-MAC (device-measured, cron#79, all in QNN fields)
+
+| scenario | QNN op | cycles | packets | cyc/pkt | what it is |
+|---|---|---|---|---|---|
+| **ours, single per-call** | `w16a16_mm_run` | **1577** (occupancy) | **111** | **14.2** | our consumer MAC, back-to-back resident |
+| native, single conv | `mm_1x1x64x64` ConvLayer | **1970** | 130 | **15.15** | **apples-to-apples → we are NOT slower** |
+| native, batch warm sub-op | `mm_64` ConvLayer | **263** (canonical) | 130 | 2.04 | HMX sub-op `cycles`, warm-steady (fill overlaps adjacent op) — **NOT a conv wall** |
+| native, batch true per-conv | graph-span ÷ 32 | ~4087 | — | — | batch is HVX-bound (HMX Σbusy = 8.6% of span) |
+
+> **口径 note (cron#78 canonical, avoid re-mixing):** native `mm_64` ConvLayer per-conv has TWO numbers —
+> **warm-steady = 263 cyc (canonical; self-consistent with cyc/pkt 2.04; THIS is what we compare our warm
+> per-conv to)** vs **mean-incl-cold = 349 (= Σ11176 ÷ 32, includes conv0 cold-start 2725; NOT a throughput
+> 口径)**. A third, distinct口径 is the `start_cycle` retire interval ~290 (throughput, see build doc) —
+> never fold 290 into the 263/349 comparison.
+
+⇒ **Our consumer is NOT behind native; the gap to native's batch warm 263 is a cross-scenario illusion.**
+The recoverable lever is fewer/leaner packets (a from-scratch dilate micro = 363 cyc / 81 pkt / 4.5 cyc-pkt
+vs convhhh 1577/111/14), NOT cross-conv pipelining (HMX has 1 acc; from-scratch SERIAL==PIPE, cron#78).
+
+## Reproduce
+
+```bash
+# native side (decode the two reference optraces into the canonical category table):
+uv run python scripts/gdn_solve_qnn_aligned_report.py --native-only
+# full side-by-side (parse a device-run stdout):
+uv run python scripts/run_w16a16_head_phase4.py --threads 4 --heads 32 --scale 0.05 > /tmp/run.txt 2>&1
+uv run python scripts/gdn_solve_qnn_aligned_report.py --our-log /tmp/run.txt
+# our consumer-MAC packets + cyc/pkt (diagnostic build; skips solve, production unaffected):
+EXTRA_DEFS="-DGDNBM_GDN_PURE_SOLVE -DGP_PKTPROBE" bash example/gdn_native/baremetal/build.sh
+```
+The aligned host print + per-category stats are gated by nothing extra — they reuse the always-on
+`gp_pcyc` probes, so the production build is bit-exact (oc 4.238e-3, PACKCHK=0, verified cron#79).

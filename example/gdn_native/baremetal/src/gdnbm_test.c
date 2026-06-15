@@ -48,34 +48,70 @@ int main(int argc, char **argv) {
                rc, stats[1], stats[2], r + 1, reps, stats[0], stats[9], stats[7], stats[3]);
         if (rc) break;
     }
-    /* ===== cycle report — SELF-LABELED 口径 (skill htp-cycle-metric). The ONLY cross-impl number is
-     * graph-wall÷N_mm (口径①). NEVER compare optrace per-op latency/busy (口径②③) to a wall (口径④).
-     * A latency-floor fact (~256/mm) is NOT a gate on a wall measurement: a per-call wall ≫300 is the
-     * CORRECT feed-inclusive cost, not a "口径 error". (Hardened cron#28 after the cross-口径 churn.) ===== */
-    if (rc == 0) {
+    /* ===== QNN-ALIGNED cycle report (cron#79, skill htp-cycle-metric). Every number is reported in
+     * the THREE QNN categories — 真算(MAC,HMX) / 装料(prep,HVX) / 卸料+输入(IO,DMA) — each tagged with
+     * its QNN op name + QNN field. This makes cross-impl comparison automatically same-category+same-field,
+     * killing the cross-口径 mis-compares (e.g. native ConvLayer batch warm sub-op 263 vs our per-call 1577).
+     * The DELETED vocabulary "①②③④ / op-latency / unit-busy / per-call wall" is GONE — say the QNN field.
+     * Side-by-side native: scripts/gdn_solve_qnn_aligned_report.py --our-log <this stdout>. ===== */
+    /* cron#80 gap#2: explicit PKTPROBE-build marker (stats[31] == "PKTP"). Production NEVER writes stats[31]
+     * (its tail stops at stats[29]) and a PKTPROBE build returns BEFORE the production stats are set, so the
+     * shared index segment (12..31) means PMU/packets in one build and IO/N_conv/NTSWEEP in the other. The
+     * magic disambiguates WITHOUT the old implicit "stats[30]!=0" overload. */
+    int is_pktprobe = (stats[31] == 0x504B5450);
+    if (rc == 0 && !is_pktprobe) {
         int H_ = stats[2] ? stats[2] : 1;
-        int nmm = H_ * 24;                       /* 24 mm/head @ Newton=0 (8 diag + 16 merge); label notes it */
+        int nconv = stats[29] ? stats[29] : H_ * 24;   /* N_conv = H*24 mm @ Newton=0 (8 diag + 16 merge) */
         double cpu = stats[6] ? (double)stats[0] / (double)stats[6] : 0.0;   /* PCYCLE/µs clock self-check */
-        printf("  ① graph-wall (口径①, THE verdict = 32-head TOTAL) = %d cyc\n", stats[0]);
+        printf("  ===== QNN-ALIGNED breakdown (真算 / 装料 / 卸料·IO ; QNN op + field; same-category compare only) =====\n");
+        printf("  graph-wall (THE verdict, 32-head TOTAL, field=timeline span) = %d cyc  = %d cyc/conv\n",
+               stats[0], nconv ? stats[0] / nconv : 0);
+        printf("     basis: per-conv N_conv=H*24=%d (throughput denom; 8 diag + 16 merge, Newton=0) "
+               "| per-matmul nmm=H*24=%d @Newton=0 (==N_conv; A^2/A^3 ARE the 2 diag mm, already counted, NOT extra)\n",
+               nconv, H_ * 24);
         printf("     clock self-check wall/us = %d/%d = %.1f  (TURBO ~1594; >> => wrong counter, re-measure)\n",
                stats[0], stats[6], cpu);
-        printf("     cross-impl compare ONLY via graph-wall/N_mm (口径①) = %d/%d = %d cyc/mm (N_mm=24/head @Newton0)\n",
-               stats[0], nmm, stats[0] / nmm);
-        printf("     native anchors (same 口径①): single 64^3 = 11034 wall ;  128-batch = 2020/mm  <- targets\n");
-        printf("  ④ per-call kernel wall (口径④, single 64^3 resident) = %d cyc  (= matmul + mxmem feed; >300 is CORRECT, not a bug)\n",
+        printf("  [真算-MAC] q::ConvLayer_s1.opt (HMX): Σcyc(cycles_used)=%d  per-conv=%d  | per-call occupancy=%d cyc\n",
+               stats[3], nconv ? stats[3] / nconv : 0, stats[5]);
+        printf("            apples-to-apples: native SINGLE ConvLayer cycles=1970 (we=%d, NOT slower); batch warm sub-op cycles=263 is NOT a conv wall (cron#78).\n",
                stats[5]);
-        printf("  ② matmul latency floor (口径②) = ~256 cyc/mm (native int16 dominant-path; what HMX does, NOT a wall target)\n");
-        printf("     !! NEVER compare optrace per-op (num_dominant_path_cycles / by_htp_type busy = 口径②③) to ④ or graph-wall.\n");
-        printf("  consumer HMX-busy Σ(口径④)=%d  feed Σ: wt-pack=%d scatter=%d renorm/acc=%d  slowest-prod-life=%d  PACKCHK=%d(0=ok)\n",
-               stats[3], stats[7], stats[9], stats[10], stats[11], stats[8]);
+        printf("  [装料-wt] convert_weights_to_signed+Cast (HVX): Σcyc=%d  per-conv=%d   (native batch per-conv 装料-wt=3425)\n",
+               stats[17], nconv ? stats[17] / nconv : 0);
+        printf("  [装料-bias] bias_weight_update+bias_scale_shuff (HVX): Σcyc=%d  per-conv=%d   (native batch per-conv 装料-bias=1703)\n",
+               stats[18], nconv ? stats[18] / nconv : 0);
+        printf("  [装料-act] q::ForceFormat_Crouton (HVX): Σcyc=%d  per-conv=%d   (native batch per-conv 装料-act=3024)\n",
+               stats[19], nconv ? stats[19] / nconv : 0);
+        printf("  [装料-alg] renorm/acc (solve-only; NO native op — honestly flagged): Σcyc=%d  per-conv=%d\n",
+               stats[10], nconv ? stats[10] / nconv : 0);
+        printf("  [卸料-IO] q::*OutputSlice (HVX vxor here): Σcyc=%d  | bulk DDR<->VTCM (q::*Input/OutputSlice, EXCL from wall)=%d\n",
+               stats[28], stats[15] + stats[16]);
+        printf("  [waste]   SPIN idle-wait (a GAP, not an op): Σcyc=%d   slowest-prod-life(lmax)=%d  PACKCHK=%d(0=ok)\n",
+               stats[4], stats[11], stats[8]);
+        printf("  THROUGHPUT 口径: graph-wall/N_conv = %d cyc/conv (NEVER cycles_used/N — that OVERSTATES, trap#6).\n",
+               nconv ? stats[0] / nconv : 0);
+        printf("     packets/cyc-per-pkt: build -DGP_PKTPROBE (consumer MAC packets=130 native @2.04 cyc/pkt; ours nt8 below).\n");
     }
     printf("  raw stats[0..11]: %d %d %d %d %d %d %d %d %d %d %d %d\n",
            stats[0], stats[1], stats[2], stats[3], stats[4], stats[5], stats[6], stats[7], stats[8], stats[9], stats[10], stats[11]);
     printf("  raw stats[12..19]: %d %d %d %d %d %d %d %d\n",
            stats[12], stats[13], stats[14], stats[15], stats[16], stats[17], stats[18], stats[19]);
-    printf("  NTSWEEP nt8=%d nt16=%d nt32=%d nt64=%d | per-walk=%d pure-conv(8walk)=%d fixed-feed=%d\n",
-           stats[20], stats[21], stats[22], stats[23], stats[24], stats[25], stats[26]);
-    printf("  DISTINCT-TILE nt8 32-distinct=%d (vs 4-reused nt8=%d; native 370)\n", stats[27], stats[20]);
+    if (!is_pktprobe) {   /* production: stats[20..27] = NTSWEEP/DISTINCT-TILE micro-bench (always run) */
+        printf("  NTSWEEP nt8=%d nt16=%d nt32=%d nt64=%d | per-walk=%d pure-conv(8walk)=%d fixed-feed=%d\n",
+               stats[20], stats[21], stats[22], stats[23], stats[24], stats[25], stats[26]);
+        printf("  DISTINCT-TILE nt8 32-distinct=%d (vs 4-reused nt8=%d; native 370)\n", stats[27], stats[20]);
+    } else {   /* cron#80 gap#2: GP_PKTPROBE diagnostic build (explicit magic stats[31] == "PKTP"). Host prints
+                * only the EARLY single-final-writer slots that always run (packets/PMU/SMT); the later
+                * DILATE/fp16/FANOUT sub-blocks reuse stats[18/19] AND can fault in this from-scratch
+                * micro-kernel build, so they are AUTHORITATIVE only in the on-device FARF "GDN_PURE ..." lines
+                * (read via the device log, not this host stats echo). */
+        printf("  PKTPROBE packets/call: nt8=%d nt16=%d nt32=%d (native nt8=130 pkt; nt64 + cyc/pkt in FARF)\n",
+               stats[28], stats[29], stats[30]);
+        printf("  PKTPROBE PMU nt8: RUN1=%d IDLE=%d COPROC=%d CU=%d IU_NOPKT=%d SYSBUSY=%d (IDLE~1564 COPROC=0 => thread WAITs on HMX)\n",
+               stats[12], stats[13], stats[14], stats[15], stats[16], stats[17]);
+        printf("  PKTPROBE SMT spinners 0/1/2/4 = %d/%d/%d/%d (do NOT shrink conv => WAIT is this thread's HMX latency)\n",
+               stats[20], stats[21], stats[22], stats[23]);
+        printf("  PKTPROBE DILATE/fp16/FANOUT: see on-device FARF (GDN_PURE DILATE/FANOUT lines; host stats unreliable there)\n");
+    }
 
     FILE *ft = fopen(Tpath, "wb"); fwrite(T, 1, abytes, ft); fclose(ft);
     printf("wrote %s (%ld bytes)\n", Tpath, abytes);
