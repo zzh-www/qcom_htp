@@ -150,14 +150,25 @@ static void gp_surf_to_cv_perm(int16_t *cv, const uint16_t *surf, int16_t *stage
 #define GP_NB     4          /* 64-blocks per C=256 head */
 #define GP_BL     64
 #define GP_BB     4096       /* GP_BL*GP_BL = crouton-compact codes per 64-block */
-#define GP_NT     4          /* max producer threads */
+#ifndef GP_NT
+#define GP_NT     4          /* max producer threads (production default 4; -DGP_NT=N for the P-sweep probe, cron#84) */
+#endif
 #ifndef GP_NEWTON
 #define GP_NEWTON 0          /* Newton-Schulz iters. @scale0.05 oc is MONOTONIC in Newton (0:4.24e-3 < 1:8.24e-3
                               * < 2:9.66e-3): Taylor(3) is already near-exact, each Newton iter only ADDS w16a16
                               * quant noise. So 0 = best (768 mm, both faster & more accurate). ⚠️ SCALE-DEPENDENT:
                               * larger ‖A‖ (real GDN) needs Newton>=1 — re-check oc per deployment scale. */
 #endif
+/* cron#84 P-sweep: under GP_RESIDENT, c->A/c->T are REASSIGNED to alias the shared resident
+ * g_Avt/g_Tvt slice (run() L806-807), so the per-producer GPV_A(0x30000)+GPV_T(0x50000)=256KB are
+ * DEAD. For P>4 the default 0x84000 stride overflows 8MB VTCM (5.24MB resident @H=32 + 6*0x84000),
+ * so the P>4 probe build packs SCR/ACC/LIN right after stage (compact slice end 0x42000) and shrinks
+ * the stride. Production P<=4 keeps the original byte-identical layout. NOT a DDR move (VTCM-only). */
+#if GP_NT > 4
+#define GP_VSTRIDE 0x44000u  /* compact resident slice: mm(0x28000)+stage(0x8000)+SCR/ACC/LIN(0x12000)=0x42000 */
+#else
 #define GP_VSTRIDE 0x84000u  /* per-producer VTCM region: mm(~0x28000)+stage(0x8000)+resident A/T/scratch/acc/lin(0x52000) (cron#74). 4*0x84000=2.1MB < 8MB VTCM */
+#endif
 
 static inline uint64_t gp_pcyc(void) { uint64_t v; asm volatile("%0 = C15:14" : "=r"(v)); return v; }
 
@@ -248,19 +259,73 @@ static void gp_hwlut_init(void) {
                             g_hw[h++] = (uint16_t)(2 * g_lut[(kt * 32 + row) * 64 + (nt * 32 + col)]);
                         }
 }
+#ifdef GP_WTVEC_SPLIT
+static uint64_t g_wtv_gather, g_wtv_pack;   /* cron#84 task(2): wt-vec split = 64-vgather Σ vs lo/hi-pack Σ (probe only) */
+#endif
+#ifdef GP_RENORM_SPLIT
+/* wave3 probe: pin what stats[10]="other" (residual = life-spin-actcopy-kmajor-scatter-outcopy, self-named
+ * "renorm+acc") actually contains. Pure timing, no value change; all #ifdef gated; not committed. Buckets:
+ *   t_acc_vsxt   = gp_acc3 / gp_acc_from_cv / gp_acc_addsh / gp_acc_negw  (vsxt-driven acc fills)
+ *   t_acc_arith  = gp_acc_zero / gp_acc_diag_add / gp_acc_shr             (pointwise int32 arith, no vsxt)
+ *   t_renorm_absmax = gp_acc_absmax                                       (reduction for renorm scale)
+ *   t_renorm_tocv   = gp_acc_to_cv                                        (acc->cv vasr/clamp drain)
+ * gp_renorm() body == absmax + to_cv (the scalar s-loop between is negligible) so it is fully covered
+ * by the two renorm buckets without double counting. Probe B: split addsh into vsxt-body vs vasr-shift,
+ * and count vsxt passes (gp_acc3=3, from_cv=1, addsh=1, negw=1 per call). */
+static uint64_t g_rs_acc_vsxt, g_rs_acc_arith, g_rs_renorm_absmax, g_rs_renorm_tocv;
+static uint64_t g_rs_vsxt_body, g_rs_addsh_vasr;   /* Probe B: addsh internal split */
+static uint64_t g_rs_vsxt_passes;                  /* Probe B: # of 64-vec vsxt passes (16-lane sxt) */
+#endif
 static void gp_pack_wt_bias_hvx(const int16_t *w_cv, int16_t *stage /*VTCM 8KB+*/, uint8_t *wt, int32_t *bias,
                                 uint64_t *t_vec, uint64_t *t_bia) {
     /* cron#74: w_cv is VTCM-resident (all block operands live in VTCM) -> gather DIRECTLY from it; the old
      * 64-vec cv->stage staging copy is gone. gtmp (gather output, 64 vec) goes at stage[0].
      * Sub-probes (cron#75): t_vec = vector gather+lo/hi-pack; t_bia = colsum + scalar bias/control writes. */
     uint64_t _pb0 = gp_pcyc();
+#ifdef GP_WTVEC_SPLIT
+    uint64_t _pg = _pb0;   /* cron#84 task(2): gather/pack boundary timestamp (set after the 64-gather below) */
+    asm volatile("" ::: "memory");   /* anchor: nothing below hoists above this _pb0 read */
+#endif
     HVX_Vector *gtmp = (HVX_Vector *)stage;
     const HVX_Vector *ofs = (const HVX_Vector *)g_hw;
     const HVX_Vector K128 = Q6_Vh_vsplat_R(128);
 #if GP_GPIPE
+#ifdef GP_WTVEC_VSHUFF
+    /* Phase3 wave-2 A.1: replace the 64-vgather (sole gather-engine user in the producer path) with 32×
+     * Q6_W_vshuff_VVR (zero gather engine). Byte-EXACT to the gather: derived host-side from g_hw via the
+     * PRM bitmask SWAP model (/tmp/vshuff_prm.cpp) — pair i = vshuff(src[2i+1], src[2i], Rt=124), lo half
+     * -> gtmp[LO_DST[i]], hi half -> gtmp[HI_DST[i]]. Rt=124 (0x7C, swap passes at byte offsets 4,8,16,32,64).
+     * NOTE: Rt is a bitmask (NOT a grain); LO_DST/HI_DST are the derived destination perm (NOT 2i/2i+1).
+     * PACKCHK (run()) is the byte oracle: any wrong lane/Rt/dst -> nonzero. */
+    {
+        static const int LO_DST[32] = {0,2,4,6,8,10,12,14,32,34,36,38,40,42,44,46,1,3,5,7,9,11,13,15,33,35,37,39,41,43,45,47};
+        static const int HI_DST[32] = {16,18,20,22,24,26,28,30,48,50,52,54,56,58,60,62,17,19,21,23,25,27,29,31,49,51,53,55,57,59,61,63};
+        const HVX_Vector *src = (const HVX_Vector *)w_cv;   /* 64 VTCM-resident operands (int16, contiguous) */
+        for (int i = 0; i < 32; ++i) {
+            HVX_VectorPair p = Q6_W_vshuff_VVR(src[2 * i + 1], src[2 * i], 124);
+            gtmp[LO_DST[i]] = Q6_V_lo_W(p);
+            gtmp[HI_DST[i]] = Q6_V_hi_W(p);
+        }
+    }
+#else
     /* cron#72: was 2-deep gather (gtmp[0..1]) read back inside the pack loop => each pair's pack stalled on
      * its gather. Issue ALL 64 gathers into a 64-vec buffer first (engine pipelines), then pack. */
     for (int v = 0; v < 64; ++v) Q6_vgather_ARMVh((void *)&gtmp[v], (uint32_t)(uintptr_t)w_cv, 8191, ofs[v]);
+#endif
+#ifdef GP_WTVEC_SPLIT
+    /* cron#84 task(2): split t_vec into gather-LATENCY vs pack-COMPUTE. The 64 vgather instrs issue ~free
+     * (fire-and-forget to the gather engine); the cost is paid lazily when a consumer READS gtmp[]. So a
+     * plain timestamp here measures issue-cost (~0) and buries the gather LATENCY inside the pack loop's
+     * first reads. To attribute the gather engine drain honestly, force-read all 64 gtmp vecs into a sink
+     * the compiler cannot elide BEFORE the boundary timestamp -> g_wtv_gather = true gather drain latency;
+     * g_wtv_pack = pure lo/hi byte-shuffle compute (the work vshuff would still have to do). */
+    asm volatile("" ::: "memory");   /* anchor: gathers above must complete before the boundary read */
+    { HVX_Vector _s = Q6_V_vzero();
+      for (int v = 0; v < 64; ++v) _s = Q6_Vh_vadd_VhVh(_s, gtmp[v]);
+      asm volatile("" : : "v"(_s) : "memory"); }   /* sink+barrier: drain the gather engine, prevent DCE/reorder */
+    _pg = gp_pcyc(); __atomic_fetch_add(&g_wtv_gather, _pg - _pb0, __ATOMIC_RELAXED);
+    asm volatile("" ::: "memory");
+#endif
     for (int v = 0; v < 64; v += 2) {
         HVX_Vector q0 = gtmp[v], q1 = gtmp[v + 1];
         HVX_Vector lo = Q6_Vb_vpacke_VhVh(q1, q0);                                  /* low bytes */
@@ -284,6 +349,9 @@ static void gp_pack_wt_bias_hvx(const int16_t *w_cv, int16_t *stage /*VTCM 8KB+*
     }
 #endif
     uint64_t _pb1 = gp_pcyc(); *t_vec += _pb1 - _pb0;   /* split: vector gather+pack done; colsum+bias below */
+#ifdef GP_WTVEC_SPLIT
+    __atomic_fetch_add(&g_wtv_pack, _pb1 - _pg, __ATOMIC_RELAXED);   /* cron#84 task(2): pack-only (lo/hi split + vshuff) */
+#endif
     static const int32_t ctrl[2] = { 0x00404420, 0x40000000 };   /* 1/32767 drain = the solve's scale model */
 #if GP_CROUTON8
     /* colsum GATHER-FREE (cron#68): exploit the crouton_pos cv structure directly (no extra vgather — feed
@@ -360,43 +428,96 @@ static void gp_pack_wt_bias_hvx(const int16_t *w_cv, int16_t *stage /*VTCM 8KB+*
  * the 64 diag fix-ups need the interleaved index. Ported from pure_hmx_solve.cpp:p4v_acc*. Replaces the
  * scalar renorm/acc loops (the lone remaining scalar bottleneck). acc must be 128-byte aligned. */
 static inline void gp_acc3(int32_t *acc, const int16_t *a, const int16_t *b, const int16_t *cc) {
+#ifdef GP_RENORM_SPLIT
+    uint64_t _rs0 = gp_pcyc();
+#endif
     const HVX_Vector *va = (const HVX_Vector *)a, *vb = (const HVX_Vector *)b, *vc = (const HVX_Vector *)cc;
     HVX_Vector *d = (HVX_Vector *)acc;
     for (int i = 0; i < 64; ++i) {
         HVX_VectorPair s = Q6_Ww_vadd_WwWw(Q6_Ww_vadd_WwWw(Q6_Ww_vsxt_Vh(va[i]), Q6_Ww_vsxt_Vh(vb[i])), Q6_Ww_vsxt_Vh(vc[i]));
         d[2 * i] = Q6_V_lo_W(s); d[2 * i + 1] = Q6_V_hi_W(s);
     }
+#ifdef GP_RENORM_SPLIT
+    uint64_t _rs1 = gp_pcyc(); __atomic_fetch_add(&g_rs_acc_vsxt, _rs1 - _rs0, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&g_rs_vsxt_body, _rs1 - _rs0, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&g_rs_vsxt_passes, 3, __ATOMIC_RELAXED);
+#endif
 }
 static inline void gp_acc_negw(int32_t *acc, const int16_t *a) {
+#ifdef GP_RENORM_SPLIT
+    uint64_t _rs0 = gp_pcyc();
+#endif
     const HVX_Vector *va = (const HVX_Vector *)a; HVX_Vector *d = (HVX_Vector *)acc;
     HVX_VectorPair z = Q6_Ww_vsxt_Vh(Q6_V_vzero());
     for (int i = 0; i < 64; ++i) { HVX_VectorPair s = Q6_Ww_vsxt_Vh(va[i]);
         d[2 * i] = Q6_Vw_vsub_VwVw(Q6_V_lo_W(z), Q6_V_lo_W(s));
         d[2 * i + 1] = Q6_Vw_vsub_VwVw(Q6_V_hi_W(z), Q6_V_hi_W(s)); }
+#ifdef GP_RENORM_SPLIT
+    uint64_t _rs1 = gp_pcyc(); __atomic_fetch_add(&g_rs_acc_vsxt, _rs1 - _rs0, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&g_rs_vsxt_body, _rs1 - _rs0, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&g_rs_vsxt_passes, 1, __ATOMIC_RELAXED);
+#endif
 }
-static inline void gp_acc_zero(int32_t *acc) { HVX_Vector *d = (HVX_Vector *)acc, z = Q6_V_vzero();
-    for (int i = 0; i < 128; ++i) d[i] = z; }
+static inline void gp_acc_zero(int32_t *acc) {
+#ifdef GP_RENORM_SPLIT
+    uint64_t _rs0 = gp_pcyc();
+#endif
+    HVX_Vector *d = (HVX_Vector *)acc, z = Q6_V_vzero();
+    for (int i = 0; i < 128; ++i) d[i] = z;
+#ifdef GP_RENORM_SPLIT
+    __atomic_fetch_add(&g_rs_acc_arith, gp_pcyc() - _rs0, __ATOMIC_RELAXED);
+#endif
+}
 static inline void gp_acc_addsh(int32_t *acc, const int16_t *p, int sh) {
+#ifdef GP_RENORM_SPLIT
+    uint64_t _rs0 = gp_pcyc();
+#endif
     const HVX_Vector *vp = (const HVX_Vector *)p; HVX_Vector *d = (HVX_Vector *)acc;
     for (int i = 0; i < 64; ++i) { HVX_VectorPair w = Q6_Ww_vsxt_Vh(vp[i]);
         d[2 * i] = Q6_Vw_vadd_VwVw(d[2 * i], Q6_Vw_vasr_VwR(Q6_V_lo_W(w), sh));
         d[2 * i + 1] = Q6_Vw_vadd_VwVw(d[2 * i + 1], Q6_Vw_vasr_VwR(Q6_V_hi_W(w), sh)); }
+#ifdef GP_RENORM_SPLIT
+    uint64_t _rs1 = gp_pcyc(); __atomic_fetch_add(&g_rs_acc_vsxt, _rs1 - _rs0, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&g_rs_addsh_vasr, _rs1 - _rs0, __ATOMIC_RELAXED);   /* whole loop = vsxt+vasr+vadd (vasr-bearing) */
+    __atomic_fetch_add(&g_rs_vsxt_passes, 1, __ATOMIC_RELAXED);
+#endif
 }
-static inline void gp_acc_shr(int32_t *acc, int sh) { HVX_Vector *d = (HVX_Vector *)acc;
-    for (int i = 0; i < 128; ++i) d[i] = Q6_Vw_vasr_VwR(d[i], sh); }
+static inline void gp_acc_shr(int32_t *acc, int sh) {
+#ifdef GP_RENORM_SPLIT
+    uint64_t _rs0 = gp_pcyc();
+#endif
+    HVX_Vector *d = (HVX_Vector *)acc;
+    for (int i = 0; i < 128; ++i) d[i] = Q6_Vw_vasr_VwR(d[i], sh);
+#ifdef GP_RENORM_SPLIT
+    __atomic_fetch_add(&g_rs_acc_arith, gp_pcyc() - _rs0, __ATOMIC_RELAXED);
+#endif
+}
 static inline int32_t gp_acc_absmax(const int32_t *acc) {
+#ifdef GP_RENORM_SPLIT
+    uint64_t _rs0 = gp_pcyc();
+#endif
     const HVX_Vector *d = (const HVX_Vector *)acc; HVX_Vector mx = Q6_V_vzero();
     for (int i = 0; i < 128; ++i) mx = Q6_Vw_vmax_VwVw(mx, Q6_Vw_vabs_Vw(d[i]));
     for (int sh = 64; sh >= 4; sh >>= 1) mx = Q6_Vw_vmax_VwVw(mx, Q6_V_vror_VR(mx, sh));
-    union { HVX_Vector v; int32_t w[32]; } u; u.v = mx; return u.w[0];
+    union { HVX_Vector v; int32_t w[32]; } u; u.v = mx;
+#ifdef GP_RENORM_SPLIT
+    __atomic_fetch_add(&g_rs_renorm_absmax, gp_pcyc() - _rs0, __ATOMIC_RELAXED);
+#endif
+    return u.w[0];
 }
 static inline void gp_acc_to_cv(int16_t *cv, const int32_t *acc, int s) {
+#ifdef GP_RENORM_SPLIT
+    uint64_t _rs0 = gp_pcyc();
+#endif
     const HVX_Vector *d = (const HVX_Vector *)acc; HVX_Vector *o = (HVX_Vector *)cv;
     const HVX_Vector CP = Q6_Vh_vsplat_R(32639), CN = Q6_Vh_vsplat_R(-32639);
     for (int i = 0; i < 64; ++i) { HVX_Vector lo = d[2 * i], hi = d[2 * i + 1];
         if (s < 0) { lo = Q6_Vw_vasl_VwR(lo, -s); hi = Q6_Vw_vasl_VwR(hi, -s); }
         o[i] = Q6_Vh_vasr_VwVwR_sat(hi, lo, s > 0 ? (s & 31) : 0);
         o[i] = Q6_Vh_vmin_VhVh(Q6_Vh_vmax_VhVh(o[i], CN), CP); }
+#ifdef GP_RENORM_SPLIT
+    __atomic_fetch_add(&g_rs_renorm_tocv, gp_pcyc() - _rs0, __ATOMIC_RELAXED);
+#endif
 }
 static inline int gp_renorm(int32_t *acc, int16_t *cv) {
     int32_t mx = gp_acc_absmax(acc);
@@ -405,14 +526,28 @@ static inline int gp_renorm(int32_t *acc, int16_t *cv) {
     gp_acc_to_cv(cv, acc, s); return s;
 }
 static inline void gp_acc_diag_add(int32_t *acc, int32_t add) {   /* cron#74: vector acc += diagmask & splat(add) (was 64 scalar RMW) */
+#ifdef GP_RENORM_SPLIT
+    uint64_t _rs0 = gp_pcyc();
+#endif
     const HVX_Vector *m = (const HVX_Vector *)g_diagmask; HVX_Vector *d = (HVX_Vector *)acc;
     HVX_Vector av = Q6_V_vsplat_R(add);
     for (int v = 0; v < GP_BB / 32; ++v) d[v] = Q6_Vw_vadd_VwVw(d[v], Q6_V_vand_VV(m[v], av));
+#ifdef GP_RENORM_SPLIT
+    __atomic_fetch_add(&g_rs_acc_arith, gp_pcyc() - _rs0, __ATOMIC_RELAXED);
+#endif
 }
 static inline void gp_acc_from_cv(int32_t *acc, const int16_t *a) {
+#ifdef GP_RENORM_SPLIT
+    uint64_t _rs0 = gp_pcyc();
+#endif
     const HVX_Vector *va = (const HVX_Vector *)a; HVX_Vector *d = (HVX_Vector *)acc;
     for (int i = 0; i < 64; ++i) { HVX_VectorPair s = Q6_Ww_vsxt_Vh(va[i]);
         d[2 * i] = Q6_V_lo_W(s); d[2 * i + 1] = Q6_V_hi_W(s); }
+#ifdef GP_RENORM_SPLIT
+    uint64_t _rs1 = gp_pcyc(); __atomic_fetch_add(&g_rs_acc_vsxt, _rs1 - _rs0, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&g_rs_vsxt_body, _rs1 - _rs0, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&g_rs_vsxt_passes, 1, __ATOMIC_RELAXED);
+#endif
 }
 
 /* HVX permute (O4d): dst[j] = src[ofs[j]/2], src staged in VTCM (8KB), ofs = byte offsets. Replaces the
@@ -490,12 +625,26 @@ static gp_job g_job[GP_NT];
 /* cron#74 (VTCM residency, [[feedback_vtcm_only_intermediates]]): ALL intermediate solve state lives in
  * VTCM (pointers into the producer's VTCM slice, assigned in run()); DDR only at head-load (A in) and
  * head-store (T out). Offsets within the per-producer slice, AFTER mm(<=0x28000)+stage(0x28000..0x30000). */
+#if GP_NT > 4 && !GP_RESIDENT
+#error "GP_NT>4 compact VTCM layout requires GP_RESIDENT=1 (A/T must alias the shared resident slice)"
+#endif
+#if GP_NT > 4
+/* cron#84 compact layout (P>4 probe, GP_RESIDENT only): GPV_A/GPV_T are dead (c->A/c->T alias the
+ * shared resident slice in run() L806-807), so SCR/ACC/LIN pack right after stage. slice end 0x42000.
+ * GPV_A/GPV_T point at the (dead, immediately overwritten) compact tail to stay in-bounds. */
+#define GPV_SCR  0x30000u   /* AA,A3,M,Z,Tt,prod = 6*0x2000 = 0xC000 */
+#define GPV_ACC  0x3C000u   /* acc int32[GP_BB] = 0x4000 (16KB) */
+#define GPV_LIN  0x40000u   /* lin int16[GP_BB] = 0x2000 -> slice end 0x42000 */
+#define GPV_A    0x30000u   /* dead under RESIDENT (reassigned L806); value harmless */
+#define GPV_T    0x30000u
+#else
 #define GPV_A    0x30000u   /* 16 cv blocks  = 0x20000 (128KB) */
 #define GPV_T    0x50000u   /* 16 cv blocks  = 0x20000 */
 #define GPV_SCR  0x70000u   /* AA,A3,M,Z,Tt,prod = 6*0x2000 = 0xC000 */
 #define GPV_ACC  0x7C000u   /* acc int32[GP_BB] = 0x4000 (16KB) */
 #define GPV_LIN  0x80000u   /* lin int16[GP_BB] = 0x2000 */
 /* per-producer VTCM slice end = 0x82000; GP_VSTRIDE must be >= this. */
+#endif
 struct gp_ctx {
     w16a16_mm_t mm;
     uint8_t     descs[256] __attribute__((aligned(64)));
@@ -509,6 +658,20 @@ struct gp_ctx {
     uint64_t    spin, t_pack, t_depack, t_life;
     uint64_t    t_gather, t_kmajor, t_bias, t_scatter;   /* sub-stage probes */
     uint64_t    t_mc, t_pm, t_ms;   /* O5 scatter split: linear↔block memcpy / gp_perm vgather / memset */
+#ifdef GP_WTCACHE
+    /* cron#85 wt-cache (off-diag merge T-weight reuse): per-producer cache of already-packed (wt,bias) bytes,
+     * keyed by the T-block cv source pointer TBLK(k*4+j). The merge does mm64(A_ik, T_kj) with weight=T_kj;
+     * the same T-block weight repeats up to 3× across the forward-substitution (4 redundant repacks/head, see
+     * /tmp merge trace). keepwt only catches the CONSECUTIVE same-weight diag A²/A³; this catches the
+     * NON-consecutive cross-diagonal T-weight reuse. 6 distinct T-weights/head -> 6 slots. Reset per head
+     * (each head's T differs). Buffers are VTCM (8KB wt + 1KB bias each); zero-copy: on hit c->mm.wt/bias
+     * point at the cached buffer and gp_pack_wt_bias_hvx is skipped (the #1 producer cost, wt_vec Σ). */
+    const int16_t *wc_key[6];        /* T-block cv source pointer = weight identity (resident-slice-stable) */
+    uint8_t       *wc_wt[6];         /* VTCM 8KB packed-weight buffer per slot */
+    int32_t       *wc_bias[6];       /* VTCM 1KB packed-bias buffer per slot */
+    int            wc_n;             /* live slots this head (<=6) */
+    uint64_t       wc_hit, wc_miss;  /* probe: cache hits / misses over the whole solve */
+#endif
 };
 static gp_ctx   g_ctx[GP_NT];
 static uint64_t g_cbusy;                 /* consumer: per-call feed-inclusive kernel cyc (口径 ④) */
@@ -598,6 +761,52 @@ static void mm64(gp_ctx *c, const int16_t *a_cv, const int16_t *b_cv, int16_t *o
     uint64_t d1 = gp_pcyc(); c->t_depack += d1 - d0;
     if (c->slot >= 0) GP_EV(c->slot, 10, d0, d1);              /* OUT_COPY (HVX) = q::*OutputSlice */
 }
+
+#ifdef GP_WTCACHE
+/* cron#85 wt-cache matmul: like mm64, but the WEIGHT pack is served from a per-head, per-producer cache
+ * keyed by the weight's cv source pointer (b_cv). On hit the (wt,bias) packed bytes are reused (zero-copy:
+ * c->mm.wt/bias point at the cached buffer); on miss they are packed into a fresh cache slot. Byte-identical
+ * to mm64: the cache buffer holds exactly the bytes gp_pack_wt_bias_hvx would write (PACKCHK/LEANCHK oracle).
+ * Only used in the off-diag merge (weight = T_kj); diag (mm64/mm64_keepwt) untouched. The canonical
+ * c->mm.wt/bias (init buffers) are restored at head end so the next head's diag packs into them again. */
+static void mm64_wtcache(gp_ctx *c, const int16_t *a_cv, const int16_t *b_cv, int16_t *out_cv) {
+    uint64_t p0 = gp_pcyc();
+    gp_cv_to_surf((uint16_t *)c->mm.act, a_cv);                  /* act: cv -> surface (HVX vxor) */
+    uint64_t g0 = gp_pcyc(); c->t_pack += g0 - p0;
+    int hit = -1;
+    for (int s = 0; s < c->wc_n; ++s) if (c->wc_key[s] == b_cv) { hit = s; break; }
+    if (hit >= 0) {
+        c->mm.wt = c->wc_wt[hit]; c->mm.bias = c->wc_bias[hit];   /* zero-copy: reuse packed bytes, skip pack */
+        ++c->wc_hit;
+    } else {
+        int s = (c->wc_n < 6) ? c->wc_n++ : 0;                    /* fill slots; >6 distinct (never @6/head) would evict slot 0 */
+        c->mm.wt = c->wc_wt[s]; c->mm.bias = c->wc_bias[s];
+        gp_pack_wt_bias_hvx(b_cv, c->stage, c->mm.wt, c->mm.bias, &c->t_gather, &c->t_bias);
+        c->wc_key[s] = b_cv;
+        ++c->wc_miss;
+    }
+    uint64_t k1 = gp_pcyc(); c->t_kmajor += k1 - g0;
+    if (c->slot < 0) {
+        uint64_t t0 = gp_pcyc(); w16a16_mm_run(&c->mm); uint64_t t1 = gp_pcyc(); g_cbusy += t1 - t0;
+        GP_EV(GP_NT, 3, t0, t1);
+#ifdef GP_LEANCHK_LIVE
+        gp_leanchk_live(&c->mm);
+#endif
+    } else {
+        GP_EV(c->slot, 4, p0, g0);                              /* ACT_FORMAT (HVX) */
+        if (hit < 0) GP_EV(c->slot, 5, g0, k1);                /* WT_PACK (HVX) — only on miss */
+        GP_ARM(&g_job[c->slot]);
+        uint64_t s0 = gp_pcyc();
+        GP_WAIT(&g_job[c->slot]); GP_RESET(&g_job[c->slot]);
+        uint64_t s1 = gp_pcyc(); c->spin += s1 - s0;
+        GP_EV(c->slot, 11, s0, s1);
+    }
+    uint64_t d0 = gp_pcyc();
+    gp_surf_to_cv(out_cv, (const uint16_t *)c->mm.out);          /* out: surface -> cv (HVX vxor) */
+    uint64_t d1 = gp_pcyc(); c->t_depack += d1 - d0;
+    if (c->slot >= 0) GP_EV(c->slot, 10, d0, d1);
+}
+#endif
 
 /* cron#77 WTREUSE: same-weight matmul WITHOUT re-packing the weight. The diag inverse computes A^2 = A@A
  * and A^3 = AA@A — BOTH use weight=A. The weight pack (cv->kmajor 64-vgather + lo/hi split + bias) is the #1
@@ -705,6 +914,11 @@ static int diag_inv(gp_ctx *c, const int16_t *A, int16_t *X) {
 #define TBLK(i) (c->T[i])
 #endif
 static void solve_head(gp_ctx *c, const int16_t *Aq, int16_t *To) {
+#ifdef GP_WTCACHE
+    uint8_t  *wt0   = c->mm.wt;     /* canonical init wt/bias buffers — restored at head end so the next */
+    int32_t  *bias0 = c->mm.bias;   /* head's diag (mm64/mm64_keepwt) packs into them, not a cache buffer. */
+    c->wc_n = 0;                    /* reset cache per head (each head's T-weights differ) */
+#endif
 #if GP_RESIDENT
     (void)Aq;   /* cron#75: c->A/c->T already alias this head's resident VTCM slice (no per-head DDR load) */
 #else
@@ -732,7 +946,11 @@ static void solve_head(gp_ctx *c, const int16_t *Aq, int16_t *To) {
             int j = i - d, eAcc = 0;
             uint64_t _m0 = GP_EVT0(); gp_acc_zero(c->acc); GP_EV(c->slot, 6, _m0, GP_EVT0());
             for (int k = j; k < i; ++k) {                      /* acc = sum_k A_ik @ T_kj (exp-aligned) */
+#ifdef GP_WTCACHE
+                mm64_wtcache(c, ABLK(i * 4 + k), TBLK(k * 4 + j), c->prod);  /* weight=T_kj served from per-head wt-cache */
+#else
                 mm64(c, ABLK(i * 4 + k), TBLK(k * 4 + j), c->prod);   /* benign act=A_ik; weight may be extreme (ok via :dilate) */
+#endif
                 uint64_t _ka = GP_EVT0();
                 int ep = c->e[k * 4 + j];
                 if (k == j) eAcc = ep;
@@ -744,6 +962,9 @@ static void solve_head(gp_ctx *c, const int16_t *Aq, int16_t *To) {
             uint64_t _r0 = GP_EVT0();
             int eS = eAcc + gp_renorm(c->acc, c->prod);
             GP_EV(c->slot, 6, _r0, GP_EVT0());                /* ACC (renorm->S) */
+#ifdef GP_WTCACHE
+            c->mm.wt = wt0; c->mm.bias = bias0;   /* T_ii@S weight=S is unique (not cached): pack into canonical */
+#endif
             MM64(c, TBLK(i * 4 + i), c->prod, TBLK(i * 4 + j));   /* T_ij = T_ii @ S (dense: working operand order) */
             uint64_t _f0 = GP_EVT0();
             gp_acc_from_cv(c->acc, TBLK(i * 4 + j));
@@ -831,10 +1052,15 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
 #else
     size_t res_bytes = 0;
 #endif
-#if GP_DENSE_SURF || GP_DENSE_PERM
-    HAP_compute_res_attr_set_vtcm_param(&va, (unsigned)((size_t)P * GP_VSTRIDE + 0xC000u + res_bytes), 0);   /* +48KB LUTs + resident */
+#ifdef GP_WTCACHE
+    size_t wtc_bytes = (size_t)P * 0xE000u;   /* cron#85: 6 slots × (8KB wt + 1KB bias rounded to 0x2400) per producer */
 #else
-    HAP_compute_res_attr_set_vtcm_param(&va, (unsigned)((size_t)P * GP_VSTRIDE + 0xA000u + res_bytes), 0);   /* +40KB LUTs + resident */
+    size_t wtc_bytes = 0;
+#endif
+#if GP_DENSE_SURF || GP_DENSE_PERM
+    HAP_compute_res_attr_set_vtcm_param(&va, (unsigned)((size_t)P * GP_VSTRIDE + 0xC000u + res_bytes + wtc_bytes), 0);   /* +48KB LUTs + resident (+wt-cache) */
+#else
+    HAP_compute_res_attr_set_vtcm_param(&va, (unsigned)((size_t)P * GP_VSTRIDE + 0xA000u + res_bytes + wtc_bytes), 0);   /* +40KB LUTs + resident (+wt-cache) */
 #endif
     unsigned int vctx = HAP_compute_res_acquire(&va, 2000000);
     uint8_t *vbase = (uint8_t *)HAP_compute_res_attr_get_vtcm_ptr(&va);
@@ -845,6 +1071,13 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
         if (vctx) HAP_compute_res_release(vctx); return -1; }
 
     gp_lut_init();
+#ifdef GP_WTVEC_SPLIT
+    g_wtv_gather = 0; g_wtv_pack = 0;   /* cron#84 task(2): reset per-run() (host calls run() once per rep) */
+#endif
+#ifdef GP_RENORM_SPLIT
+    g_rs_acc_vsxt = g_rs_acc_arith = g_rs_renorm_absmax = g_rs_renorm_tocv = 0;
+    g_rs_vsxt_body = g_rs_addsh_vasr = g_rs_vsxt_passes = 0;   /* wave3: reset per-run() */
+#endif
     g_hw = (uint16_t *)(vbase + (size_t)P * GP_VSTRIDE);                    /* shared VTCM LUTs */
     g_il = (uint16_t *)(vbase + (size_t)P * GP_VSTRIDE + 0x2000u);          /* linear->cv (A-unpack) */
     g_fl = (uint16_t *)(vbase + (size_t)P * GP_VSTRIDE + 0x4000u);          /* cv->linear (T-pack) */
@@ -873,8 +1106,25 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
       for (int p = 0; p < GP_BB; ++p) g_qa[p] = (uint16_t)(2 * g_lut[pk_inv[p]]);
       for (int k = 0; k < GP_BB; ++k) g_qo[k] = (uint16_t)(2 * pk[lut_inv[k]]); }
 #endif
+#ifdef GP_WTCACHE
+    /* cron#85 wt-cache VTCM region: placed AFTER the shared LUTs + resident A/T (uses the same 0xC000/0xA000
+     * offset the acquire used so it never overlaps). Per producer: 6 slots × (8KB wt @ +0x0000, 1KB bias
+     * @ +0x2000) packed at 0x2400 stride -> 0xE000/producer. */
+#if GP_DENSE_SURF || GP_DENSE_PERM
+    uint8_t *wtc_base = vbase + (size_t)P * GP_VSTRIDE + 0xC000u + res_bytes;
+#else
+    uint8_t *wtc_base = vbase + (size_t)P * GP_VSTRIDE + 0xA000u + res_bytes;
+#endif
+#endif
     for (int t = 0; t < P; ++t) {
         w16a16_mm_init(&g_ctx[t].mm, vbase + (size_t)t * GP_VSTRIDE, g_ctx[t].descs);
+#ifdef GP_WTCACHE
+        { uint8_t *wc = wtc_base + (size_t)t * 0xE000u;
+          for (int s = 0; s < 6; ++s) { g_ctx[t].wc_wt[s] = wc + (size_t)s * 0x2400u;
+              g_ctx[t].wc_bias[s] = (int32_t *)(wc + (size_t)s * 0x2400u + 0x2000u);
+              g_ctx[t].wc_key[s] = 0; }
+          g_ctx[t].wc_n = 0; g_ctx[t].wc_hit = 0; g_ctx[t].wc_miss = 0; }
+#endif
         { hmx_conv_out_desc_t *od = (hmx_conv_out_desc_t *)g_ctx[t].mm.od;   /* TRUE 64^3 (INVARIANT 7) */
 #if GP_CROUTON8
           /* CROUTON8 (cron#68): PROVEN native M=64 descriptor (cron#66-67, bit-exact). act/out = 4
@@ -943,6 +1193,50 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
         packchk = 0;
         for (int i = 0; i < W16MM_WT_BYTES; ++i) if (wA[i] != wB[i]) ++packchk;
         for (int i = 0; i < W16MM_BIAS_BYTES / 4; ++i) if (bA[i] != bB[i]) ++packchk;
+#ifdef GP_WTVEC_SPLIT
+        {   /* cron#84 task(2) CLEAN microbench (single-thread, HVX-locked, pre-solve): isolate the 64-vgather
+             * cost from the lo/hi byte-pack compute. N back-to-back, result force-consumed so neither is DCE'd.
+             * gather-only = 64 vgather + drain; full = gather + pack. pack-cost = full - gather. */
+            const int NB = 2000;
+            HVX_Vector *gtmp = (HVX_Vector *)g_ctx[0].stage;
+            const HVX_Vector *ofs = (const HVX_Vector *)g_hw;
+            const int16_t *wcv2 = g_ctx[0].AA;
+            const HVX_Vector K128 = Q6_Vh_vsplat_R(128);
+            HVX_Vector sink = Q6_V_vzero();
+            uint64_t b0 = gp_pcyc();
+            for (int it = 0; it < NB; ++it) {
+                for (int v = 0; v < 64; ++v) Q6_vgather_ARMVh((void *)&gtmp[v], (uint32_t)(uintptr_t)wcv2, 8191, ofs[v]);
+                asm volatile("" ::: "memory");
+                for (int v = 0; v < 64; ++v) sink = Q6_Vh_vadd_VhVh(sink, gtmp[v]);   /* drain */
+            }
+            asm volatile("" : : "v"(sink) : "memory");
+            uint64_t b1 = gp_pcyc();
+            uint8_t *wt = wA;
+            for (int it = 0; it < NB; ++it) {
+                for (int v = 0; v < 64; ++v) Q6_vgather_ARMVh((void *)&gtmp[v], (uint32_t)(uintptr_t)wcv2, 8191, ofs[v]);
+                asm volatile("" ::: "memory");
+                for (int v = 0; v < 64; v += 2) {
+                    HVX_Vector q0 = gtmp[v], q1 = gtmp[v + 1];
+                    HVX_Vector lo = Q6_Vb_vpacke_VhVh(q1, q0);
+                    HVX_Vector h0 = Q6_Vh_vasr_VhR(Q6_Vh_vadd_VhVh_sat(q0, K128), 8);
+                    HVX_Vector h1 = Q6_Vh_vasr_VhR(Q6_Vh_vadd_VhVh_sat(q1, K128), 8);
+                    HVX_Vector hi = Q6_Vb_vpack_VhVh_sat(h1, h0);
+                    HVX_VectorPair il = Q6_W_vshuff_VVR(hi, lo, -4);
+                    ((HVX_Vector *)wt)[v] = Q6_V_lo_W(il); ((HVX_Vector *)wt)[v + 1] = Q6_V_hi_W(il);
+                }
+                asm volatile("" ::: "memory");
+            }
+            uint64_t b2 = gp_pcyc();
+            uint64_t g_only = (b1 - b0) / NB, full = (b2 - b1) / NB;
+            /* report into host-printed raw[12..14] (sc_mc/sc_pm/sc_ms O5-scatter, =0 here; live-split no longer
+             * writes them). [12]=gather-only [13]=full(gather+pack) [14]=pack-compute, per wt-pack call. */
+            if (statsLen > 12) stats[12] = (int)g_only;
+            if (statsLen > 13) stats[13] = (int)full;
+            if (statsLen > 14) stats[14] = (int)(full - g_only);
+            FARF(ALWAYS, "GDN_PURE WTVEC_MICRO (N=%d, single-thread, HVX): gather-only=%llu cyc/pack  full(gather+pack)=%llu  pack-compute=%llu (=full-gather)",
+                 NB, (unsigned long long)g_only, (unsigned long long)full, (unsigned long long)(full - g_only));
+        }
+#endif
         if (hvx == 0) qurt_hvx_unlock();
         FARF(ALWAYS, "GDN_PURE PACKCHK diff=%d (0 = HVX wt-pack byte-exact vs scalar)", packchk);
     }
@@ -2078,6 +2372,11 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
         wt_vec += g_ctx[t].t_gather; wt_bia += g_ctx[t].t_bias;
         life += g_ctx[t].t_life; if (g_ctx[t].t_life > lmax) lmax = g_ctx[t].t_life; }
     uint64_t other = life - spin - actcopy - kmajor - scatter - outcopy;   /* HVX renorm+acc (mm-level) */
+#ifdef GP_WTCACHE
+    { uint64_t wch = 0, wcm = 0; for (int t = 0; t < P; ++t) { wch += g_ctx[t].wc_hit; wcm += g_ctx[t].wc_miss; }
+      FARF(ALWAYS, "GDN_PURE WTCACHE hits=%llu misses=%llu (expect hits=%d=H*4, misses=%d=H*6)",
+           (unsigned long long)wch, (unsigned long long)wcm, H * 4, H * 6); }
+#endif
     /* per-head w16a16_mm_run count at the PRODUCTION default (GP_NEWTON=0, GP_DENSE_*=0, MM64==mm64):
      *   diag_inv ×4 blocks: each = mm64(A²=A@A) + mm64_keepwt(A³=AA@A) = 2 mm  -> 4×2 = 8
      *   merge (4×4 strict-lower forward-subst, 6 off-diag blocks): inner Σ_k A_ik@T_kj = 1+1+1+2+2+3 = 10,
@@ -2097,14 +2396,23 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
     if (statsLen > 9) stats[9] = (int)scatter;                 /* A-unpack + T-pack LUT-scatter Σ (SCALAR) */
     if (statsLen > 10) stats[10] = (int)other;                /* HVX renorm + acc (mm-level) Σ */
     if (statsLen > 11) stats[11] = (int)lmax;                  /* slowest producer life (~wall) */
+#ifndef GP_WTVEC_SPLIT   /* cron#84: under WTVEC_SPLIT, [12..14] carry the wt-vec micro split (set in PACKCHK) */
     if (statsLen > 12) stats[12] = (int)sc_mc;                 /* O5 scatter split: linear↔block memcpy Σ */
     if (statsLen > 13) stats[13] = (int)sc_pm;                 /* O5 scatter split: gp_perm vgather Σ */
     if (statsLen > 14) stats[14] = (int)sc_ms;                 /* O5 scatter split: memset(To,128KB) Σ */
+#endif
     if (statsLen > 15) stats[15] = (int)bulk_ld;             /* cron#75 one-time bulk DDR->VTCM A load (excluded from wall) */
     if (statsLen > 16) stats[16] = (int)bulk_st;             /* cron#75 one-time bulk VTCM->DDR T store (excluded from wall) */
     if (statsLen > 17) stats[17] = (int)wt_vec;               /* cron#75 wt-pack split: vector gather+pack Σ */
     if (statsLen > 18) stats[18] = (int)wt_bia;               /* cron#75 wt-pack split: colsum+scalar-bias Σ */
     if (statsLen > 19) stats[19] = (int)actcopy;              /* cron#79: 装料-act Σ (gp_cv_to_surf) <-> q::ForceFormat_Crouton */
+#ifdef GP_WTVEC_SPLIT
+    /* cron#84 task(2): live-solve split (gather-issue vs pack) in FARF only; the authoritative clean split is
+     * the single-thread microbench above (stats[12..14] = gather-only / full / pack-compute per wt-pack). */
+    FARF(ALWAYS, "GDN_PURE WTVEC_SPLIT(live) gather-issue=%llu pack=%llu (sum=%llu vs wt_vec=%llu)",
+         (unsigned long long)g_wtv_gather, (unsigned long long)g_wtv_pack,
+         (unsigned long long)(g_wtv_gather + g_wtv_pack), (unsigned long long)wt_vec);
+#endif
     if (statsLen > 28) stats[28] = (int)outcopy;              /* cron#79: 卸料 Σ (gp_surf_to_cv) <-> q::*OutputSlice */
     if (statsLen > 29) stats[29] = (int)((uint32_t)H * 24u);  /* cron#79: N_conv = H*24 (Newton=0); per-conv basis */
 #ifdef GP_LEANCHK_LIVE
@@ -2149,6 +2457,21 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
          (unsigned long long)wt_vec, (unsigned long long)wt_bia,
          (unsigned long long)scatter, (unsigned long long)other, (unsigned long long)outcopy,
          (unsigned long long)spin, (unsigned long long)g_cbusy, (unsigned long long)bulk_ld, (unsigned long long)bulk_st);
+#ifdef GP_RENORM_SPLIT
+    {   uint64_t rs_sum = g_rs_acc_vsxt + g_rs_acc_arith + g_rs_renorm_absmax + g_rs_renorm_tocv;
+        FARF(ALWAYS, "GDN_PURE RENORM_SPLIT acc_vsxt=%llu acc_arith=%llu absmax=%llu to_cv=%llu sum=%llu vs other=%llu (sum/other=%llu%%)",
+             (unsigned long long)g_rs_acc_vsxt, (unsigned long long)g_rs_acc_arith,
+             (unsigned long long)g_rs_renorm_absmax, (unsigned long long)g_rs_renorm_tocv,
+             (unsigned long long)rs_sum, (unsigned long long)other,
+             (unsigned long long)(other ? rs_sum * 100ull / other : 0));
+        /* Probe B: vsxt-only loops (acc3/from_cv/negw) vs addsh (vsxt+vasr loop); + 64-vec vsxt-pass count & mean. */
+        FARF(ALWAYS, "GDN_PURE RENORM_SPLIT(B) vsxt_body(acc3/from_cv/negw)=%llu addsh_vsxt+vasr=%llu (acc_vsxt=%llu) | vsxt_passes=%llu mean_per_pass=%llu mean_per_head=%llu",
+             (unsigned long long)g_rs_vsxt_body, (unsigned long long)g_rs_addsh_vasr,
+             (unsigned long long)g_rs_acc_vsxt, (unsigned long long)g_rs_vsxt_passes,
+             (unsigned long long)(g_rs_vsxt_passes ? g_rs_acc_vsxt / g_rs_vsxt_passes : 0),
+             (unsigned long long)(H ? g_rs_vsxt_passes / (unsigned)H : 0));
+    }
+#endif
 #ifdef GP_TRACE
     {   /* serialize the event trace into T (overwrites the result; trace runs are timeline-only).
          * [magic][n][wall u64][base u64=t0] then n*{tid u32, stage u32, t0 u64, t1 u64}. */
