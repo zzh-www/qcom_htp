@@ -192,8 +192,8 @@ repeatedly inverted verdicts. Unit = PCYCLE (= C15:14 = optrace; this baseline s
 | **Consumer kernel occupancy (整核)** | the consumer *thread* running the matmul kernel (convhhh) per call = thread-wall | **~1576/conv** = MAC(~363) + non-MAC bloat(~1213: bias staircase + M-loop + 14 cyc/pkt packet-stall); total `cbusy` **1.31M** | **"HMX compute / 真算" — this is the classic confusion.** It is thread-occupancy, mostly liftable. |
 | **Σ work-volume** | a stage's cycles summed across ALL threads/calls — NOT a wall | e.g. wt-vec Σ 2.05M = 4 producer threads = 0.51M/thread | a wall; **never rank wall levers by a Σ %** |
 | **Critical-path / thread-life** | the slowest single-thread span — correlates with wall | slowest-prod-life lmax = **1.53M** (= feed 1.00M + spin 0.50M + skew) | "producer work" (it includes spin = waiting the HMX) |
-| **Roofline floor** | max(parallel producer-feed/P, serial consumer-occupancy) | current = max(1.00M, **1.31M**) = **1.31M**; after a lean consumer = max(1.00M, 0.28M) = **1.00M** (🟡 derived) | settled (the lean-consumer branch is DERIVED) |
-| **Wall** | 32-head TOTAL, VTCM-only, reps2-8 median | **1.738M** (the final verdict number) | — |
+| **Roofline floor** | ~~max(parallel producer-feed/P, serial consumer-occupancy)~~ → **wall(P) = feed_Σ/P + b_serial** (cron#82: `max(...)` is only a LOWER BOUND — it dropped the serial constant `b_serial`) | A态 current = 1.31M; **lean (cron#82 VERIFIED) = feed_Σ/P 1.004M + b_serial 0.376M ≈ 1.41M** (P-fit `wall=4.136M/P+0.376M`, slope 4.136M ≈ HVX-Σ 4.02M within 3%) | the bare `max(feed/P, consumer)` — it ignores b_serial (mostly glue) |
+| **Wall** | 32-head TOTAL, VTCM-only, reps2-8 median | A态 **1.733M**; **lean (cron#82 Stage B, GP_LEANMM gated) = 1.410M (−18.6%, bit-exact)** | — |
 
 **The crucial distinction (memorize): consumer-thread-occupancy ≠ HMX-unit-MAC.** Same 16 tile-MAC →
 lean dilate micro 363 cyc vs convhhh 1576 cyc (4.3×). The 1213-cyc difference is kernel bloat
@@ -204,48 +204,77 @@ lean dilate micro 363 cyc vs convhhh 1576 cyc (4.3×). The 1213-cyc difference i
 - latency vs throughput (which field to read) follows the existing htp-cycle-metric rule (pick by whether
   that unit is the saturated bottleneck); unchanged.
 
-## Current pure-HMX numbers, every one tagged to a level + 🟢verified/🟡derived (cron#81 SPEC)
+## Current pure-HMX numbers, every one tagged to a level + 🟢verified/🟡derived (cron#82 Stage B = VERIFIED)
 
-| quantity | value | level / 口径 | tag |
-|---|---|---|---|
-| wall | 1.738M | Wall (32-head total, VTCM-only, reps2-8 median) | 🟢 |
-| HMX-unit MAC (真算)/conv | ~363 | HMX-unit MAC (lean kernel, same 16 tile-MAC, cron#78) | 🟢 |
-| HMX-unit MAC total | ~0.28M | 768 × 363 | 🟢/🟡 (×768 not yet measured on the solve path) |
-| consumer occupancy/conv | ~1576 | Consumer kernel occupancy (convhhh, 14 cyc/pkt) | 🟢 |
-| consumer occupancy total (cbusy) | 1.31M | = MAC 0.28M + bloat ~1.0M | 🟢 |
-| producer feed/thread (feed_pt) | 1.00M | DERIVED: (verified-Σ 的合计)/P — Σ_HVX≈4.02M = wt-vec 2.054M + wt-bias 0.456M + act 0.112M + renorm/acc 1.255M + outcopy 0.139M (各 Σ 均逐字见 perf_baseline_cron77.txt;outcopy=卸料 HVX,producer 线程也做), ÷4 | 🟡 DERIVED |
-| spin/thread (spin_pt) | 0.50M | DERIVED: SPIN Σ 2.007M (🟢 逐字见 perf_baseline_cron77.txt `[waste] SPIN idle-wait Σcyc=2007041`) ÷4 = waiting-HMX, **consumer-dependent** | 🟡 DERIVED |
-| slowest-prod-life (lmax) | 1.53M | Critical-path (feed 1.00M + spin 0.50M + skew) | 🟢 |
-| roofline floor (current) | 1.31M | max(feed/P 1.00M, consumer-occupancy 1.31M) | 🟢 |
-| roofline floor (after lean consumer) | 1.00M | max(feed/P 1.00M, MAC 0.28M) | 🟡 derived |
-| wall ceiling (after lean consumer) | ~1.0M + glue ≈ **−42%** | derived | 🟡 derived |
-| wall − current floor = schedulable slack | ~0.43M | glue + spin-bubble + imbalance | 🟢 |
+> **cron#82 Stage B landed the lean consumer kernel (`example/gdn_native/pure_hmx_solve/lean_mm64.h`,
+> `-DGP_LEANMM` gated, default OFF — production byte path unchanged). The mechanism (consumer is
+> bloat-bound; stripping it flips the wall to feed-bound) is now 🟢 CONFIRMED on device; the 42%
+> ceiling is 🔴 REFUTED (real gain −18.6%). Evidence file: `Agent/current/perf_baseline_cron82_leanmm.txt`.**
+> **Honesty: lean is VALIDATED BIT-EXACT, GATED, PENDING PROMOTION (promote = Phase 2, not done).**
 
-## The verdict, restated to this taxonomy (and what it RETRACTS)
+| quantity | A态 value | lean (cron#82) | level / 口径 | tag |
+|---|---|---|---|---|
+| wall | 1.733M | **1.410M (−18.6%)** | Wall (32-head total, VTCM-only, reps2-8 median, A/B paired same thermal) | 🟢 |
+| HMX-unit MAC (真算)/conv | ~363 | ~363 | HMX-unit MAC (lean kernel, same 16 tile-MAC, cron#78) | 🟢 |
+| consumer occupancy/conv (per-call) | ~1574 | **475 (3.3×)** | Consumer kernel occupancy (A=convhhh 14 cyc/pkt; lean strips bloat toward MAC) | 🟢 |
+| consumer occupancy total (cbusy) | 1.309M | **0.376M (−71%)** | A = MAC 0.28M + bloat ~1.0M; lean ≈ MAC-bound | 🟢 |
+| spin Σ (4-thread sum) | 1.983M | **0.544M (−73%)** | SPIN idle-wait Σ = waiting-the-1-HMX; the −73% PROVES spin is consumer-dependent | 🟢 |
+| slowest-prod-life (lmax) | 1.541M | **1.195M** | Critical-path / thread-life | 🟢 |
+| producer feed_Σ (HVX work-volume) | ~4.02M | ~4.02M (unchanged) | wt-vec 2.054M + wt-bias 0.456M + act 0.112M + renorm/acc 1.255M + outcopy 0.139M (逐字 perf_baseline_cron77.txt) | 🟢 |
+| producer feed/P (P=4) | 1.00M | **1.004M** | feed_Σ ÷ P; cron#82 confirmed via P-sweep slope | 🟢 |
+| **bottleneck** | consumer-occupancy-bound at floor 1.31M | **FEED-BOUND** (consumer 0.376M ≪ feed/P 1.004M) | 翻转 = cron#82 实测 | 🟢 |
+| **b_serial (serial floor)** | — | **0.376M** | glue 0.215M + 残留 spin 0.136M/thread + skew 0.055M — the constant `max(...)` dropped | 🟢 |
+| **wall ceiling formula** | ~~max(feed/P, consumer)~~ 🔴 REFUTED | **wall(P) = feed_Σ/P + b_serial** | P-fit `wall=4.136M/P+0.376M`, slope 4.136M ≈ HVX-Σ 4.02M (3%) | 🟢 |
+| ~~wall ceiling (after lean consumer)~~ | ~~~1.0M + glue ≈ **−42%**~~ | 🔴 **REFUTED → real −18.6%** | ~~derived (max(feed/P,consumer) 漏 b_serial)~~ | 🔴 REFUTED |
+| next-step feed/P (🟡, UNMEASURED) | — | wt-vec halved → ~1.12M; P=6 → ~1.07M | DERIVED extrapolation of `wall=4.136M/P+0.376M` — NOT measured | 🟡 derived |
 
-**Current pure-HMX is consumer-occupancy-bound AT THE FLOOR 1.31M — and it is BLOAT-bound, not
-MAC-bound.** The #1 lever is **leaning the consumer kernel** (strip the ~1.0M of non-MAC bloat →
-consumer 0.28M → floor 1.00M); wt-pack feed is the SECOND tier (it only becomes binding after the
-consumer is leaned). The following earlier claims are RETRACTED (kept struck for the audit trail):
+## The verdict, restated to this taxonomy (cron#82 Stage B = VERIFIED, and what it RETRACTS)
 
-- ❌ ~~"producer-bound (lmax 1.53M > consumer 1.30M)"~~ → lmax includes 0.50M spin = waiting-HMX, not
-  pure producer work. **Correction: currently consumer-occupancy-bound at floor 1.31M (and bloat-bound,
-  not MAC-bound).**
+**The lean consumer kernel was landed (`-DGP_LEANMM` gated, bit-exact) and measured. The mechanism is
+🟢 CONFIRMED and the bottleneck has FLIPPED to feed-bound — but the 42% ceiling is 🔴 REFUTED.**
+
+1. **Lean consumer = DONE, −18.6% bit-exact (🟢 cron#82, GP_LEANMM gated, PENDING PROMOTION).** Stripping
+   the ~1.0M non-MAC bloat dropped consumer occupancy 1.309M → **0.376M** (per-call 1574 → **475**, 3.3×),
+   and wall **1.733M → 1.410M (−18.6%)**, oc 4.238e-3 逐位不变, LEANCHK max|d|=0. The mechanism
+   (consumer is bloat-bound) is CONFIRMED. **It is validated bit-exact but still GATED, not yet the
+   production path — promotion is Phase 2.**
+2. **Bottleneck flipped to FEED-BOUND (🟢).** consumer 0.376M ≪ feed/P 1.004M. P-sweep: wall(P4)=1.410M,
+   wall(P2)=2.444M ⇒ `wall = 4.136M/P + 0.376M`; the slope 4.136M ≈ independently-measured HVX work-Σ
+   4.02M (within 3%) = feed-bound 铁证. spin Σ 1.983M → 0.544M (−73%) PROVES spin was consumer-dependent
+   (waiting the 1 HMX), not producer's own work.
+3. **🔴 −42% ceiling REFUTED → real −18.6%.** cron#81's ceiling used `floor = max(feed/P 1.00M,
+   consumer)`, which **dropped the serial floor `b_serial`** (main missing item = glue 0.215M, never
+   counted). The real serial constant is **b_serial = 0.376M** (glue 0.215M + 残留 spin 0.136M/thread +
+   skew 0.055M). The correct ceiling 口径 is `wall(P) = feed_Σ/P + b_serial`, **NOT** `max(parallel
+   extremes)` — `max(...)` is only a lower bound; any ceiling prediction MUST include the P-sweep-measured
+   serial constant b_serial or it systematically over-states the gain.
+
+The following earlier claims stay RETRACTED (kept struck for the audit trail):
+
+- ❌ ~~"producer-bound (lmax 1.53M > consumer 1.30M)"~~ → lmax includes spin = waiting-HMX. **Correction:
+  A态 was consumer-occupancy-bound at floor 1.31M; after lean (cron#82) it is FEED-BOUND.**
 - ❌ ~~"leaning the consumer is worth only ~11% of wall"~~ → spin is consumer-dependent. **Correction:
-  ceiling ~42% (🟡 derived).**
-- ❌ ~~"真算 = 1576/conv (1.31M)" / "165/walk = pure mxmem"~~ → 1576 is the bloated occupancy; 165/walk
-  includes stall. **Correction: 真算 = 363/conv ≈ 0.28M.**
-- ❌ ~~"#1 lever = producer feed (wt-pack vgather)"~~ → wt-pack is below the floor (Σ 2.52M = 0.63M/thread;
-  0.51M is the wt-**vec** sub-item per-thread, not wt-pack). **Correction: #1 lever = lean the consumer
-  kernel; wt-pack is the second tier, binding only after.**
+  lean is worth −18.6% (🟢 measured).**
+- ❌ ~~"ceiling ~42% (🟡 derived)"~~ → cron#81's `max(feed/P, consumer)` dropped b_serial. **🔴 REFUTED:
+  real gain −18.6%; ceiling = feed_Σ/P + b_serial(~0.38M).**
+- ❌ ~~"真算 = 1576/conv (1.31M)" / "165/walk = pure mxmem"~~ → 1576 is the bloated occupancy. **Correction:
+  真算 = 363/conv; lean per-call 475 ≈ approaches it.**
+- ❌ ~~"#1 lever = producer feed (wt-pack vgather)" (as A态 #1)~~ → it was below the A态 floor. **Correction:
+  after lean it IS the new #1 lever (feed-bound): producer feed (wt-vec vgather 51% + renorm/acc 31%), or
+  raise P.**
 
 ## Honesty rule (so this doesn't mislead in the OTHER direction)
 
-The *decomposition* of the verdict ("consumer-occupancy-bound / #1 = lean consumer kernel") is
-**🟢 verified**. But the **42% ceiling is 🟡 DERIVED** — it assumes the lean from-scratch micro (cron#78's
-363 cyc) actually drops onto the solve's consumer path, which has NOT been done (the 363 is a
-from-scratch micro, not yet landed in the solve consumer). Tag it 🟡; **do not write it as a new
-"settled" number.**
+The verdict decomposition ("consumer was bloat-bound → lean → feed-bound") and the −18.6% gain are now
+**🟢 VERIFIED on device** (cron#82, `Agent/current/perf_baseline_cron82_leanmm.txt`). What is NOT yet
+done / NOT measured:
+
+- **lean is GATED (`-DGP_LEANMM`), NOT yet promoted to production.** Promotion = Phase 2. Do not write it
+  as "the production path".
+- The **next-step feed/P estimates are 🟡 DERIVED, unmeasured**: wt-vec halved → ~1.12M, P=6 → ~1.07M (both
+  extrapolated from `wall=4.136M/P+0.376M`). Do not write them as settled.
+- **General methodology rule (cron#82):** never report a ceiling as `max(parallel extremes)`. Always
+  `feed_Σ/P + b_serial` with a P-sweep-measured b_serial. `max(...)` is a lower bound only.
 
 ---
 

@@ -1,0 +1,96 @@
+================================================================================
+PURE-HMX w16a16 三角求逆 — LEAN consumer kernel 设备硬证据 (cron#82 Stage B)
+  机理假设 🟢 CONFIRMED (consumer bloat-bound; 拆后翻转 feed-bound);
+  42% 定量 ceiling 🔴 REFUTED (实测真增益 −18.6%, 不是 −42%)。
+================================================================================
+DATE        : 2026-06-15
+DEVICE      : oneplus (termux sshd; v75 cDSP TURBO; clock self-check wall/us ≈ 1594)
+口径(metric): 32-head TOTAL graph wall, VTCM-only (bulk DDR<->VTCM 出计时窗=artifact);
+              steady = reps2-8 median, 绝不取 min (loop doc §口径)。
+              同热窗 A/B/B2 交替环比配对 (ACAC...) 取中位。
+状态(honesty): lean 核 (lean_mm64.h, GP_LEANMM gated) = VALIDATED BIT-EXACT, GATED,
+              PENDING PROMOTION (提生产 = Phase 2, 尚未做)。当前生产路径仍是 convhhh。
+
+REPRODUCE
+---------
+# A) 自检 lean 核 bit-exact (LEANCHK: 逐 conv max|d| vs native kernel 必须 = 0):
+EXTRA_DEFS="-DGDNBM_GDN_PURE_SOLVE -DGP_LEANMM -DGP_LEANCHK" bash example/gdn_native/baremetal/build.sh
+# B) lean perf (gated 核上 32-head wall):
+EXTRA_DEFS="-DGDNBM_GDN_PURE_SOLVE -DGP_LEANMM" bash example/gdn_native/baremetal/build.sh
+# 部署 + 跑 + 算 oc (reps2-8 median 由 --reps 触发):
+uv run python scripts/run_w16a16_head_phase4.py --deploy --threads 4 --heads 32 --scale 0.05 --reps 8
+# 基线 A 态 (生产 convhhh, 对照) = perf_baseline_cron77.txt 同命令去掉 GP_LEANMM。
+# P-sweep (feed-bound 铁证): --threads 2 与 --threads 4 各跑, 拟合 wall=feed_Σ/P + b_serial。
+
+================================================================================
+A/B/B2 三配置 device 实测表 (reps2-8 median, 同热窗配对, VTCM-only)
+================================================================================
+  A   = 生产 convhhh consumer (cron#77 best, baseline)        — perf_baseline_cron77.txt
+  B   = lean consumer kernel (lean_mm64.h, GP_LEANMM)         — Stage B 主结果
+  B2  = lean + LEANCHK self-check (bit-exact gate)            — 正确性门
+
+| 量                         | A (convhhh, 生产)  | B (lean, GP_LEANMM) | 变化         | 口径 / 字段                         |
+|----------------------------|--------------------|---------------------|--------------|-------------------------------------|
+| wall (32-head TOTAL)       | 1.733M             | **1.410M**          | **−18.6%**   | graph-wall, VTCM-only, reps2-8 med  |
+| consumer 整核占用 (cbusy)  | 1.309M             | **0.376M**          | −71%         | HMX Σ cycles_used (整核占用)        |
+| consumer per-call          | 1574               | **475**             | 3.3×         | per-call occupancy (1 conv)         |
+| spin Σ (4 线程之和)        | 1.983M             | **0.544M**          | −73%         | SPIN idle-wait Σcyc (= 等-HMX)      |
+| slowest-prod-life (lmax)   | 1.541M             | **1.195M**          | −22%         | Critical-path / thread-life         |
+| wt-pack Σ (wt-vec+bias)    | 2.521M             | ~2.52M (不变)       | ~0           | 装料-wt Σ work-volume               |
+| oc (synthetic 0.05, 32head)| 4.238e-3           | **4.238e-3**        | 逐位不变     | device T vs fp64 inv, 硬门 < 4e-2 ✅ |
+| LEANCHK (max|d| vs native) | —                  | **0**               | bit-exact ✅ | 逐 conv 自检 (B2 build)             |
+| PACKCHK                    | 0                  | 0                   | ✅            | HVX wt-pack byte-exact self-check   |
+
+BIT-EXACT 证据
+--------------
+- LEANCHK (B2 build, -DGP_LEANCHK): 每个 conv lean_mm64 输出 vs native our_v73deep_kernel_i16
+  逐 code max|d| = 0 (lean 核是 ALIGNED MAIN PATH 的 flat-loop 复刻, register-traced byte-verified)。
+- 端到端 oc = 4.238e-3 (mean) — 与生产 A 态逐位一致 (4.238e-3), PACKCHK=0。
+- ⇒ lean 核 = bit-exact 到生产数值路径, 仅占用周期不同 (拆掉 ~1.0M 非-MAC 臃肿)。
+
+================================================================================
+🟢 VERIFIED 结论 (cron#82 Stage B)
+================================================================================
+1. 机理假设 🟢 CONFIRMED:
+   - consumer 是 bloat-bound: convhhh 整核占用 1574/conv 里只 ~363 是 HMX-unit MAC,
+     其余 ~1213 是非-MAC 核臃肿 (bias staircase + M-loop, 14 cyc/pkt packet-stall)。
+     lean 把它拆到 per-call 475 (consumer 整核 1.309M → 0.376M, −71%)。
+   - spin 真是等-HMX (consumer-依赖): consumer 拆掉后 spin Σ 1.983M → 0.544M (−73%),
+     证明 spin 不是 producer 自己的活, 而是 producer 等 1 个 HMX 出活的气泡。
+
+2. 瓶颈翻转 = feed-bound (🟢 实测坐实):
+   - consumer 整核占用 0.376M ≪ feed/P 1.004M ⇒ consumer 不再是瓶颈。
+   - P-scaling: wall(P4) = 1.410M, wall(P2) = 2.444M。
+     拟合 wall = 4.136M / P + 0.376M。
+   - 斜率 4.136M ≈ 独立测的 HVX 工作-Σ 4.02M (差 3%) = FEED-BOUND 铁证
+     (wall 的 P-可约部分 = HVX feed 总量 ÷ P, 不是 consumer 占用)。
+
+3. 新发现 b_serial (串行地板) = 0.376M:
+   = glue 0.215M + 残留 spin 0.136M/thread + skew 0.055M。
+   这是 wall 里随 P 增大而不缩的串行常数 (= cron#81 ceiling 公式漏掉的主缺项)。
+
+================================================================================
+🔴 REFUTED: −42% ceiling (cron#81 derived)
+================================================================================
+- cron#81 的 ceiling 口径 = floor = max(feed/P 1.00M, consumer-占用) ⇒ 推 wall ceiling ~−42%。
+- 此口径 **漏了串行地板 b_serial** (主缺项 = glue 0.215M 完全没算)。
+- 真增益 = −18.6% (1.733M → 1.410M), 不是 −42%。
+- 正确 ceiling 口径 (方法论沉淀, cron#82):
+      wall(P) = feed_Σ / P + b_serial(~0.38M)
+  **不是** max(并行极); max(...) 只是下界。
+  任何 ceiling 预测必须带 P-sweep 实测出的串行常数 b_serial, 否则系统性高估增益。
+
+================================================================================
+🟡 DERIVED (下一步 feed/P 估计, 均未测 — 别当 verified)
+================================================================================
+- wt-vec vgather 减半 → feed_Σ ~减半 → wall ~1.12M (🟡 derived, 未测)。
+- P=6 → wall ~1.07M (🟡 derived, 按 wall=4.136M/P+0.376M 外推, 未测)。
+- 这些是下一步候选, 不是已兑现增益。
+
+注 (口径)
+---------
+- consumer per-call 1574/475 是 consumer-thread-occupancy (整核占用), 不是 HMX-unit MAC;
+  真算 = HMX-unit MAC ~363/conv (lean dilate micro, cron#78)。lean 把整核占用逼近真算。
+- feed_Σ 4.02M = HVX 工作总量 (wt-vec 2.054M + wt-bias 0.456M + act 0.112M + renorm/acc 1.255M
+  + outcopy 0.139M, 逐字见 perf_baseline_cron77.txt), /P 得 feed/P。
+- bulk DDR<->VTCM 是 standalone-harness artifact, 出计时窗, 不计入 VTCM-only wall。
