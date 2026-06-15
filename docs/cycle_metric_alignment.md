@@ -230,7 +230,8 @@ lean dilate micro 363 cyc vs convhhh 1576 cyc (4.3×). The 1213-cyc difference i
 | **wall ceiling formula** | ~~max(feed/P, consumer)~~ 🔴 REFUTED | **wall(P) = feed_Σ/P + b_serial** | P-fit `wall=4.136M/P+0.376M`, slope 4.136M ≈ HVX-Σ 4.02M (3%) | 🟢 |
 | ~~wall ceiling (after lean consumer)~~ | ~~~1.0M + glue ≈ **−42%**~~ | 🔴 **REFUTED → real −18.3% (prod default) / −18.6% (gated)** | ~~derived (max(feed/P,consumer) 漏 b_serial)~~ | 🔴 REFUTED |
 | ~~next-step feed/P (🟡, UNMEASURED): wt-vec halved → ~1.12M; P=6 → ~1.07M~~ | — | 🔴 **cron#84 REFUTED on device** (wave1 P-sweep: P=2 2.44M / P=4 1.37M / P=6 1.72M = +25.6% rebound, 4-HVX ceiling, fixed P=4; wave2 wt-vec→vshuff bit-exact but wall unchanged, wt-vec Σ 2.08M→2.05M unmoved ⇒ wt-pack is NOT gather-bound) | both DERIVED estimates 🔴 refuted by Phase 3 measurement | 🔴 REFUTED |
-| next clean lever (cron#84) | — | renorm/acc (31% feed, Σ≈1.32M, pure-HVX, solve-only, UNATTACKED; 🟡 ~−7-12% → ~1.25M, UNMEASURED) | the only clean block left after P + wt-vec both refuted | 🟡 derived |
+| **wt-cache (cron#85, `GP_WTCACHE` gated default-OFF, commit 736b309)** | — | **wall −7.3% PINNED** (A/B same-kernel toggle paired, wt-cache-ON wall ~1.31M); wt-pack Σ 2.53M→2.08M (−18%, 640→512 pack, per-head WT-PACK 20→16) | per-producer wt-cache removes 128 redundant merge T-block re-packs; 口径 = **A/B same-kernel toggle** (ONLY GP_WTCACHE flag differs — NOT the cron#82 A=convhhh-production baseline, do not cross-mix tables) | 🟢 (−7.3% pinned 3-window; 🔴 the initial single-window −15.5% is a refuted lucky-window artifact) |
+| next clean lever (cron#84/#85) | — | renorm/acc (31% feed, Σ≈1.32M, pure-HVX, solve-only, UNATTACKED; 🟡 ~−7-12% → ~1.25M, UNMEASURED) | the only clean block left after P + wt-vec refuted; wt-cache (cron#85) has now landed the merge-redundant-wt-pack lever (gated), so renorm/acc is the remaining 2nd producer pole (WT-PACK Σ fell, ACC Σ unchanged ~1.2M) | 🟡 derived |
 | clean-path realistic floor (cron#84) | — | **~1.25–1.39M; ≤1.0M NOT reachable on the clean path** (would need an algorithm/precision trade-off — fewer matmuls / lower Taylor order, crossing the oc sweet spot, USER AUTHORIZATION required, not done) | honest floor; do not write "≤1.0M reachable (clean path)" | 🟢 |
 
 ## The verdict, restated to this taxonomy (cron#82 VERIFIED → cron#83 PROMOTED, and what it RETRACTS)
@@ -283,6 +284,30 @@ The following earlier claims stay RETRACTED (kept struck for the audit trail):
   ~−7-12% → ~1.25M). **Clean-path realistic floor ≈ 1.25–1.39M; ≤1.0M is NOT reachable on the clean path**
   (would need an algorithm/precision trade-off — fewer matmuls / lower Taylor order — crossing the oc sweet
   spot; USER AUTHORIZATION required, not done).
+
+## cron#85 — wt-cache (a THIRD feed lever, gated, −7.3% PINNED; the −15.5% correction)
+
+After cron#84 refuted raise-P and wt-vec→vshuff, a third feed lever DID land: **per-producer wt-cache**
+(`GP_WTCACHE`, gated default-OFF, commit 736b309, NOT yet promoted to production default). It removes the
+**128 redundant merge T-block re-packs** — in the off-diag merge the same `T_kj` weight is reused across
+multiple `(i,j)` output blocks, but those reuses are off-diagonal / non-contiguous (cron#77 keepwt only
+catches the contiguous same-weight diag chain), so a cache keyed by the weight's cv source pointer catches
+them zero-copy. WT-PACK drops 768→512 (per-head 20→16; per-producer 128 each; 512 = 768 − 128 keepwt −
+128 wtcache), wt-pack Σ 2.53M→2.08M (−18%). Byte-identical to mm64 (PACKCHK=0, LEANCHK_LIVE max|d|=0
+checked=768, oc 4.238e-3 逐位).
+
+- **wall = −7.3% PINNED** (A/B same-kernel toggle, 3 thermal windows same-window ACAC reps2-8 median,
+  consensus −7.3%, range −6.9~−7.3%, spread 0.36pp; wt-cache-ON wall ~1.31M); lmax −8%.
+- **🔴 the initial single-window −15.5% does NOT hold** (lucky-window / unpaired artifact); the 3-window
+  paired pin = **−7.3%** (口径 discipline: a 2×+ divergence → suspect the measurement first; reconciled via
+  multi-window pairing). lmax likewise −13.7% → measured −8%.
+- **⚠️ 口径 (do not cross-mix tables):** this −7.3% is an **A/B same-kernel toggle baseline** (both A and B
+  are the pure-solve kernel, ONLY the GP_WTCACHE flag differs), NOT the cron#82 A=convhhh-production
+  baseline — incompatible 口径, never put them in the same table.
+- bottleneck still FEED-BOUND (HMX consumer occupancy unchanged ~509 ≈ lean 497, still idle ~65-70%; the
+  cache cuts the COUNT of WT-PACK long poles 20→16, not the per-miss ~4.0K cost; new longest pole still the
+  MISS-mm WT-PACK, 2nd pole = renorm/acc). Evidence: `Agent/current/timeline_cron85_wtcache.txt` + commit
+  736b309 + `Agent/current/perf_baseline_cron82_leanmm.txt`.
 
 ## Honesty rule (so this doesn't mislead in the OTHER direction)
 
