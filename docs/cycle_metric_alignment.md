@@ -229,7 +229,9 @@ lean dilate micro 363 cyc vs convhhh 1576 cyc (4.3×). The 1213-cyc difference i
 | **b_serial (serial floor)** | — | **~0.376M** | glue 0.215M + 残留 spin 0.136M/thread + skew 0.055M — the constant `max(...)` dropped | 🟢 |
 | **wall ceiling formula** | ~~max(feed/P, consumer)~~ 🔴 REFUTED | **wall(P) = feed_Σ/P + b_serial** | P-fit `wall=4.136M/P+0.376M`, slope 4.136M ≈ HVX-Σ 4.02M (3%) | 🟢 |
 | ~~wall ceiling (after lean consumer)~~ | ~~~1.0M + glue ≈ **−42%**~~ | 🔴 **REFUTED → real −18.3% (prod default) / −18.6% (gated)** | ~~derived (max(feed/P,consumer) 漏 b_serial)~~ | 🔴 REFUTED |
-| next-step feed/P (🟡, UNMEASURED) | — | wt-vec halved → ~1.12M; P=6 → ~1.07M | DERIVED extrapolation of `wall=4.136M/P+0.376M` — NOT measured | 🟡 derived |
+| ~~next-step feed/P (🟡, UNMEASURED): wt-vec halved → ~1.12M; P=6 → ~1.07M~~ | — | 🔴 **cron#84 REFUTED on device** (wave1 P-sweep: P=2 2.44M / P=4 1.37M / P=6 1.72M = +25.6% rebound, 4-HVX ceiling, fixed P=4; wave2 wt-vec→vshuff bit-exact but wall unchanged, wt-vec Σ 2.08M→2.05M unmoved ⇒ wt-pack is NOT gather-bound) | both DERIVED estimates 🔴 refuted by Phase 3 measurement | 🔴 REFUTED |
+| next clean lever (cron#84) | — | renorm/acc (31% feed, Σ≈1.32M, pure-HVX, solve-only, UNATTACKED; 🟡 ~−7-12% → ~1.25M, UNMEASURED) | the only clean block left after P + wt-vec both refuted | 🟡 derived |
+| clean-path realistic floor (cron#84) | — | **~1.25–1.39M; ≤1.0M NOT reachable on the clean path** (would need an algorithm/precision trade-off — fewer matmuls / lower Taylor order, crossing the oc sweet spot, USER AUTHORIZATION required, not done) | honest floor; do not write "≤1.0M reachable (clean path)" | 🟢 |
 
 ## The verdict, restated to this taxonomy (cron#82 VERIFIED → cron#83 PROMOTED, and what it RETRACTS)
 
@@ -266,9 +268,21 @@ The following earlier claims stay RETRACTED (kept struck for the audit trail):
   real gain −18.3%; ceiling = feed_Σ/P + b_serial(~0.38M).**
 - ❌ ~~"真算 = 1576/conv (1.31M)" / "165/walk = pure mxmem"~~ → 1576 is the bloated occupancy. **Correction:
   真算 = 363/conv; lean per-call 475 ≈ approaches it.**
-- ❌ ~~"#1 lever = producer feed (wt-pack vgather)" (as A态 #1)~~ → it was below the A态 floor. **Correction:
-  after lean it IS the new #1 lever (feed-bound): producer feed (wt-vec vgather 51% + renorm/acc 31%), or
-  raise P.**
+- ❌ ~~"#1 lever = producer feed (wt-pack vgather)" (as A态 #1)~~ → it was below the A态 floor.
+  ❌ ~~"after lean it IS the new #1 lever (feed-bound): producer feed (wt-vec vgather 51%), or raise P"~~ →
+  🔴 **cron#84 Phase 3 REFUTED both on device.** wave1 raise-P: P-sweep P=2 2.44M / P=4 1.37M / P=6 1.72M
+  (+25.6% rebound) — the 4-HVX unit ceiling (v75 has only 4 HVX units; P=6 over-subscribes → contention only,
+  renorm/acc Σ 1.25M→3.02M, spin up), so P is fixed at 4 and `wall=4.136M/P+0.376M`'s P=6 extrapolation is
+  refuted. wave2 wt-vec vgather→vshuff: vshuff is **bit-exact** (PACKCHK=0 byte oracle + LEANCHK_LIVE max|d|=0
+  checked=768 + oc 4.238e-3; v75 PRM bitmask Rt=124) **but wall is unchanged** (A vgather ~1.39M ≈ B vshuff
+  ~1.41M) and **live wt-vec Σ does not move (2.08M→2.05M, −1.6% noise)** — which **refutes the "wt-vec live 2674
+  vs isolated 1080 = 2.5× = 4 producers fighting one gather engine" hypothesis**: removing the gather did not
+  drop wt-vec Σ, so wt-pack cost is HW-irreducible kmajor byte-pack compute + SMT issue-slot contention, NOT
+  gather-engine contention (consistent with the old repo finding "pack vshuff 8.4% irreducible").
+  **Correction: #1 lever (cron#84) = renorm/acc** (31% feed, Σ≈1.32M, pure-HVX, solve-only, UNATTACKED; 🟡
+  ~−7-12% → ~1.25M). **Clean-path realistic floor ≈ 1.25–1.39M; ≤1.0M is NOT reachable on the clean path**
+  (would need an algorithm/precision trade-off — fewer matmuls / lower Taylor order — crossing the oc sweet
+  spot; USER AUTHORIZATION required, not done).
 
 ## Honesty rule (so this doesn't mislead in the OTHER direction)
 
@@ -279,10 +293,17 @@ promotion commit d075ccd). What IS done vs what is NOT yet measured:
 - **lean IS the production default (cron#83, gate `#ifndef GP_NO_LEANMM`).** It is no longer gated, no
   longer pending — Phase 2 (promotion) is DONE. Production wall = 1.391M; `-DGP_NO_LEANMM` escapes to
   native (1.703M). Do NOT write it as "gated / pending promotion / production path is still convhhh".
-- The **next-step feed/P estimates are 🟡 DERIVED, unmeasured** (Phase 3): wt-vec halved → ~1.12M,
-  P=6 → ~1.07M (both extrapolated from `wall=4.136M/P+0.376M`). Do not write them as settled.
+- ❌ ~~The next-step feed/P estimates (wt-vec halved → ~1.12M, P=6 → ~1.07M) are 🟡 DERIVED~~ → 🔴
+  **cron#84 Phase 3 REFUTED on device**: raise-P REFUTED (P-sweep P=6 1.72M = +25.6% rebound, 4-HVX ceiling,
+  fixed P=4); wt-vec→vshuff REFUTED (bit-exact but wall unchanged, wt-vec Σ unmoved ⇒ NOT gather-bound). The
+  two largest feed levers are dead. **#1 lever now = renorm/acc** (31% feed, UNATTACKED, 🟡 ~−7-12% → ~1.25M,
+  UNMEASURED). **Clean-path floor ≈ 1.25–1.39M; ≤1.0M is NOT reachable clean** — needs an algorithm/precision
+  trade-off (fewer matmuls / lower Taylor order, crossing the oc sweet spot), USER AUTHORIZATION required, not
+  done. Do not write "≤1.0M reachable (clean path)".
 - **General methodology rule (cron#82):** never report a ceiling as `max(parallel extremes)`. Always
   `feed_Σ/P + b_serial` with a P-sweep-measured b_serial. `max(...)` is a lower bound only.
+  **cron#84 corollary: a linear P-fit (`feed_Σ/P + b_serial`) is only valid up to the HVX-unit count —
+  beyond P=4 (v75) over-subscription rebounds the wall; never extrapolate the fit past the unit ceiling.**
 
 ---
 
