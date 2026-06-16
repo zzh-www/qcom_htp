@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="430" viewBox="0 0 860 430" font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif">
+  <defs>
+    <style>
+      .ti{fill:#1f2933;font-size:19px;font-weight:600}
+      .pt{fill:#1f2933;font-size:15px;font-weight:600}
+      .s{fill:#52606d;font-size:13px} .m{fill:#7b8794;font-size:11.5px}
+      .axis{stroke:#cbd2d9;stroke-width:1}
+      .lbl{fill:#3e4c59;font-size:12.5px} .val{fill:#1f2933;font-size:13px;font-weight:600}
+      .win{fill:#2e7d57;font-size:14px;font-weight:700}
+    </style>
+  </defs>
+
+  <text x="30" y="34" class="ti">Pure-HMX route: GDNSolveHMX (shipping default)</text>
+  <text x="30" y="55" class="s">C=256, 32 heads · speed = 32-head TOTAL VTCM-only wall (reps2-8 median) · precision = oc vs fp64 inv(I−A)</text>
+
+  <!-- ============ Panel A: speed ============ -->
+  <text x="30" y="100" class="pt">Speed — 32-head TOTAL wall, VTCM-only (lower is better)</text>
+  <g transform="translate(200,116)">
+    <line class="axis" x1="0" y1="0" x2="0" y2="100"/>
+    <!-- scale: 1.703M -> 380px (full deflection = the baseline) -->
+    <!-- native baseline 1.703M -->
+    <rect x="0" y="8"  width="380" height="30" rx="4" fill="#cdd6df"/>
+    <text x="-12" y="28" text-anchor="end" class="lbl">native consumer</text>
+    <text x="388" y="28" class="val">1.703M  (baseline)</text>
+    <!-- pure-HMX 1.258M : 1.258/1.703*380 = 280.7 -->
+    <rect x="0" y="58" width="281" height="30" rx="4" fill="#3f7fbf"/>
+    <text x="-12" y="78" text-anchor="end" class="lbl">pure-HMX (ship)</text>
+    <text x="289" y="78" class="val">~1.258M</text>
+  </g>
+  <text x="600" y="160" class="win">−26%</text>
+  <text x="600" y="180" class="m">vs the native baseline (1.703M);</text>
+  <text x="600" y="196" class="m">FEED-BOUND, HMX 65–70% idle</text>
+  <text x="200" y="240" class="m">baseline = native consumer 1.703M (`-DGP_NO_LEANMM`); VTCM-only, same thermal window, reps2-8 median.</text>
+
+  <!-- ============ Panel B: precision ============ -->
+  <text x="30" y="288" class="pt">Precision — oc vs fp64 inv(I−A) (lower is better; hard gate &lt; 4e-2)</text>
+  <g transform="translate(200,304)">
+    <line class="axis" x1="0" y1="0" x2="0" y2="80"/>
+    <!-- scale: 4e-2 (the gate) -> 380px ; gate marker at 380 -->
+    <line x1="380" y1="-2" x2="380" y2="76" stroke="#c0392b" stroke-width="1.4" stroke-dasharray="4 3"/>
+    <text x="384" y="20" fill="#c0392b" font-size="12" font-weight="600">gate 4e-2</text>
+    <!-- real GDN 1.107e-2 : 1.107e-2/4e-2*380 = 105.2 -->
+    <rect x="0" y="8"  width="105" height="26" rx="4" fill="#8fb8de"/>
+    <text x="-12" y="26" text-anchor="end" class="lbl">real GDN data</text>
+    <text x="113" y="26" class="val">1.107e-2</text>
+    <!-- synthetic 4.238e-3 : 4.238e-3/4e-2*380 = 40.3 -->
+    <rect x="0" y="46" width="40" height="26" rx="4" fill="#3f7fbf"/>
+    <text x="-12" y="64" text-anchor="end" class="lbl">synthetic (ship)</text>
+    <text x="48" y="64" class="val">4.238e-3</text>
+  </g>
+  <text x="620" y="334" class="win">✓ well under gate</text>
+  <text x="620" y="354" class="m">bit-exact across all four builds</text>
+  <text x="620" y="370" class="m">(default vs every escape, RAW md5 match)</text>
+</svg>

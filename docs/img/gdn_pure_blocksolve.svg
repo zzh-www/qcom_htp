@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="440" viewBox="0 0 860 440" font-family="-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif">
+  <defs>
+    <style>
+      .ti{fill:#1f2933;font-size:19px;font-weight:600}
+      .s{fill:#52606d;font-size:13px} .m{fill:#7b8794;font-size:12px}
+      .cap{fill:#3e4c59;font-size:13.5px;font-weight:600}
+      .diag{fill:#fff4ec;stroke:#e08a52;stroke-width:1.5}
+      .merge{fill:#fdeede;stroke:#e0a060;stroke-width:1.5}
+      .zero{fill:#f6f7f9;stroke:#e1e5ea;stroke-width:1.2}
+      .bl{fill:#1f2933;font-size:14px;font-weight:600;text-anchor:middle}
+      .blk{fill:#7b8794;font-size:11px;text-anchor:middle}
+    </style>
+  </defs>
+
+  <text x="30" y="34" class="ti">All-HMX block solve · C=256 = 4×4 of 64-blocks</text>
+  <text x="30" y="56" class="s">T = (I − A)⁻¹, A strictly lower-triangular · every matmul on HMX · per head, 32 heads</text>
+
+  <!-- 4x4 grid -->
+  <g transform="translate(60,86)">
+    <!-- diagonal (i==j): HMX Taylor(3) -->
+    <!-- off-diag (i>j): HMX merge -->
+    <!-- upper (i<j): zero -->
+
+    <!-- row 0 -->
+    <rect class="diag"  x="0"   y="0"   width="78" height="78" rx="6"/>
+    <text x="39" y="34" class="bl">T₀₀</text><text x="39" y="50" class="blk">HMX</text><text x="39" y="65" class="blk">Taylor3</text>
+    <rect class="zero"  x="84"  y="0"   width="78" height="78" rx="6"/><text x="123" y="44" class="blk">0</text>
+    <rect class="zero"  x="168" y="0"   width="78" height="78" rx="6"/><text x="207" y="44" class="blk">0</text>
+    <rect class="zero"  x="252" y="0"   width="78" height="78" rx="6"/><text x="291" y="44" class="blk">0</text>
+
+    <!-- row 1 -->
+    <rect class="merge" x="0"   y="84"  width="78" height="78" rx="6"/>
+    <text x="39" y="124" class="bl">T₁₀</text><text x="39" y="142" class="blk">HMX merge</text>
+    <rect class="diag"  x="84"  y="84"  width="78" height="78" rx="6"/>
+    <text x="123" y="118" class="bl">T₁₁</text><text x="123" y="134" class="blk">HMX</text><text x="123" y="149" class="blk">Taylor3</text>
+    <rect class="zero"  x="168" y="84"  width="78" height="78" rx="6"/><text x="207" y="128" class="blk">0</text>
+    <rect class="zero"  x="252" y="84"  width="78" height="78" rx="6"/><text x="291" y="128" class="blk">0</text>
+
+    <!-- row 2 -->
+    <rect class="merge" x="0"   y="168" width="78" height="78" rx="6"/>
+    <text x="39" y="208" class="bl">T₂₀</text><text x="39" y="226" class="blk">HMX merge</text>
+    <rect class="merge" x="84"  y="168" width="78" height="78" rx="6"/>
+    <text x="123" y="208" class="bl">T₂₁</text><text x="123" y="226" class="blk">HMX merge</text>
+    <rect class="diag"  x="168" y="168" width="78" height="78" rx="6"/>
+    <text x="207" y="202" class="bl">T₂₂</text><text x="207" y="218" class="blk">HMX</text><text x="207" y="233" class="blk">Taylor3</text>
+    <rect class="zero"  x="252" y="168" width="78" height="78" rx="6"/><text x="291" y="212" class="blk">0</text>
+
+    <!-- row 3 -->
+    <rect class="merge" x="0"   y="252" width="78" height="78" rx="6"/>
+    <text x="39" y="292" class="bl">T₃₀</text><text x="39" y="310" class="blk">HMX merge</text>
+    <rect class="merge" x="84"  y="252" width="78" height="78" rx="6"/>
+    <text x="123" y="292" class="bl">T₃₁</text><text x="123" y="310" class="blk">HMX merge</text>
+    <rect class="merge" x="168" y="252" width="78" height="78" rx="6"/>
+    <text x="207" y="292" class="bl">T₃₂</text><text x="207" y="310" class="blk">HMX merge</text>
+    <rect class="diag"  x="252" y="252" width="78" height="78" rx="6"/>
+    <text x="291" y="286" class="bl">T₃₃</text><text x="291" y="302" class="blk">HMX</text><text x="291" y="317" class="blk">Taylor3</text>
+  </g>
+
+  <!-- legend / formulas -->
+  <g transform="translate(440,96)">
+    <rect class="diag" x="0" y="0" width="22" height="22" rx="4"/>
+    <text x="32" y="16" class="cap">Diagonal Tᵢᵢ (HMX, Taylor 3)</text>
+    <text x="32" y="36" class="s">Tᵢᵢ = Taylor3((I − Aᵢᵢ)⁻¹) = I + A + A² + A³</text>
+    <text x="32" y="54" class="s">Newton = 0 · A²/A³ keepwt reuse the A pack</text>
+
+    <rect class="merge" x="0" y="80" width="22" height="22" rx="4"/>
+    <text x="32" y="96" class="cap">Off-diagonal Tᵢⱼ (HMX merge, i &gt; j)</text>
+    <text x="32" y="116" class="s">Tᵢⱼ = Tᵢᵢ @ Σₖ Aᵢₖ @ Tₖⱼ</text>
+    <text x="32" y="134" class="s">block-forward-substitution, each matmul on HMX</text>
+
+    <rect class="zero" x="0" y="160" width="22" height="22" rx="4"/>
+    <text x="32" y="176" class="cap">Upper triangle = 0</text>
+
+    <text x="0" y="222" class="cap">Per head: 24 matmuls (8 diag + 16 merge) × 32 = 768</text>
+    <text x="0" y="242" class="m">all HMX · 64³ mxmem · VTCM-only (zero DDR in the middle)</text>
+  </g>
+</svg>
