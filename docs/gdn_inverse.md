@@ -136,6 +136,17 @@ precision for a further **−2.7%** wall: `oc 9.56e-3` (still < 1e-2). The defau
 
 ---
 
+## Sibling route: pure-HMX (`GDNSolveHMX`)
+
+A second, faster route runs **every** matmul — including the diagonal-block inversion — on the HMX
+engine, with all intermediates VTCM-resident: **[`gdn_inverse_pure_hmx.md`](gdn_inverse_pure_hmx.md)**
+(`GDNSolveHMX`, ~1.258 M / **−26%** vs the native baseline, vs this HVXMixHMX route's ~1.79 M). The two
+are different designs, not versions of each other; pick per integration constraints. Both routes and the
+shipping baseline pure-HVX route are tabulated in the authoritative engineering doc
+`Agent/current/gdn_solve.md`.
+
+---
+
 *Implementation files: `example/gdn_native/solve_br_op/src/GdnSolveBR16.cpp` (int16 static solve),
 `baremetal/src/gdnbm_imp.cpp` (FastRPC + pipeline), `solve_br_op/src/GdnSolveBROp.cpp` (pack / quant /
 merge / diagonal / HMX-kernel helpers). Authoritative engineering doc: `Agent/current/gdn_solve.md`.*

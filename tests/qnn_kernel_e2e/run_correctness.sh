@@ -37,3 +37,6 @@ echo "=== handwritten hmx matmul correctness ci ==="
 
 echo "=== gdn triangular-inverse (GDNSolveHVXMixHMX) precision gate ==="
 "$ROOT_DIR/tests/qnn_kernel_e2e/correctness/test_gdn_solve_e2e.sh"
+
+echo "=== gdn triangular-inverse (GDNSolveHMX pure-HMX) precision gate ==="
+"$ROOT_DIR/tests/qnn_kernel_e2e/correctness/test_gdn_pure_hmx_e2e.sh"
