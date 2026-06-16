@@ -525,8 +525,9 @@ static inline int gp_renorm(int32_t *acc, int16_t *cv) {
     if (s == 0) { while (mx && (mx << 1) <= 16384) { mx <<= 1; --s; } }
     gp_acc_to_cv(cv, acc, s); return s;
 }
-#ifdef GP_INPLACE_RENORM
-/* cron#87 lever B: in-place int16 renorm for the merge-FINAL T_ij = T_ii @ S sites (the 6
+#ifndef GP_NO_INPLACE_RENORM
+/* cron#89 lever B: PRODUCTION DEFAULT (in-place int16 renorm); -DGP_NO_INPLACE_RENORM escapes to int32 oracle.
+ * In-place int16 renorm for the merge-FINAL T_ij = T_ii @ S sites (the 6
  * lower-tri off-diag merges). Those do MM64 -> cv -> gp_acc_from_cv (sxt int16 INTO int32 acc, NO
  * accumulation) -> gp_renorm (absmax + asr-sat back to int16). The int32 acc round-trip is redundant
  * there because the cv already holds the only operand. This computes the SAME shift s and the SAME
@@ -534,7 +535,9 @@ static inline int gp_renorm(int32_t *acc, int16_t *cv) {
  * PROVIDED cv stays in [-32639, 32639] (no -32768): then int16 absmax == int32 absmax, and for the
  * value v fitting int16, sxt32(v) asr s == int16 v asr s, and the left-shift (s<0) clamp to ±32639
  * matches gp_acc_to_cv's clamp. Bit-exactness is the head risk -> device-verified (oc + raw byte diff).
- * MUST NOT be used on the diag(4) / merge-S Σ_k acc which genuinely overflows int16 and needs int32. */
+ * CAVEAT: relies on cv in [-32639, 32639] (no -32768); data-dependent. The -DGP_NO_INPLACE_RENORM int32
+ * path is the oracle (no such invariant). MUST NOT be used on the diag(4) / merge-S Σ_k acc which
+ * genuinely overflows int16 and needs int32. */
 static inline int gp_renorm_i16(int16_t *cv) {
     const HVX_Vector *d = (const HVX_Vector *)cv;
     HVX_Vector mxv = Q6_V_vzero();
@@ -1001,9 +1004,10 @@ static void solve_head(gp_ctx *c, const int16_t *Aq, int16_t *To) {
 #endif
             MM64(c, TBLK(i * 4 + i), c->prod, TBLK(i * 4 + j));   /* T_ij = T_ii @ S (dense: working operand order) */
             uint64_t _f0 = GP_EVT0();
-#ifdef GP_INPLACE_RENORM
-            /* cron#87 B: T_ij merge-final renorm in place on int16 (skip the redundant int32 acc round-trip).
-             * Production byte path unchanged (#else). Bit-exact device-verified before promote. */
+#ifndef GP_NO_INPLACE_RENORM
+            /* cron#89 B PRODUCTION DEFAULT: T_ij merge-final renorm in place on int16 (skip the redundant
+             * int32 acc round-trip). -DGP_NO_INPLACE_RENORM escapes to int32 oracle (#else).
+             * Bit-exact device-verified (RAW md5 == int32 path). CAVEAT: cv in [-32639,32639] (data-dep). */
             c->e[i * 4 + j] = c->e[i * 4 + i] + eS + gp_renorm_i16(TBLK(i * 4 + j));
 #else
             gp_acc_from_cv(c->acc, TBLK(i * 4 + j));
