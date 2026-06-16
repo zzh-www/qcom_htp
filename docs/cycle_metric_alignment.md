@@ -231,7 +231,7 @@ lean dilate micro 363 cyc vs convhhh 1576 cyc (4.3×). The 1213-cyc difference i
 | ~~wall ceiling (after lean consumer)~~ | ~~~1.0M + glue ≈ **−42%**~~ | 🔴 **REFUTED → real −18.3% (prod default) / −18.6% (gated)** | ~~derived (max(feed/P,consumer) 漏 b_serial)~~ | 🔴 REFUTED |
 | ~~next-step feed/P (🟡, UNMEASURED): wt-vec halved → ~1.12M; P=6 → ~1.07M~~ | — | 🔴 **cron#84 REFUTED on device** (wave1 P-sweep: P=2 2.44M / P=4 1.37M / P=6 1.72M = +25.6% rebound, 4-HVX ceiling, fixed P=4; wave2 wt-vec→vshuff bit-exact but wall unchanged, wt-vec Σ 2.08M→2.05M unmoved ⇒ wt-pack is NOT gather-bound) | both DERIVED estimates 🔴 refuted by Phase 3 measurement | 🔴 REFUTED |
 | **wt-cache (cron#85, `GP_WTCACHE` gated default-OFF, commit 736b309)** | — | **wall −7.3% PINNED** (A/B same-kernel toggle paired, wt-cache-ON wall ~1.31M); wt-pack Σ 2.53M→2.08M (−18%, 640→512 pack, per-head WT-PACK 20→16) | per-producer wt-cache removes 128 redundant merge T-block re-packs; 口径 = **A/B same-kernel toggle** (ONLY GP_WTCACHE flag differs — NOT the cron#82 A=convhhh-production baseline, do not cross-mix tables) | 🟢 (−7.3% pinned 3-window; 🔴 the initial single-window −15.5% is a refuted lucky-window artifact) |
-| next clean lever (cron#84/#85) | — | renorm/acc (31% feed, Σ≈1.32M, pure-HVX, solve-only, UNATTACKED; 🟡 ~−7-12% → ~1.25M, UNMEASURED) | the only clean block left after P + wt-vec refuted; wt-cache (cron#85) has now landed the merge-redundant-wt-pack lever (gated), so renorm/acc is the remaining 2nd producer pole (WT-PACK Σ fell, ACC Σ unchanged ~1.2M) | 🟡 derived |
+| next clean lever (cron#86 verdict) | — | **clean path AT STRUCTURAL FLOOR; only small lever B** (merge-final int32 redundant round-trip, `gdn_pure_solve.cpp:970-971`, 🟡 −2~4%, UNMEASURED) | cron#86: ~~renorm/acc 整块 31% feed ~−7-12%~~ refined — the renorm/acc int32 accumulator is a legitimate necessity (diag/merge-S overflow int16), NOT a big lever; only the 6 merge-final int32 round-trips (no Σ_k) are redundant → lever B. See §"cron#86 — structural-floor verdict" | 🟡 (B gain unmeasured; the structural-floor argument itself is 🟢) |
 | clean-path realistic floor (cron#84) | — | **~1.25–1.39M; ≤1.0M NOT reachable on the clean path** (would need an algorithm/precision trade-off — fewer matmuls / lower Taylor order, crossing the oc sweet spot, USER AUTHORIZATION required, not done) | honest floor; do not write "≤1.0M reachable (clean path)" | 🟢 |
 
 ## The verdict, restated to this taxonomy (cron#82 VERIFIED → cron#83 PROMOTED, and what it RETRACTS)
@@ -308,6 +308,58 @@ checked=768, oc 4.238e-3 逐位).
   cache cuts the COUNT of WT-PACK long poles 20→16, not the per-miss ~4.0K cost; new longest pole still the
   MISS-mm WT-PACK, 2nd pole = renorm/acc). Evidence: `Agent/current/timeline_cron85_wtcache.txt` + commit
   736b309 + `Agent/current/perf_baseline_cron82_leanmm.txt`.
+
+## cron#86 — structural-floor verdict (analyzer deep-dive; clean path basically at floor + lever B)
+
+After cron#85's wt-cache landed, an analyzer deep-dive (cron#86; **structural argument, not a fresh
+device run**) nailed three questions and concluded the **clean (non-precision) path is basically at its
+structural floor** — no big lever left, only one small untested lever **B**.
+
+**🟢 Three questions nailed (high-confidence structural argument):**
+
+1. **WT-PACK (#1 producer, 46% of busy by Σ) is at floor, both sides:**
+   - **(a) The count 16/head IS the per-matmul-weight minimum** (exact enumeration: **4 diag-A +
+     6 merge-T-distinct + 6 merge-final-S = 16**, each distinct weight packed once; **cross-head reuse =
+     0**, nothing missed). The candidate "transpose-reuse the 6 merge-final weights along columns
+     (6→3 pack)" is 🔴 **REFUTED** — it needs 15 perms/head, the perms use the same-source 64-vgather, and
+     the cost model is net −1%~loss (the same "vshuff moves HVX work, total volume unchanged" trap as the
+     cron#84 vshuff refutation).
+   - **(b) per-pack cost is at floor: the cv→kmajor bridge is structurally unavoidable.** kmajor is the
+     byte-expanded k-major stream order intrinsic to the weight-side input FORMAT; **HMX is a MAC engine —
+     it cannot produce kmajor and cannot permute**; and most intermediate weights A/A²/A³/T are also used
+     as act/acc (so they cannot reside in kmajor-only). Consistent with cron#84 "wt-pack is NOT
+     gather-bound; HW-irreducible kmajor byte-pack" — this is the structural-side proof (cron#84 was the
+     device-side proof).
+2. **The 65-70% idle HMX cannot absorb the HVX work 🟢 dead-end confirmed.** The producer's work is
+   physically impossible on the HMX: wt-pack = permute (HMX can't), out-copy = XOR (can't), renorm =
+   int32 vsxt/absmax/vasr/**exp-align** (HVX-only; the HMX has 1 acc, no exp-align). Feed-bound = the
+   TOTAL HVX volume is the limit; idle HMX physically cannot absorb it. simple overlap / pack-ahead do
+   not cut the volume (producer 81% busy, spin only 12-15% ⇒ feed already largely overlaps the HMX).
+3. **The ACC/renorm int32 accumulator is a legitimate necessity, NOT waste.** The diag(4) + merge-S(6)
+   renorm needs a **real int32 accumulator** (acc3/addsh sums overflow int16 — legal/necessary);
+   to_cv 34% (~5% wall-class) + absmax/vsxt are scattered and irreducible (wave3 measured).
+
+**🟡 The ONE untested small lever B (an int32 redundant round-trip the wave3 op-type bucketing missed):**
+The 6 merge-final `gp_acc_from_cv + gp_renorm` calls (`example/gdn_native/pure_hmx_solve/gdn_pure_solve.cpp:970-971`,
+the `T_ij = T_ii @ S` step) are an **int32 redundant round-trip** — the MM writes int16 cv (TBLK), it is
+filled into the int32 acc but with **NO accumulation** (single block, no Σ_k), then scaled back down; the
+only reason it touches int32 is that renorm currently runs on the int32 acc. Switching to an **in-place
+int16 renorm** (int16 vabs/vmax absmax + saturating shift/clamp) would skip this redundant int32 fill.
+**🟡 Predicted −2~4% wall (ceiling-class, small); RISK = bit-exact** (the int16 saturating shift must be
+bit-for-bit == the int32 vasr-sat — must be verified on device with `GP_LEANCHK_LIVE`). **To be tried in
+cron#87 (= the user's "try 1").**
+
+- **State (stated clearly):** clean-path floor ≈ **wt-cache-ON ~1.31M (toggle 口径) / production-default
+  lean 1.391M**; banked = lean −18.3% + wt-cache −7.3% (gated, commit 736b309), all bit-exact. ≤1.0M needs
+  a precision/algorithm trade-off (fewer matmuls / lower Taylor order, crossing the oc sweet spot, USER
+  AUTHORIZATION required).
+- **Honesty:** the three nailed questions (WT-PACK count/bridge, HMX absorption, ACC int32 necessity) =
+  🟢 high-confidence structural argument; lever B exists (line-by-line confirmed redundant round-trip,
+  `gdn_pure_solve.cpp:970-971`) = 🟢; **B's bit-exactness + actual gain (~2-4%) = 🟡 UNMEASURED (the only
+  open item — do not write it as already achieved).** The clean path **is at floor, only B remains (small)**
+  — do not write "still a big lever open".
+- **Next-step queue:** ② promote wt-cache to production default (user-approved, cron#83 pattern) + ① try B
+  (cron#87). Evidence = this section + `Agent/current/timeline_cron85_wtcache.txt` + cron#86 analyzer.
 
 ## Honesty rule (so this doesn't mislead in the OTHER direction)
 
