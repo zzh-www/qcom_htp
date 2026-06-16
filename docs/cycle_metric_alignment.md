@@ -230,9 +230,9 @@ lean dilate micro 363 cyc vs convhhh 1576 cyc (4.3×). The 1213-cyc difference i
 | **wall ceiling formula** | ~~max(feed/P, consumer)~~ 🔴 REFUTED | **wall(P) = feed_Σ/P + b_serial** | P-fit `wall=4.136M/P+0.376M`, slope 4.136M ≈ HVX-Σ 4.02M (3%) | 🟢 |
 | ~~wall ceiling (after lean consumer)~~ | ~~~1.0M + glue ≈ **−42%**~~ | 🔴 **REFUTED → real −18.3% (prod default) / −18.6% (gated)** | ~~derived (max(feed/P,consumer) 漏 b_serial)~~ | 🔴 REFUTED |
 | ~~next-step feed/P (🟡, UNMEASURED): wt-vec halved → ~1.12M; P=6 → ~1.07M~~ | — | 🔴 **cron#84 REFUTED on device** (wave1 P-sweep: P=2 2.44M / P=4 1.37M / P=6 1.72M = +25.6% rebound, 4-HVX ceiling, fixed P=4; wave2 wt-vec→vshuff bit-exact but wall unchanged, wt-vec Σ 2.08M→2.05M unmoved ⇒ wt-pack is NOT gather-bound) | both DERIVED estimates 🔴 refuted by Phase 3 measurement | 🔴 REFUTED |
-| **wt-cache (cron#85, `GP_WTCACHE` gated default-OFF, commit 736b309)** | — | **wall −7.3% PINNED** (A/B same-kernel toggle paired, wt-cache-ON wall ~1.31M); wt-pack Σ 2.53M→2.08M (−18%, 640→512 pack, per-head WT-PACK 20→16) | per-producer wt-cache removes 128 redundant merge T-block re-packs; 口径 = **A/B same-kernel toggle** (ONLY GP_WTCACHE flag differs — NOT the cron#82 A=convhhh-production baseline, do not cross-mix tables) | 🟢 (−7.3% pinned 3-window; 🔴 the initial single-window −15.5% is a refuted lucky-window artifact) |
-| next clean lever (cron#86 verdict) | — | **clean path AT STRUCTURAL FLOOR; only small lever B** (merge-final int32 redundant round-trip, `gdn_pure_solve.cpp:970-971`, 🟡 −2~4%, UNMEASURED) | cron#86: ~~renorm/acc 整块 31% feed ~−7-12%~~ refined — the renorm/acc int32 accumulator is a legitimate necessity (diag/merge-S overflow int16), NOT a big lever; only the 6 merge-final int32 round-trips (no Σ_k) are redundant → lever B. See §"cron#86 — structural-floor verdict" | 🟡 (B gain unmeasured; the structural-floor argument itself is 🟢) |
-| clean-path realistic floor (cron#84) | — | **~1.25–1.39M; ≤1.0M NOT reachable on the clean path** (would need an algorithm/precision trade-off — fewer matmuls / lower Taylor order, crossing the oc sweet spot, USER AUTHORIZATION required, not done) | honest floor; do not write "≤1.0M reachable (clean path)" | 🟢 |
+| **wt-cache (cron#85 gated → cron#87 PRODUCTION DEFAULT, commit 736b309/01c5376)** | — | **wall −7.6% PRODUCTION (cron#87, ~1.30M / median 1.299M)**; cron#85 gated toggle −7.3% PINNED; wt-pack Σ 2.53M→2.08M (−18%, 640→512 pack, per-head WT-PACK 20→16) | per-producer wt-cache removes 128 redundant merge T-block re-packs; **cron#87 PROMOTED to production default** (gate `#ifdef GP_WTCACHE`→`#ifndef GP_NO_WTCACHE`, 9 sites; `-DGP_NO_WTCACHE` escapes; orthogonal to GP_NO_LEANMM, 4 states self-consistent). cron#85 −7.3% 口径 = A/B same-kernel toggle (do not cross-mix with cron#82 A=convhhh baseline) | 🟢 (−7.6% production 3-window; gated toggle −7.3% pinned; 🔴 the initial single-window −15.5% is a refuted lucky-window artifact) |
+| next clean lever B (cron#86 → cron#88 REALIZED, gated, commit e5b8834) | — | **wall −3.9% (cron#88, gated `GP_INPLACE_RENORM` default-OFF; B-on ~1.25M)** — merge-final int32 redundant round-trip → in-place int16 renorm (`gdn_pure_solve.cpp` ~528/~972) | cron#86 identified it (renorm/acc int32 accumulator is a legitimate necessity for diag/merge-S which overflow int16, NOT a big lever; only the 6 merge-final int32 round-trips with NO Σ_k are redundant → lever B); cron#88 REALIZED it. ⚠️ bit-exact depends on the cv∈[−32639,32639] invariant (DATA invariant, NOT a compile-time guarantee; #else int32 path kept as oracle). See §"cron#88 — lever B realized" | 🟢 (−3.9% verified by RAW md5 + 3-window; **gated, NOT promoted to production**; the cv-invariant caveat is a 🟡 data-dependency) |
+| clean-path realistic floor (cron#84/#87/#88) | — | **production default ~1.30M (lean+wt-cache, cron#87); +B (gated) ~1.25M; ≤1.0M NOT reachable on the clean path** (would need an algorithm/precision trade-off — fewer matmuls / lower Taylor order, crossing the oc sweet spot, USER AUTHORIZATION required, not done) | honest floor; cumulative ~−27% vs native 1.70M; do not write "≤1.0M reachable (clean path)" | 🟢 |
 
 ## The verdict, restated to this taxonomy (cron#82 VERIFIED → cron#83 PROMOTED, and what it RETRACTS)
 
@@ -349,10 +349,12 @@ int16 renorm** (int16 vabs/vmax absmax + saturating shift/clamp) would skip this
 bit-for-bit == the int32 vasr-sat — must be verified on device with `GP_LEANCHK_LIVE`). **To be tried in
 cron#87 (= the user's "try 1").**
 
-- **State (stated clearly):** clean-path floor ≈ **wt-cache-ON ~1.31M (toggle 口径) / production-default
-  lean 1.391M**; banked = lean −18.3% + wt-cache −7.3% (gated, commit 736b309), all bit-exact. ≤1.0M needs
-  a precision/algorithm trade-off (fewer matmuls / lower Taylor order, crossing the oc sweet spot, USER
-  AUTHORIZATION required).
+- **State (cron#86 snapshot — SUPERSEDED by cron#87/#88 below; current state = §cron#87/#88):** clean-path
+  floor ≈ wt-cache-ON ~1.31M (toggle 口径) / production-default lean 1.391M; banked at cron#86 time =
+  lean −18.3% + wt-cache −7.3% (then gated, commit 736b309), all bit-exact. **(cron#87 then PROMOTED
+  wt-cache to production default → ~1.30M / −7.6%; cron#88 then realized lever B gated → ~1.25M / −3.9%.)**
+  ≤1.0M needs a precision/algorithm trade-off (fewer matmuls / lower Taylor order, crossing the oc sweet
+  spot, USER AUTHORIZATION required).
 - **Honesty:** the three nailed questions (WT-PACK count/bridge, HMX absorption, ACC int32 necessity) =
   🟢 high-confidence structural argument; lever B exists (line-by-line confirmed redundant round-trip,
   `gdn_pure_solve.cpp:970-971`) = 🟢; **B's bit-exactness + actual gain (~2-4%) = 🟡 UNMEASURED (the only
@@ -360,6 +362,51 @@ cron#87 (= the user's "try 1").**
   — do not write "still a big lever open".
 - **Next-step queue:** ② promote wt-cache to production default (user-approved, cron#83 pattern) + ① try B
   (cron#87). Evidence = this section + `Agent/current/timeline_cron85_wtcache.txt` + cron#86 analyzer.
+
+## cron#87 — wt-cache PROMOTED to production default (−7.6%, ~1.30M)
+
+After cron#85 validated wt-cache gated (−7.3% PINNED) and cron#86 confirmed the clean path is at floor,
+cron#87 **promoted wt-cache to the production default** (commit 01c5376). Gate flipped
+`#ifdef GP_WTCACHE` (opt-in) → `#ifndef GP_NO_WTCACHE` (wt-cache default-ON; `-DGP_NO_WTCACHE` escapes
+to no-cache mm64), 9 sites. The default build is now **lean + wt-cache both ON**; orthogonal to
+`GP_NO_LEANMM` (which escapes to the native consumer), so the {wtcache × lean} 4 states are
+self-consistent.
+
+- **wall = ~1.30M (median 1.299M), ΔWall = −7.6%** (3 thermal windows same-window ACAC paired, reps2-8
+  median; per-window −7.2~−7.8%, consistent with the cron#85 gated-toggle pin of −7.3%). bit-exact:
+  `GP_LEANCHK_LIVE` max|d|=0 checked=768 + PACKCHK=0 + oc 4.238e-3 逐位.
+- **wt-cache IS the production default now — no longer gated, no longer pending.** The cron#85 −7.3% is a
+  gated-toggle data point (A/B same-kernel toggle 口径); the production −7.6% is the same lever measured as
+  the production default (compatible 口径, thermal-consistent).
+- Production chain: native 1.70M → lean −18.3% (1.39M) → +wt-cache −7.6% (~1.30M), all bit-exact.
+  Evidence: commit 01c5376.
+
+## cron#88 — lever B realized (merge-final in-place int16 renorm, gated, −3.9%, ~1.25M)
+
+cron#88 realized the last clean lever cron#86 had nailed (commit e5b8834, **gated `GP_INPLACE_RENORM`
+default-OFF, NOT promoted to production**). The 6 merge-final `gp_acc_from_cv + gp_renorm` calls
+(`example/gdn_native/pure_hmx_solve/gdn_pure_solve.cpp` ~528 helper `gp_renorm_i16` + ~972 site) were an
+int32 redundant round-trip (the int16 cv is sign-extended into the int32 acc with NO accumulation, then
+renormed back) → switched to an **in-place int16 renorm** computing the SAME shift s and the SAME
+saturating asr directly on the int16 cv block. The diag(4) and merge-S int32 accumulator renorms are
+UNTOUCHED (they genuinely overflow int16 — legitimate necessity).
+
+- **bit-exact (strongest proof, 🟢 verified):** A (B off) vs B (B on) **full 32-head 4 MB T output
+  md5 byte-identical** (`cmp` IDENTICAL, md5 3a95d1aa...==3a95d1aa...) + `GP_LEANCHK_LIVE` max|d|=0
+  checked=768 + PACKCHK=0 + oc 4.238e-3.
+- **perf:** 3 thermal windows same-window ACAC paired, reps2-8 median, **ΔWall −3.9% (consensus
+  −3.5..−4.5%: win1 −3.73% / win2 −4.51% / win3 −3.47%)**; A ~1.30M → B ~1.25M; timeline ACC/renorm
+  aggregate −17.9% (only the 6 merge-final int32 fills removed; wt-pack/MM unchanged),
+  `Agent/current/timeline_cron87_B.txt`.
+- **⚠️ caveat (must state): bit-exactness depends on the cv∈[−32639,32639] invariant** (maintained by the
+  solve renorm + the to_cv clamp — this is a **DATA invariant, NOT a compile-time hard guarantee**; if a cv
+  ever hits −32768 the int16 absmax can diverge from the int32 absmax. The #else int32 path is kept as an
+  oracle/escape).
+- **State: gated (`GP_INPLACE_RENORM` default-OFF), committed e5b8834, NOT yet promoted to production
+  (awaiting user decision).** Cumulative chain: native 1.70M → lean −18.3% (1.39M, production) → +wt-cache
+  −7.6% (~1.30M, production) → +B −3.9% (~1.25M, gated) ≈ −27% vs native, all bit-exact. The clean path is
+  at its structural floor (cron#86); B is the last lever; ≤1.0M needs a precision/algorithm trade-off (not
+  authorized). Evidence: commit e5b8834 + `Agent/current/timeline_cron87_B.txt`.
 
 ## Honesty rule (so this doesn't mislead in the OTHER direction)
 
