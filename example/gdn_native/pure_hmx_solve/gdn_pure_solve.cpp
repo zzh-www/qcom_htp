@@ -525,6 +525,38 @@ static inline int gp_renorm(int32_t *acc, int16_t *cv) {
     if (s == 0) { while (mx && (mx << 1) <= 16384) { mx <<= 1; --s; } }
     gp_acc_to_cv(cv, acc, s); return s;
 }
+#ifdef GP_INPLACE_RENORM
+/* cron#87 lever B: in-place int16 renorm for the merge-FINAL T_ij = T_ii @ S sites (the 6
+ * lower-tri off-diag merges). Those do MM64 -> cv -> gp_acc_from_cv (sxt int16 INTO int32 acc, NO
+ * accumulation) -> gp_renorm (absmax + asr-sat back to int16). The int32 acc round-trip is redundant
+ * there because the cv already holds the only operand. This computes the SAME shift s and the SAME
+ * saturating-asr result directly on the int16 cv block, byte-for-byte equivalent to the int32 path
+ * PROVIDED cv stays in [-32639, 32639] (no -32768): then int16 absmax == int32 absmax, and for the
+ * value v fitting int16, sxt32(v) asr s == int16 v asr s, and the left-shift (s<0) clamp to ±32639
+ * matches gp_acc_to_cv's clamp. Bit-exactness is the head risk -> device-verified (oc + raw byte diff).
+ * MUST NOT be used on the diag(4) / merge-S Σ_k acc which genuinely overflows int16 and needs int32. */
+static inline int gp_renorm_i16(int16_t *cv) {
+    const HVX_Vector *d = (const HVX_Vector *)cv;
+    HVX_Vector mxv = Q6_V_vzero();
+    for (int i = 0; i < 64; ++i) mxv = Q6_Vh_vmax_VhVh(mxv, Q6_Vh_vabs_Vh(d[i]));   /* int16 absmax (64 vec) */
+    for (int sh = 64; sh >= 2; sh >>= 1) mxv = Q6_Vh_vmax_VhVh(mxv, Q6_V_vror_VR(mxv, sh));
+    union { HVX_Vector v; int16_t h[64]; } u; u.v = mxv;
+    int32_t mx = u.h[0];                          /* == gp_acc_absmax on sxt32(cv), given |cv|<=32639 */
+    int s = 0; while ((mx >> s) > 32639) ++s;     /* identical shift-select logic to gp_renorm */
+    if (s == 0) { while (mx && (mx << 1) <= 16384) { mx <<= 1; --s; } }
+    HVX_Vector *o = (HVX_Vector *)cv;
+    if (s >= 0) {
+        for (int i = 0; i < 64; ++i) o[i] = Q6_Vh_vasr_VhR(o[i], s);   /* asr (no overflow); sat moot */
+    } else {
+        const HVX_Vector CP = Q6_Vh_vsplat_R(32639), CN = Q6_Vh_vsplat_R(-32639);
+        for (int i = 0; i < 64; ++i) {
+            HVX_Vector x = Q6_Vh_vasl_VhR(o[i], -s);                   /* asl (non-sat) ... */
+            o[i] = Q6_Vh_vmin_VhVh(Q6_Vh_vmax_VhVh(x, CN), CP);       /* ... then clamp to ±32639 */
+        }
+    }
+    return s;
+}
+#endif
 static inline void gp_acc_diag_add(int32_t *acc, int32_t add) {   /* cron#74: vector acc += diagmask & splat(add) (was 64 scalar RMW) */
 #ifdef GP_RENORM_SPLIT
     uint64_t _rs0 = gp_pcyc();
@@ -969,8 +1001,14 @@ static void solve_head(gp_ctx *c, const int16_t *Aq, int16_t *To) {
 #endif
             MM64(c, TBLK(i * 4 + i), c->prod, TBLK(i * 4 + j));   /* T_ij = T_ii @ S (dense: working operand order) */
             uint64_t _f0 = GP_EVT0();
+#ifdef GP_INPLACE_RENORM
+            /* cron#87 B: T_ij merge-final renorm in place on int16 (skip the redundant int32 acc round-trip).
+             * Production byte path unchanged (#else). Bit-exact device-verified before promote. */
+            c->e[i * 4 + j] = c->e[i * 4 + i] + eS + gp_renorm_i16(TBLK(i * 4 + j));
+#else
             gp_acc_from_cv(c->acc, TBLK(i * 4 + j));
             c->e[i * 4 + j] = c->e[i * 4 + i] + eS + gp_renorm(c->acc, TBLK(i * 4 + j));
+#endif
             GP_EV(c->slot, 6, _f0, GP_EVT0());                /* ACC (from_cv+renorm->T_ij) */
         }
 #if GP_RESIDENT
