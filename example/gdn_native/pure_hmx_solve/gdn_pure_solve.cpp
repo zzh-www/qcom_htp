@@ -658,8 +658,9 @@ struct gp_ctx {
     uint64_t    spin, t_pack, t_depack, t_life;
     uint64_t    t_gather, t_kmajor, t_bias, t_scatter;   /* sub-stage probes */
     uint64_t    t_mc, t_pm, t_ms;   /* O5 scatter split: linear↔block memcpy / gp_perm vgather / memset */
-#ifdef GP_WTCACHE
-    /* cron#85 wt-cache (off-diag merge T-weight reuse): per-producer cache of already-packed (wt,bias) bytes,
+#ifndef GP_NO_WTCACHE
+    /* PRODUCTION DEFAULT (cron#87); -DGP_NO_WTCACHE escapes.
+     * cron#85 wt-cache (off-diag merge T-weight reuse): per-producer cache of already-packed (wt,bias) bytes,
      * keyed by the T-block cv source pointer TBLK(k*4+j). The merge does mm64(A_ik, T_kj) with weight=T_kj;
      * the same T-block weight repeats up to 3× across the forward-substitution (4 redundant repacks/head, see
      * /tmp merge trace). keepwt only catches the CONSECUTIVE same-weight diag A²/A³; this catches the
@@ -762,8 +763,9 @@ static void mm64(gp_ctx *c, const int16_t *a_cv, const int16_t *b_cv, int16_t *o
     if (c->slot >= 0) GP_EV(c->slot, 10, d0, d1);              /* OUT_COPY (HVX) = q::*OutputSlice */
 }
 
-#ifdef GP_WTCACHE
-/* cron#85 wt-cache matmul: like mm64, but the WEIGHT pack is served from a per-head, per-producer cache
+#ifndef GP_NO_WTCACHE
+/* PRODUCTION DEFAULT (cron#87); -DGP_NO_WTCACHE escapes.
+ * cron#85 wt-cache matmul: like mm64, but the WEIGHT pack is served from a per-head, per-producer cache
  * keyed by the weight's cv source pointer (b_cv). On hit the (wt,bias) packed bytes are reused (zero-copy:
  * c->mm.wt/bias point at the cached buffer); on miss they are packed into a fresh cache slot. Byte-identical
  * to mm64: the cache buffer holds exactly the bytes gp_pack_wt_bias_hvx would write (PACKCHK/LEANCHK oracle).
@@ -914,7 +916,7 @@ static int diag_inv(gp_ctx *c, const int16_t *A, int16_t *X) {
 #define TBLK(i) (c->T[i])
 #endif
 static void solve_head(gp_ctx *c, const int16_t *Aq, int16_t *To) {
-#ifdef GP_WTCACHE
+#ifndef GP_NO_WTCACHE
     uint8_t  *wt0   = c->mm.wt;     /* canonical init wt/bias buffers — restored at head end so the next */
     int32_t  *bias0 = c->mm.bias;   /* head's diag (mm64/mm64_keepwt) packs into them, not a cache buffer. */
     c->wc_n = 0;                    /* reset cache per head (each head's T-weights differ) */
@@ -946,7 +948,7 @@ static void solve_head(gp_ctx *c, const int16_t *Aq, int16_t *To) {
             int j = i - d, eAcc = 0;
             uint64_t _m0 = GP_EVT0(); gp_acc_zero(c->acc); GP_EV(c->slot, 6, _m0, GP_EVT0());
             for (int k = j; k < i; ++k) {                      /* acc = sum_k A_ik @ T_kj (exp-aligned) */
-#ifdef GP_WTCACHE
+#ifndef GP_NO_WTCACHE
                 mm64_wtcache(c, ABLK(i * 4 + k), TBLK(k * 4 + j), c->prod);  /* weight=T_kj served from per-head wt-cache */
 #else
                 mm64(c, ABLK(i * 4 + k), TBLK(k * 4 + j), c->prod);   /* benign act=A_ik; weight may be extreme (ok via :dilate) */
@@ -962,7 +964,7 @@ static void solve_head(gp_ctx *c, const int16_t *Aq, int16_t *To) {
             uint64_t _r0 = GP_EVT0();
             int eS = eAcc + gp_renorm(c->acc, c->prod);
             GP_EV(c->slot, 6, _r0, GP_EVT0());                /* ACC (renorm->S) */
-#ifdef GP_WTCACHE
+#ifndef GP_NO_WTCACHE
             c->mm.wt = wt0; c->mm.bias = bias0;   /* T_ii@S weight=S is unique (not cached): pack into canonical */
 #endif
             MM64(c, TBLK(i * 4 + i), c->prod, TBLK(i * 4 + j));   /* T_ij = T_ii @ S (dense: working operand order) */
@@ -1052,8 +1054,8 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
 #else
     size_t res_bytes = 0;
 #endif
-#ifdef GP_WTCACHE
-    size_t wtc_bytes = (size_t)P * 0xE000u;   /* cron#85: 6 slots × (8KB wt + 1KB bias rounded to 0x2400) per producer */
+#ifndef GP_NO_WTCACHE
+    size_t wtc_bytes = (size_t)P * 0xE000u;   /* PRODUCTION DEFAULT (cron#87); -DGP_NO_WTCACHE escapes. cron#85: 6 slots × (8KB wt + 1KB bias rounded to 0x2400) per producer */
 #else
     size_t wtc_bytes = 0;
 #endif
@@ -1106,8 +1108,9 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
       for (int p = 0; p < GP_BB; ++p) g_qa[p] = (uint16_t)(2 * g_lut[pk_inv[p]]);
       for (int k = 0; k < GP_BB; ++k) g_qo[k] = (uint16_t)(2 * pk[lut_inv[k]]); }
 #endif
-#ifdef GP_WTCACHE
-    /* cron#85 wt-cache VTCM region: placed AFTER the shared LUTs + resident A/T (uses the same 0xC000/0xA000
+#ifndef GP_NO_WTCACHE
+    /* PRODUCTION DEFAULT (cron#87); -DGP_NO_WTCACHE escapes.
+     * cron#85 wt-cache VTCM region: placed AFTER the shared LUTs + resident A/T (uses the same 0xC000/0xA000
      * offset the acquire used so it never overlaps). Per producer: 6 slots × (8KB wt @ +0x0000, 1KB bias
      * @ +0x2000) packed at 0x2400 stride -> 0xE000/producer. */
 #if GP_DENSE_SURF || GP_DENSE_PERM
@@ -1118,7 +1121,7 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
 #endif
     for (int t = 0; t < P; ++t) {
         w16a16_mm_init(&g_ctx[t].mm, vbase + (size_t)t * GP_VSTRIDE, g_ctx[t].descs);
-#ifdef GP_WTCACHE
+#ifndef GP_NO_WTCACHE
         { uint8_t *wc = wtc_base + (size_t)t * 0xE000u;
           for (int s = 0; s < 6; ++s) { g_ctx[t].wc_wt[s] = wc + (size_t)s * 0x2400u;
               g_ctx[t].wc_bias[s] = (int32_t *)(wc + (size_t)s * 0x2400u + 0x2000u);
@@ -2372,7 +2375,7 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
         wt_vec += g_ctx[t].t_gather; wt_bia += g_ctx[t].t_bias;
         life += g_ctx[t].t_life; if (g_ctx[t].t_life > lmax) lmax = g_ctx[t].t_life; }
     uint64_t other = life - spin - actcopy - kmajor - scatter - outcopy;   /* HVX renorm+acc (mm-level) */
-#ifdef GP_WTCACHE
+#ifndef GP_NO_WTCACHE
     { uint64_t wch = 0, wcm = 0; for (int t = 0; t < P; ++t) { wch += g_ctx[t].wc_hit; wcm += g_ctx[t].wc_miss; }
       FARF(ALWAYS, "GDN_PURE WTCACHE hits=%llu misses=%llu (expect hits=%d=H*4, misses=%d=H*6)",
            (unsigned long long)wch, (unsigned long long)wcm, H * 4, H * 6); }
