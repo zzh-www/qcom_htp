@@ -1,0 +1,178 @@
+============================================================================================
+GDN pure-HMX solve — per-thread TIMELINE (4 producer + 1 HMX consumer), cron#85 GP_WTCACHE
+============================================================================================
+
+WHAT THIS IS
+  Per-thread (横轴=时间, 纵轴=5 线程) timeline of the wt-cache solve path (GP_WTCACHE on top of
+  the cron#83 lean production default, P=4, 32-head, scale 0.05, VTCM-only). Companion to
+  Agent/current/timeline_cron84_lean.txt — same capture flow, same legend, same口径. The point of
+  this render = VISUALLY CONFIRM that the per-producer weight cache pulls the WT-PACK long pole out
+  of the merge critical path: WT-PACK should drop from 20/head (cron#84) to 16/head (cron#85), and
+  the 4 merge cache-hit matmuls/head should run a SHORT chain (ACT->SPIN->OUT->ACC, no WT-PACK).
+
+WHAT GP_WTCACHE DOES (mm64_wtcache, gdn_pure_solve.cpp ~772 + solve_head ~917/949/965)
+  Per-head, per-producer weight cache keyed by the weight's cv source pointer (b_cv = T_kj block).
+  In the off-diag merge the inner Σ_k A_ik @ T_kj reuses the SAME T_kj weight across multiple (i,j)
+  output blocks; on a cache HIT the packed (wt,bias) bytes are reused zero-copy (c->mm.wt/bias point
+  at the cached buffer, the cv->kmajor 64-vgather + lo/hi + bias pack is SKIPPED). On a miss they are
+  packed into a fresh slot (<=6 slots/head; the merge has at most 6 distinct T-weights/head). The diag
+  (mm64/mm64_keepwt) is untouched; the T_ii@S merge weight (=S, unique) packs into the canonical buffer.
+  Byte-identical to mm64 (the cache holds exactly the bytes gp_pack_wt_bias_hvx would write —
+  PACKCHK/LEANCHK oracle). cron#77 keepwt (diag A²/A³ share weight=A) is orthogonal and still on.
+
+CAPTURE CONDITION
+  device = oneplus (v75 cDSP TURBO);  build = -DGDNBM_GDN_PURE_SOLVE -DGP_WTCACHE -DGP_TRACE
+  (= cron#83 lean production default + GP_WTCACHE + GP_TRACE; GP_TRACE adds ONLY #ifdef-gated PCYCLE
+  timestamp events — production build BYTE-IDENTICAL, no numeric change).
+  run: scripts/run_w16a16_head_phase4.py --heads 32 --scale 0.05 --threads 4 --deploy   (P=4, H=32, 1 rep)
+  trace wall this run = 1,313,891 cyc (a single trace rep; cron#84 trace rep was 1,406,636 — both
+  are trace-perturbed single reps, read STRUCTURE not absolute wall). Production (untraced) wall held
+  bit-exact below.
+
+  ⚠️ TRACE-PERTURBED ABSOLUTE TIMING: GP_TRACE serializes events into the T output buffer (so this run
+  produces NO valid oc — expected; the run script's oc parse overflows on the trace blob). The per-segment
+  cyc are traced-state, directionally correct (long-pole ranking robust), not production-exact. READ THE
+  STRUCTURE (order / overlap / which segment is the long pole / how many WT-PACK per head), NOT the
+  absolute wall. Production-exact numerics + wall verified on a SEPARATE untraced build (below).
+
+NUMERICS HELD (verified on the SEPARATE untraced GP_WTCACHE build, same P=4/32-head/scale 0.05):
+  oc mean = 4.238e-03  (max 4.523e-03, 硬门 < 4e-2 ✅, 与 cron#84/生产逐位一致)   PACKCHK = 0 ✅
+  GP_LEANCHK_LIVE max|d|=0 checked=6144 (lean bit-exact over full live solve, 768 conv covered) ✅
+  clean GP_WTCACHE wall reps2-8 median = 1.299M cyc (clock self-check wall/us=1594.2 ✅), spread 2.0%.
+    (vs cron#83 lean production ~1.391M in its own session; this paired session shows WIN direction
+     ~-6.6%. The prompt's headline 1.406M->1.188M (-15.5%) is a separate thermal session; the
+     STRUCTURAL change below is the robust result, the exact % is thermal-session-dependent.)
+  ⇒ trace did NOT touch the数值 path; wt-cache is bit-exact and a WIN.
+
+EVENT ACCOUNTING (this trace, 4608 events, no buffer overflow)
+  MM(consumer,tid4)=768=32h×24mm | ACT=768 | OUT-COPY=768 | SPIN=768 | ACC=1024
+  WT-PACK=512  <<< THE HEADLINE: down from cron#84's 640.  512 = 768 − 256 skipped packs.
+    256 skipped = 128 (cron#77 keepwt: diag A³ reuse weight=A) + 128 (cron#85 wtcache: 4 merge hits/head×32).
+    per head: WT-PACK = 512/32 = 16  (cron#84 = 640/32 = 20).  ✅ 16-vs-20 CONFIRMED.
+  WT-PACK per producer (exact): P0=128 P1=128 P2=128 P3=128  (=4.00 WT-PACK/head each = 16/head ÷ 4 prod).
+
+STAGE LEGEND (one char = one segment on that thread's timeline; COARSE view = GDN_TL_COARSE)
+  q = ACT-format   (act cv->surface, HVX vxor)             — tiny (~150 cyc)
+  p = WT-PACK      (weight cv->kmajor vgather + lo/hi + bias -> VTCM, HVX)  ← THE LONG POLE (~4.0K)
+  a = ACC/renorm   (acc3 + diag_add + renorm, solve-only HVX algebra)
+  s = SPIN         (producer idle-waiting for the 1 HMX consumer to finish its matmul)
+  x = OUT-COPY     (matmul out surface -> cv, HVX vxor)
+  m = MM           (the actual 64^3 w16a16 lean matmul on HMX — consumer thread only)
+  overlap rule (zoom rows): per column show highest-priority stage  m > p > a > q > x > s
+
+PER-SEGMENT DURATION (traced-state; cyc/instance over all 32 heads)
+  stage      n    mean  median     max   note
+  WT-PACK  512    4026    3958   12497   <<< LONG POLE: ~4.0K/inst, ~8x the matmul; now 512 not 640
+  ACC     1024    1195    1256    9807   solve algebra (renorm/acc); 2nd pole
+  MM       768     509     497    5346   the actual HMX lean matmul (consumer occupancy)
+  SPIN     768     787     625   17765   wait-for-HMX bubble
+  OUT-COPY 768     315     320     361   tiny
+  ACT      768     151     140     375   tiny
+
+============================================================================================
+FULL-RUN OVERVIEW (entire 32-head solve, busy% per thread)   GDN_TL_COARSE
+============================================================================================
+
+  window [0,1307877] = 1307877 cyc / 120 cols  (1 col = 10899 cyc)
+  (note: at this scale a single ~4K WT-PACK is < half a column, so the long 'p' RUNS of cron#84's
+   overview are gone — 'p' no longer carpets the row. WT-PACK is still 46% of busy by Σ, but it is now
+   INTERLEAVED with ACC/SPIN/OUT rather than appearing as one giant pole per producer. This is itself
+   the visual signature of the cache: fewer + shorter-relative WT-PACK runs.)
+
+  P0   |          qssxqssssxssassasqsxqssasasxqxsaqssasqsxaxsxqqsxssssssqsqxasasassaqsxqasqsassaqssqasssxqsxsqsssssxssasss      | busy=81%  [ACT=2% PREP=46% ACC=26% DEPACK=5% SPIN=15%]
+  P1   |           qsxqssssxssqsaqssqqssssxssqssxqssasxssaqqsxqqsasqsxaxsxqssasqsaqasqqssasqqssxssxqasqsassaassqasasaqsax       | busy=80%  [ACT=2% PREP=46% ACC=27% DEPACK=5% SPIN=13%]
+  P2   |            qsqssssxssasssssxqqqssssxssaqsxxasasaqsssqsssxsxssaspsqqqqsqsqssaassxxqspsaqssaqsssqsaqsxxqsxxxqsassqssx    | busy=81%  [ACT=3% PREP=46% ACC=28% DEPACK=5% SPIN=12%]
+  P3   |             qqssssxssassqsssqsqasqsassaassxasxsxqsssqqssxsxssaqasxsqasasaqsaxssssqsasxassxqsssasaassqqssxxqsassasss    | busy=81%  [ACT=2% PREP=46% ACC=28% DEPACK=5% SPIN=12%]
+  CONS |            mmmmmmm mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm    | busy=29%  [MM=35%]
+
+============================================================================================
+ZOOM A — steady-state window (~9 mm-cycles), the repeating producer period   GDN_TL_COARSE
+============================================================================================
+
+  window [500000,560000] = 60000 cyc / 120 cols  (1 col = 500 cyc)
+
+  P0   |pppps aaaappppppppssaaaaqppppppp sxaaaaqxaappppppppsssxaaaappppppppssaaa asxappppppppsssxaaaappppppppsxaaaaq aaqxaqppppp| busy=96%  [ACT=2% PREP=47% ACC=26% DEPACK=5% SPIN=14%]
+  P1   |ppssaaaaappppppp sxaaaappppppppssxaaaasxaqppppppp sxaaaappppppppss aaa asxappppppppssaaaa ppppppppssxaaaaqsaaqxa ppppppp| busy=96%  [ACT=2% PREP=47% ACC=26% DEPACK=6% SPIN=14%]
+  P2   |pxaaaaqppppppppsxaaaappppppppssaaaaqppppppppsxaaaaqsxaqppppppppsxaaaaqppppppp sxaaaaqsxapppppppp sxaaaapppppppp s aaa as| busy=95%  [ACT=2% PREP=47% ACC=28% DEPACK=5% SPIN=11%]
+  P3   |pssaaaaqppppppp sxaaaappppppppssaaaaappppppppsxaaaaqsxaqppppppppsxaaaappppppppssxaaaaqsxappppppppssxaaaappppppppsssaaaaa| busy=96%  [ACT=2% PREP=47% ACC=28% DEPACK=5% SPIN=13%]
+  CONS |mm mm          mmmmm         m mmm    mm    mm    mmmm         mmm m    m m   mm   m mmm         mmm m   m m m mmm     m| busy=35%  [MM=35%]
+
+  Read: the producer period is still WT-PACK-dominated (long 'p' runs ~8 cols ≈ 4K cyc) — the misses
+  are the long pole, unchanged in shape from cron#84. The cache shows up as the ~16-vs-20 fewer 'p'
+  runs per head (see counts above + ZOOM B short chain), not as shorter individual 'p'.
+
+============================================================================================
+ZOOM B — tight (~2 mm-cycles), per-mm SERIAL chain + consumer starvation   GDN_TL_COARSE
+============================================================================================
+
+  window [508600,522800] = 14200 cyc / 120 cols  (1 col = 118 cyc)
+
+  P0   |pppppppsssssxxxaaaaaaaaaaaaaaaaaqppppppppppppppppppppppppppppppppp ssssssxxxaaaaaaaaaaaaaaaa q sssssxxxaaaaaaqpppppppppp| busy=96%  [ACT=2% PREP=41% ACC=31% DEPACK=7% SPIN=13%]
+  P1   |ssssssxxxaaaaaaaaaaaaaaaaaqppppppppppppppppppppppppppppppppp sssssssxxxaaaaaaaaaaaaa aaq sssssxxxaaaaaaqpppppppppppppppp| busy=96%  [ACT=2% PREP=40% ACC=30% DEPACK=6% SPIN=15%]
+  P2   |aaaaaaaaaaaaaaaaqqpppppppppppppppppppppppppppppppppp sssss xx aaaaaaaaaaaaaaaa qpppppppppppppppppppppppppppppppppp sssss| busy=96%  [ACT=2% PREP=56% ACC=27% DEPACK=2% SPIN=8%]
+  P3   |sxxxaaaaaaaaaaaaaaaaaqppppppppppppppppppppppppppppppppp sssssssxxxaaaaaaaaaaaaaaaaa qppppppppppppppppppppppppppppppppp s| busy=96%  [ACT=1% PREP=56% ACC=27% DEPACK=4% SPIN=7%]
+  CONS |mmmmmm mmmm                                          mmmmmmmmm mmmm mmmmm                mmmm  mmmm                mmmm | busy=32%  [MM=32%]
+
+============================================================================================
+TWO REPRESENTATIVE PRODUCER mm-CYCLES (P0, exact traced intervals)
+============================================================================================
+  (1) MISS mm — the full serial chain, WT-PACK is the long pole (~4K, ~58% of the period):
+        ACT      133        (cv->surface)
+        WT-PACK 3944        <<< LONG POLE (cv->kmajor vgather + lo/hi + bias)
+        SPIN     838        (only this overlaps the consumer's ~500 matmul)
+        OUT-COPY 327
+        ACC      ~645+      (renorm/acc; exp-align addsh)
+     => period ≈ 133+3944+838+327+~900 ≈ 6.2K cyc/mm  (dominated by WT-PACK).
+
+  (2) HIT mm (cache hit OR keepwt) — SHORT chain, NO WT-PACK:
+        ACT      147        (cv->surface)
+        SPIN     624        (wait HMX)
+        OUT-COPY 146
+        ACC     9367        (this instance is a large renorm; ACC varies widely)
+     => period ≈ ACT 147 + SPIN 624 + OUT 146 + ACC ≈ NO WT-PACK leg at all.
+     The 4 merge cache-hit matmuls/head (+ the diag keepwt A³) skip the entire ~4K WT-PACK pole —
+     their critical chain is exactly ACT->SPIN->OUT->ACC as predicted.
+
+============================================================================================
+COMPARISON vs cron#84 (Agent/current/timeline_cron84_lean.txt) — the structural delta
+============================================================================================
+  WT-PACK count            cron#84: 640 (20/head)   cron#85: 512 (16/head)   ✅ -128 = 4 merge hits/head
+  WT-PACK Σ (traced)       cron#84: ~2.52M-class     cron#85: 2.06M           (-~18%; aggregate stage cyc)
+  WT-PACK per producer     —                          cron#85: 128 each (exact, balanced)
+  cache-hit mm chain       —                          ACT->SPIN->OUT->ACC, NO WT-PACK  ✅ predicted
+  new longest pole         still WT-PACK on MISS mm (~4.0K/inst) — UNCHANGED shape; cache reduces the
+                           NUMBER of long poles (20->16/head), not the per-miss cost. The miss WT-PACK
+                           remains the single longest segment; 2nd pole = ACC/renorm (~1.2K mean,
+                           tail to ~9.8K). (cron#84 NEXT/⑥ already flags renorm/acc as the next lever.)
+  HMX consumer occupancy   cron#84 MM busy=27%(full)/26-27%(zoom)   cron#85 MM busy=29%(full)/32-35%(zoom)
+                           consumer is STILL starved (idle ~65-70%) — the bottleneck stays FEED-BOUND
+                           (producer-side WT-PACK+ACC), exactly as the doc's cron#82/#84 verdict says.
+                           Fewer WT-PACK -> producers finish feed sooner -> consumer slightly less idle
+                           (MM% up a few points) -> wall down. Consumer occupancy itself unchanged
+                           (MM mean ~509 ≈ lean ~497), as expected (cache touches FEED not the kernel).
+  bubbles                  SPIN per-producer ~12-15% (cron#84 ~8-11%) at full-run; the cache removed
+                           feed work so producers spend marginally MORE of their (now shorter) life
+                           waiting on the single HMX — consistent with feed-bound moving toward the
+                           consumer/serial floor. No new structural stall introduced.
+
+VERDICT (structural)
+  GP_WTCACHE does exactly what was predicted: it pulls 128 of the 768 WT-PACK long poles (the 4 merge
+  cache-hit matmuls/head) off the producer critical path (20/head -> 16/head, per-producer 128 each).
+  The 4 cache-hit mm/head run a short ACT->SPIN->OUT->ACC chain with NO WT-PACK leg. The remaining
+  miss WT-PACK is still the single longest segment (~4.0K/inst) — the cache cuts the COUNT of poles,
+  not the per-miss cost. Bottleneck stays FEED-BOUND; consumer (HMX) still idle ~65-70%. Bit-exact
+  (oc 4.238e-3, PACKCHK=0, LEANCHK_LIVE max|d|=0). Next clean lever per cron#84 NEXT⑥ = renorm/acc
+  (now the relatively larger remaining producer block: WT-PACK Σ fell, ACC Σ unchanged ~1.2M).
+
+REPRODUCE
+  # trace render (this file):
+  cd example/gdn_native/baremetal && EXTRA_DEFS="-DGDNBM_GDN_PURE_SOLVE -DGP_WTCACHE -DGP_TRACE" ARCH=v75 bash build.sh
+  uv run python scripts/run_w16a16_head_phase4.py --heads 32 --scale 0.05 --threads 4 --deploy   # T.raw <- trace blob
+  GDN_TL_COARSE=1 python3 scripts/gdn_pipe_timeline.py /tmp/w16p4_T.raw 120                       # full-run overview
+  # (windowed zooms: a small inline renderer over /tmp/w16p4_T.raw, COARSE, priority m>p>a>q>x>s)
+  # numeric gate (untraced):
+  cd example/gdn_native/baremetal && EXTRA_DEFS="-DGDNBM_GDN_PURE_SOLVE -DGP_WTCACHE -DGP_LEANCHK_LIVE" ARCH=v75 bash build.sh
+  uv run python scripts/run_w16a16_head_phase4.py --heads 32 --scale 0.05 --threads 4 --deploy --reps 8   # oc/PACKCHK/LEANCHK
+  # clean wall (untraced, no leanchk):
+  cd example/gdn_native/baremetal && EXTRA_DEFS="-DGDNBM_GDN_PURE_SOLVE -DGP_WTCACHE" ARCH=v75 bash build.sh
+  uv run python scripts/run_w16a16_head_phase4.py --heads 32 --scale 0.05 --threads 4 --deploy --reps 8

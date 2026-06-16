@@ -1,0 +1,88 @@
+============================================================================================
+GDN pure-HMX solve — per-thread TIMELINE, cron#87 lever B: merge-final in-place int16 renorm
+============================================================================================
+
+WHAT THIS IS
+  Per-thread (横轴=时间, 纵轴=4 producer + 1 HMX consumer) timeline of lever B = the 6 merge-FINAL
+  T_ij renorm sites done IN-PLACE on int16 (no int32 acc round-trip). Companion to
+  Agent/current/timeline_cron85_wtcache.txt — same capture flow, same legend, same口径 (P=4, 32-head,
+  scale 0.05, VTCM-only, COARSE view). Built ON TOP of the cron#85 production default (lean + wt-cache).
+  The point of this render = VISUALLY + AGGREGATE-CONFIRM that the ACC/renorm aggregate shrinks at the
+  merge-final sites (the int32 fill `gp_acc_from_cv` removed) while every other stage is untouched.
+
+WHAT LEVER B DOES (gp_renorm_i16, gdn_pure_solve.cpp ~528 helper + solve_head ~972 site, #ifdef GP_INPLACE_RENORM)
+  The 6 lower-tri off-diag merges end with `MM64 -> cv (T_ij) -> gp_acc_from_cv(acc, T_ij) ->
+  gp_renorm(acc, T_ij)`. There gp_acc_from_cv SIGN-EXTENDS the fresh int16 cv into the int32 acc with
+  NO accumulation, then gp_renorm immediately reads absmax + asr-sat back to int16. The int32 acc is a
+  pure round-trip there (the cv already holds the only operand). gp_renorm_i16 computes the SAME shift s
+  and the SAME saturating-asr DIRECTLY on the int16 cv block. The diag(4) and merge-S Σ_k acc are
+  UNTOUCHED — those genuinely overflow int16 and need real int32. Production byte path unchanged (#else).
+
+  BIT-EXACTNESS (the head risk — device-verified, see below). Equivalent to the int32 path PROVIDED the
+  cv stays in [-32639,32639] (no -32768): then int16 absmax == int32 absmax; for v fitting int16,
+  sxt32(v) asr s == int16 v asr s; and for the s<0 left-shift, the renorm shift-select guarantees
+  max|val|<<(-s) <= 16384 < 32639 so Q6_Vh_vasl_VhR cannot drop high bits (clamp ±32639 then matches).
+
+CAPTURE CONDITION
+  device = oneplus (v75 cDSP TURBO);  build = -DGDNBM_GDN_PURE_SOLVE -DGP_INPLACE_RENORM -DGP_TRACE
+  (= cron#85 production default + GP_INPLACE_RENORM + GP_TRACE; GP_TRACE adds ONLY #ifdef-gated PCYCLE
+  timestamp events — production build BYTE-IDENTICAL, no numeric change).
+  run: scripts/run_w16a16_head_phase4.py --heads 32 --scale 0.05 --threads 4 --deploy   (P=4, H=32, 1 rep)
+  A-on (cron#85 prod default, GP_TRACE) and B-on (this) captured back-to-back, same session/thermal.
+  trace wall A=1,303,615  B=1,206,365 cyc (trace-perturbed single reps; tracing amplifies the ACC
+  fraction so read STRUCTURE not absolute — production untraced delta is -3.9%, see below).
+
+BIT-EXACT GATE (🔴 head risk — PASSED, hard proof)
+  LEANCHK_LIVE max|d|=0 checked=768  (matmul path bit-exact over full live solve)         ✅
+  PACKCHK=0                                                                                ✅
+  oc mean=4.238e-03 max=4.523e-03 min=4.076e-03  (== production baseline to displayed prec) ✅
+  RAW BYTE DIFF (the decisive renorm gate): A (B off) vs B (B on) full 4 MB 32-head T output
+    cmp /tmp/w16p4_T_A.raw /tmp/w16p4_T_B.raw -> IDENTICAL, md5 3a95d1aa... == 3a95d1aa...  ✅✅
+  ⇒ in-place int16 renorm is BYTE-FOR-BYTE equivalent to the int32 acc round-trip on the merge-final.
+
+PERF (untraced production, A/B paired, reps2-8 MEDIAN never min, 3 thermal windows)
+  win  A median (cyc)  B median (cyc)  ΔWall%
+   1     1,301,837       1,253,340      -3.73%
+   2     1,306,683       1,247,775      -4.51%
+   3     1,302,484       1,257,232      -3.47%
+  CONSENSUS ΔWall = -3.9% (range -3.5%..-4.5%), all 3 windows agree (WIN; lands in the predicted -2~4%).
+  A is very stable (~1.303M across windows); B consistently ~1.25M.
+
+STAGE LEGEND (COARSE view = GDN_TL_COARSE; one char = one segment on that thread's timeline)
+  q = ACT-format   p = WT-PACK   a = ACC/renorm   s = SPIN(wait HMX)   x = OUT-COPY   m = MM(HMX)
+
+AGGREGATE STAGE cyc (summed over the 4 producer threads; same trace, paired A vs B)
+  stage        A (prod default)   B (in-place i16)   delta
+  ACC/renorm     1,221,244          1,002,644        -218,600  (-17.9%)   <<< THE merge-final shrink
+  PREP(wt-pack)  2,048,691          2,045,681          ~0       (untouched — only renorm changed)
+  MM               392,452            389,145          ~0       (untouched)
+  ACT              116,351            144,190          (tiny; trace jitter)
+  DEPACK           242,500            243,514          ~0
+  SPIN             604,022            583,303         -20,719   (-3.4%; bubble follows the wall)
+
+  ⇒ The ONLY structural change is ACC/renorm down -17.9%, isolated to the 6 merge-final sites (the int32
+    `gp_acc_from_cv` fill removed). wt-pack (the #1 long pole, ~2.05M) and MM are bit-unchanged. This is
+    exactly the cron#85 NEXT⑥ "renorm/acc is now the relatively larger remaining producer block" lever,
+    partially realized for the merge-final subset.
+
+FULL-RUN OVERVIEW (B-on, entire 32-head solve, busy% per thread)   GDN_TL_COARSE
+  P0   busy=82%wall  [ACT=2% PREP=48% ACC=23% DEPACK=5% SPIN=14%]
+  P1   busy=82%wall  [ACT=2% PREP=49% ACC=23% DEPACK=5% SPIN=14%]
+  P2   busy=85%wall  [ACT=5% PREP=47% ACC=23% DEPACK=5% SPIN=13%]
+  P3   busy=82%wall  [ACT=2% PREP=49% ACC=24% DEPACK=5% SPIN=13%]
+  CONS busy=32%wall  [MM=35%]
+  (vs cron#85 producers ACC ~27-31%; merge-final share of ACC pulled down. wt-pack PREP ~47-49% still
+   the dominant producer block — the residual #1 lever is still producer feed / wt-pack, NOT renorm.)
+
+VERDICT
+  WIN. Bit-exact (raw byte-identical 4 MB output + LEANCHK 0 + PACKCHK 0 + oc 4.238e-3) and a consensus
+  -3.9% wall over 3 thermal windows. ACC/renorm aggregate -17.9%, no other stage moved. Gated under
+  #ifdef GP_INPLACE_RENORM (production byte path unchanged via #else). NOT committed; awaiting promote-gate.
+
+REPRODUCE
+  bit-exact:  source scripts/dssh.sh
+              EXTRA_DEFS="-DGDNBM_GDN_PURE_SOLVE -DGP_INPLACE_RENORM -DGP_LEANCHK_LIVE" bash example/gdn_native/baremetal/build.sh
+              uv run python scripts/run_w16a16_head_phase4.py --deploy --threads 4 --heads 32 --scale 0.05
+              # then capture B raw; rebuild without GP_INPLACE_RENORM for A raw; cmp the two T.raw
+  perf:       build A=-DGDNBM_GDN_PURE_SOLVE  B=+-DGP_INPLACE_RENORM ; each --reps 8 ; reps2-8 median ; 3 windows
+  timeline:   add -DGP_TRACE ; GDN_TL_COARSE=1 uv run python scripts/gdn_pipe_timeline.py /tmp/w16p4_T.raw 110

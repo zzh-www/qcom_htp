@@ -1,0 +1,100 @@
+============================================================================================
+GDN pure-HMX solve — per-thread TIMELINE (4 producer + 1 HMX consumer), cron#84 lean prod
+============================================================================================
+
+WHAT THIS IS
+  Per-thread (横轴=时间, 纵轴=5 线程) timeline of the CURRENT lean production solve path
+  (cron#83 lean_mm64 = production default, P=4, 32-head, scale 0.05, VTCM-only). Shows the
+  REAL critical path that the aggregate Σ-decomposition (feed_Σ/spin_Σ/wt-vec/renorm) hides:
+  how each producer's feed phases (act / wt-pack / acc-renorm) interleave with its spin (wait
+  for HMX), and how the single HMX consumer serves jobs vs idles (starvation).
+
+CAPTURE CONDITION
+  device = oneplus (v75 cDSP TURBO);  build = -DGDNBM_GDN_PURE_SOLVE -DGP_TRACE  (lean default,
+  GP_RESIDENT/GP_WTREUSE/GP_CROUTON8 all on = the cron#83 production config; GP_TRACE adds ONLY
+  #ifdef-gated PCYCLE timestamp events — production build BYTE-IDENTICAL, no numeric change).
+  run: ./gdnbm 4 w16p4_A.raw w16p4_T.raw 32 256 ...   (P=4, H=32, single rep)
+  trace wall this run = 1,406,636 cyc (within the production reps2-8 median 1.399M thermal band).
+
+  ⚠️ TRACE-PERTURBED ABSOLUTE TIMING: GP_TRACE serializes events into the T output buffer (so this
+  run produces NO valid oc — that is expected). The PCYCLE-stamp pairs add a small per-segment
+  probe overhead, so absolute durations carry that overhead. READ THE STRUCTURE (relative order /
+  overlap / bubbles / which segment is the long pole), NOT the absolute wall. The per-segment
+  cyc numbers below are traced-state and directionally correct (the long-pole ranking is robust),
+  not the production-exact值. Production-exact Σ (untraced) lives in perf_baseline_cron82_leanmm.txt.
+
+NUMERICS HELD (verified on the SEPARATE untraced lean build, same P=4/32-head/scale 0.05/reps 8):
+  oc mean = 4.238e-03  (硬门 < 4e-2 ✅, 与生产逐位一致)   PACKCHK = 0 ✅
+  wall reps2-8 median = 1.399M cyc (= cron#83 production).  ⇒ trace did NOT touch the数值 path.
+
+EVENT ACCOUNTING (this trace, 4736 events, no buffer overflow):
+  MM(consumer,tid4)=768=32h×24mm | ACT=768(每mm) | WT-PACK=640(=768−128 keepwt A³ 复用权重不重打包)
+  ACC/renorm=1024 | OUT-COPY=768 | SPIN=768 | producers tid0..3 均衡(992 events each)
+
+STAGE LEGEND (one char = one segment on that thread's timeline)
+  q = ACT-format   (act cv->surface, HVX vxor)             — tiny
+  p = WT-PACK      (weight cv->kmajor vgather + lo/hi + bias -> VTCM, HVX)  ← THE LONG POLE
+  a = ACC/renorm   (acc3 + diag_add + renorm, solve-only HVX algebra)
+  s = SPIN         (producer idle-waiting for the 1 HMX consumer to finish its matmul)
+  x = OUT-COPY     (matmul out surface -> cv, HVX vxor)
+  m = MM           (the actual 64^3 w16a16 matmul on HMX — consumer thread only)
+  overlap rule (zoom rows): per column show highest-priority stage  m > p > a > q > x > s
+
+PER-SEGMENT DURATION (traced-state; cyc/instance over all 32 heads)
+  stage            n   mean  median     max   note
+  PREP           640   3933    3924    5614   <<< LONG POLE: ~3.9K/inst, 8x the matmul it feeds
+  ACC           1024   1183    1251   12084   solve algebra (renorm); 2nd pole
+  MM             768    497     490    2332   the actual HMX matmul (consumer)
+  SPIN           768    758     618   10218   wait-for-HMX bubble
+  DEPACK         768    322     323     366   tiny
+  ACT            768    155     140    1430   tiny
+
+============================================================================================
+FULL-RUN OVERVIEW (entire 32-head solve, busy% per thread)
+============================================================================================
+
+  window [0,1406636] = 1406636 cyc / 120 cols  (1 col = 11722 cyc)
+
+  P0       |          pqappppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp      | busy=83%  [ACT=1% PREP=44% ACC=20% DEPACK=4% SPIN=11%]
+  P1       |          pqappppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp      | busy=83%  [ACT=1% PREP=44% ACC=21% DEPACK=4% SPIN=10%]
+  P2       |           papppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp     | busy=83%  [ACT=2% PREP=44% ACC=22% DEPACK=4% SPIN=9%]
+  P3       |            ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp     | busy=82%  [ACT=2% PREP=44% ACC=21% DEPACK=4% SPIN=9%]
+  CONS(HMX)|           mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm     | busy=27%  [MM=27%]
+
+============================================================================================
+ZOOM A — steady-state window (~9 mm-cycles), shows the repeating producer period
+============================================================================================
+
+  window [500000,560000] = 60000 cyc / 120 cols  (1 col = 500 cyc)
+
+  P0       |pppsxaaaappppppppsxaaaappppppppsxaaaappppppppsxaaaappppppppsxaaaappppppppsxaqppppppppsxaaaappppppppsxaaaappppppppsxapppp| busy=97%  [ACT=2% PREP=57% ACC=23% DEPACK=4% SPIN=8%]
+  P1       |aappppppppssxaaaappppppppsxaaaappppppppssxaaaappppppppsxaaaappppppppssaappppppppsxa aappppppppsssaaaappppppppssxaqpppppp| busy=97%  [ACT=2% PREP=57% ACC=22% DEPACK=4% SPIN=10%]
+  P2       |appppppp sxaaaappppppppsxaaaappppppppssaaaaappppppppsxaaaappppppppsxaaaappppppppsssaappppppppsxaaaaqppppppp sxaaaapppppp| busy=96%  [ACT=2% PREP=57% ACC=24% DEPACK=4% SPIN=8%]
+  P3       |aqppppppp sxaaaappppppppsxaaaappppppppssxaaaappppppppsxaaaappppppppssaaaaappppppppssaappppppppsxaaaaqppppppp sxaaaappppp| busy=96%  [ACT=2% PREP=56% ACC=25% DEPACK=4% SPIN=8%]
+  CONS(HMX)|   m     mmm     m     mmm     m      mmm    m      mmm    m      mm m   m      mmm  m       mmm   m        mmm  m      | busy=26%  [MM=26%]
+
+============================================================================================
+ZOOM B — tight (~2 mm-cycles), shows the per-mm SERIAL chain + consumer starvation gaps
+============================================================================================
+
+  window [508600,522800] = 14200 cyc / 120 cols  (1 col = 118 cyc)
+
+  P0       |pssssxxxaaaaaaaaaaaaaaaaaqppppppppppppppppppppppppppppppppppsssssxxxaaaaaaaaaaaaaaaaqpppppppppppppppppppppppppppppppppps| busy=96%  [ACT=1% PREP=55% ACC=26% DEPACK=4% SPIN=8%]
+  P1       |appppppppppppppppppppppppppppppppppsssss xx aaaaaaaaaaaaaaaqqpppppppppppppppppppppppppppppppppssssssssxxxaaaaaaaaaaaaaaa| busy=97%  [ACT=1% PREP=55% ACC=24% DEPACK=4% SPIN=10%]
+  P2       |ppppppppppppppppppppppppp sssssxxxaaaaaaaaaaaaaaaaaaqppppppppppppppppppppppppppppppppppsssss xx aaaaaaaaaaaaaaaaqppppppp| busy=96%  [ACT=2% PREP=53% ACC=27% DEPACK=4% SPIN=8%]
+  P3       |ppppppppppppppppppppppppppppppsssss xx aaaaa aaaaaaaaaaaqqpppppppppppppppppppppppppppppppppssssssxxxaaaaaaaaaaaaaaaa qpp| busy=96%  [ACT=2% PREP=53% ACC=27% DEPACK=4% SPIN=8%]
+  CONS(HMX)| mmmm                     mmmm mmmm mmmm                    mmmmm                       mmmmmmmm mmmm                   | busy=27%  [MM=27%]
+
+============================================================================================
+ONE REPRESENTATIVE PRODUCER mm-CYCLE (P0, exact traced intervals)
+============================================================================================
+  the serial chain a producer walks per matmul it feeds (cyc are traced-state):
+    t0= 511623 t1= 511757 dur=  134  ACT
+    t0= 511757 t1= 515731 dur= 3974  PREP
+    t0= 515782 t1= 516340 dur=  558  SPIN
+    t0= 516368 t1= 516702 dur=  334  DEPACK
+
+  => period ≈ ACT 134 + WT-PACK 3974 + SPIN 558 + OUT-COPY 334 + ACC 1788 ≈ 6.8K cyc/mm.
+     Of that, only the 558 SPIN overlaps the consumer's 497-cyc matmul; the other ~6.2K is the
+     producer's own serial HVX work, dominated by WT-PACK (3974, ~58% of the producer period).
+
