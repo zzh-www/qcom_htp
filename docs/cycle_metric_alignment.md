@@ -193,7 +193,7 @@ repeatedly inverted verdicts. Unit = PCYCLE (= C15:14 = optrace; this baseline s
 | **Σ work-volume** | a stage's cycles summed across ALL threads/calls — NOT a wall | e.g. wt-vec Σ 2.05M = 4 producer threads = 0.51M/thread | a wall; **never rank wall levers by a Σ %** |
 | **Critical-path / thread-life** | the slowest single-thread span — correlates with wall | slowest-prod-life lmax = **1.53M** (= feed 1.00M + spin 0.50M + skew) | "producer work" (it includes spin = waiting the HMX) |
 | **Roofline floor** | ~~max(parallel producer-feed/P, serial consumer-occupancy)~~ → **wall(P) = feed_Σ/P + b_serial** (cron#82: `max(...)` is only a LOWER BOUND — it dropped the serial constant `b_serial`) | A态 current = 1.31M; **lean (cron#82 VERIFIED) = feed_Σ/P 1.004M + b_serial 0.376M ≈ 1.41M** (P-fit `wall=4.136M/P+0.376M`, slope 4.136M ≈ HVX-Σ 4.02M within 3%) | the bare `max(feed/P, consumer)` — it ignores b_serial (mostly glue) |
-| **Wall** | 32-head TOTAL, VTCM-only, reps2-8 median | **lean = PRODUCTION DEFAULT (cron#83) = 1.391M; native escape (`-DGP_NO_LEANMM`) = 1.703M (−18.3%)**; (cron#82 gated-Stage-B data point 1.410M, within thermal drift) | — |
+| **Wall** | 32-head TOTAL, VTCM-only, reps2-8 median | **PRODUCTION DEFAULT (cron#89) = lean + wt-cache + B ≈ 1.258M; native escape (`-DGP_NO_LEANMM`) = 1.703M ⇒ −26% vs native**; chain: lean 1.391M (cron#83) → +wt-cache ~1.30M (cron#87) → +B ~1.258M (cron#89). 优化线收口. | — |
 
 **The crucial distinction (memorize): consumer-thread-occupancy ≠ HMX-unit-MAC.** Same 16 tile-MAC →
 lean dilate micro 363 cyc vs convhhh 1576 cyc (4.3×). The 1213-cyc difference is kernel bloat
@@ -231,8 +231,8 @@ lean dilate micro 363 cyc vs convhhh 1576 cyc (4.3×). The 1213-cyc difference i
 | ~~wall ceiling (after lean consumer)~~ | ~~~1.0M + glue ≈ **−42%**~~ | 🔴 **REFUTED → real −18.3% (prod default) / −18.6% (gated)** | ~~derived (max(feed/P,consumer) 漏 b_serial)~~ | 🔴 REFUTED |
 | ~~next-step feed/P (🟡, UNMEASURED): wt-vec halved → ~1.12M; P=6 → ~1.07M~~ | — | 🔴 **cron#84 REFUTED on device** (wave1 P-sweep: P=2 2.44M / P=4 1.37M / P=6 1.72M = +25.6% rebound, 4-HVX ceiling, fixed P=4; wave2 wt-vec→vshuff bit-exact but wall unchanged, wt-vec Σ 2.08M→2.05M unmoved ⇒ wt-pack is NOT gather-bound) | both DERIVED estimates 🔴 refuted by Phase 3 measurement | 🔴 REFUTED |
 | **wt-cache (cron#85 gated → cron#87 PRODUCTION DEFAULT, commit 736b309/01c5376)** | — | **wall −7.6% PRODUCTION (cron#87, ~1.30M / median 1.299M)**; cron#85 gated toggle −7.3% PINNED; wt-pack Σ 2.53M→2.08M (−18%, 640→512 pack, per-head WT-PACK 20→16) | per-producer wt-cache removes 128 redundant merge T-block re-packs; **cron#87 PROMOTED to production default** (gate `#ifdef GP_WTCACHE`→`#ifndef GP_NO_WTCACHE`, 9 sites; `-DGP_NO_WTCACHE` escapes; orthogonal to GP_NO_LEANMM, 4 states self-consistent). cron#85 −7.3% 口径 = A/B same-kernel toggle (do not cross-mix with cron#82 A=convhhh baseline) | 🟢 (−7.6% production 3-window; gated toggle −7.3% pinned; 🔴 the initial single-window −15.5% is a refuted lucky-window artifact) |
-| next clean lever B (cron#86 → cron#88 REALIZED, gated, commit e5b8834) | — | **wall −3.9% (cron#88, gated `GP_INPLACE_RENORM` default-OFF; B-on ~1.25M)** — merge-final int32 redundant round-trip → in-place int16 renorm (`gdn_pure_solve.cpp` ~528/~972) | cron#86 identified it (renorm/acc int32 accumulator is a legitimate necessity for diag/merge-S which overflow int16, NOT a big lever; only the 6 merge-final int32 round-trips with NO Σ_k are redundant → lever B); cron#88 REALIZED it. ⚠️ bit-exact depends on the cv∈[−32639,32639] invariant (DATA invariant, NOT a compile-time guarantee; #else int32 path kept as oracle). See §"cron#88 — lever B realized" | 🟢 (−3.9% verified by RAW md5 + 3-window; **gated, NOT promoted to production**; the cv-invariant caveat is a 🟡 data-dependency) |
-| clean-path realistic floor (cron#84/#87/#88) | — | **production default ~1.30M (lean+wt-cache, cron#87); +B (gated) ~1.25M; ≤1.0M NOT reachable on the clean path** (would need an algorithm/precision trade-off — fewer matmuls / lower Taylor order, crossing the oc sweet spot, USER AUTHORIZATION required, not done) | honest floor; cumulative ~−27% vs native 1.70M; do not write "≤1.0M reachable (clean path)" | 🟢 |
+| clean lever B (cron#86 → cron#88 REALIZED gated → cron#89 PRODUCTION DEFAULT, commit e5b8834/89927c4) | — | **wall −3.1% production vs no-B (cron#89, gate `#ifdef GP_INPLACE_RENORM`→`#ifndef GP_NO_INPLACE_RENORM`; default-ON; B-on ~1.258M)**; cron#88 gated toggle −3.9% — merge-final int32 redundant round-trip → in-place int16 renorm (`gdn_pure_solve.cpp` ~528/~1007) | cron#86 identified it (renorm/acc int32 accumulator is a legitimate necessity for diag/merge-S which overflow int16, NOT a big lever; only the 6 merge-final int32 round-trips with NO Σ_k are redundant → lever B); cron#88 REALIZED it gated; **cron#89 PROMOTED to production default** (`-DGP_NO_INPLACE_RENORM` escapes to int32 oracle). ⚠️ bit-exact depends on the cv∈[−32639,32639] invariant (DATA invariant, NOT a compile-time guarantee; #else int32 path kept as oracle). See §"cron#89 — lever B promoted (优化线收口)" | 🟢 (−3.1% production / −3.9% gated, verified by default-vs-escape RAW md5 + 3-window; **PRODUCTION DEFAULT now**; the cv-invariant caveat is a 🟡 data-dependency) |
+| clean-path realistic floor (cron#84/#87/#88/#89) | — | **production default ~1.258M (lean+wt-cache+B, cron#89, all three levers promoted); ≤1.0M NOT reachable on the clean path** (would need an algorithm/precision trade-off — fewer matmuls / lower Taylor order, crossing the oc sweet spot, USER AUTHORIZATION required, not done) | honest floor; cumulative ~−26% vs native 1.70M; clean path AT structural floor (优化线收口); do not write "≤1.0M reachable (clean path)" | 🟢 |
 
 ## The verdict, restated to this taxonomy (cron#82 VERIFIED → cron#83 PROMOTED, and what it RETRACTS)
 
@@ -402,11 +402,50 @@ UNTOUCHED (they genuinely overflow int16 — legitimate necessity).
   solve renorm + the to_cv clamp — this is a **DATA invariant, NOT a compile-time hard guarantee**; if a cv
   ever hits −32768 the int16 absmax can diverge from the int32 absmax. The #else int32 path is kept as an
   oracle/escape).
-- **State: gated (`GP_INPLACE_RENORM` default-OFF), committed e5b8834, NOT yet promoted to production
-  (awaiting user decision).** Cumulative chain: native 1.70M → lean −18.3% (1.39M, production) → +wt-cache
-  −7.6% (~1.30M, production) → +B −3.9% (~1.25M, gated) ≈ −27% vs native, all bit-exact. The clean path is
-  at its structural floor (cron#86); B is the last lever; ≤1.0M needs a precision/algorithm trade-off (not
-  authorized). Evidence: commit e5b8834 + `Agent/current/timeline_cron87_B.txt`.
+- **State (at cron#88): gated (`GP_INPLACE_RENORM` default-OFF), committed e5b8834.** SUPERSEDED by cron#89
+  (B promoted to production default — see §"cron#89"). Evidence: commit e5b8834 + `Agent/current/timeline_cron87_B.txt`.
+
+## cron#89 — lever B promoted (production default, ~1.258M; optimization line CLOSED)
+
+cron#89 PROMOTED lever B to the production default (commit 89927c4). Gate flipped
+`#ifdef GP_INPLACE_RENORM` (opt-in) → `#ifndef GP_NO_INPLACE_RENORM` (B default-ON;
+`-DGP_NO_INPLACE_RENORM` escapes to the int32 renorm oracle), 2 sites
+(`gdn_pure_solve.cpp:528` helper `gp_renorm_i16` + `:1007` merge-final site). The default build is now
+**lean + wt-cache + B all ON**; orthogonal to `GP_NO_LEANMM` and `GP_NO_WTCACHE`, the three escapes are
+self-consistent.
+
+- **wall ≈ 1.258M, ΔWall = −3.1% vs no-B** (3 thermal windows same-window paired, reps2-8 median;
+  thermal-consistent with the cron#88 gated-toggle −3.9%). bit-exact (strongest proof): default (B on)
+  vs escape `-DGP_NO_INPLACE_RENORM` (int32 oracle) **full 32-head 4 MB T output RAW md5 byte-identical**
+  (3 windows) + `GP_LEANCHK_LIVE` max|d|=0 + PACKCHK=0 + oc 4.238e-3.
+- **B IS the production default now — no longer gated, no longer pending.** cron#88 −3.9% is the
+  gated-toggle data point (compatible 口径, thermal-consistent).
+- ⚠️ caveat (must state): bit-exactness depends on the cv∈[−32639,32639] invariant (DATA invariant, NOT a
+  compile-time hard guarantee; the `-DGP_NO_INPLACE_RENORM` int32 path is kept as the oracle/escape).
+
+## Optimization-line closing summary (cron#89; cite this, do not re-derive)
+
+**The pure-HMX solve (GDNSolveHMX) optimization line is CLOSED, state stable.** All three clean
+(non-precision) levers are landed, all promoted to the production default, all bit-exact; the clean path is
+at its structural floor; further reduction needs a user-authorized precision/algorithm trade-off (not done).
+
+- **Production default wall ≈ 1.258M** (32-head TOTAL, VTCM-only, reps2-8 median, P=4, Newton=0/Taylor3),
+  all bit-exact (oc 4.238e-3, PACKCHK=0, default-vs-escape RAW md5 byte-identical).
+- **Three-lever chain (all production default, all bit-exact):**
+  `native 1.70M → lean −18.3% (cron#83) → +wt-cache −7.6% (cron#87) → +B −3.1% (cron#89) ≈ 1.258M = −26% vs native.`
+- **Clean (non-precision) path is at its STRUCTURAL FLOOR (cron#86 nailed):** WT-PACK 16/head = min +
+  cv→kmajor bridge unavoidable (HMX cannot produce/permute kmajor) + the 65-70% idle HMX cannot absorb the
+  HVX work + the ACC int32 accumulator is a legitimate necessity (diag/merge-S overflow int16).
+- **≤1.0M is NOT reachable on the clean path** — needs a precision/algorithm trade-off (fewer matmuls /
+  lower Taylor order, crossing the oc sweet spot); **USER AUTHORIZATION required, not done.**
+- **Refuted dead-ends (do not retry, audit trail):** raise P (>4 = v75 4-HVX unit ceiling, P=6 +25.6%
+  rebound, cron#84); wt-vec vgather→vshuff (bit-exact but zero wall gain, wt-pack is NOT gather-bound =
+  HW-irreducible kmajor byte-pack + SMT contention, cron#84); merge-final transpose-reuse 6→3 pack (15
+  perms/head net loss, cron#86).
+- **Three orthogonal escapes (all `#ifndef` default-ON):** `GP_NO_LEANMM` (`w16a16_mm.h:96,105` → native
+  consumer) / `GP_NO_WTCACHE` (`gdn_pure_solve.cpp` 9 sites → no-cache feed) / `GP_NO_INPLACE_RENORM`
+  (`gdn_pure_solve.cpp:528,1007` → int32 renorm oracle). The default build (no flags) = lean+wt-cache+B all
+  ON. Evidence: commit 89927c4 + cron#86 structural floor + cron#88 lever B.
 
 ## Honesty rule (so this doesn't mislead in the OTHER direction)
 
