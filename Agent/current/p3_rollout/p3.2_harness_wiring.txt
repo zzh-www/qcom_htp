@@ -1,0 +1,52 @@
+================================================================================
+P3.2 — gdnbm harnesses default-produce canonical htp_perf_report / htp_timeline
+================================================================================
+DATE     : 2026-06-17
+DEVICE   : oneplus (termux sshd; v75 cDSP TURBO)
+CONTRACT : docs §"HTP Kernel Measurement Standard" §4 (stats[] dict) / §7 (report template) /
+           §5 (timeline stage spec). P2 built the tools (htp_perf_report.py / htp_timeline.py);
+           P3.2 wires the run/capture harnesses to default-emit them.
+GOAL     : a standard §7 report + canonical timeline are a DEFAULT product of a harness run,
+           not a hand-typed table. ADDITIVE — every harness keeps its original stdout/behavior.
+================================================================================
+
+WHAT CHANGED (scripts/glue — low risk, no kernel code)
+  - scripts/htp_harness_report.py  (NEW): shared glue. parse_stats() reconstructs stats[0..23] from
+    the host's "raw stats[..]" + "raw PMU stats[20..23]" echo lines; emit_report() writes
+    <outdir>/{spec.json, report.txt} (htp_perf_report.py §7) and, if a trace blob is given,
+    <outdir>/timeline.svg (htp_timeline.py §5). PMU真值 (§6 tier-1) is auto-attached when the host
+    printed the 'raw PMU stats[20..23]' line (= stats[26]=="PMUU" marker, P2.3 pure-HMX or P3.1
+    SHIP/ARES); it converts per-call COPROC_BUSY/CYCLES_1T + THREAD_IDLE/CYCLES_1T to the fractions
+    htp_perf_report.py's util_str expects.
+  - scripts/run_w16a16_head_phase4.py:
+      L76-78   : _keys += "PMU"  (the P2-dev 1-liner) so the §6 tier-1 PMU真值 line is surfaced.
+      L46-49   : new --report-dir (default /tmp/htp_perf/phase4; ""=off).
+      L123-135 : after the existing oc/wall prints, calls emit_report(path="pure") -> §7 report.
+  - scripts/gdn_hvxmix_acac.sh:
+      after the 3-window A/C delta, emits the A-variant §7 report from /tmp/${TAG}_A_win1.log
+      (path="hvxmix", P=THREADS). The A/C delta output is unchanged.
+  - scripts/gdn_capture_3impl_traces.sh:
+      after capturing the 3 trace blobs, auto-renders the canonical AGGREGATE timeline via
+      htp_timeline.py (the ONE tool) -> /tmp/htp_perf/3impl_timeline.svg. The .raw blobs are
+      still written as before.
+
+END-TO-END DEMO (pure-HMX phase4, real device run)
+  cmd : python scripts/run_w16a16_head_phase4.py --heads 32 --threads 4 --reps 6
+        (pure-HMX binary built with -DGP_PMU_UTIL deployed to $HOME/gdnbm_run)
+  result:
+    - WALL reps2-6 MEDIAN=1,262,566 cyc (spread 2.5%), oc mean=4.238e-03  (canonical pure-HMX)
+    - the harness now prints the §6 tier-1 PMU真值 line:
+        PMU_UTIL: per-call COPROC_BUSY=52 THREAD_IDLE=470 CYCLES_1T=470 PKT=108 | HMX-util 11%
+    - auto-emitted: /tmp/htp_perf/phase4/{spec.json, report.txt}. report.txt = the §7 template with
+      the §4 canonical table (wall 1.263M / cbusy 0.388M / spin_Σ 0.565M / lmax 1.055M / percall 454)
+      + §6 utilization line "PMU真值 (§6 tier-1): HMX COPROC_BUSY/CYCLES=11%, THREAD_IDLE=100%".
+
+  glue unit-cross-check (SHIP hvxmix log -> report): parse_stats correctly reads stats[0..23] and
+  the §4 hvxmix mapping (stats[4]=feed_Σ=6.808M, stats[8]=lmax=1.887M, honest-tail 0.256M).
+
+VERIFY : all edited scripts pass `python3 -c ast.parse` / `bash -n`. The original stdout of every
+         harness is untouched (the report lines are appended). Default report-dir is /tmp (no repo
+         pollution). No device or kernel code change in P3.2 — pure measurement-side glue.
+
+SCOPE : ② done (phase4 demo'd live; acac + capture wired + syntax-clean; their live demo only needs
+        a SHIP/ARES device run, same path the P3.1 script already exercised).

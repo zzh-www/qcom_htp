@@ -79,6 +79,13 @@ for win in $(seq 1 $WINDOWS); do
   fi
 done
 
+# P3.2: emit the canonical §7 perf report for the A-variant (win1 log) — additive, the A/C delta above
+# is unchanged. SHIP/ARES = the "hvxmix" §4 stats mapping; P=THREADS.
+if [ -s "/tmp/${TAG}_A_win1.log" ]; then
+  python3 "$ROOT/scripts/htp_harness_report.py" "/tmp/${TAG}_A_win1.log" hvxmix "$THREADS" "/tmp/htp_perf/${TAG}_A" \
+    && echo "  -> §7 perf report /tmp/htp_perf/${TAG}_A/report.txt"
+fi
+
 echo ""
 python3 - <<PY
 A=[${AW[@]/%/,}]; C=[${CW[@]/%/,}]

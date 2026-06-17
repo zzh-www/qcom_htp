@@ -63,4 +63,12 @@ echo "  -> /tmp/w16n8_trace.raw ($(stat -c%s /tmp/w16n8_trace.raw) bytes)"
 
 cap purehmx "-DGDNBM_HMX_PIPE -DGDN_BR_STATIC_GAIN -DGDN_BR_STATIC_FULL -DGDNBM_GDN_PURE_SOLVE -DGP_TRACE"
 
+# P3.2: auto-render the canonical aggregate timeline (htp_timeline.py, the ONE tool; §5 stage spec) from
+# the three trace blobs just captured. Additive — the .raw blobs above are still written as before.
+OUT="${TIMELINE_SVG:-/tmp/htp_perf/3impl_timeline.svg}"; mkdir -p "$(dirname "$OUT")"
+if [ -s /tmp/ship_trace.raw ] && [ -s /tmp/w16n8_trace.raw ] && [ -s /tmp/purehmx_trace.raw ]; then
+  python3 "$ROOT/scripts/htp_timeline.py" aggregate /tmp/ship_trace.raw /tmp/w16n8_trace.raw /tmp/purehmx_trace.raw "$OUT" \
+    && echo "  -> aggregate timeline $OUT (SHIP+ARES+pure-HMX, §5 canonical)"
+fi
+
 echo "DONE"

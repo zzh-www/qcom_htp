@@ -1,0 +1,83 @@
+================================================================================
+P3.3 — optrace-path bridge: GDNSolveHVX baseline + matmul family -> same PCYCLE table
+================================================================================
+DATE     : 2026-06-17
+DEVICE   : (artifacts = archived optrace; no new device run needed — measure-only adapter)
+CONTRACT : docs §"HTP Kernel Measurement Standard" §2 Q1-Q4 (QNN field map), §4 (canonical
+           fields). skill htp-cycle-metric: QNN cycles == C15:14 PCYCLE (ratio 0.9963, NO
+           conversion) -> optrace-path impls belong in the SAME table as the gdnbm C15:14 routes.
+IRON LAW : GDNSolveHVX is "measure-only" (gdn_solve.md §5). The bridge READS optrace JSON only;
+           it never touches op code (grep: 0 writes/subprocess in htp_optrace_bridge.py; git status
+           shows solve_op/ untouched).
+REPRODUCE:
+  python scripts/htp_optrace_bridge.py example/gdn_native/solve_op/standalone/out_solve/optrace \
+         --label GDNSolveHVX --n 768
+  python scripts/htp_optrace_bridge.py --table \
+    --add "GDNSolveHVX:example/gdn_native/solve_op/standalone/out_solve/optrace:768" \
+    --add "u8i8-matmul:example/qnn_matmul_profile/output_u8i8_route_probe_rowid_default/optrace:1" \
+    --add "w8a16-matmul:example/qnn_matmul_profile/output_w8a16_aligned_e2e_256/optrace:1" \
+    --add-gdnbm "pure-HMX-GDNSolveHMX:/tmp/htp_perf/phase4/spec.json:768"
+================================================================================
+
+WHAT CHANGED (new script, measurement-side only)
+  - scripts/htp_optrace_bridge.py (NEW): reads chrometrace_qnn_htp_analysis_summary.json and maps
+    to the §4 canonical fields (PCYCLE, no conversion):
+       wall (Q4 graph-wall)     = htp_overall_summary.timeline_cycles  (= max(end)-min(start))
+       cbusy (Q2 cycles_used)   = HMX unit cycles_used (MAC occupancy)
+       bottleneck-busy (Q2)     = max-over-units cycles_used + the saturated unit name (= domain)
+       num_dominant (Q1)        = Σ dp_cycles over dominant_path_htp_0 (critical path)
+       us                       = graph_execute_us (clock self-check)
+    --table mode mixes optrace impls (--add label:dir:N) AND gdnbm spec.json (--add-gdnbm, the P3.2
+    canonical JSON) into ONE PCYCLE table; cross-impl number = graph-wall÷N (§2 Q4 +
+    feedback_cross_impl_compare_graphwall_only). Handles both overall-summary shapes (dict / list-of-1).
+
+UNIFIED MULTI-IMPL TABLE (the P3.3 demo — proves "统一" reaches the optrace routes)
+  | impl                 | src          |  wall (Q4) | wall/N | cbusy(Q2) | busy-unit  | num_dom(Q1) |
+  | GDNSolveHVX          | optrace      |   13.974M  | 18.2K  |  258.9K   |    HVX     |   13.974M   |
+  | u8i8-matmul          | optrace      |    40.2K   | 40.2K  |   17.6K   |    HVX     |    40.2K    |
+  | w8a16-matmul         | optrace      |    76.6K   | 76.6K  |   45.0K   |    HMX     |    76.6K    |
+  | pure-HMX-GDNSolveHMX | gdnbm(pure)  |    1.263M  |  1.6K  |  387.8K   | HMX(cbusy) |     —       |
+
+  READING (all same field, same PCYCLE unit):
+   - GDNSolveHVX shipping baseline = HVX-bound (HVX cycles_used 13.89M >> HMX 258.9K), 18.2K/conv
+     over 768 convs — the documented producer-bound pure-HVX route.
+   - pure-HMX GDNSolveHMX = 1.6K/conv (graph-wall÷N) => ~11× the HVX baseline's per-conv at the SAME
+     32-head/768-conv scenario. This per-conv cross-impl number is now LEGAL (§2 Q4 graph-wall÷N,
+     same shape+scenario), not a Q1-vs-Q3 cross-instrument mis-compare.
+   - matmul family (u8i8 40.2K HVX-bound / w8a16 76.6K HMX-bound) sits in the same units as a
+     per-matmul member — extensible to the rest of qnn_hmx_matmul_*.
+   (num_dom for gdnbm = "—": bare-metal stats[] has no dominant-path field; optrace does. The
+    apples-to-apples cross-impl field is wall/N, which both have.)
+
+VERIFY : bridge is read-only (json.load only; 0 writes/subprocess); GDNSolveHVX op code untouched
+         (git status: solve_op/ clean). The optrace numbers reproduce from the in-repo archived
+         summaries via the REPRODUCE commands above.
+
+SCOPE : ③ done. Applied to GDNSolveHVX baseline + two matmul-family members + folded the gdnbm
+        pure-HMX into the same table. The seed bridge (gdn_solve_qnn_aligned_report.py, the one
+        manual side-by-side) is now generalized into a reusable §4-field adapter.
+
+================================================================================
+GRAND UNIFIED DEMO — ALL 6 handwriting impls on ONE PCYCLE 口径 ("统一" landed)
+================================================================================
+(3 gdnbm bare-metal C15:14 routes + 3 optrace-path routes, all §4 fields, graph-wall÷N @ 768 conv)
+cmd: python scripts/htp_optrace_bridge.py --table \
+       --add "GDNSolveHVX:.../out_solve/optrace:768" \
+       --add "u8i8-matmul:.../output_u8i8_route_probe_rowid_default/optrace:1" \
+       --add "w8a16-matmul:.../output_w8a16_aligned_e2e_256/optrace:1" \
+       --add-gdnbm "HVXMix-SHIP:/tmp/htp_perf/ship/spec.json:768" \
+       --add-gdnbm "HVXMix-ARES:/tmp/htp_perf/ares/spec.json:768" \
+       --add-gdnbm "pure-HMX:/tmp/htp_perf/phase4/spec.json:768"
+
+  | impl         | src           |  wall (Q4) | wall/N | cbusy(Q2) | busy-unit  | num_dom(Q1) |
+  | GDNSolveHVX  | optrace       |   13.974M  | 18.2K  |  258.9K   |    HVX     |   13.974M   |
+  | u8i8-matmul  | optrace       |    40.2K   | 40.2K  |   17.6K   |    HVX     |    40.2K    |
+  | w8a16-matmul | optrace       |    76.6K   | 76.6K  |   45.0K   |    HMX     |    76.6K    |
+  | HVXMix-SHIP  | gdnbm(hvxmix) |    1.833M  |  2.4K  |  138.8K   | HMX(cbusy) |     —       |
+  | HVXMix-ARES  | gdnbm(hvxmix) |    2.513M  |  3.3K  |  286.6K   | HMX(cbusy) |     —       |
+  | pure-HMX     | gdnbm(pure)   |    1.263M  |  1.6K  |  387.8K   | HMX(cbusy) |     —       |
+
+  GDN-solve family per-conv (graph-wall÷N, the legal cross-impl number): GDNSolveHVX 18.2K ->
+  HVXMix-ARES 3.3K -> HVXMix-SHIP 2.4K -> pure-HMX 1.6K. Coherent with the productized verdict
+  (pure-HMX GDNSolveHMX = the winner). matmul family (u8i8/w8a16) sits in the same PCYCLE units.
+  This IS the "统一" deliverable: every handwriting impl, one field set, one unit, one comparison rule.

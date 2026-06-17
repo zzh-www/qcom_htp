@@ -373,6 +373,36 @@ struct hmx_job {
     int _pad[11];                       /* own cache/SMT line -> no false sharing between producer slots */
 } __attribute__((aligned(128)));
 static struct hmx_job g_pjob[GDN_BR_NT];
+#if defined(GDN_BR_PMU_UTIL)
+static struct hmx_job *g_pmu_lastjob;   /* P3.1: last job consumed (replayed by the post-solve PMU真值 pass) */
+/* GDNBM_PMU_CONSUME(jb): re-run the SAME consumer kernel the drain loop ran, for the compiled variant
+ * (SHIP=#else gdn_hmx_run_only; ARES=GDN_BR_W16_N8 w16a16_mm_run; W16/PURE_HMX mirror their drain branch).
+ * References pipe_ep/pipe_mb which are in scope at the PMU-pass call site (declared before the drain loop). */
+#if defined(GDN_BR_W16_N8)
+#define GDNBM_PMU_CONSUME(jb) do { const gdn_vtcm_t *cvt = (jb)->vt; \
+    hmx_conv_out_desc_t od __attribute__((aligned(64))) = { cvt->outtab, 2u, 4u, 8u, 8, 64u }; \
+    hmx_conv_act_desc_t ad __attribute__((aligned(64))) = { cvt->acttab, 2u, 4u }; \
+    w16a16_mm_t mmj; mmj.atab = cvt->acttab; mmj.otab = cvt->outtab; \
+    mmj.wt = (uint8_t *)(jb)->wt; mmj.bias = (int32_t *)cvt->bias; \
+    mmj.ep = pipe_ep; mmj.mb = pipe_mb; mmj.od = &od; mmj.ad = &ad; \
+    w16a16_mm_run(&mmj); } while (0)
+#elif defined(GDN_BR_W16)
+#define GDNBM_PMU_CONSUME(jb) do { const gdn_vtcm_t *cvt = (jb)->vt; uint32_t Kt = (uint32_t)(jb)->n_act_pairs; \
+    hmx_conv_out_desc_t od __attribute__((aligned(64))) = { cvt->outtab, 2u, 64u, 64u, 1, 64u }; \
+    hmx_conv_act_desc_t ad __attribute__((aligned(64))) = { cvt->acttab, Kt, 64u * Kt }; \
+    our_v73deep_kernel_i16(&od, &ad, (const uint8_t *)(jb)->wt, (const uint8_t *)cvt->bias, \
+                           (const hmx_conv_mask_desc_t *)pipe_mb, pipe_ep); } while (0)
+#elif defined(GDNBM_PIPE_PURE_HMX)
+#define GDNBM_PMU_CONSUME(jb) do { const gdn_vtcm_t *cvt = (jb)->vt; \
+    hmx_conv_out_desc_t od __attribute__((aligned(64))) = { cvt->outtab, GDN_BR_OUT_TABLE_STRIDE, \
+        GDN_BR_OUT_Y_STRIDE, GDN_BR_N_TILES_POW2, GDN_BR_M_TOTAL_MINUS_STEP, GDN_BR_K_TOTAL_BYTES }; \
+    hmx_conv_act_desc_t ad __attribute__((aligned(64))) = { cvt->acttab, (uint32_t)(jb)->n_act_pairs, GDN_BR_ACT_Y_STRIDE }; \
+    our_v73deep_kernel(&od, &ad, (const uint8_t *)(jb)->wt, (const uint8_t *)cvt->bias, \
+                       (const hmx_conv_mask_desc_t *)pipe_mb, pipe_ep); } while (0)
+#else
+#define GDNBM_PMU_CONSUME(jb) gdn_hmx_run_only((jb)->vt, (jb)->wt, (jb)->eff, (jb)->scale, (jb)->baseline, (jb)->round)
+#endif
+#endif
 /* hand-off sync: the full __sync_synchronize() barriers (SIG+POST) cost 28% of MM (604K cyc, trace-confirmed).
  * The handshake only needs ACQUIRE/RELEASE ordering on `state`, not a full barrier: producer release-stores
  * state=1 after writing job fields (consumer acquire-loads => sees fields); consumer release-stores state=2
@@ -1520,6 +1550,10 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
 #if defined(GDN_BR_TRACE)
                     gdn_tr_push((uint32_t)GDN_BR_NT, GDN_TR_MM, k0, k1);   /* consumer tid=GDN_BR_NT, MM span */
 #endif
+#if defined(GDN_BR_PMU_UTIL)
+                    g_pmu_lastjob = jb;   /* P3.1: remember the last consumed job so the post-solve PMU pass can
+                                           * replay this EXACT consumer kernel back-to-back (vt/wt still valid). */
+#endif
                     GDN_JOB_DONE(jb);                        /* release-store: publish vt->out + mark done */
                 }
             }
@@ -1528,6 +1562,35 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
         uint64_t us1 = HAP_perf_get_time_us();
         for (int t = 0; t < P; ++t) { int s; if (tid[t]) qurt_thread_join(tid[t], &s); }
         g_hmx_dispatch = nullptr;
+#if defined(GDN_BR_PMU_UTIL)
+        /* P3.1 (§6 tier-1, MIRROR of pure-HMX P2.3 gdn_pure_solve.cpp:2394-2420): SEPARATE post-solve PMU
+         * pass — read the HVXMix consumer's HMX occupancy真值 (COPROC_BUSY = HMX MACing) + THREAD_IDLE
+         * (consumer waiting on HMX) over a back-to-back replay of the LAST consumed job's kernel. This runs
+         * AFTER the clean wall t1 (L1527) is captured and AFTER all producers joined (L1529) => no SMT
+         * contention, cannot perturb stats[0]. The HMX lock (hl/hctx) is STILL held here (unlock is below).
+         * Event codes IDENTICAL to P2.3: cnt0=COMMITTED_PKT_ANY(0x03) cnt1=CYCLES_1_THREAD_RUNNING(0x3b)
+         * cnt2=THREAD_IDLE_PVIEW(0xe5) cnt3=COPROC_BUSY_PVIEW(0xed). util = COPROC_BUSY/CYCLES_1T. */
+        int pmu_coproc_pc = 0, pmu_idle_pc = 0, pmu_cyc1_pc = 0, pmu_pk_pc = 0;
+        if (hl == 0 && g_pmu_lastjob) {
+            struct hmx_job *jb = g_pmu_lastjob;
+            const int PB = 256;
+            qurt_pmu_enable(1);
+            qurt_pmu_set(QURT_PMUEVTCFG, (0xedu << 24) | (0xe5u << 16) | (0x3bu << 8) | 0x03u);
+            for (int w = 0; w < 32; ++w) GDNBM_PMU_CONSUME(jb);   /* warm */
+            unsigned a0 = qurt_pmu_get(QURT_PMUCNT0), b0 = qurt_pmu_get(QURT_PMUCNT1),
+                     c0 = qurt_pmu_get(QURT_PMUCNT2), d0 = qurt_pmu_get(QURT_PMUCNT3);
+            for (int i = 0; i < PB; ++i) GDNBM_PMU_CONSUME(jb);
+            unsigned pk = qurt_pmu_get(QURT_PMUCNT0) - a0, run1 = qurt_pmu_get(QURT_PMUCNT1) - b0,
+                     idle = qurt_pmu_get(QURT_PMUCNT2) - c0, coproc = qurt_pmu_get(QURT_PMUCNT3) - d0;
+            qurt_pmu_enable(0);
+            pmu_coproc_pc = (int)(coproc / PB); pmu_idle_pc = (int)(idle / PB);
+            pmu_cyc1_pc = (int)(run1 / PB);     pmu_pk_pc = (int)(pk / PB);
+            FARF(ALWAYS, "GDNBM PMU_UTIL(separate pass, clean-wall-safe): per-call COPROC_BUSY=%d THREAD_IDLE=%d "
+                 "CYCLES_1T=%d PKT=%d | HMX-util(COPROC/CYC1T)=%d%% (CYC1T basis)",
+                 pmu_coproc_pc, pmu_idle_pc, pmu_cyc1_pc, pmu_pk_pc,
+                 pmu_cyc1_pc ? (pmu_coproc_pc * 100 / pmu_cyc1_pc) : 0);
+        }
+#endif
         if (hl == 0) HAP_compute_res_hmx_unlock(hctx); if (hctx) HAP_compute_res_release(hctx);
         if (vctx2) HAP_compute_res_release(vctx2);
         { HAP_power_request_t off; memset(&off,0,sizeof(off)); off.type=HAP_power_set_HMX; off.hmx.power_up=FALSE; HAP_power_set(pctx,&off); }
@@ -1543,6 +1606,17 @@ int gdnbm_solve(remote_handle64 _h, const uint8_t *A, int ALen, int H, int C, in
         if (statsLen > 4) stats[4] = (int)hvx_cyc;            /* 总 HVX cycle */
         if (statsLen > 5) stats[5] = (int)wall;               /* 总 domain cycle (= wall) */
         if (statsLen > 6) stats[6] = (int)us;                 /* 总时间 us (real, HAP_perf) */
+#if defined(GDN_BR_PMU_UTIL)
+        /* P3.1 (§6 tier-1, MIRROR of pure-HMX P2.3): PMU真值 per-call -> spare slots [20..23] (htp_perf_report.py
+         * reads these, SAME layout as pure-HMX). stats[20]=COPROC_BUSY/call (HMX MAC busy)
+         * stats[21]=THREAD_IDLE/call (consumer wait) stats[22]=CYCLES_1_THREAD_RUNNING/call (basis)
+         * stats[23]=COMMITTED_PKT_ANY/call. wall(stats[0]) was captured BEFORE this pass => unpolluted. */
+        if (statsLen > 20) stats[20] = pmu_coproc_pc;
+        if (statsLen > 21) stats[21] = pmu_idle_pc;
+        if (statsLen > 22) stats[22] = pmu_cyc1_pc;
+        if (statsLen > 23) stats[23] = pmu_pk_pc;
+        if (statsLen > 26) stats[26] = 0x504D5555;            /* "PMUU" host marker (SAME slot as pure-HMX P2.3) */
+#endif
         /* direction-A diagnostic: per-producer lifetime + spin -> is the HVX idle from imbalance(tail) or spin? */
         { uint64_t lmin = ~0ull, lmax = 0, spinsum = 0;
           for (int t = 0; t < P; ++t) { uint64_t l = g_pipe_plife[t];

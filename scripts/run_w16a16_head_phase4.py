@@ -43,6 +43,9 @@ def main() -> int:
                          "median wall (steady-state metric, loop doc 口径). default 1.")
     ap.add_argument("--linear", action="store_true",
                     help="legacy linear I/O (GP_CVIO=0 build); default = cv-block contract (GP_CVIO=1)")
+    ap.add_argument("--report-dir", default="/tmp/htp_perf/phase4",
+                    help="P3.2: also emit canonical perf-report JSON + §7 report.txt here "
+                         "(additive; htp_harness_report.py). Empty string = off.")
     a = ap.parse_args()
     H = a.heads
     cvio = not a.linear
@@ -74,7 +77,8 @@ def main() -> int:
              f"./gdnbm {a.threads} w16p4_A.raw w16p4_T.raw {H} 256 32768 32768 3.05e-5 3.05e-5 2>&1'").stdout.decode()
     # surface the QNN-aligned cycle report (host prints 真算/装料/卸料 by QNN op + field; cron#79).
     _keys = ("rc=", "QNN-ALIGNED", "graph-wall", "basis:", "真算", "装料", "卸料", "waste",
-             "clock self-check", "THROUGHPUT", "apples-to-apples", "raw stats", "NTSWEEP", "LEANCHK")
+             "clock self-check", "THROUGHPUT", "apples-to-apples", "raw stats", "NTSWEEP", "LEANCHK",
+             "PMU")   # P3.2: surface the §6 tier-1 PMU真值 line(s) (P2.3 pure-HMX + P3.1 SHIP/ARES)
     print("\n".join(l for l in out.splitlines() if any(k in l for k in _keys)))
     # cron#80: reps2-N median wall (steady-state metric, loop doc 口径 — drop rep1 warm-up, never min).
     if reps > 1:
@@ -120,6 +124,18 @@ def main() -> int:
         ocs.append(np.abs(Tdev - Tref).mean() / max(np.abs(Tref).mean(), 1e-12))
     ocs = np.array(ocs)
     print(f"H={H} oc mean={ocs.mean():.3e} max={ocs.max():.3e} min={ocs.min():.3e}")
+    # P3.2: also emit the canonical §7 perf report + spec.json (additive; existing stdout above unchanged).
+    if a.report_dir:
+        try:
+            import sys as _sys; _sys.path.insert(0, str(Path(__file__).resolve().parent))
+            from htp_harness_report import emit_report
+            emit_report(out, path="pure", P=a.threads,
+                        title=f"pure-HMX GDNSolveHMX — phase4 H={H} P={a.threads}",
+                        reproduce=f"python scripts/run_w16a16_head_phase4.py --heads {H} "
+                                  f"--threads {a.threads} --reps {reps}",
+                        outdir=a.report_dir)
+        except Exception as e:
+            print(f"[P3.2] report emit skipped: {e}")
     print("PHASE4 RAN")
     return 0
 
