@@ -1,0 +1,45 @@
+W16_N8 高精度档 act 上游协同 — 阶段2 真兑现 (ACTCV) wall 实测 (正确 T 口径)
+============================================================================
+口径: 32-head VTCM-only, stats[0] graph-wall, reps2-8 median, ACAC A C 同热窗背靠背配对。
+  A = actcache base (生产 W16_N8 高精度档); C = base + -DGDN_BR_W16_N8_ACTCV (融合 fold+crouton)。
+  C 拿到的是正确 T (bit-exact, md5 == A, 见 w16n8_actcv_bitexact.txt) -> 这是真实 wall (非阶段1 上界)。
+
+### ΔWall 实测 ###
+3 窗:
+  win1: A=2864530 C=2863601 dWall=-0.03%
+  win2: A=2845121 C=2964365 dWall=+4.19%
+  win3: A=3340578 C=3300606 dWall=-1.20%
+  MERGED: A_med=2864530 C_med=2964365 dWall=+3.49%
+
+5 窗 (复跑):
+  win1: A=2984120 C=2847230 dWall=-4.59%
+  win2: A=2826000 C=2833157 dWall=+0.25%
+  win3: A=2963621 C=2835877 dWall=-4.31%
+  win4: A=2881181 C=3151548 dWall=+9.38%
+  win5: A=2839737 C=2975541 dWall=+4.78%
+  MERGED: A_med=2881181 C_med=2847230 dWall=-1.18%   (per-win 散布 -4.6%..+9.4% 绕零)
+
+### 裁决: ZERO (真兑现无增益) ###
+  2 独立运行 (+3.49% / -1.18%) 均在热噪声内绕零, 散布远大于均值 -> 确定性 ZERO 改善。
+  ❌ ACTCV (融合 fold+crouton, 省 qbuf16->stage 中转) 相对 actcache base 无可测 wall 增益。
+
+### 根因 (结构论证, 与阶段1 拆分实测一致) ###
+  1) path (b) "head 开头一次 fold+crouton 成 cv-resident, merge 内 act 退化成平拷" 在现有 ACTCACHE
+     下已实现: ACTCACHE 每个 distinct A 块 fold+crouton 一次 -> 持久 VTCM crouton 槽; merge 的
+     K-stack 消费 (gdn_w16_kstack:626 vt->acttab[i]=act_cr[m]+(i&3)*2048) 是指针直引用, 已无 per-merge
+     平拷。 所以 ACTCACHE base 即 path (b) 的落地态。
+  2) ACTCV 唯一能再榨的 = 省 fold 输出 qbuf16(nat) -> stage 的一次中转复制 (64 stores/块, 9 distinct
+     块/head)。 实测 = 噪声内零。
+  3) 阶段1 拆分实测 (CAP_PACK_A: 保 fold 跳 vgather) = -16% ceiling, 即 act 路成本几乎全在 vgather
+     (nat->crouton 置换), fold_quant 本身很便宜。 vgather 是喂 HMX 所需的 nat->crouton 置换, 必须在
+     设备上做一次 (standalone 无上游 op 送 crouton-order A); ACTCV 不动 vgather 本身, 故零增益。
+  4) 阶段1 上界 -12.66% 是 "整段 A act 消失" 的天花板, 但那段成本 (9 个 distinct crouton build)
+     ACTCACHE 已是 once-per-head 的最小态; 进一步只能靠真上游 op 送 cv-resident crouton-order A
+     (图改, 非本任务 standalone 范围) 才能消, 干净路 standalone 内到此为地板。
+
+### 复现 ###
+  bash scripts/w16n8_actcv_check.sh                (默认 3 窗)
+  WINDOWS=5 bash scripts/w16n8_actcv_check.sh      (复跑稳定化)
+  阶段1 上界:  WINDOWS=5 bash scripts/w16n8_actupstream_upper.sh
+  vgather 拆分: 见 w16n8_actupstream_upper.txt (CAP_PACK_A -16% ceiling)
+  设备只经 source scripts/dssh.sh。

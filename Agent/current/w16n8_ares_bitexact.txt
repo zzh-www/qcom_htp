@@ -1,0 +1,51 @@
+W16_N8 full GP_RESIDENT (ARES) — bit-exact 证据
+================================================
+任务: 照搬 pure-HMX GP_RESIDENT 完整模式 (gdn_pure_solve.cpp:1071-1134 + 2328-2341), 把 W16_N8 的
+  6 distinct merge A cv-block 面全 32-head 一次性常驻 VTCM 共享尾区 + alias 零拷, 消掉 ACVRES 残留的
+  per-head 48KB head-load 平拷。这是 act 上游协同的真收口 (ACVRES 是半截, 只方差收敛没降 mean)。
+
+ARES vs ACVRES 的区别:
+  ACVRES = host cv-block (DDR) + DSP 每-head 48KB DDR->VTCM HVX 平拷 (head-load, 在计时循环内) + 指针直返。
+  ARES   = host cv-block (DDR) 全 32-head 一次性 bulk-load 进 VTCM 共享尾区 (vbase + P*0xA0000, 1.5MB,
+           setup 期非计时) + merge get_act_A 返 alias 指针 (head*6+slot)*8KB, 零 head-load 拷贝。
+
+照搬要点 (pure-HMX GP_RESIDENT 怎么做):
+  - resident 区在共享全局尾 (gdn_pure_solve.cpp:1132 g_Avt = vbase + P*GP_VSTRIDE + 0xA000), 不碰
+    per-producer 48KB gap (那是红鲱鱼)。ARES: g_w16n8_ares_base = vbase + P*0xA0000。
+  - 全 head setup 期一次性 bulk DDR->VTCM (gdn_pure_solve.cpp:2328-2341, OUTSIDE timed region)。
+    ARES: gdnbm_imp.cpp pipe 入口, gdn_w16_lut_init() 后 / t0=pcyc() 前, HVX 平拷 H*6 面 (32*6*8KB=1.5MB)。
+  - producer alias 指针零拷 (gdn_pure_solve.cpp:1071 c->A = g_Avt + h*stride)。
+    ARES: get_act_A 返 g_w16n8_ares_base + (head*6 + key2slot[key])*0x2000。
+
+代码改动 (gated 新旗 -DGDN_BR_W16_N8_ARES, 默认 OFF, 生产 byte-unaffected):
+  example/gdn_native/solve_br_op/src/GdnSolveBR16.cpp:
+    + g_w16n8_ares_base (VTCM 尾基址) + __thread g_w16n8_ares_head + g_ares_key2slot[16] (key->slot 0..5)
+    + gdn_w16_get_act_A 顶部 #if ARES 分支: alias 指针直返 (head*6+slot)*8KB, 零 fold/quant/vgather/拷贝。
+  example/gdn_native/baremetal/src/gdnbm_imp.cpp:
+    + pipe_producer 静态交错路: #if ARES 每-head 设 g_w16n8_ares_head = hs[i]。
+    + gdnbm_solve pipe 入口: #if ARES VTCM-acquire 扩 +H*6*0x2000=1.5MB (= P*0xA0000 + ares_bytes);
+      setup 期 bulk-load H*6 面 DDR(Au+H*CC+h*24576)->VTCM 尾 (OUTSIDE timed window); 设 g_w16n8_ares_base。
+  host cv-block 准备 = DSP-dump (一次性非计时, 与求解内同一 HVX fold+quant+crouton 路 => 逐字节 bit-exact),
+    复用 ACVRES 的 DUMP build + 扩展 A 输入 (A_ares.raw = natural || cv-block)。
+  生产 build (不带 -DGDN_BR_W16_N8_ARES) 字节不变: 全 #if 包裹; acquire 改 #if BP4/#else -> #if ARES/#elif
+    BP4/#else, 非-ARES 路径字节相同。
+
+------------------------------------------------------------
+### 设备 bit-exact 门 (PASS) ###
+口径: A=BASE (FUSEDEP+ACTCACHE, 生产高精度档, oracle) vs C=ARES (全常驻 + alias 零拷)。
+设备 oneplus, P=4, natural A_u16_h32.raw + 扩展 cv-block (A_ares.raw), scales 同 ACVRES, 整 32-head 4MB T。
+  md5sum (整 32-head, 4 MB T, u16):
+    0e61249dd4400b18867fa38a0cf8bd6a  T_base.raw     (actcache 生产 oracle)
+    0e61249dd4400b18867fa38a0cf8bd6a  T_ares.raw     (全常驻 + alias 零拷)
+  -> 逐字节相同 (且 = FUSEDEP/ACTCACHE/ACVRES base md5 0e61249d..., 整条链一致)。
+  cmp T_base T_ares: IDENTICAL (exit 0)。
+  numpy (u16, 2097152 elem): array_equal=True, max|d|=0。
+理论必 bit-exact (已实测证实): ARES 指向的 resident cv-block 是 DSP 用求解内同一 HVX fold+quant+crouton 路
+  dump 的同一份 host-prep 数据 (与 ACVRES 指向同一份), 与求解内逐字节相同; ARES 只把 "每-head 平拷到
+  ACTCACHE 槽再读" 换成 "直接 alias resident 尾区", 不改任何输出位。
+
+oc (vs fp64 inv(I-A), gate 4e-2): ARES T 与 BASE 逐字节相同 => oc 完全相同 = 3.81e-4 (高精度档, 精度零退)。
+
+### 复现 ###
+  BITEXACT_ONLY=1 bash scripts/w16n8_ares_check.sh   (build DUMP/BASE/ACVRES/ARES/PRECR + DSP-dump + md5/cmp)
+  设备只经 source scripts/dssh.sh。

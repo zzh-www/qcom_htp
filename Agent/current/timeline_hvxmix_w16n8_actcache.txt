@@ -1,0 +1,72 @@
+GDNSolveHVXMixHMX — W16_N8 + FUSEDEP + ACTCACHE (当前最终态) per-thread timeline
+================================================================================
+档 = W16_N8 高精度 (int16 weight, oc 3.81e-4), act-cache 兑现后的当前最终态。
+对外 wall ≈ 2.85M (ACAC 同热窗配对, w16n8_actcache_wall.txt) = +48% vs SHIP u8i8 1.925M。
+本 trace = 32-head solve, SHIP 7 旗 + W16 + W16_N8 + FUSEDEP + ACTCACHE + GDN_BR_TRACE, 单 rep
+  (trace 模式把 trace blob 写进 T 输出, 故 trace 与 bit-exact 必须分两次 build)。
+
+build (复现):
+  EXTRA_DEFS="-DGDNBM_HMX_PIPE -DGDN_BR_STATIC_GAIN -DGDN_BR_STATIC_FULL -DGDN_BR_SBOOST \
+    -DGDN_BR_DIAG_I16 -DGDN_BR_REQ_FUSE -DGDN_BR_FBOOST -DGDN_BR_W16 -DGDN_BR_W16_N8 \
+    -DGDN_BR_W16_N8_FUSEDEP -DGDN_BR_W16_N8_ACTCACHE -DGDN_BR_TRACE" \
+    bash example/gdn_native/baremetal/build.sh
+run (单 rep): GDNBM_REPS=1 ./gdnbm 4 A_u16_h32.raw T_TR.raw 32 256 32768 32768 \
+    2.770166930875267e-05 6.103701895199438e-05   # T_TR.raw 即 trace blob (magic 0x47545203)
+render: python3 scripts/gdn_pipe_timeline.py T_TR.raw 130
+        python3 scripts/gdn_hvxmix_perfetto_timeline.py T_TR.raw timeline_hvxmix_w16n8_actcache.svg
+
+trace-perturbed wall (单 rep, 仅看 STRUCTURE) = 3384453 cyc  (vs FUSEDEP-no-actcache trace 3885019)
+un-perturbed 对外 wall (ACAC) ≈ 2.85M (= +48% vs SHIP u8i8 1.925M; -19.5% vs no-actcache 同窗)
+events = 4640, tids = [0,1,2,3=producers, 4=CONS]
+
+stage 编码 (GdnSolveBROp.cpp enum, 权威):
+  1=DIAG 3=MM(producer wrapper + consumer real MAC) 4=QUANT/ACT 6=ACC 7=REQ 8=PACK 9=EFF
+  10=DEPACK 11=SPIN 12=BIAS-PACK 13=STORE 14=POST 15=TABS
+  ⚠️ FUSEDEP 态: 10=DEPACK / 6=ACC / 9=EFF 计数=0 (折进 gdn_w16n8_acc_add_surf, 末尾 untile 一次)。
+
+================================================================================
+### ASCII (scripts/gdn_pipe_timeline.py, 130 cols; ⚠️ 'L' 是 BIAS-PACK column-paint artifact) ###
+events=4640  wall=3384453 cyc  (1 col = 26034 cyc)
+
+P0   | DDD qLLqLLLLrLqLDD qqKLL?LL??DD qKLsqqKqLLqLDD qqKLLLLKLLDD qKLqLrLqrLLrD qqLqLLLLqL?DD qLLrqqLLLLKLD | busy=72%w [DIAG=17 MM=30 ACT=6 REQ=3 PACK=19 SPIN=3]
+P1   | DDD qLLqLLLLrLLLDDD qqqLLLLqL?mL?DDDDD qqKLL?LqLrLDDqqLLrKqLLLKLDD qKqL?rLLLLLrD qKqLqq?sLmmmmrLDD     | busy=82%w [DIAG=19 MM=36 ACT=5 REQ=3 PACK=17 SPIN=2]
+P2   | DDD qLLqLLLLLLqLDDD qqKLKL?KLLLDD qLrKKLLrLL?DD qqqqKqLLrLqLDD qLrqKLLr?qLDDDqKLLrqqLL?L?DD            | busy=76%w [DIAG=19 MM=31 ACT=6 REQ=4 PACK=18 SPIN=3]
+P3   | DDDDD qLLqLKLLrLL?DDDD qqLLrqKLLqLLDDD qqqL?qLLKLDD qLqLqL?qL?DDD qqLLrqq?LqLDD qLrqKLLqLLLDD          | busy=77%w [DIAG=23 MM=30 ACT=5 REQ=4 PACK=18 SPIN=3]
+CONS | mmmmmmmmmmm mmmmmmmmmmmmm mmmmmmmmmmmmmmmmmmmmmmmmmmmmm mmmmmmmmmmmmmmmmmmmmmmmm...                    | busy=8%w  [MM=9]
+legend: D=DIAG q=ACT-format K=PACK(kmajor) r=REQ s=SPIN m=matmul(HMX) | (L = BIAS-PACK paint artifact, 真账见下表)
+SVG (权威可视化, 正确 HVXMixHMX taxonomy): Agent/current/timeline_hvxmix_w16n8_actcache.svg
+
+================================================================================
+### 权威读数 (从 trace 直接 union/Σ 派生, 与 FUSEDEP / pure-HMX 同口径) ###
+per-thread union-busy (非容器叶子区间并集 / wall):
+  P0 69.4%w   P1 78.8%w (最忙)   P2 73.0%w   P3 74.0%w
+  CONS(HMX) MM-busy 9.0%w (304176 cyc, n=512 matmul, per-call ~594 cyc) = FEED-BOUND, HMX 闲 ~91%
+  SPIN Σ (4 prod) = 384328 = 11.4%wall (Σ口径; producers 忙在自己 HVX 活, 非等 HMX)
+
+producer-Σ per stage (4 线程 work-volume 和; 占 producer-Σ%):
+  MM-wrapper Σ=3,998,258  38.3%   (gather+dispatch+spin-wait+FUSEDEP acc_add_surf; 内嵌真 MAC 仅 304K)
+  DIAG       Σ=2,486,877  23.8%   (fwd-subst 串行)
+  PACK       Σ=2,249,645  21.6%   (int16 wt+act 双字节 kmajor/crouton + d 次 per-block pack)
+  ACT/QUANT  Σ=  747,992   7.2%
+  REQ        Σ=  506,945   4.9%   (widen+requant; FUSEDEP 末尾 untile-once)
+  SPIN       Σ=  384,328   3.7%
+  (STORE/POST/LOAD < 0.6% 合计)
+  producer-Σ total = 10,428,865
+
+act-cache vs no-actcache (FUSEDEP) 结构变化:
+  PACK Σ 跌: FUSEDEP-no-actcache 3,420,202 -> actcache 2,249,645 (−34% Σ, 7 个冗余 act-pack 削掉)。
+  其余 stage 量级不动 (act-cache 只省 act 的 fold_quant+pack, 不碰 MM/DIAG/REQ/HMX)。
+  -> act-cache 后 PACK 不再是 prod-Σ 第二大 (从 28.4% 跌到 21.6%), 但仍是 +48% vs u8i8 的主因
+     (u8i8 PACK 仅 678K, W16 仍 3.3× 于 u8i8)。
+
+================================================================================
+### +48% vs SHIP u8i8 的逐 stage 来源 ###
+详见 Agent/current/w16n8_wall_breakdown.txt (核心交付对比表)。
+一句话: wall +48% (多出 ~0.93M) 主因 = PACK 翻倍 (int16 双字节 + d-block, act-pack 为主,
+  cap-off wall ~935K), 加 FUSEDEP-glue (cv 累加/depack 折进 MM-wrapper) 次级; DIAG/ACT/REQ
+  W16 反而不比 u8i8 多 (甚至略少), HMX MAC 两侧都闲 (W16 9%w / u8i8 6%w) 非瓶颈。
+
+证据/复现: 本文件 build/run/render (顶部) + timeline_hvxmix_w16n8_actcache.svg
+  + w16n8_actcache_wall.txt (ACAC −19.5%) + w16n8_actcache_bitexact.txt (oc 3.81e-4, T 逐字节相同)
+  + w16n8_wall_breakdown.txt (vs u8i8 逐 stage 对比表)。
+  对照: FUSEDEP-no-actcache = timeline_hvxmix_w16n8_fusedep.txt; u8i8 = timeline_hvxmix_u8i8.svg。

@@ -1,0 +1,38 @@
+### EXP3 alias62k FASTPTR vs ARES ###
+bit-exact (FASTPTR T == ARES T):
+0e61249dd4400b18867fa38a0cf8bd6a  /tmp/T_ares.raw
+0e61249dd4400b18867fa38a0cf8bd6a  /tmp/T_fp.raw
+  cmp: IDENTICAL (PASS)
+### ACAC x6 REPS=8 ###
+win1: ARES=2498978 FASTPTR=2565329 dWall=+2.66%
+win2: ARES=2522805 FASTPTR=2464167 dWall=-2.32%
+win3: ARES=2516172 FASTPTR=2568332 dWall=+2.07%
+win4: ARES=2495529 FASTPTR=2568224 dWall=+2.91%
+win5: ARES=2578321 FASTPTR=2577034 dWall=-0.05%
+win6: ARES=2521272 FASTPTR=2582612 dWall=+2.43%
+
+  ARES med=2518722  FASTPTR med=2568278  dWall=+1.97%
+  same-window paired Δ median=+2.25%  range=[-2.32,+2.91]
+
+### RUN2 ACAC x10 REPS=8 (same script, OUT=w16n8_alias62k_run2.txt) ###
+win1: ARES=2539545 FASTPTR=2540741 dWall=+0.05%
+win2: ARES=2563030 FASTPTR=2568027 dWall=+0.19%
+win3: ARES=2553772 FASTPTR=2480964 dWall=-2.85%
+win4: ARES=2517031 FASTPTR=2538485 dWall=+0.85%
+win5: ARES=2550506 FASTPTR=2617817 dWall=+2.64%
+win6: ARES=2568970 FASTPTR=2573741 dWall=+0.19%
+win7: ARES=2585323 FASTPTR=2554260 dWall=-1.20%
+win8: ARES=2555301 FASTPTR=2533176 dWall=-0.87%
+win9: ARES=2521151 FASTPTR=2550947 dWall=+1.18%
+win10: ARES=2533391 FASTPTR=2547473 dWall=+0.56%
+  RUN2: ARES med=2552139  FASTPTR med=2549210  dWall=-0.11%
+  RUN2 same-window paired Δ median=+0.19%  range=[-2.85,+2.64]
+
+===== EXP3 VERDICT (run1 6win + run2 10win = 16 paired) =====
+bit-exact: PASS — FASTPTR T md5 == ARES/BASE 0e61249d, cmp IDENTICAL (max|d|=0, oc 3.81e-4 unchanged; only ptr-fetch path changed)
+combined paired Δ: median=+0.38%  mean=+0.53%  range=[-2.85,+2.91]  (neg=5 / pos=11)
+=> FASTPTR 不更快 (若有则略慢, 落在 ±2.9% 热噪声内, 16 窗中位 +0.38%)。
+=> 62K (ARES vs PRECROUTON +2.45% = 2.46% of ARES) NOT 可消: 若 62K 是 per-call key2slot 查表+offset 乘,
+   FASTPTR 应给 ~-2.46%; 实测 +0.38% (反向, 噪声内)。per-call alias 分支成本 ≈ 0。
+裁决: 62K = 不可消结构开销 (NOT per-call 分支/查表)。FASTPTR 无法把 ARES 从 +32.7% 压向 act-zero +29.4%。
+   ARES median 仍 ~2.52M = +32.7% vs ship 1.925M; act-zero PRECROUTON +29.4% 是物理底 (+25% 在它之下到不了)。

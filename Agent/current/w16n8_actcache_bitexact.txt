@@ -1,0 +1,58 @@
+W16_N8 高精度档 act-cache 恢复: bit-exact + 生产 byte-unaffected 证据
+=====================================================================
+任务: 给 W16_N8 (高精度档, oc 3.81e-4) 恢复被 W16_N8 主动丢弃的 act-cache。
+根因 (analyzer code-confirmed): W16_N8 的 A_ik getter 写瞬态槽不查 valid、T_ii getter 每次重打包,
+  导致 7/16 个 bit-identical 重打包 (A_ik 4 冗余 + T_ii 3 冗余)。SHIP u8i8 路 (gdn_get_act_A vAa /
+  gdn_get_act_Tdiag vTa) 早有 distinct-key valid-flag act-cache, W16_N8 没用。
+
+实现 (gated, 默认 OFF):
+  新旗 -DGDN_BR_W16_N8_ACTCACHE (默认 OFF)。
+  GdnSolveBR16.cpp gdn_w16_get_act_A: 旗 ON 时 key=gdn_blk_index(i,k), 持久 8KB 槽 GDN_W16_ACTC_A,
+    命中 (sc->vAa[key]) 直接 return cr, 跳过 fold_quant + pack 两步。
+  GdnSolveBR16.cpp gdn_w16_get_act_Tdiag: 旗 ON 时 key=i, 持久 8KB 槽 GDN_W16_ACTC_T, 命中跳 quant+pack。
+  GdnSolveBROp.cpp 新增持久 8KB-stride 槽宏 (acache 区 [0x18000,0x40000)):
+    GDN_W16_ACTC_A(vt,key) = acache + key*0x2000   (key 0..9, 10*8K=80K, 0x18000..0x2C000)
+    GDN_W16_ACTC_T(vt,i)   = acache + 0x14000 + i*0x2000 (i 0..3, 4*8K=32K, 0x2C000..0x34000)
+    GDN_W16_ACTC_NAT(vt)   = acache + 0x1C000        (1 个 8K 瞬态 nat scratch, 0x34000..0x36000 < wcache 0x40000)
+  8KB stride (非 512B compact): lean 核实读 act_cr+(i&3)*2048 i=0..3 = 8KB live span
+    (GdnSolveBR16.cpp:~577); 512B-compact 是历史坑 "kernel reads past live span"。
+  head 开头 (gdn_br_one_head16 line ~809/814) 已无条件 reset sc->vAa[]/vTa[], cache 自动每-head 失效。
+
+复用计数 (NB=4, NBLK=10, C=256 32-head):
+  A_ik 访问 10 次 -> 6 distinct keys {1,3,4,6,7,8} -> 省 4 冗余 pack。
+  T_ii 终合并访问 6 次 (i=1×1,2×2,3×3) -> 3 distinct i -> 省 3 冗余 pack。
+  合计省 7/16 = 命门数字吻合。
+
+---------------------------------------------------------------------
+### 生产 byte-unaffected 证据 (.text 逐字节, 旗默认 OFF) ###
+口径: 同 FUSEDEP build defs, 旗 OFF。
+  (a) 当前树 (FUSEDEP base + 我的 actcache 代码, 旗 OFF 时为死代码)
+  (b) 把我的 actcache 代码完全删除后的 FUSEDEP base (/tmp/noac_*.cpp)
+两者编译产物 .text 段 (hexagon-llvm-objdump -s -j .text, 地址列剥离) md5:
+  (a) 67de83f0143f895c2d83a96251817b8f
+  (b) 67de83f0143f895c2d83a96251817b8f
+  -> .text 逐字节相同。gated 旗默认 OFF 时生产代码路完全不受影响 (确认)。
+  (build 确定性: 同 build 连跑两次 skel.so md5 相同, 已验。)
+注: 整 .so md5 因 .symtab/.strtab/.bss 元数据 (新 #define/注释行号) 略变, 但 .text (可执行码) 逐字节相同。
+
+---------------------------------------------------------------------
+### 设备 bit-exact 门 (PASS) ###
+口径: A (FUSEDEP, 无 actcache, oracle) vs C (FUSEDEP + actcache) 整 32-head 4MB T 输出。
+设备 oneplus, 同确定性输入 A_u16_h32.raw, 同 scales 2.770166930875267e-05 6.103701895199438e-05,
+  GDNBM_REPS=4 ./gdnbm 4 A_u16_h32.raw T_{A,C}.raw 32 256 32768 32768 <scales>。
+md5sum (整 32-head, 4 MB T, u16):
+  0e61249dd4400b18867fa38a0cf8bd6a  T_A.raw   (无 actcache)
+  0e61249dd4400b18867fa38a0cf8bd6a  T_C.raw   (+actcache)
+  -> 逐字节相同 (且 = 此前 FUSEDEP base md5 0e61249d..., 链路一致)。
+cmp T_A T_C: IDENTICAL (exit 0)。
+numpy (u16, 2097152 elem): array_equal=True, max|T_A-T_C|=0。
+oc (vs fp64 inv(I-A), 32-head; scripts/gdn_solve_oc_check.py, gate 4e-2):
+  A: oc = 3.8059e-04  PASS
+  C: oc = 3.8059e-04  PASS
+  -> 两档 oc 完全相同 = 3.81e-4 (精度零退)。
+理论必 bit-exact (已实测证实): 跳过的重打包逐字节等于已缓存面 (相同 Tblk16/A 输入 -> 相同 nat
+  -> 相同 packed surface), cache 只省冗余重算, 不改任何输出位。
+
+### 复现 ###
+  bash scripts/w16n8_actcache_bitexact.sh   (build A/C + deploy + run + md5/cmp/oc)
+  设备只经 source scripts/dssh.sh。

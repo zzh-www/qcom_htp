@@ -1,0 +1,83 @@
+GDNSolveHVXMixHMX — merge 换 int16 (路 B / dilate 单 acc) 完整设备验证 (dev)
+================================================================================
+命题: "wall 维持 + 精度收益" —— 假设 HMX 7% busid / 93% idle 能吸收路 B int16 的 1.45× latency。
+裁决: ❌ REFUTED。wall +126% (×2.26)。精度收益真实但 wall 翻倍 = 权衡，非纯赚。
+口径: stats[0] graph-wall, 32-head TOTAL, VTCM-only, reps2-8 median, ACAC x3 窗同热窗交错。
+A = 出货 7 旗 (u8i8 merge); C = A + -DGDN_BR_W16 (int16 w16a16 路 B merge)。
+SHIP = -DGDNBM_HMX_PIPE -DGDN_BR_STATIC_GAIN -DGDN_BR_STATIC_FULL -DGDN_BR_SBOOST
+       -DGDN_BR_DIAG_I16 -DGDN_BR_REQ_FUSE -DGDN_BR_FBOOST
+
+================================================================================
+阶段 1 — 现状: GDN_BR_W16 已经是路 B (无需改造)
+--------------------------------------------------------------------------------
+consumer kernel = our_v73deep_kernel_i16 (gdnbm_imp.cpp:1249, GDN_BR_W16 时分派)
+  = example/gdn_native/baremetal/inc/v73deep_conv1x1_kernel_i16.inc (convhhh)
+  asm 核实: `weight.b = mxmem(...):dilate` (行 34/35/38/56) = hi/lo 进单 acc;
+            单 `cvt.uh = acc(r31):2x2` drain (行 43/59); `mxclracc` 仅一次 (行 65)。
+  => 路 B 确认 (单 acc dilate + 单 drain)，NOT 路 A。
+producer pack = gdn_w16_pack_wt (GdnSolveBR16.cpp:303) weight hi/lo (lo=vpacke, hi=+128>>8)
+              + gdn_w16_pack_act int16 crouton16 (字节翻倍 vs u8)。
+结论: 无需重写 producer-consumer；直接拿现成 -DGDN_BR_W16 测 (跳到阶段 3)。
+
+================================================================================
+阶段 3 — wall (ACAC x3 窗, reps2-8 median)  [复现: scripts/gdn_hvxmix_acac.sh "" "-DGDN_BR_W16" w16routeB]
+--------------------------------------------------------------------------------
+win1: A=1860640  C=4286094  dWall=+130.36%
+win2: A=1923363  C=4346434  dWall=+125.98%
+win3: A=1928421  C=4371611  dWall=+126.69%
+3-WINDOW MERGED: A_med=1923363  C_med=4346434   dWall=+125.98%  (×2.26;3 窗一致穿透热噪声)
+  A wins=[1860640,1923363,1928421]  C wins=[4286094,4346434,4371611]
+==> 复现了原 GDN_BR_W16 "×2.55" 否决量级 (热窗差异内)。
+
+in-solve stats 分解 (rep 代表值, A vs C):
+  stat        A (u8i8)     C (int16)    比值
+  wall        ~1.86M       ~4.30M       ×2.26
+  cons(HMX)   ~139K        ~3.96M       ×28.5   <- HMX 消费者占用爆炸 (memory 记的 "7%->92%" 重现)
+  wtpack      ~1.65M       ~4.02M       ×2.4    <- producer feed 字节翻倍
+  scatter     ~45K         ~2.39M       ×53
+
+================================================================================
+timeline 对照 (GDN_BR_TRACE, 单 rep, 同 renderer)  [SVG: Agent/current/timeline_hvxmix_{u8i8,i16routeB}.svg]
+--------------------------------------------------------------------------------
+stage         A u8i8 per-call   C int16 per-call   倍率    | A Σ(%wall)    C Σ(%wall)
+MM/CONS(HMX)      1795              20583           ×11.5   | 1.38M(70.8)   15.81M(344%聚合)
+SPIN              508              26028            ×51     | 195K(10.0)    9.995M(217%聚合)
+DIAG            57591             56623            ×1.0    | 1.84M(94.6)   1.81M(39.4)
+PACK             1173              1435            ×1.2    | 564K(28.9)    1.01M(22.0)
+QUANT/ACT        1410              1318            ×0.9    | 677K(34.7)    801K(17.4)
+(MM/CONS calls=768 两者相同 -> per-call 1795->20583 是纯 kernel 成本比 = ×11.5)
+
+机理 (根因, 推翻 1.45× 前提):
+  - 路 B int16 convhhh per-call = u8i8 的 ×11.5 (NOT ×1.45)。"1.45×" 是 pure-HMX 单 conv
+    microbench 口径;在 K-stack 64³ merge 里 int16 dilate 做 4 byte-pass × 2× act/wt 字节 load,
+    实测 ×11.5。
+  - u8i8 时 consumer (1795/call, 70.8% 聚合) 完全藏在 producer DIAG (94.6% = 真 wall 驱动) 下
+    (上一轮 cap-test: 去 consumer 买 ~0% wall)。
+  - int16 时 consumer per-call 20583 -> MM/CONS 成主导, 4 个 producer SPIN 在它上 (聚合 217%),
+    wall -> 4.59M。consumer 不再被吸收 = 假设破。
+  - HMX 从不是 "93% idle 等吸收";它对自己被 11.5× 加重的串行链没有 headroom。
+
+================================================================================
+精度 (host fp64 oracle, scripts/gdn_br_precision_sim.py, golden p29_L00 C=256)
+--------------------------------------------------------------------------------
+  op-bits  out-quant   oc relerr
+   8       float       9.543e-03
+  16       float       3.438e-05   <- int16 merge ~280× 更准 (merge-matmul 级)
+设备侧: A (u8i8) 与 C (int16) T 输出 md5 不同 (ed9d5bcd != 0da727a9), 5.3% 码不同
+  -> int16 确实改变数值 (精度收益方向, 与 sim 一致)。
+  ⚠️ baremetal harness 输出 T 是 tiled surface 原始码 (absmean ~32621 饱和, 非自然 [C,C]),
+     设备端 oc 需 untile RE (proper oc 在 QNN 侧 gdn_br_oc_check.py)。文档记的端到端:
+     u8i8 oc 3.10e-3 -> w16a16 oc 1.16e-3 (~2.7×)。精度收益不存疑;wall 是真未知, 已测。
+
+================================================================================
+裁决
+--------------------------------------------------------------------------------
+命题 "wall 维持 + 精度收益" = ❌ 不成立。
+  - wall: +126% (×2.26), 3 窗一致, MEASURED。
+  - 精度: oc ~2.7× (3.10e-3->1.16e-3 端到端 / merge 级 280×), MEASURED (sim) / 方向设备确认。
+  => 不是纯赚, 是 "精度 ×2.7 换 wall ×2.26" 的权衡; 对 wall 敏感的出货路线 = 否决。
+根因 = consumer (HMX matmul) 不被吸收: 路 B int16 kernel per-call ×11.5 (NOT 假设的 ×1.45),
+  把原本藏在 producer DIAG 下的 consumer 顶成主导, producer SPIN 爆炸。
+  + producer feed wtpack ×2.4 (int16 pack 字节翻倍, 是 prompt 标的 "唯一真未知" 之一, 也涨)。
+fallback (w16a8: wt int16 + act u8) 未测: 即便 act 省一半字节, consumer kernel 仍 int16 dilate
+  (×11.5 主因来自 4-byte-pass + wt 字节, 非 act), 预计 wall 仍大涨; 建议交回 core 定是否值得测。

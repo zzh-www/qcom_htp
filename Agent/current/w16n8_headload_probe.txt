@@ -1,0 +1,54 @@
+### EXP2 HEADLOAD PROBE (REPS=8) ###
+--- run 1 ---
+gdnbm_solve rc=0x0  P=4  H=32  rep=1/8  wall=2724705 scatter=87757 wtpack=2589134 cons=285390
+  HEADLOAD: total_cyc=1074882 per_head=33590 heads=32  vs wall=2724705  (Σ%=39, /4producers≈268720 cyc wall)
+gdnbm_solve rc=0x0  P=4  H=32  rep=2/8  wall=2752337 scatter=88972 wtpack=2633974 cons=289434
+  HEADLOAD: total_cyc=2237669 per_head=34963 heads=64  vs wall=2752337  (Σ%=81, /4producers≈559417 cyc wall)
+gdnbm_solve rc=0x0  P=4  H=32  rep=3/8  wall=2692791 scatter=87435 wtpack=2589264 cons=287607
+  HEADLOAD: total_cyc=3155621 per_head=32871 heads=96  vs wall=2692791  (Σ%=117, /4producers≈788905 cyc wall)
+gdnbm_solve rc=0x0  P=4  H=32  rep=4/8  wall=2747641 scatter=93948 wtpack=2624551 cons=295204
+  HEADLOAD: total_cyc=4205978 per_head=32859 heads=128  vs wall=2747641  (Σ%=153, /4producers≈1051494 cyc wall)
+gdnbm_solve rc=0x0  P=4  H=32  rep=5/8  wall=2783284 scatter=89985 wtpack=2584328 cons=287415
+  HEADLOAD: total_cyc=5229272 per_head=32682 heads=160  vs wall=2783284  (Σ%=187, /4producers≈1307318 cyc wall)
+gdnbm_solve rc=0x0  P=4  H=32  rep=6/8  wall=2763715 scatter=92997 wtpack=2629253 cons=292778
+  HEADLOAD: total_cyc=6198818 per_head=32285 heads=192  vs wall=2763715  (Σ%=224, /4producers≈1549704 cyc wall)
+gdnbm_solve rc=0x0  P=4  H=32  rep=7/8  wall=2786069 scatter=90375 wtpack=2619847 cons=295264
+  HEADLOAD: total_cyc=7199852 per_head=32142 heads=224  vs wall=2786069  (Σ%=258, /4producers≈1799963 cyc wall)
+gdnbm_solve rc=0x0  P=4  H=32  rep=8/8  wall=2814228 scatter=93874 wtpack=2696977 cons=298727
+  HEADLOAD: total_cyc=8478677 per_head=33119 heads=256  vs wall=2814228  (Σ%=301, /4producers≈2119669 cyc wall)
+--- run 2 ---
+gdnbm_solve rc=0x0  P=4  H=32  rep=1/8  wall=3462247 scatter=92286 wtpack=3317205 cons=293006
+  HEADLOAD: total_cyc=2839093 per_head=88721 heads=32  vs wall=3462247  (Σ%=82, /4producers≈709773 cyc wall)
+gdnbm_solve rc=0x0  P=4  H=32  rep=2/8  wall=2675694 scatter=87071 wtpack=2571888 cons=283564
+  HEADLOAD: total_cyc=3804488 per_head=59445 heads=64  vs wall=2675694  (Σ%=142, /4producers≈951122 cyc wall)
+gdnbm_solve rc=0x0  P=4  H=32  rep=3/8  wall=2829440 scatter=91152 wtpack=2678784 cons=290662
+  HEADLOAD: total_cyc=4994855 per_head=52029 heads=96  vs wall=2829440  (Σ%=176, /4producers≈1248713 cyc wall)
+gdnbm_solve rc=0x0  P=4  H=32  rep=4/8  wall=2760496 scatter=87841 wtpack=2585163 cons=288914
+  HEADLOAD: total_cyc=5931852 per_head=46342 heads=128  vs wall=2760496  (Σ%=214, /4producers≈1482963 cyc wall)
+gdnbm_solve rc=0x0  P=4  H=32  rep=5/8  wall=2740440 scatter=87955 wtpack=2582741 cons=284338
+  HEADLOAD: total_cyc=6963730 per_head=43523 heads=160  vs wall=2740440  (Σ%=254, /4producers≈1740932 cyc wall)
+gdnbm_solve rc=0x0  P=4  H=32  rep=6/8  wall=2772774 scatter=88161 wtpack=2648067 cons=288192
+  HEADLOAD: total_cyc=8081565 per_head=42091 heads=192  vs wall=2772774  (Σ%=291, /4producers≈2020391 cyc wall)
+gdnbm_solve rc=0x0  P=4  H=32  rep=7/8  wall=2787943 scatter=92142 wtpack=2647674 cons=293649
+  HEADLOAD: total_cyc=9186915 per_head=41013 heads=224  vs wall=2787943  (Σ%=329, /4producers≈2296728 cyc wall)
+gdnbm_solve rc=0x0  P=4  H=32  rep=8/8  wall=2770092 scatter=92871 wtpack=2616768 cons=297783
+  HEADLOAD: total_cyc=10322115 per_head=40320 heads=256  vs wall=2770092  (Σ%=372, /4producers≈2580528 cyc wall)
+--- run 3 ---
+gdnbm_solve rc=0x0  P=4  H=32  rep=1/8  wall=3358131 scatter=105444 wtpack=3235074 cons=301012
+  HEADLOAD: total_cyc=2389231 per_head=74663 heads=32  vs wall=3358131  (Σ%=71, /4producers≈597307 cyc wall)
+gdnbm_solve rc=0x0  P=4  H=32  rep=2/8  wall=2809220 scatter=89263 wtpack=2691975 cons=290278
+  HEADLOAD: total_cyc=3666178 per_head=57284 heads=64  vs wall=2809220  (Σ%=130, /4producers≈916544 cyc wall)
+gdnbm_solve rc=0x0  P=4  H=32  rep=3/8  wall=2645649 scatter=86387 wtpack=2545604 cons=290767
+  HEADLOAD: total_cyc=4649317 per_head=48430 heads=96  vs wall=2645649  (Σ%=175, /4producers≈1162329 cyc wall)
+gdnbm_solve rc=0x0  P=4  H=32  rep=4/8  wall=2766335 scatter=88010 wtpack=2633249 cons=289841
+  HEADLOAD: total_cyc=5823792 per_head=45498 heads=128  vs wall=2766335  (Σ%=210, /4producers≈1455948 cyc wall)
+gdnbm_solve rc=0x0  P=4  H=32  rep=5/8  wall=2668782 scatter=90297 wtpack=2538237 cons=289996
+  HEADLOAD: total_cyc=6757094 per_head=42231 heads=160  vs wall=2668782  (Σ%=253, /4producers≈1689273 cyc wall)
+gdnbm_solve rc=0x0  P=4  H=32  rep=6/8  wall=2682068 scatter=92201 wtpack=2542458 cons=298067
+  HEADLOAD: total_cyc=7660471 per_head=39898 heads=192  vs wall=2682068  (Σ%=285, /4producers≈1915117 cyc wall)
+gdnbm_solve rc=0x0  P=4  H=32  rep=7/8  wall=2732551 scatter=94220 wtpack=2644966 cons=293733
+  HEADLOAD: total_cyc=8743160 per_head=39031 heads=224  vs wall=2732551  (Σ%=319, /4producers≈2185790 cyc wall)
+gdnbm_solve rc=0x0  P=4  H=32  rep=8/8  wall=2792293 scatter=101352 wtpack=2615928 cons=293655
+  HEADLOAD: total_cyc=9841969 per_head=38445 heads=256  vs wall=2792293  (Σ%=352, /4producers≈2460492 cyc wall)
+
+NOTE: total_cyc = Σ全 32-head copy span; 4 producers 并行 (8 head/producer 串行) -> wall 贡献 ≈ total/4。

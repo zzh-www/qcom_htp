@@ -1,0 +1,85 @@
+GDNSolveHVXMixHMX — 3 decisive device experiments (dev, ACAC x3 windows, reps2-8 median, VTCM-only)
+================================================================================================
+metric = stats[0] graph-wall (32-head TOTAL, timeline span). clock self-check wall/us ~1593.
+baseline A = 出货 7 旗 = -DGDNBM_HMX_PIPE -DGDN_BR_STATIC_GAIN -DGDN_BR_STATIC_FULL -DGDN_BR_SBOOST
+             -DGDN_BR_DIAG_I16 -DGDN_BR_REQ_FUSE -DGDN_BR_FBOOST  (auto -> GDN_BR_I16 -> GDN_BR_KSTACK)
+A baseline wall (this thermal day) ~1.85M cyc (consistent w/ prior-round ~1.873M).
+harness: ./gdnbm 4 A_u16_h32.raw <T> 32 256 32768 32768 3.05e-5 3.05e-5 ; GDNBM_REPS=8
+ACAC runner: scripts/gdn_hvxmix_acac.sh "<A_defs>" "<C_defs>" <tag>
+
+============================================================================================
+EXP A (疑点1b) — upstream-collab ACT-path skip UPPER BOUND.  gate=-DGDN_BR_A_PRECROUTON (pre-existing).
+  口径: UPPER BOUND, T 错(crouton garbage), wall-only.  C = ship + A_PRECROUTON ; A = ship.
+  win1: A=1878317 C=1658494  dWall=-11.70%
+  win2: A=1860842 C=1686938  dWall= -9.35%
+  win3: A=1785057 C=1679362  dWall= -5.92%
+  3-WINDOW MERGED: A_med=1860842 C_med=1679362  dWall=-9.75%   (penetrates thermal noise: all 3 windows <0)
+  CODE CONFIRM: GdnSolveBROp.cpp:1025-1030 gdn_get_act_A returns the cache ptr directly (skips fold+quant+
+    crouton) when A_PRECROUTON; KSTACK calls gdn_get_act_A (GdnSolveBR16.cpp:820). Confirmed it skips the A
+    producer path.
+  TIMELINE (same renderer, single trace rep, apples-to-apples):
+    stage        OFF(baseline)   ON(A_PRECROUTON)   delta
+    ACT/QUANT       731989          203287           -72%   <- A fold+quant+crouton collapses
+    PACK            562556          328332           -42%   <- A crouton-pack skipped (T-wt kmajor PACK stays)
+    EFF             165011          157515            -5%
+    wall(1 rep)    1965939         1773235           -9.8%
+  VERDICT: 疑点1b CONFIRMED — skipping device-side A ACT-prep buys ~-9.75% wall (upper bound, T invalid).
+
+============================================================================================
+EXP C (疑点2 反证) — consumer-free cap-test.  NEW gate=-DGDN_BR_CONS_STUB (default OFF, byte-unaffected).
+  code: baremetal/src/gdnbm_imp.cpp ~1257, replace our_v73deep_kernel (consumer mxmem) with a SCALAR store
+    (out garbage; pipeline path byte-identical otherwise).  口径: LOWER BOUND (consumer=0), T 错, wall-only.
+  --- FIRST attempt (HVX-vector stub) was a methodology BUG: +55% slower.  Root cause = the HVX store on the
+      consumer thread injects 5-on-4 HVX SMT contention (the PURE_HMX consumer is deliberately HVX-FREE).
+      => secondary finding: the consumer staying HVX-free is LOAD-BEARING (any HVX work there = thrash).
+  --- corrected (SCALAR-only stub, consumer stays HVX-free):
+  win1: A=1842352 C=1847561  dWall=+0.28%
+  win2: A=1826074 C=1800352  dWall=-1.41%
+  win3: A=1853638 C=1824698  dWall=-1.56%
+  3-WINDOW MERGED: A_med=1842352 C_med=1824698  dWall=-0.96%   (INDISTINGUISHABLE from thermal noise; one
+    window positive, spread > signal)
+  VERDICT: 疑点2 CONFIRMED (反证成立) — removing the consumer matmul ENTIRELY buys ~0% wall (<=1%, noise).
+    The consumer mxmem (~360 cyc/call, ~7% wall busy) is FULLY hidden under the producer feed; it is NOT on
+    the critical path.  consumer-side total realizable space <= ~7% busy, ~0% wall.  360/call NOT worth touching.
+
+============================================================================================
+EXP B (疑点3) — async SW-pipe recover spin.  NEW gate=-DGDN_BR_SWPIPE_KSTACK (default OFF, byte-unaffected).
+  code: cross-block software pipeline over the KSTACK Sigma_k merge — dispatch block n async (no spin), prep
+    block n+1's ACTIVATIONS (dependency-free; weights are forward-subst-dependent so fetched AFTER finalize)
+    while the consumer runs n; then wait+depack n.  GdnSolveBR16.cpp off-diag loop (gated) +
+    gdn_merge_kstack_dispatch/_wait_depack (GdnSolveBROp.cpp) + g_hmx_dispatch_async wt2-clear fix (gdnbm_imp.cpp).
+  BIT-EXACT (the gate): async T vs sync T byte-identical, md5 ed9d5bcd... == ed9d5bcd..., cmp IDENTICAL, 3/3 runs.
+    (2 bugs found+fixed en route, both proven by the bit-exact gate:
+       1. g_hmx_dispatch_async never set jb->wt2 -> stale BP4 2nd-kernel ran -> T corrupt. fixed: jb->wt2=g_bp_wt2.
+       2. effs[] as `static __thread` (vs stack local) -> wrong HVX-aligned read in gdn_pack_bias -> T corrupt.
+          fixed: plain stack local (bias-pack consumes effs synchronously, need not outlive the call).)
+  WALL:
+  win1: A=1797198 C=1846437  dWall=+2.74%
+  win2: A=1854537 C=1828814  dWall=-1.39%
+  win3: A=1856767 C=1863089  dWall=+0.34%
+  3-WINDOW MERGED: A_med=1854537 C_med=1846437  dWall=-0.44%   (INDISTINGUISHABLE from thermal noise; windows
+    straddle zero, spread >> signal)
+  TIMELINE (async vs sync, same renderer, 1 trace rep): SPIN-Σ 197950 (10.1% wall) -> 124567 (6.8% wall):
+    the async DID hide ~37% of the spin (73K cyc absorbed under the act-prefetch).  But wall did NOT move.
+  VERDICT: 疑点3 CONFIRMED (反证成立) — spin IS partly hideable (10.1%->6.8% wall-Σ) but recovers ~0% WALL.
+    The spin was never on the critical path: producers are feed-bound on their OWN HVX; moving act-prep earlier
+    just reorders the same HVX work, the producer's total HVX-busy (the real wall driver) is unchanged.
+
+============================================================================================
+SYNTHESIS (all 3疑点 device-measured):
+  疑点1b (上游协同 ACT-path ~10%): CONFIRMED — -9.75% wall upper bound (real, penetrates noise, T invalid).
+  疑点2 (consumer 360/call <=7%):  CONFIRMED 反证 — consumer=0 buys ~0% wall (-0.96%, noise); not worth touching.
+  疑点3 (async spin recover ~3-5%): CONFIRMED 反证 — spin partly hideable but ~0% wall (-0.44%, noise).
+  => The ONLY杠杆 with real wall headroom is 疑点1b (upstream collaboration to skip device-side A-ACT prep),
+     which is a contract/precision change (T错 here = upper bound; real version needs upstream to deliver the
+     correct pre-crouton A).  consumer-side and async-spin are both dead ends (structurally feed-bound).
+
+GATED CHANGES (working tree, NOT committed; production path byte-verified UNAFFECTED, md5 ed9d5bcd... pristine==mine):
+  baremetal/src/gdnbm_imp.cpp        : -DGDN_BR_CONS_STUB (consumer scalar stub) + g_hmx_dispatch_async jb->wt2 clear
+  solve_br_op/src/GdnSolveBROp.cpp   : gdn_merge_kstack_dispatch / _wait_depack (under GDN_BR_SWPIPE_KSTACK)
+  solve_br_op/src/GdnSolveBR16.cpp   : off-diag cross-block pipeline loop (under GDN_BR_SWPIPE_KSTACK)
+REPRO:
+  EXP A: bash scripts/gdn_hvxmix_acac.sh "" "-DGDN_BR_A_PRECROUTON" expA
+  EXP C: bash scripts/gdn_hvxmix_acac.sh "" "-DGDN_BR_CONS_STUB"     expC
+  EXP B: bash scripts/gdn_hvxmix_acac.sh "" "-DGDN_BR_SWPIPE_KSTACK" expB   (bit-exact: cmp async vs sync T)
+  timelines: EXTRA_DEFS="<ship> -DGDN_BR_<gate> -DGDN_BR_TRACE" build, run, pull T, gdn_hvxmix_perfetto_timeline.py

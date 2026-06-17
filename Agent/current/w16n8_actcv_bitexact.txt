@@ -1,0 +1,29 @@
+W16_N8 高精度档 act 上游协同 — 阶段2 真兑现 (ACTCV) bit-exact 证据
+==================================================================
+真兑现路径 (b 的可在 standalone 实现的形态): DSP head-load 一次转 cv, 融合 fold+quant+crouton。
+  新旗 -DGDN_BR_W16_N8_ACTCV (默认 OFF)。
+  实现 (GdnSolveBR16.cpp):
+    新函数 gdn_w16_foldpack_act_cv: 把 gdn_w16_fold_quant_act (fold q15 写 nat 到 qbuf16) +
+      gdn_w16_pack_act (qbuf16 -> stage 复制 -> 64×vgather -> surface) 融合成一遍 —— fold 直接把
+      折叠后的 q15 nat 写进 VTCM stage, 省掉 qbuf16(nat) 中转, vgather 原地从 stage 跑。
+    gdn_w16_get_act_A: 旗 ON 时调融合版 (与 ACTCACHE 正交, 仍 per-key cache once)。
+  ⚠️ 注意: 这 IS 与现有 ACTCACHE 同一形态 —— ACTCACHE 已经做到 "head 内每个 distinct A 块
+     fold+crouton 一次 -> 持久 VTCM crouton 槽 -> merge K-stack 内 vt->acttab 指针直引用 (无 per-merge
+     平拷)"。本任务 path (b) 描述的 "head 开头一次性 fold+crouton 成 cv-resident, merge 内 act 退化成
+     平拷" 在 ACTCACHE 下已实现。ACTCV 仅能再榨 "省 qbuf16->stage 中转" 这一微优化 (见 wall 文件: 零)。
+
+bit-exact 门 (硬, PASS):
+  A = actcache base (oracle) vs C = base + ACTCV: 32-head 4MB T 整文件 md5 逐字节相同。
+    A: 0e61249dd4400b18867fa38a0cf8bd6a  T_A.raw  (4194304 = 4MB = 32 head)
+    C: 0e61249dd4400b18867fa38a0cf8bd6a  T_C.raw  (4194304)
+    MD5 MATCH -> max|d|=0 整字节. (fold/quant/crouton 是确定性逐元素变换, 同 Au+同 M/S/g+同
+    g_w16n8_qa LUT => 折叠 q15 nat 字节相同 => gather 出的 surface 字节相同 => T 字节相同。)
+  2 独立运行 (3 窗 + 5 窗) md5 均相同。
+
+代码改动 (gated, 默认 OFF, 生产 byte-unaffected):
+  GdnSolveBR16.cpp: +gdn_w16_foldpack_act_cv (新函数, #if GDN_BR_W16_N8_ACTCV); gdn_w16_get_act_A
+    新增 #if GDN_BR_W16_N8_ACTCV 分支。 不带 -DGDN_BR_W16_N8_ACTCV 的生产 build 字节不变。
+
+复现:
+  bash scripts/w16n8_actcv_check.sh   (md5 + wall, WINDOWS/REPS/THREADS 可调)
+  设备只经 source scripts/dssh.sh。

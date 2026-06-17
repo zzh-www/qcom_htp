@@ -1,0 +1,188 @@
+================================================================================
+GDN 三角求逆 三方案统一稳态口径表 (cron#82kqie)
+  SHIP u8i8  |  W16_N8 ARES  |  pure-HMX(生产 = lean+wt-cache+B)
+  口径 = pure-HMX cron#82 那轮的稳态权威口径, 一模一样套到三方案。
+  作废所有单-rep trace 推的利用率% (58%/82%/8×DEPACK 全是 trace artifact)。
+================================================================================
+DATE        : 2026-06-17
+DEVICE      : oneplus (termux sshd; v75 cDSP TURBO)
+SESSION     : 三方案同一 device session 连跑 (同热窗可比)
+
+口径 (metric) — 逐字照 perf_baseline_cron82_leanmm.txt
+----------------------------------------------------------------
+- wall = 32-head TOTAL graph wall (stats[0] = makespan t1-t0), VTCM-only
+  (bulk DDR<->VTCM 出计时窗 = artifact)。
+- steady = reps2-8 median, 绝不取 min。
+- clock self-check: wall/us = PCYCLE/µs, TURBO ~1594; >> 则计数器错。
+- 三方案 wall 口径完全一致 (32-head TOTAL, VTCM-only, reps2-8 med)。
+
+字段来源 (HVXMix SHIP/ARES path, gdnbm_imp.cpp:1534-1577)
+----------------------------------------------------------------
+- wall          = stats[0]  (makespan)
+- cbusy(HMX Σ)  = stats[3]  (g_pipe_cbusy = consumer mxmem Σcyc = HMX 整核占用)
+- feed_Σ(HVX)   = stats[4]  (Σ over producers of life-spin = HVX 工作总量)
+- us            = stats[6]  (HAP_perf real µs, clock self-check)
+- lmin          = stats[7]  (earliest-finishing producer life)
+- lmax          = stats[8]  (slowest-prod-life = critical-path)
+- spin avg/prod = stats[9]  (spinsum/P)  => spin_Σ = stats[9]*P
+- wt-pack Σ     = stats[24] (GDN_BR_W16_PACKCNT)  per-inst = stats[25]
+- act-pack Σ    = stats[26] (GDN_BR_W16_PACKCNT)  per-inst = stats[27]
+pure-HMX(生产) path 用它自己的 stats 映射 (gdn_pure_solve), 见下方各格口径标注。
+
+REPRODUCE
+----------------------------------------------------------------
+SHIP_FLAGS="-DGDNBM_HMX_PIPE -DGDN_BR_STATIC_GAIN -DGDN_BR_STATIC_FULL -DGDN_BR_SBOOST -DGDN_BR_DIAG_I16 -DGDN_BR_REQ_FUSE -DGDN_BR_FBOOST"
+# SHIP u8i8 (+PACKCNT 抓 wt/act-pack Σ):
+EXTRA_DEFS="$SHIP_FLAGS -DGDN_BR_W16_PACKCNT" bash example/gdn_native/baremetal/build.sh
+# run (reps2-8 median): ./gdnbm <P> A_u16_h32.raw T.raw 32 256 32768 32768 3.05e-5 3.05e-5  (GDNBM_REPS=8)
+#   P-sweep: P=4 与 P=2 各跑。
+# W16_N8 ARES (+PACKCNT), 用扩展 A 输入 A_ares.raw:
+EXTRA_DEFS="$SHIP_FLAGS -DGDN_BR_W16 -DGDN_BR_W16_N8 -DGDN_BR_W16_N8_FUSEDEP -DGDN_BR_W16_N8_ACTCACHE -DGDN_BR_W16_N8_ARES -DGDN_BR_W16_PACKCNT" bash example/gdn_native/baremetal/build.sh
+# pure-HMX(生产 = lean+wt-cache+B 全默认 ON):
+EXTRA_DEFS="-DGDNBM_GDN_PURE_SOLVE" bash example/gdn_native/baremetal/build.sh
+# run: uv run python scripts/run_w16a16_head_phase4.py --deploy --threads 4 --heads 32 --scale 0.05 --reps 8
+
+honesty
+----------------------------------------------------------------
+- 所有利用率 = 稳态计数推导 (work_Σ/lmax + spin 占比), 非 PMU per-thread 真值
+  (HVXMix path 不跑 qurt_pmu; PMU 真值仅 GP_PKTPROBE/单-rep 诊断 build 才有, 那是
+   单-rep trace artifact, 本轮作废)。明确标注: HVX 利用率 = 稳态推导。
+- P-sweep = --threads 2 与 4 两点直线拟合 wall = feed_Σ/P + b_serial。
+
+================================================================================
+[增量落盘区] 每测完一个方案/P 点立即写这里
+================================================================================
+
+--- SHIP u8i8  P=4 (reps2-5 median; clock self-check 1593.5≈TURBO ok) ---
+wall (32-head TOTAL, reps2-5 med) = 1.892M cyc  (spread 3.2%; reps2-8 hotter run med 1.979M spread 14.8% throttled)
+  per-conv (wall/768) = 2464 cyc/conv
+cbusy (HMX Σ cycles_used, stats[3]) = 139811  | per-call(/768) = 182 cyc  => HMX ~92% IDLE
+feed_Σ (HVX work-volume Σ, stats[4]) = 6.894M  | /P(4) = 1.723M
+lmax (slowest-prod-life, stats[8]) = 1.795M   lmin(stats[7])=1.738M  skew=57K
+spin_Σ (avg/prod stats[9]=46888 *P) = 187552   (spin-avg/lmax = 2.6%)
+HVX util/thread (steady-derived = (feed/P)/lmax) = 96.0%    <-- SHIP HVX 近饱和
+wt/act-pack Σ 分解: PACKCNT counters 在此 code state 未定义(g_wtpack_cyc 等 undeclared) => 仅 aggregate feed_Σ
+raw stats[0..11]: 1901039 4 32 139811 6893552 1901039 1193 1738280 1795377 46888 1738280 47401
+
+--- SHIP u8i8  P=2 (reps2-5 median; clock self-check 1593.7 ok) ---
+wall (reps2-5 med) = 2.935M cyc (spread <0.3%)
+cbusy(stats[3])=117942  feed_Σ(stats[4])=5.539M  lmax(stats[8])=2.875M  spin-avg(stats[9])=73330
+raw stats[0..11]: 2937252 2 32 117942 5538520 2937252 1843 2810218 2874963 73330 2810218 71877
+
+--- SHIP P-sweep FIT (wall = feed_Σ/P + b_serial; P=4,P=2 两点) ---
+P=4 med=1.892M  P=2 med=2.935M
+slope K = 4*(P2-P4) = 4.171M   b_serial = 0.849M
+   => SHIP b_serial = 0.849M  (远大于 pure-HMX cron#82 0.376M)
+   => slope K 4.17M < 实测 feed_Σ(P4) 6.89M (K/feed=0.61): feed_Σ 不全 P-可约,
+      ~一大块 HVX 工作是串行的 (= HVXMix merge-GLUE 串行底, 落进 b_serial)。
+   => 这就是 analyzer 开放项的答案: SHIP 有 HVXMix 特有的大串行底 (merge-glue),
+      不只是"更大 b_serial", 是串行 HVX work (非纯并行 feed)。
+
+--- W16_N8 ARES  P=4 (reps2-5 median; A_ares.raw; clock 1593.3 ok) ---
+wall (reps2-5 med) = 2.506M cyc (spread 1.5%)   per-conv(/768)=3264
+cbusy (HMX Σ stats[3]) = 297401  per-call(/768)=387  => HMX ~88% IDLE  (2× SHIP: W16=2-pass matmul)
+feed_Σ (HVX stats[4]) = 9.145M  /P(4) = 2.286M   lmax(stats[8])=2.424M
+spin-avg(stats[9])=90001  (spin-avg/lmax=3.7%)
+HVX util/thread (steady-derived) = 94.3%    <-- ARES HVX 也近饱和
+raw stats[0..11]: 2517388 4 32 297401 9145408 2517388 1580 2423903 2423903 90001 2423903 92022
+
+--- W16_N8 ARES  P=2 (reps2-5 median) ---
+wall (reps2-5 med) = 4.245M (spread 0.9%)
+cbusy=260506 feed_Σ=7.900M lmax=4.123M spin-avg=147975
+raw stats[0..11]: 4240440 2 32 260506 7899730 4240440 2661 4073161 4122520 147975 4073161 147853
+
+--- ARES P-sweep FIT ---
+P=4 med=2.506M  P=2 med=4.245M
+slope K = 6.955M   b_serial = 0.767M   (K/feed(P4)=0.76)
+   => ARES b_serial 0.767M, 比 SHIP 0.849M 略小; K/feed 0.76 > SHIP 0.61
+      = W16 双-pass 让更多 feed 落进并行 matmul-feed, 串行底占比相对降。
+
+--- pure-HMX (生产 = lean+wt-cache+B 默认 ON)  P=4 (reps2-8 median; clock 1592.2 ok) ---
+wall (reps2-8 med) = 1.259M cyc (spread 8.0%)   per-conv(/768)=1639
+cbusy (HMX Σ stats[3]) = 387062  per-call occupancy=479 (lean) => HMX ~69% IDLE
+feed_Σ (production) = 3.643M = wt1.675M + bias0.406M + act0.121M + renorm/acc1.162M + outcopy0.279M
+  (注: cron#82 lean-only feed_Σ 是 4.02M; wt-cache+B 把 wt-pack/renorm 降到此值)
+feed/P(4)=0.911M  lmax(stats[11])=1.094M
+spin_Σ (stats[4]) = 569700 (=13.0% of P*lmax)
+HVX util/thread (steady-derived = (feed/P)/lmax) = 83.2%
+oc = 4.238e-3  PACKCHK=0  (bit-exact 生产路, 与 memory 一致)
+raw stats[0..11]: 1259452 4 32 387062 569700 479 791 2116987 0 0 1161612 1094221
+
+--- pure-HMX  P=2 (reps2-8 median) ---
+wall (reps2-8 med) = 2.122M (spread 1.4%)  cbusy=365485 spin_Σ=413771 lmax=1.930M
+raw stats[0..11]: 2122491 2 32 365485 413771 480 1332 2016431 0 0 1032850 1930021
+
+--- pure-HMX P-sweep FIT ---
+P=4 med=1.259M  P=2 med=2.122M
+slope K = 3.452M   b_serial = 0.396M   (K/feed=0.95)
+   => b_serial 0.396M ≈ cron#82 lean-only 0.376M (一致); K/feed 0.95 = feed 几乎全 P-可约
+      (干净并行 feed, 串行底极小)。
+
+================================================================================
+统一对比表 (32-head TOTAL wall, VTCM-only, reps2-N median, 同 device session)
+================================================================================
+| 字段                          | SHIP u8i8      | W16_N8 ARES    | pure-HMX(生产)  | 口径/字段                       |
+|-------------------------------|----------------|----------------|-----------------|---------------------------------|
+| wall (P=4, reps2-N med)       | 1.892M         | 2.506M         | 1.259M          | graph-wall stats[0], VTCM-only  |
+|   spread                      | 3.2%           | 1.5%           | 8.0%            | reps2-N min..max                |
+|   per-conv (wall/768)         | 2464           | 3264           | 1639            | throughput 口径                 |
+| cbusy (HMX Σ cycles_used)     | 0.140M         | 0.297M         | 0.387M          | stats[3] consumer mxmem Σ       |
+|   HMX 占 wall                 | ~7% (92% idle) | ~12% (88%idle) | ~31% (69%idle)  | cbusy/wall                      |
+|   per-call occupancy          | 182            | 387            | 479 (lean)      | per-conv HMX occ                |
+| feed_Σ (HVX work-volume Σ)    | 6.894M         | 9.145M         | 3.643M          | stats[4] Σ(life-spin) [pure=分解Σ]|
+| lmax (slowest-prod-life)      | 1.795M         | 2.424M         | 1.094M          | stats[8] / pure stats[11]       |
+| spin_Σ (4 线程之和)           | 0.188M         | 0.360M         | 0.570M          | spin-avg*P / pure stats[4]      |
+| HVX util/thread (steady推导)  | 96.0%          | 94.3%          | 83.2%           | (feed/P)/lmax                   |
+| P-sweep slope K (feed_Σ/P 段) | 4.171M         | 6.955M         | 3.452M          | 4*(P2-P4)                       |
+| P-sweep b_serial (串行地板)   | 0.849M         | 0.767M         | 0.396M          | P4 - K/4                        |
+| K/feed_Σ(P4) (feed 并行占比)  | 0.61           | 0.76           | 0.95            | slope ÷ 实测 feed_Σ             |
+| oc (device T vs fp64 inv)     | 3.097e-3 实测  | 1.16e-3(=BASE) | 4.238e-3 实测   | SHIP/pure本轮实测;ARES==oracle  |
+
+================================================================================
+P-sweep 结论 (回答 analyzer 开放项)
+================================================================================
+三方案都 feed-bound (HMX 大量空闲 69-92%, HVX util 83-96%), 但 feed 的"可并行度"
+差异巨大 (K/feed_Σ):
+  - pure-HMX K/feed=0.95: feed 几乎全 P-可约 = 干净并行 producer feed, b_serial 仅 0.396M。
+  - SHIP    K/feed=0.61: feed_Σ 6.89M 里只 ~4.17M 随 P 缩, ~2.7M 是串行 HVX work
+    落进 b_serial(0.849M, 2.1× pure 的串行底)。
+  - ARES    K/feed=0.76: 介于两者; W16 双-pass 让更多 matmul-feed 进并行段, 但 b_serial
+    仍 0.767M(1.9× pure)。
+=> analyzer 开放项答案: SHIP/ARES 不只是"更大 b_serial", 而是有 HVXMix 特有的
+   串行 HVX work(= merge-GLUE 串行段, 见 reference_gdn_solve_global_roofline merge-GLUE 51%),
+   它既不随 P 缩(进 b_serial)又是真 HVX 活(进 feed_Σ 但非 K)。pure-HMX 没有这段
+   串行胶水(cv-block I/O 契约 + VTCM 常驻消掉了), 所以 b_serial 小一半、feed 全并行。
+
+================================================================================
+一句话回答用户原问题 (稳态口径)
+================================================================================
+SHIP/ARES 的 HVX "瞬时利用率" 反而比 pure-HMX 高 (96%/94% vs 83%) —— 但这不是优点,
+是 SHIP/ARES 把 HVX 喂满在做"更多的 HVX 活"(feed_Σ 6.9M/9.1M vs pure 3.6M, 含大段
+不可并行的 merge-glue 串行 work)。pure-HMX 的 HVX util 看似低 (83%), 是因为它 (a) 总
+HVX work-volume 最小 (cv-block 契约 + wt-cache + B 省掉打包/depack/renorm 往返), (b) 把
+活更多卸给 HMX (cbusy 31% vs 7%/12%)。差距来源 = WORK-VOLUME + 串行胶水, NOT pure-HMX
+"HVX 闲置浪费"。结论: pure-HMX 1.259M 最快, 正因为它做的 HVX 活最少且全并行;
+SHIP/ARES 慢是被自己更大的、且部分串行的 HVX feed 拖住 (feed-bound)。
+
+================================================================================
+正确性 (oc / bit-exact) — 本轮实测
+================================================================================
+- SHIP u8i8:  oc = 3.097e-3  (本轮设备实测, authoritative scales 2.77e-5/6.10e-5,
+              T linear-u16 [32,256,256] decode vs fp64 inv(I-A); 与 docs/gdn_inverse.md
+              文档值 3.10e-3 逐位一致)。✅ VERIFIED 本轮。
+- W16_N8 ARES: bit-exact 硬门 PASS = ARES T == BASE(W16 高精度 oracle) T 整 32-head
+              4MB 逐字节相同 (md5 IDENTICAL, numpy array_equal=True, max|d|=0;
+              scripts/w16n8_ares_check.sh STEP2 本轮跑过)。BASE = 文档 W16 oc 1.16e-3
+              (gdn_solve.md:116)。⚠️ ARES T cv-block exp-layout 直接 oc 解码本轮未钉
+              (decode 偏移与 phase4 pure-HMX cv 布局不同, 非 load-bearing); 正确性由
+              "== BASE oracle bit-exact" 这条硬门坐实 (该脚本的权威 oc 门)。
+              => ARES oc = BASE oc = 文档 1.16e-3 (🟡 引用文档, 本轮只验了 == oracle)。
+- pure-HMX:   oc = 4.238e-3 (本轮实测, scale 0.05 synthetic; PACKCHK=0); 真 GDN 1.107e-2
+              (文档)。✅ VERIFIED 本轮 (synthetic)。
+
+honesty 小结 (哪些本轮 VERIFIED / 哪些引用):
+- wall / cbusy / feed_Σ / lmax / spin / P-sweep b_serial / HVX util: 三方案全部本轮设备实测
+  (reps2-N median, VTCM-only, clock self-check 1592-1594 全过)。
+- HVX 利用率 = 稳态推导 ((feed/P)/lmax + spin 占比), NON-PMU (明确标注, 见文件头)。
+- SHIP oc 本轮实测; ARES 本轮验 == BASE oracle bit-exact, oc 数值引用文档 1.16e-3;
+  pure-HMX oc 本轮实测 synthetic。

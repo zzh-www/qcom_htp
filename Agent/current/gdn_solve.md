@@ -8,7 +8,7 @@ GDN/KDA linear-attention 在 v75 HTP 上的核心难点 = 每 head 对 C×C 下�
 
 ## 0. 当前最佳（权威数）
 
-> **当前最快路线 = pure-HMX `GDNSolveHMX`，~1.258M（VTCM-only，−26% vs native 1.703M，cron#89，生产默认 lean+wt-cache+B，oc 4.238e-3 synthetic / 1.107e-2 真 GDN，bit-exact-to-native）。release doc = `docs/gdn_inverse_pure_hmx.md`；过程/极限/dead-end = `pure_hmx_solve_build.md`。** 下面 §0 详情是**另一路线** GDNSolveHVXMixHMX（精度最佳档 oc 3.10e-3 / 速度 ~1.79M）的出货定稿，作并行路线保留（release doc `docs/gdn_inverse.md`）。
+> **当前最快路线 = pure-HMX `GDNSolveHMX`，~1.258M（VTCM-only，−26% vs native 1.703M，cron#89，生产默认 lean+wt-cache+B，oc 4.238e-3 synthetic / 1.107e-2 真 GDN，bit-exact-to-native）。release doc = `docs/gdn_inverse_pure_hmx.md`；过程/极限/dead-end = `pure_hmx_solve_build.md`。** 下面 §0 详情是**另一路线** GDNSolveHVXMixHMX（精度最佳档 oc 3.10e-3 / 速度 ~1.79M）的出货定稿，作并行路线保留（release doc `docs/gdn_inverse.md`）。**📌 2026-06-17 更正:三方案 QNN-标准同口径稳态对比 + trace 口径统一(MM 只在 consumer)+ 旧 "HVXMix HVX 利用率低 / 已到地板" 措辞更正,见 §1.2;权威稳态表 = `Agent/current/perf_3impl_cron82kqie.txt`。**
 
 **GDNSolveHVXMixHMX，`GdnSolveBR16.cpp` int16 静态 solve，producer-consumer pipeline（P=4 HVX 生产者 + 1 主线程 PURE-HMX 消费者）。出货旗组 7 个（见 §3）。**
 
@@ -32,6 +32,32 @@ GDN/KDA linear-attention 在 v75 HTP 上的核心难点 = 每 head 对 C×C 下�
 | `GDN_BR_REQ_FUSE` | final-merge widen+requant 融合一遍读,省冗余 VTCM 读 | wall **−0.9%**，bit-exact |
 
 可选 min-wall 档 `GDN_BR_SKIPFIN_D3`:跳 d=3 块 final merge,wall 再 −2.7%,oc 9.56e-3(贴 1e-2);非默认。
+
+### 1.2 QNN-标准三方案稳态对比 + trace 口径统一（2026-06-17）
+
+> **本小节是三方案（SHIP u8i8 / W16_N8 ARES / pure-HMX 生产）在 cron#82 同一稳态口径下的权威对比,作废所有从单-rep trace 图读出的利用率%(58%/82% 等全是 trace artifact)。** 权威表 = `Agent/current/perf_3impl_cron82kqie.txt`(reproduce 段在文件头)。
+
+**(1) trace 口径统一(MM 只在 consumer)。** 三方案聚合 timeline 已对齐 pure-HMX 口径:producer **不再标 MM** —— 全代码库唯一 stage-3(MM)push = `gdnbm_imp.cpp:1521` 主线程 consumer tid(单 HMX 单元被 consumer 独占)。HVXMix(SHIP/ARES)producer 过去把整段同步 merge 握手(fill→spin→depack)误标为自身 tid 的 MM,双计 consumer 的 HMX 窗口、把 producer 行画成橙色并掩盖真 SPIN;现已改为 producer 只发 SPIN(11)+DEPACK(10)(+ACT/WT-PACK 预派发)。证据 = `Agent/current/timeline_3impl_aggregate.svg`(自检:1664 个橙 MM 矩形全在 CONS 行,producer 0 橙;CONS MM-Σ 逐字段对上 run 的 cons= 字段)+ `Agent/current/trace_kqie_production_unaffected.txt`(本轮 trace 改动全在 `#if defined(GDN_BR_TRACE)` guard 内或纯注释,SHIP 生产 TU 预处理 0 残留,生产字节不受影响已证)。**⚠️ 该 SVG 是单-rep trace,只看 STAGE 结构,per-thread 利用率/占用以下方稳态表为准。**
+
+**(2) QNN-标准三方案稳态表**(cron#82 同口径:32-head TOTAL wall / VTCM-only / reps2-N median / P-sweep):
+
+| 字段 | SHIP u8i8 | W16_N8 ARES | pure-HMX(生产) | 口径 |
+|---|---|---|---|---|
+| wall (P=4, reps2-N med) | 1.892M | 2.506M | 1.259M | graph-wall stats[0], VTCM-only |
+| cbusy(HMX Σ) / HMX 闲 | 0.140M / 92%闲 | 0.297M / 88%闲 | 0.387M / 69%闲 | stats[3] consumer mxmem Σ |
+| feed_Σ (HVX work-volume Σ) | 6.894M | 9.145M | 3.643M | stats[4] / pure 分解Σ |
+| b_serial (串行地板) | 0.849M | 0.767M | 0.396M | P-sweep: P4 − K/4 |
+| K/feed_Σ (feed 并行占比) | 0.61 | 0.76 | 0.95 | slope ÷ 实测 feed_Σ |
+| HVX-util/thread (稳态推导,非 PMU) | 96% | 94% | 83% | (feed/P)/lmax |
+
+口径自洽校验:pure-HMX b_serial 0.396M ≈ cron#82 独立测 0.376M(热噪声内一致)。三方案都 feed-bound(HMX 闲 69-92%,HVX-util 83-96%)。
+
+**(3) 关键结论 + 更正旧措辞。**
+- 🔴 **更正(被推翻的 artifact 措辞):"HVXMix 的 HVX 利用率比不上 pure-HMX" 是 ERROR** —— 真值相反:HVXMix HVX 瞬时利用率反而**更高**(SHIP 96% / ARES 94% vs pure 83%)。旧单-rep trace 图说的 "58% vs 82%" 是 trace artifact,**已作废**。
+- 真正的差距 = **(a) ~2× 的 HVX work-volume**(feed_Σ 6.9M/9.1M vs pure 3.6M)**+ (b) 一段不随 P 缩的串行 merge-GLUE**(K/feed 0.61/0.76 vs pure 0.95;b_serial 2.1×/1.9× pure)。pure-HMX 用 cv-block I/O 契约 + VTCM 常驻把这段串行胶水消掉了,所以 feed 几乎全 P-可约、b_serial 只有一半。
+- ⚠️ **"HVXMix off-diag merge 已对齐 pure-HMX / 干净路到结构地板" 加 nuance**:off-diag merge **MATMUL** 对齐 pure-HMX 属实,但 HVXMix **仍扛着 pure-HMX 已消除的串行 merge-GLUE**(b_serial 2× pure)。这是**已定位的真差距/候选杠杆**(把 pure-HMX 的 cv-block I/O 契约更彻底搬到 HVXMix,削这段串行胶水),analyzer 正在评估能削多少。故 **"HVXMix 已到地板" 这条尚未定论,待 analyzer。**(注:pure-HMX 自身的干净路结构地板判定 cron#86 不受影响。)
+
+**(4) 复现。** 三方案 reproduce 段(SHIP/ARES/pure build+run flags、A_ares.raw 扩展 A 装配)= `Agent/current/perf_3impl_cron82kqie.txt` 文件头 REPRODUCE 段;trace blob 抓取 = `scripts/gdn_capture_3impl_traces.sh`;聚合 SVG 重绘 = `scripts/gdn_3impl_aggregate_timeline.py <ship.raw> <ares.raw> <purehmx.raw> <out.svg>`(blob 归档于 `Agent/current/trace_blobs_3impl/`)。
 
 ---
 

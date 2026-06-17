@@ -217,6 +217,17 @@ struct gdn_vtcm_t {
 #define GDN_W16_BLK 0x2000
 #define GDN_W16_ACT_SLOT(vt, m)  ((vt)->acache + (size_t)(m) * 0x8000)
 #define GDN_W16_TDIAG_NAT(vt, i) ((uint16_t *)((vt)->acache + 0x18000 + (size_t)(i) * 0x2000))
+#if defined(GDN_BR_W16_N8_ACTCACHE)
+/* ACTCACHE persistent crouton16 act-cache (8KB stride = the span the lean kernel actually reads,
+ * act_cr+(i&3)*2048 i=0..3; 512B-compact is the historical "kernel reads past live span" pit).
+ * Restores the per-distinct-key act-cache the SHIP u8i8 path has (gdn_get_act_A vAa / gdn_get_act_Tdiag
+ * vTa) but W16_N8 dropped, killing 7/16 bit-identical repacks (A_ik 4 redundant + T_ii 3 redundant).
+ * Layout in the W16 acache region [0x18000,0x40000): A by gdn_blk_index(i,k) key 0..9 (10*8K=80K),
+ * Tdiag by i 0..3 (4*8K=32K), 1 transient nat scratch (8K) -> ends 0x36000 < wcache 0x40000. */
+#define GDN_W16_ACTC_A(vt, key) ((vt)->acache + (size_t)(key) * 0x2000)              /* 0x18000..0x2C000 */
+#define GDN_W16_ACTC_T(vt, i)   ((vt)->acache + 0x14000 + (size_t)(i) * 0x2000)      /* 0x2C000..0x34000 */
+#define GDN_W16_ACTC_NAT(vt)    ((uint16_t *)((vt)->acache + 0x1C000))               /* 0x34000..0x36000 */
+#endif
 static gdn_vtcm_t gdn_vtcm_from(uint8_t *base) {
     gdn_vtcm_t v;
     v.act    = base + 0x00000;
@@ -1270,8 +1281,14 @@ static float gdn_merge_dispatch(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint8
     return sP;
 }
 static void gdn_merge_wait_depack(gdn_scr_t *sc, const gdn_vtcm_t *vt, int8_t *out_codes) {
-    g_hmx_wait(sc);                                  /* spin for the consumer's result */
+    g_hmx_wait(sc);                                  /* spin for the consumer's result (g_hmx_wait pushes SPIN) */
+#if defined(GDN_BR_TRACE)
+    uint64_t _dp0 = gdn_trnow();
+#endif
     gdn_depack_out_fast(sc, vt->out, 128, out_codes);
+#if defined(GDN_BR_TRACE)
+    gdn_tr_push((uint32_t)(sc - g_scr), 10, _dp0, gdn_trnow());   /* DEPACK */
+#endif
 }
 #endif
 
@@ -1401,9 +1418,69 @@ static float gdn_merge_kstack(gdn_scr_t *sc, const gdn_vtcm_t *vt,
     if (g_hmx_dispatch) g_hmx_dispatch(sc, vt, wcontig, effs, g1 * 512.0f, 128 << 7, 1);
     else                gdn_hmx_run_only(vt, wcontig, effs, g1 * 512.0f, 128 << 7, 1);
     g_kstack_nap = 2;
+#if defined(GDN_BR_TRACE)
+    uint64_t _dp0 = gdn_trnow();   /* pure-HMX口径: producer post-dispatch depack (the dispatch already pushed SPIN); NO producer MM */
+#endif
     gdn_depack_out_fast(sc, vt->out, 128, out_codes);
+#if defined(GDN_BR_TRACE)
+    gdn_tr_push((uint32_t)(sc - g_scr), 10, _dp0, gdn_trnow());   /* DEPACK */
+#endif
     return sP;
 }
+
+#if defined(GDN_BR_SWPIPE_KSTACK)
+/* EXP-B (疑点3): async split of gdn_merge_kstack for a CROSS-BLOCK software pipeline.
+ *   _dispatch: gather d weights contiguous + set tabs + sum eff + bias-pack + ARM (NO spin).  Returns sP.
+ *   then the caller preps the NEXT off-diag block's OPERAND CACHES (acache/wcache fills — different VTCM
+ *   slots, NOT vt->wt/bias/out) while the consumer runs THIS block's matmul -> the spin hides under that prep.
+ *   _wait_depack: spin for this block + de-crouton.  Single job in flight: out/bias are reused only AFTER
+ *   wait, and the next block's vt->wt gather is deferred to its own _dispatch (after this wait) -> safe.
+ * Gated, default OFF -> production (KSTACK sync) path byte-unaffected. */
+static float gdn_merge_kstack_dispatch(gdn_scr_t *sc, const gdn_vtcm_t *vt,
+                                       const uint8_t *const act_cr[], const int8_t *const wt_km[],
+                                       const int32_t *const eff_blk[], int d, float sa, float sw) {
+    int8_t *wcontig = (int8_t *)vt->wt;
+    for (int m = 0; m < d; ++m) {
+        const HVX_Vector *s = (const HVX_Vector *)wt_km[m];
+        HVX_Vector *dst = (HVX_Vector *)(wcontig + (size_t)m * (BL * BL));
+        for (int v = 0; v < (BL * BL) / 128; ++v) dst[v] = s[v];
+    }
+    for (int m = 0; m < d; ++m) {
+        vt->acttab[2*m + 0] = (int32_t)(uintptr_t)(act_cr[m] + 0);
+        vt->acttab[2*m + 1] = (int32_t)(uintptr_t)(act_cr[m] + 64 * 32);
+    }
+    vt->outtab[0] = (int32_t)(uintptr_t)(vt->out + 0);
+    vt->outtab[1] = (int32_t)(uintptr_t)(vt->out + 64 * 32);
+    /* local effs: the async dispatch's bias-pack consumes it SYNCHRONOUSLY before returning, so it need not
+     * outlive the call (matches sync gdn_merge_kstack; static __thread alignment was a red herring/bug source). */
+    int32_t effs[BL] __attribute__((aligned(128)));
+    for (int n = 0; n < BL; ++n) { int32_t s = 0; for (int m = 0; m < d; ++m) s += eff_blk[m][n]; effs[n] = s; }
+    int maxP_est = 128 * d * GDN_OPS_COLABS;
+#if defined(GDN_BR_SBOOST)
+    static const float GDN_SB[4] = { 1.0f, 5.5f, 12.0f, 20.0f };
+    const float B = GDN_SB[d];
+    float g1 = B * 127.0f / (float)maxP_est;
+    float sP = ((float)maxP_est * sa * sw) / (127.0f * B); if (sP <= 0.0f) sP = 1e-12f;
+#else
+    float g1 = 127.0f / (float)maxP_est;
+    float sP = ((float)maxP_est * sa * sw) / 127.0f; if (sP <= 0.0f) sP = 1e-12f;
+#endif
+    g_kstack_nap = 2 * d;
+    g_hmx_dispatch_async(sc, (gdn_vtcm_t *)vt, wcontig, effs, g1 * 512.0f, 128 << 7, 1);   /* bias-pack + ARM, no spin */
+    g_kstack_nap = 2;
+    return sP;
+}
+static void gdn_merge_kstack_wait_depack(gdn_scr_t *sc, const gdn_vtcm_t *vt, int8_t *out_codes) {
+    g_hmx_wait(sc);                                  /* spin for this block's result (g_hmx_wait pushes SPIN) */
+#if defined(GDN_BR_TRACE)
+    uint64_t _dp0 = gdn_trnow();
+#endif
+    gdn_depack_out_fast(sc, vt->out, 128, out_codes);
+#if defined(GDN_BR_TRACE)
+    gdn_tr_push((uint32_t)(sc - g_scr), 10, _dp0, gdn_trnow());   /* DEPACK */
+#endif
+}
+#endif  /* GDN_BR_SWPIPE_KSTACK */
 #endif  /* GDN_BR_KSTACK */
 
 /* ============ int16-HVX merge = the GDNSolveHVX baseline matmul (NO HMX -> threads freely; HMX is process-serial, can't hit 4-thread) ============
@@ -1862,7 +1939,11 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
                 gdn_matmul_i8_vrmpy(sc->a8, sc->btp, sc->Tc);
                 sterm = sAq * sBq;
 #if defined(GDN_BR_TRACE)
-                gdn_tr_push(_tid, GDN_TR_MM, _mm0, GDN_TR_NOW());
+                /* pure-HMX口径: NO producer MM(3). This HVX_MERGE path runs the matmul INLINE on the
+                 * producer's HVX (gdn_matmul_i8_vrmpy, no HMX consumer) -> producer-side combine = DEPACK(10),
+                 * matching the BP4 producer-combine口径 (GdnSolveBR16.cpp DEPACK push). MM(3) is reserved
+                 * strictly for the consumer's mxmem kernel (gdnbm_imp.cpp tid=GDN_BR_NT). */
+                gdn_tr_push(_tid, 10, _mm0, GDN_TR_NOW());   /* DEPACK (inline producer-HVX vrmpy combine) */
 #endif
 #if defined(GDN_BR_PROBE_CYCLES)
                 { uint64_t mm; asm volatile("%0 = C15:14" : "=r"(mm)); g_c_hmxkern += mm - mm0; }
@@ -1923,7 +2004,10 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
 #endif
                 gdn_merge_packed(sc, vt, a, sa, w, eff, sw, wcolabs, sc->termi, &sterm);
 #if defined(GDN_BR_TRACE)
-                uint64_t _p2 = GDN_TR_NOW(); gdn_tr_push(_tid, GDN_TR_MM, _p1, _p2);
+                /* pure-HMX口径: NO producer MM(3); gdn_merge_packed dispatches to the consumer
+                 * (g_hmx_dispatch pushes SPIN(11) on this producer; consumer pushes MM(3)) and pushes
+                 * TABS(15)+DEPACK(10) internally. Just take _p2 for the ACC push below. */
+                uint64_t _p2 = GDN_TR_NOW(); (void)_p1;
 #endif
                 if (first) s_S = sterm;
 #if defined(GDN_BR_PROBE_CYCLES)
@@ -1995,7 +2079,10 @@ static void gdn_br_one_head(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t 
             g_force_sP = 0.f;
 #endif
 #if defined(GDN_BR_TRACE)
-            uint64_t _fp2 = GDN_TR_NOW(); gdn_tr_push(_tid, GDN_TR_MM, _fp1, _fp2);
+            /* pure-HMX口径: NO producer MM(3); gdn_merge_packed dispatches to the consumer
+             * (g_hmx_dispatch pushes SPIN(11) on this producer; consumer pushes MM(3)) and pushes
+             * TABS(15)+DEPACK(10) internally. Just take _fp2 for the REQ push below. */
+            uint64_t _fp2 = GDN_TR_NOW(); (void)_fp1;
 #endif
 #if defined(GDN_BR_PROBE_CYCLES)
             uint64_t w0; asm volatile("%0 = C15:14" : "=r"(w0));

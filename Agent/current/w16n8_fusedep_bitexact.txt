@@ -1,0 +1,52 @@
+W16_N8 FUSEDEP bit-exact 正确性证据 (depack 合一不改输出)
+============================================================
+结论: FUSEDEP (per-block depack 折进 tiled-坐标累加, 末尾 untile 一次) 与无-FUSEDEP (per-block
+  depack + 逐块累加) 的整 32-head T 输出 **逐字节相同** —— FUSEDEP 是纯结构优化, 不改任何输出位。
+  机理: untile 是纯索引置换, sxt32+add 是逐元素线性, 故 "tiled 坐标累加后整块 untile 一次" 与
+  "逐块 untile 后累加" byte-exact 相同 (GdnSolveBR16.cpp:505-529 注释所述)。
+
+A / C 两 build (除 FUSEDEP 旗外完全相同):
+  SHIP = -DGDNBM_HMX_PIPE -DGDN_BR_STATIC_GAIN -DGDN_BR_STATIC_FULL -DGDN_BR_SBOOST \
+         -DGDN_BR_DIAG_I16 -DGDN_BR_REQ_FUSE -DGDN_BR_FBOOST
+  A (无 FUSEDEP) = SHIP -DGDN_BR_W16 -DGDN_BR_W16_N8
+  C (+FUSEDEP)   = SHIP -DGDN_BR_W16 -DGDN_BR_W16_N8 -DGDN_BR_W16_N8_FUSEDEP
+
+run (同一确定性输入 A_u16_h32.raw, 同 scales, 设备 oneplus):
+  GDNBM_REPS=4 ./gdnbm 4 A_u16_h32.raw T_{A,C}.raw 32 256 32768 32768 \
+    2.770166930875267e-05 6.103701895199438e-05
+
+------------------------------------------------------------
+### bit-exact 证据 (整 32-head, 4 MB T, u16) ###
+
+md5sum:
+  0e61249dd4400b18867fa38a0cf8bd6a  T_A.raw   (无 FUSEDEP)
+  0e61249dd4400b18867fa38a0cf8bd6a  T_C.raw   (+FUSEDEP)
+  -> md5 逐字节相同
+
+cmp T_A.raw T_C.raw:
+  -> IDENTICAL (cmp exit 0, 无差异字节)
+
+numpy (u16, 2097152 elem = 32 head x 256 x 256):
+  np.array_equal(T_A, T_C) = True
+  max|T_A - T_C| = 0   (ndiff = 0)
+
+### oc (vs fp64 inv(I-A), 32-head aggregate; scripts/gdn_solve_oc_check.py) ###
+  A (无 FUSEDEP): oc = 3.8059e-04   (gate <= 4.00e-02, PASS)
+  C (+FUSEDEP):   oc = 3.8059e-04   (gate <= 4.00e-02, PASS)
+  -> 两档 oc 完全相同 (因 T 逐字节相同), 均 = 3.81e-4, 远低于硬门 4e-2。
+
+------------------------------------------------------------
+### perf (同次 run, reps2-4, 信息性, 非配对热窗) ###
+  口径: stats[0] graph-wall (32-head TOTAL); 本次为单次 run reps (非 ACAC 同热窗配对), 仅作量级。
+  A (无 FUSEDEP) reps: 3886677 / 3832188 / 3948105   (rep2-4)
+  C (+FUSEDEP)   reps: 3360876 / 3186117 / 3195935   (rep2-4)
+  -> C 系统性低于 A (FUSEDEP 削 untile 起作用); 精确 ΔWall 需 ACAC 同热窗配对 (本轮未做, 任务只采 trace+落盘)。
+  W16_N8 FUSEDEP 档相对 SHIP u8i8 1.925M ≈ +67% (高精度档代价, oc 3.81e-4 vs u8i8 较粗)。
+  clock self-check: wall/us ≈ 1593 (TURBO ~1594, OK)。
+
+------------------------------------------------------------
+### 复现 ###
+  bash /tmp/w16n8_fusedep_run.sh  (本轮用的 build+deploy+run 脚本; 或手动按上方 build/run 命令)
+  对比: md5sum T_A.raw T_C.raw ; cmp T_A.raw T_C.raw ;
+        python3 scripts/gdn_solve_oc_check.py example/gdn_native/baremetal/A_u16_h32.raw T_C.raw --gate 4e-2
+  设备只经 source scripts/dssh.sh。

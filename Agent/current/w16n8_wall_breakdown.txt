@@ -1,0 +1,142 @@
+W16_N8 高精度档 (act-cache 当前最终态) vs SHIP u8i8 —— wall +48% 逐 stage 来源对比
+===================================================================================
+目的: 给 core 向用户可视化汇报。坐实 W16_N8 (int16 高精度档, oc 3.81e-4) wall ~2.85M
+  相对 SHIP u8i8 1.925M 的 +48% (多出 ~0.93M) 从哪些 stage 来。
+  本轮只采 trace + 渲染 + 对比, 不优化、不改算法。增量落盘 (得一组即写, 规避 final-report API)。
+
+口径 (两侧严格同口径才并表):
+  - per-stage Σ = GDN_BR_TRACE (GP_TRACE) trace, 单 rep, 4 producer 线程求和的 work-volume。
+    单 rep trace 受 trace 扰动, 只读 STRUCTURE 与同口径 stage 占比, 不读绝对 wall。
+  - 对外 wall 数 (+48% / +67%) 用此前 ACAC 同热窗配对实测 (w16n8_actcache_wall.txt),
+    非 trace 绝对 wall。SHIP u8i8 出货 wall = 1.925M (memory/历史口径)。
+  - ASCII 渲染器对 W16 路有 'L'(head-LOAD) 标签 artifact (BIAS-PACK 被画成 L, 行内大量 L
+    是 column-paint 假象, busy 行 LOAD=0% 已证), 真账以下方 per-stage Σ 表 + SVG 为准。
+
+证据文件:
+  W16_N8 act-cache timeline:  Agent/current/timeline_hvxmix_w16n8_actcache.{svg,txt}
+  SHIP u8i8 timeline (同口径): Agent/current/timeline_hvxmix_u8i8.svg
+  trace blob 复现见底部 build/run 命令。
+
+===================================================================================
+[A] W16_N8 act-cache 当前态 timeline 读数 (trace 单 rep, wall=3,384,453 cyc trace-perturbed)
+===================================================================================
+  per-thread union-busy (非容器叶子区间并集 / wall):
+    P0  union-busy 69.4%w
+    P1  union-busy 78.8%w   <-- 最忙 producer
+    P2  union-busy 73.0%w
+    P3  union-busy 74.0%w
+    CONS(HMX)  MM-busy 9.0%w  (304176 cyc, n=512 matmul, per-call ~594 cyc)
+  -> 4 producer busy 69-79%w; HMX consumer 仅 9%w = FEED-BOUND, HMX 闲 ~91%。
+  -> SPIN Σ (4 prod) = 384328 = 11.4%wall (Σ口径) = producers 基本不在等 HMX, 忙在自己 HVX 活。
+
+  各 stage 占 wall% (producer-Σ / wall, 注意是 work-volume 占 wall, 多线程可并行所以行和 > 100%):
+    MM-wrapper  Σ=3,998,258   118%×wall? (Σ口径, 4线程和)  -> 占 producer-Σ 38.3%
+    DIAG        Σ=2,486,877                                 -> 占 producer-Σ 23.8%
+    PACK        Σ=2,249,645                                 -> 占 producer-Σ 21.6%
+    ACT         Σ=  747,992                                 -> 占 producer-Σ  7.2%
+    REQ         Σ=  506,945                                 -> 占 producer-Σ  4.9%
+    SPIN        Σ=  384,328                                 -> 占 producer-Σ  3.7%
+    (STORE/POST/LOAD < 0.6% 合计)
+    producer-Σ total = 10,428,865
+  ⚠️ FUSEDEP+actcache 态: DEPACK(stage10)/ACC(stage6)/EFF(stage9) 计数=0 (FUSEDEP 把 per-block
+     depack+acc 折进 MM-wrapper 的 acc_add_surf, untile 末尾一次)。故 MM-wrapper 这个 bucket
+     已经吸收了原本独立的 DEPACK+ACC 活 —— 跨 u8i8 对比时必须把 u8i8 的 ACC+DEPACK+EFF 也并进
+     glue 才同口径 (见下表)。
+
+===================================================================================
+[B] SHIP u8i8 同口径 per-stage Σ (GP_TRACE 单 rep, wall=2,590,921 cyc trace-perturbed)
+===================================================================================
+  per-thread union-busy: P0 69.1% / P1 70.0% / P2 71.0% / P3 61.3%w
+  CONS(HMX) MM-busy 6.2%w (159635, n=384, per-call ~416 cyc) = 也 FEED-BOUND
+  SPIN Σ = 253401 = 9.8%wall
+
+  各 stage producer-Σ:
+    DIAG     Σ=2,638,728   33.9% prod-Σ
+    MM       Σ=1,603,387   20.6% prod-Σ
+    ACT      Σ=  928,113   11.9% prod-Σ
+    REQ      Σ=  902,440   11.6% prod-Σ
+    PACK     Σ=  678,186    8.7% prod-Σ   <-- u8i8 单字节, PACK 轻
+    STORE    Σ=  324,010    4.2% prod-Σ
+    SPIN     Σ=  253,401    3.3% prod-Σ
+    EFF      Σ=  195,686    2.5% prod-Σ
+    DEPACK   Σ=  114,756    1.5% prod-Σ
+    ACC      Σ=   81,911    1.1% prod-Σ
+    (LOAD/TABS/POST < 0.8% 合计)
+    producer-Σ total = 7,787,844
+
+===================================================================================
+[C] ★ wall +48% 逐 stage 来源对比表 (核心交付) ★
+===================================================================================
+口径并表说明: W16_N8 FUSEDEP 把 ACC+DEPACK+EFF 折进 MM-wrapper, 所以把 u8i8 的
+  MM+ACC+DEPACK+EFF 合并成可比的 "MM/glue" 桶再对。DIAG/ACT/REQ/PACK/SPIN/STORE 直接对。
+
+  stage(可比桶)   W16_N8 actcache   SHIP u8i8        W16 多出(Σ口径)   占 Σ-delta
+  --------------   ---------------   --------------   ---------------   ----------
+  PACK             2,249,645          678,186         +1,571,459        +59.5%   ★最大头
+  MM/glue          3,998,258        1,995,740(*)      +2,002,518        ...(见注)
+    其中 MM-wrapper 折叠了 u8i8 的独立 ACC+DEPACK+EFF, (*)=MM1603+ACC82+DEPACK115+EFF196=1,995,740
+  DIAG             2,486,877        2,638,728           -151,851        (W16 反而略少)
+  ACT/QUANT          747,992          928,113           -180,121        (W16 反而略少)
+  REQ                506,945          902,440           -395,495        (W16 反而略少!)
+  SPIN               384,328          253,401           +130,927
+  STORE               50,605          324,010           -273,405
+  --------------   ---------------   --------------   ---------------
+  producer-Σ tot   10,428,865        7,787,844        +2,641,021       (Σ口径 work-volume)
+
+  ⚠️ producer-Σ = 4 线程 work-volume 和, 不是 wall。+2.64M Σ-delta 经 ~4-way 并行 + roofline
+     压到 wall-delta ~0.93M (+48%)。要把 +48% 归到 stage, 必须用 wall口径 (cap-off wall-delta),
+     不能直接拿 Σ-delta 当 wall。下面用 cap-off 实测把 PACK 的 wall 贡献钉死:
+
+  ---- wall口径因果钉死 (cap-off 实测, hvxmix_pack_split.txt, W16_N8 base wall ~3.15M) ----
+    W16_N8 PACK 对 wall 的真实贡献 (cap = packer 入口早 return 的 wall-delta):
+      act-pack (gdn_w16_pack_act, int16 双字节 crouton vgather)  ~776K wall  (~24% base wall)
+      wt-pack  (gdn_w16_pack_wt,  int16 双字节 kmajor vgather)   ~377K wall  (~12% base wall)
+      capboth  ~935K wall (~29% base wall; act:wt ≈ 67:33, act-HEAVY)
+    SHIP u8i8 PACK 总 Σ 仅 678K (单字节, 无 d-block 双字节膨胀), 对 wall 贡献远小 (PACK 仅 8.7%
+      prod-Σ vs W16 21.6%)。
+    -> W16_N8 PACK 对 wall 多出的量级 (~935K cap-off wall) ≈ 用户问的 "多出 ~0.93M (+48%)"
+       的同一量级。这是 +48% 的★主因★。
+
+===================================================================================
+[D] 一句话主因 + 归因总结
+===================================================================================
+  ★ wall +48% (多出 ~0.93M) 主因 = PACK 翻倍, 且其中 act-pack 是 weight-pack 的 ~2x。
+    具体: W16_N8 是 int16 高精度档, weight 与 act 都是双字节 (u8i8 单字节), kmajor/crouton
+    vgather pack 量天然翻倍, 且 n8 是 d 次 per-block pack。cap-off 实测 W16_N8 PACK 对 wall
+    贡献 ~935K (act ~776K + wt ~377K, 有重叠), 与 +48% 多出的 ~0.93M 同量级、同因果方向。
+
+  逐 stage 归因 (与任务简报预期对照):
+    [预期 PACK 翻倍 = 最大头]  ✅ 坐实: PACK Σ 678K(u8i8) -> 2.25M(W16) = 3.3×; cap-off wall ~935K
+        = +48% 主因。act-pack(~24%w) > wt-pack(~12%w), act-HEAVY (推翻 weight-heavy 估计)。
+    [预期 cv 累加 (n8 d 次单块 + int32 acc)]  → 已被 FUSEDEP 折进 MM-wrapper 桶 (独立 ACC/DEPACK
+        stage 计数=0); 体现在 MM-wrapper 比 u8i8 MM/glue 多 ~2.0M Σ 里, 是第二影响但被并入 glue 桶。
+    [预期 REQ (int16 widen+requant)]  🔴 实测 W16 REQ Σ 506K < u8i8 902K (REQ 反而更少, 因 FUSEDEP
+        末尾 untile-once 把 REQ 集中收口; u8i8 per-block requant 反而 Σ 更大)。REQ ≠ +48% 来源。
+    [预期 DIAG int16 多]  🔴 实测 W16 DIAG 2.49M ≈ u8i8 2.64M (基本持平, W16 略少)。DIAG ≠ +48% 来源。
+    [HMX MAC 两侧 FEED-BOUND]  ✅ 核对: W16 CONS 9.0%w / u8i8 6.2%w, 都 < 10%w, HMX 真 MAC 非主因
+        (per-call W16 594 vs u8i8 416 cyc, 量级一致; HMX 都大量空闲)。
+
+  净结论: W16_N8 比 SHIP u8i8 慢 +48% 的钱几乎全花在 ★PACK★ (int16 双字节 + d-block per-block pack,
+    act-pack 为主), 外加 FUSEDEP-glue (cv 累加/depack 折进 MM-wrapper) 的次级开销; DIAG/ACT/REQ
+    W16 反而不比 u8i8 多 (甚至略少), HMX MAC 两侧都闲不是瓶颈。
+    -> 这是 int16 高精度档的内禀成本 (双字节 pack); act-cache 已削掉 7 个冗余 act-pack (−19.5% wall,
+       3.57M->2.87M), 剩下的 PACK = 不可约 wt-pack + 9 distinct act-pack, 是结构地板 (cron#84 判
+       wt-pack 非 gather-bound = HW 不可约 kmajor byte-pack)。再降需精度/算法权衡。
+
+===================================================================================
+[E] 复现命令
+===================================================================================
+  SHIP = -DGDNBM_HMX_PIPE -DGDN_BR_STATIC_GAIN -DGDN_BR_STATIC_FULL -DGDN_BR_SBOOST
+         -DGDN_BR_DIAG_I16 -DGDN_BR_REQ_FUSE -DGDN_BR_FBOOST
+  W16_N8 act-cache trace build:
+    EXTRA_DEFS="$SHIP -DGDN_BR_W16 -DGDN_BR_W16_N8 -DGDN_BR_W16_N8_FUSEDEP \
+      -DGDN_BR_W16_N8_ACTCACHE -DGDN_BR_TRACE" bash example/gdn_native/baremetal/build.sh
+  SHIP u8i8 trace build:
+    EXTRA_DEFS="$SHIP -DGDN_BR_TRACE" bash example/gdn_native/baremetal/build.sh
+  run (单 rep, 设备只经 source scripts/dssh.sh):
+    GDNBM_REPS=1 ./gdnbm 4 A_u16_h32.raw T_TR.raw 32 256 32768 32768 \
+      2.770166930875267e-05 6.103701895199438e-05
+  render:
+    python3 scripts/gdn_pipe_timeline.py T_TR.raw 130   (ASCII + aggregate stage cyc)
+    python3 scripts/gdn_hvxmix_perfetto_timeline.py T_TR.raw <out>.svg
+  对外 wall (+48%) = ACAC 同热窗配对: bash scripts/w16n8_actcache_wall.sh (见 w16n8_actcache_wall.txt)

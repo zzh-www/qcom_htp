@@ -1,0 +1,60 @@
+============================================================================================
+per-stage PACK split (act vs weight): cap-off 设备实测 (W16_N8 路)
+============================================================================================
+增量落盘。口径: cap = 在 packer 入口早 return (mxmem/MAC 时序数据无关, wall-delta 合法), 默认 OFF。
+目标: 量 W16_N8 FUSEDEP PACK Σ (3.42M, 28.4% prod-Σ) 里 weight-pack vs act-pack 真实占比,
+      验 analyzer 的 57/43 估计 + act-cache 可削上界。
+
+--------------------------------------------------------------------------------------------
+[cap 旗状态 — 关键修正]
+--------------------------------------------------------------------------------------------
+上轮 dev 在 GdnSolveBROp.cpp 加的 cap 旗 (GDN_BR_CAP_PACK / _A / _W, +48 行, 完整):
+  - 守的是 gdn_pack_act_crouton8 (line 668) 和 gdn_pack_w8_kmajor (line 704) —— 这是 u8i8 SHIP 路 packer。
+  - ❌ W16_N8 路 PACK 不调这两个! W16_N8 用 gdn_w16_pack_wt (BR16.cpp:326) + gdn_w16_pack_act
+    (BR16.cpp:364, W16_N8 branch) —— int16 双字节 packer。
+  ⇒ 上轮 cap 旗对 W16_N8 PACK split *无效* (会 cap 掉 u8i8 packer, 但 W16_N8 trace 里那两个 Σ=0)。
+
+本轮修正: 在 gdn_w16_pack_wt / gdn_w16_pack_act(W16_N8) 入口加同名 cap 旗 (GDN_BR_CAP_PACK_W /
+  GDN_BR_CAP_PACK_A / GDN_BR_CAP_PACK), 默认 OFF, 生产 byte-unaffected。BROp.cpp 的旧 cap 旗保留
+  (对 u8i8 路有效, 正交)。
+
+--------------------------------------------------------------------------------------------
+[cap-off 实测] —— W16_N8 FUSEDEP, P=4 H=32, reps2-8 median, tight 配对 (base/cap 背靠背, 抵热漂)
+--------------------------------------------------------------------------------------------
+设备 = oneplus v75 cDSP。build = SHIP7+W16+W16_N8+FUSEDEP (无 trace), 仅换 skel (cap 在 DSP 侧)。
+口径: wall = stats[0] (t1-t0)。注意: host 打印的 "wtpack="/"scatter=" 在 PIPE 路其实是 lmin/avg-spin
+  (gdnbm_imp.cpp:1518/1520), NOT wt-pack 测量 —— 忽略那两个 label, 只信 wall=。
+cap = packer 入口早 return -> wall-delta = 该 packer 对 wall 的真实贡献 (mxmem 时序数据无关, 合法)。
+
+  cap          wall-delta (base-cap) [3 配对]          中位 delta    占 base wall %
+  capW (跳 wt) 376621 / 335494 / 428026               ~377K         ~12%  (10.7-13.5%)
+  capA (跳 act) 776062 / 862748 / 709760              ~776K         ~24%  (22.5-25.6%)
+  capboth      907744 / 961724 / (1385371 热污)        ~935K         ~29-31% (前两配对; 第3配对 base
+                                                                     热尖 3.52M 污染, 弃)
+
+  base wall (median, 同窗) ≈ 3.15-3.18M。
+
+--------------------------------------------------------------------------------------------
+[结论 — PACK split: act vs weight]
+--------------------------------------------------------------------------------------------
+  PACK 对 wall 的贡献分解 (wall-delta 口径, 真实因果):
+    act-pack  (gdn_w16_pack_act, W16_N8 vgather crouton)  ~776K wall  = ~24% base wall
+    wt-pack   (gdn_w16_pack_wt,  int16 kmajor vgather)    ~377K wall  = ~12% base wall
+    两者合计 (capboth) ~935K = ~29% base wall (≈ capW+capA 1.15M 略有重叠, 共享 gather/stage 基建)
+
+  act : weight 比 ≈ 776 : 377 ≈ 67% : 33%  (act-pack 是 wt-pack 的 ~2x)
+
+  🔴 推翻 analyzer 的 "57/43 (weight-heavy)" 估计: 实测是 act-HEAVY (act ~67% / weight ~33%)。
+     原因: W16_N8 act-pack 每 off-diag block 都要重做一次 vgather crouton (act 每块不同, 无复用),
+     而 wt-pack 虽 int16 双字节但 distinct weight 数有限。⇒ act-cache (复用同一 act 的 crouton pack)
+     是比 wt pack-cache 更大的可削上界 —— 但 act 每块不同, "act-cache" 可削性需 analyzer 评估
+     (act 复用度 < weight 复用度; 不一定能像 pure-HMX wt-cache 那样消冗余)。
+
+  ⇒ 杠杆候选修正: HVXMix W16_N8 PACK 的第一可削是 ACT-pack (~24% wall), 不是 weight-pack。
+     pure-HMX 的 wt-cache 类比应优先用在 act 侧 (act-crouton-cache), 但需先证 act 跨块复用度。
+
+--------------------------------------------------------------------------------------------
+[正确性] cap 旗默认 OFF, 生产 byte-unaffected (cap 仅在 -DGDN_BR_CAP_PACK* 时早 return)。
+  cap-on 输出是错的 (跳了 pack), 仅用于 wall-delta 因果, 不验 oc/bit-exact (cap 本就破坏正确性)。
+  生产路 (无 cap def) build OK, 与上轮交付的 W16_N8 FUSEDEP 完全一致。
+

@@ -1,0 +1,129 @@
+GDNSolveHVXMixHMX — W16_N8 + FUSEDEP per-thread timeline (统一标准, 与 pure-HMX / pre-FUSEDEP 同口径)
+================================================================================================
+档 = W16_N8 高精度 (int16 weight, oc 3.81e-4)。trace = 32-head solve, SHIP 7 旗 + W16 + W16_N8 +
+     FUSEDEP + GDN_BR_TRACE, 单 rep (trace 模式把 trace blob 写进 T 输出, 故 trace 与 bit-exact 必须分两次 build)。
+build (复现):
+  EXTRA_DEFS="-DGDNBM_HMX_PIPE -DGDN_BR_STATIC_GAIN -DGDN_BR_STATIC_FULL -DGDN_BR_SBOOST \
+    -DGDN_BR_DIAG_I16 -DGDN_BR_REQ_FUSE -DGDN_BR_FBOOST -DGDN_BR_W16 -DGDN_BR_W16_N8 \
+    -DGDN_BR_W16_N8_FUSEDEP -DGDN_BR_TRACE" bash example/gdn_native/baremetal/build.sh
+run (复现, 单 rep): GDNBM_REPS=1 ./gdnbm 4 A_u16_h32.raw T_TR.raw 32 256 32768 32768 \
+    2.770166930875267e-05 6.103701895199438e-05   # T_TR.raw 即 trace blob (magic 0x47545203)
+render: python3 scripts/gdn_pipe_timeline.py T_TR.raw 130        (ASCII, 见下 + 口径警告)
+        python3 scripts/gdn_hvxmix_perfetto_timeline.py T_TR.raw timeline_hvxmix_w16n8_fusedep.svg
+
+trace-perturbed wall (单 rep, 仅看 STRUCTURE) = 3885019 cyc
+un-perturbed wall (此 W16_N8 FUSEDEP 档, reps2-4 中位) ≈ 3.20M cyc (= +67% vs SHIP u8i8 1.925M; 见 bit-exact 文件 perf 段)
+busy% = WALL-relative union of work intervals (与 pure-HMX / pre-FUSEDEP 同口径)
+events = 4992, tids = [0,1,2,3=producers, 4=CONS], wall = 3885019 cyc
+
+stage 编码 (GdnSolveBROp.cpp enum + GdnSolveBR16.cpp pushes, 权威):
+  1=DIAG 2=MERGE(容器) 3=MM(producer wrapper + consumer real MAC) 4=QUANT/ACT 5=PREP(容器)
+  6=ACC 7=REQ 8=PACK 9=EFF 10=DEPACK 11=SPIN 12=BIAS-PACK 13=SIG 14=POST 15=TABS
+  ⚠️ FUSEDEP 态: 10=DEPACK 和 6=ACC 不再出现 (FUSEDEP 把 per-block depack 折进 gdn_w16n8_acc_add_surf,
+     在 tiled 坐标累加, 末尾只 untile 一次 -> 省 d-1 次 untile gather + 取消独立 ACC 阶段)。
+
+================================================================================================
+### ASCII (scripts/gdn_pipe_timeline.py, 130 cols) ###
+events=4992  wall=3885019 cyc  (130 cols, 1 col = 29885 cyc)
+
+P0   |     DDD qqsLLrLqLLqLrD   q?qLqqLLLKKDD  qLrqKLLKLqKD qqL?LqLKrKqLDD qLqLLrLKKKKDDqKLLLKLqLqLqLD qqLqqKqLLLqsr qqK?KKLLLqL        | busy=74%wall  [DIAG=15% MM=28% ACT=8% REQ=3% PACK=25% SPIN=2%]
+P1   |    DDD   qLLLrLqLLrqLDDD  qLqLqKLLLLsqLLDDqKrLLqKKLqLDD  qLLqLqL?qqLDD qLrLqqKKLqLDD qKLq?LKLLrqLDqKLqqLLLrLqLr qqqrKKKKLKL      | busy=75%wall  [DIAG=16% MM=27% ACT=7% REQ=4% PACK=24% SPIN=2%]
+P2   |     DDD  qLLLrKqKKLqKDDDD qLrLLqKKLqKrD   q?qLqqLqLq?LDDD qLLKLLrKLqL?DD qqKrLqLqLqLLDD qqqLLrLLqKKLDD qLqLqqLKLKsD qLqLqqLqrLr  | busy=79%wall  [DIAG=18% MM=28% ACT=7% REQ=3% PACK=23% SPIN=2%]
+P3   |     DDDDD qLqLLqKqLKLDDDD  qqqLqqLqLqLLDDqqLLqLLrLqL?DD qKLLKLLr?KLLDD qqqLqqLqLq?rDD     qLLrKrLLLLLLDD qqKrLKLLLqLD qLKLqqLLrLK| busy=80%wall  [DIAG=20% MM=26% ACT=7% REQ=3% PACK=22% SPIN=2%]
+CONS |           mmmmmmmmmmm    mmmmmmmmmmmmmmm mmmmmmmmmmmmmmm mmmmmmmm mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm mmmmmmmmmmmmmmmmmmmmmmm mm| busy=7%wall  [MM=8%]
+legend: D=DIAG q=ACT-format K=PACK(kmajor) r=REQ s=SPIN m=matmul(HMX) | (L 见口径警告)
+
+⚠️ ASCII 口径警告 (本档须知): gdn_pipe_timeline.py 的 CH 把 stage 12 画成 'L'(=旧 head-LOAD), 但本 W16
+   路 stage 12 = BIAS-PACK, Σdur 仅 1602 cyc (512 个亚-cycle 事件), 却因列-paint 占满整行 -> 行里大量 'L'
+   是渲染 artifact, 不代表 head-LOAD (busy 行 LOAD=0% 已证)。本档真账以下方 "权威 per-stage 表" 为准,
+   ASCII 仅作 STRUCTURE 直观 (临界路 = DIAG 段在头, 后面 PACK(K)/ACT(q)/REQ(r) 交织, HMX(m) 始终 7-8%)。
+   SVG (timeline_hvxmix_w16n8_fusedep.svg) 用正确 HVXMixHMX taxonomy, 是权威可视化。
+
+================================================================================================
+### 权威读数 (从 trace 直接 union 派生, 与 pre-FUSEDEP 同口径) ###
+
+per-thread (union-busy = 非容器叶子区间并集 / wall):
+  P0  union-busy 72.1%w   (busy=2801602)
+  P1  union-busy 72.9%w   (busy=2833943)
+  P2  union-busy 76.2%w   (busy=2961786)
+  P3  union-busy 77.6%w   (busy=3014970)   <-- 最忙 producer
+  CONS(HMX)  MM-busy 7.8%w  (busy=302070, n=768 matmul, per-call ~393 cyc)
+
+  4 producer busy%  = 72-78% wall (union; P3 最忙 77.6%)
+  HMX consumer busy% = 7.8% wall (302070 cyc) —— FEED-BOUND, HMX 闲 ~92%
+  spin Σ (4 prod, stage11) = 378431 = 9.7% wall (Σ 口径; producers 主要忙在自己的 HVX 活, 不是等 HMX)
+  lmax (最慢 producer 生命跨度 = 临界路) = 3710252 = 95.5% wall (P3)
+
+临界路径序列 (一个 head 串行 stage 链, 重复 ×8 heads; 与 pre-FUSEDEP 同结构, 但 DEPACK 段被折掉):
+  DIAG(对角块 fwd-subst, 串行递归)
+    -> [off-diag MERGE: PREP(get_act QUANT/ACT + get_wt: PACK kmajor int16 双字节 + EFF)
+        -> MM(producer wrapper: K-stack d-block gather + dispatch + SPIN-wait-HMX
+              + FUSEDEP acc_add_surf 在 tiled 坐标累加, 无 per-block depack)
+        -> REQ(widen+requant; FUSEDEP 末尾 untile 一次)] x (off-diag blocks)
+    -> head store
+  => 临界路 ≈ DIAG(串行) + Σ off-diag(PREP + MM-wrapper + REQ); HMX 真 MAC 仅 7.8% 嵌在 MM-wrapper。
+  => 削掉的是 per-block DEPACK 阶段 (pre-FUSEDEP 独立 DEPACK Σ + per-block untile gather), 折进 acc。
+
+================================================================================================
+### producer-side Σ work-volume (4 线程求和, 与 pre-FUSEDEP doc 同 bucketing) ###
+  ⚠️ Σ% 是 work-volume 占比, NOT wall-delta; Σ 落在 roofline floor 之下, 不直接设 wall 优先级。
+
+  MM-wrapper Σ=3985199   33.0% of producer-Σ   (gather + dispatch + spin-wait + FUSEDEP acc_add_surf;
+                                                内嵌 HMX 真 MAC 仅 302070, 其余是 producer 包裹活)
+  PACK       Σ=3420202   28.4% of producer-Σ   <-- int16 wt 双字节 kmajor + d 次 per-block pack (本档重)
+  DIAG       Σ=2539201   21.1% of producer-Σ   (fwd-subst 串行)
+  ACT/QUANT  Σ=1108443    9.2% of producer-Σ
+  REQ        Σ= 559256    4.6% of producer-Σ   (widen+requant; FUSEDEP 末尾 untile-once 在这)
+  SPIN       Σ= 378431    3.1% of producer-Σ
+  SIG/POST/BIAS-PACK Σ< 70K (合计 <0.6%)
+  (producer-Σ 合计 = 12059902)
+
+  roofline buckets (与 pre-FUSEDEP doc 同):
+    diag (fwd-subst)                                           = 21% of producer-Σ
+    merge-glue (ACT+PACK+EFF+ACC+REQ+DEPACK+MM-wrapper)        = 75% of producer-Σ
+    HMX matmul (consumer real MAC)                            = 7.8% wall
+
+================================================================================================
+### FUSEDEP vs pre-FUSEDEP 分解对照 (untile 削后) ###
+
+口径说明 (诚实点): 任务简报给的 "pre-FUSEDEP = MM 31% / PACK 23% / DIAG 13% / QUANT 7%" 与 repo 内
+  pre-FUSEDEP 权威 doc (Agent/current/timeline_hvxmixhmx.txt) 的数 (DIAG 31% of prod-Σ / merge-glue 60%
+  / HMX 7% wall, 或 ASCII fine-view DIAG=26%/MM=17%/ACT=9%/PACK=7%) 不一致 —— 简报那组数更像本 W16_N8
+  态自身的结构 (MM-wrapper 33% / PACK 28% / DIAG 21%), 不是通用 HVXMixHMX 基线。下面对照同时给两组,
+  以 trace 实测为准。注意: repo 的 pre-FUSEDEP doc 是 SHIP 通用档 (PACK 仅 7%, 因 u8i8 单字节 wt),
+  W16_N8 的 PACK 天然重 (int16 双字节 + d-block) —— PACK 占比的跃升是 W16_N8 档属性, 不是 FUSEDEP 引起。
+
+  最关键的 FUSEDEP 结构变化 (untile 削后):
+  1) DEPACK 阶段消失: pre-FUSEDEP per-block 有独立 DEPACK (Σ 96805 in 通用档) + 每 off-diag block 一次
+     untile gather; FUSEDEP 把 depack 折进 gdn_w16n8_acc_add_surf (tiled 坐标累加, surf u16^zp 直接 sxt32),
+     末尾整块只 untile 一次 (gdn_w16n8_untile_cv)。trace 实测: 本 FUSEDEP trace 中 stage 10(DEPACK) 与
+     stage 6(ACC) 计数 = 0, 即这两段已被折叠/省去 d-1 次 untile gather。
+  2) ACC 独立阶段消失: pre-FUSEDEP 的 int32 ACC 是独立 push; FUSEDEP 的累加发生在 add_surf 内, 不再单列。
+  3) MM-wrapper 区相对变大 (33% of prod-Σ): 因为 acc_add_surf 现在跑在 MM-wrapper 区内 (dispatch 后立即
+     在 tiled 坐标累加), 把原本独立的 DEPACK+ACC 活吸收进 MM-wrapper 的包裹时间。
+  4) HMX 真 MAC 不变 (~7.8% wall, per-call ~393 cyc) —— FUSEDEP 不碰 HMX 路, 只削 producer 侧 untile。
+
+  各 stage 现占 (FUSEDEP, producer-Σ):
+    MM-wrapper 33% / PACK 28% / DIAG 21% / ACT 9% / REQ 5% / SPIN 3%
+  -> MM 区 (含 FUSEDEP 折进的 acc): 33% of prod-Σ
+  -> DIAG 区: 21% of prod-Σ (fwd-subst, 串行, 算法极, 削不动)
+  -> PACK 现在临界路占比: PACK 28% of prod-Σ, 是第二大 producer 极 (仅次于 MM-wrapper); 在临界路 P3 行里
+     PACK(K) 与 ACT(q) 交织贯穿整条 off-diag 链, 是 DIAG 之后的主要串行成本。
+
+### 还有没有非结构成本可削 (诚实评估, 供 analyzer 下一杠杆) ###
+  - PACK (28% of prod-Σ) = int16 weight kmajor 双字节 pack + d 次 per-block pack。是本 W16_N8 高精度档的
+    内禀成本 (int16 weight 本就双字节)。是否可削属 analyzer 范畴 —— 候选: per-distinct-weight pack-cache
+    (类比 pure-HMX 的 wt-cache, 消 merge 跨块冗余 T-weight 重打包) / d-block pack 复用。本 dev 轮只采 trace,
+    未试任何削减。
+  - SPIN Σ 仅 9.7% wall (Σ 口径), 即 producers 基本不在等 HMX (FEED-BOUND on 自己的 HVX 活), 削 spin 无大头。
+  - HMX 7.8% wall, 大量空闲 —— 但 producer 的 PACK/ACT/DIAG/REQ 是 permute/quant/fwd-subst/widen, HMX 物理
+    做不了 (与 pure-HMX cron#86 "HMX 吸收不了 HVX 活" 同理), 不能靠把活挪给 HMX 来削。
+  - DEPACK 已被 FUSEDEP 削掉 = 本轮已兑现的非结构成本削减 (untile d-1 次 -> 1 次)。
+
+地板判定 (本 dev 轮不下结论, 仅供 analyzer): wall ≈ 3.20M 的临界路 = DIAG(串行 21%) + merge-glue(75%,
+  以 MM-wrapper 33% + PACK 28% 为两大极)。下一可削候选 = PACK (W16_N8 内禀双字节, 需 pack-cache 类杠杆,
+  analyzer 评估); DIAG 串行是算法极。
+
+证据/复现: 本文件 build/run/render 命令 (顶部) + Agent/current/timeline_hvxmix_w16n8_fusedep.svg
+  + Agent/current/w16n8_fusedep_bitexact.txt (FUSEDEP 不变正确性: A vs C md5 逐字节相同, oc 3.81e-4)。
+  pre-FUSEDEP 通用对照 = Agent/current/timeline_hvxmixhmx.txt。

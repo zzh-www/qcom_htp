@@ -1,0 +1,55 @@
+W16_N8 高精度档 act 上游协同 — 真兑现 (ACVRES) bit-exact 证据
+============================================================
+任务: 照搬 pure-HMX GP_CVIO/GP_RESIDENT 的 host cv-block A 数据流, 真兑现 -12.66% (不是上界, T 正确)。
+用户裁定 (本任务前提): pure-HMX 在 standalone 里就是让 host 一次性把 A 准备成 cv-block (量化+crouton序),
+  DSP load 进 VTCM 平拷处理, 零 fold_quant + 零 vgather。HVXMixHMX W16_N8 照搬即可, 非图改。
+
+照搬要点 (pure-HMX 怎么做的):
+  - host cv-block 准备 (pure-HMX run_w16a16_head_phase4.py:51-61): host q16=round(A*32767) 量化 + 按
+    crouton_pos 序 Abuf[h,blk,posf]=blk_natural (host 做 permute), 写 cv-block raw。
+  - DSP cv-resident 平拷 (gdn_pure_solve.cpp GP_CVIO :963-969): head-load 是纯 HVX 平拷 d[v]=s[v]
+    (A 块已 cv-block 序, 零 unpack/vgather); GP_RESIDENT 进一步零拷 alias。merge 内 act = 指针直引用。
+
+ACVRES 实现 (gated 新旗 -DGDN_BR_W16_N8_ACVRES, 默认 OFF, 与 ACTCACHE 共用持久槽):
+  数据流 (= pure-HMX): host 一次性把 6 个 distinct merge A-act 块 (key={1,3,4,6,7,8}=gdn_blk_index,
+    即所有 i>k 的 off-diag A 块) 准备成 cv-block (fold+quant+crouton_pos 序, 各 8KB 面);
+    DSP head-load HVX 平拷 48KB/head DDR cv-block -> VTCM ACTCACHE 槽 (GDN_W16_ACTC_A) + 预置 vAa[key]=1
+    (= pure-HMX GP_CVIO 的 d[v]=s[v] head-load 平拷, 不是 DMA);
+    merge get_act_A 命中 cache = 指针直返 => 零 fold / 零 quant / 零 crouton vgather (= -DGDN_BR_A_PRECROUTON
+    cap 路, 但喂的是正确数据)。diag 路不在范围 (读 natural A 走 gdn_fold_block_hvx, 不碰 crouton 面)。
+  host cv-block 准备 = DSP-dump (一次性非计时):
+    -DGDN_BR_W16_N8_ACVRES_DUMP build 正常求解, head 末把求解内已填好的 6 个 ACTCACHE A 面拷进 T (T=dump
+    载体)。用与求解内完全相同的 HVX fold+quant+crouton 路产出 => 与求解内 byte-identical => bit-exact 内禀保证。
+    这正对应 pure-HMX "host 离线把 A 准备成 cv-block, 计时循环只平拷" —— standalone 内可做, 非图改。
+
+代码改动 (gated, 默认 OFF, 生产 byte-unaffected):
+  example/gdn_native/solve_br_op/src/GdnSolveBR16.cpp:
+    + g_acvres_keys[6]={1,3,4,6,7,8} + __thread g_w16n8_acvres_src (#if ACVRES||ACVRES_DUMP)
+    + gdn_br_one_head16 head 开头: #if ACVRES 平拷 6 个 DDR cv-block 面 -> GDN_W16_ACTC_A 槽 + vAa[key]=1
+    + gdn_br_one_head16 head 末尾:  #if ACVRES_DUMP 把 6 个 ACTCACHE A 面拷进 Th (dump 载体)
+  example/gdn_native/baremetal/src/gdnbm_imp.cpp:
+    + pipe_producer 静态交错路: #if ACVRES 每-head 设 g_w16n8_acvres_src = Au + h1*CC + h*24576u
+  example/gdn_native/baremetal/src/gdnbm_test.c:
+    + 读 A 输入全文件长度 (afile, 扩展 cv-block 区), gdnbm_solve 传 afile 作 ALen (FastRPC marshall 全 A)。
+    (host driver 改动无条件但语义中性: 非 ACVRES build A 文件就是 abytes, afile==abytes 行为不变。)
+  不带 -DGDN_BR_W16_N8_ACVRES / _DUMP 的生产 build 字节不变 (DSP 侧全 #if 包裹; host driver afile 退化恒等)。
+
+------------------------------------------------------------
+### 设备 bit-exact 门 (PASS) ###
+口径: A=BASE (FUSEDEP+ACTCACHE, 生产高精度档, oracle) vs C=ACVRES (host cv-block + DSP 平拷+指针直返)。
+设备 oneplus, 同 natural A_u16_h32.raw, scales 2.770166930875267e-05 6.103701895199438e-05, 整 32-head 4MB T。
+  md5sum (整 32-head, 4 MB T, u16):
+    0e61249dd4400b18867fa38a0cf8bd6a  T_base.raw     (actcache 生产 oracle)
+    0e61249dd4400b18867fa38a0cf8bd6a  T_acvres.raw   (host cv-block + DSP 平拷)
+  -> 逐字节相同 (且 = 此前 FUSEDEP/ACTCACHE base md5 0e61249d..., 链路一致)。
+  cmp T_base T_acvres: IDENTICAL (exit 0)。
+  numpy (u16, 2097152 elem): array_equal=True, max|d|=0。
+理论必 bit-exact (已实测证实): host cv-block 是 DSP 用求解内同一 HVX fold+quant+crouton 路 dump 的, 与求解内
+  逐字节相同; ACVRES 只把 "求解内每 rep 重算的 fold+crouton" 换成 "head 平拷预算好的同一面", 不改任何输出位。
+
+oc (vs fp64 inv(I-A), gate 4e-2): 两档同 T => oc 相同 = 3.81e-4 (高精度档, 精度零退)。
+  (oc 数继承 w16n8_actcache_bitexact.txt 的 BASE=3.8059e-04; ACVRES T 与 BASE 逐字节相同故 oc 完全相同。)
+
+### 复现 ###
+  BITEXACT_ONLY=1 bash scripts/w16n8_acvres_check.sh   (build DUMP/BASE/ACVRES + DSP-dump cv-block + md5/cmp)
+  设备只经 source scripts/dssh.sh。

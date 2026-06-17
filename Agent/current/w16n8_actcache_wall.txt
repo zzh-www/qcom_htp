@@ -1,0 +1,37 @@
+W16_N8 高精度档 act-cache: wall ACAC (act-cache off vs on, 同热窗配对)
+======================================================================
+口径: 32-head VTCM-only, stats[0] graph-wall, reps2-8 median, ACAC 3 窗 A C 同窗背靠背配对抵热漂。
+  A = FUSEDEP base (无 actcache, oracle), C = FUSEDEP + -DGDN_BR_W16_N8_ACTCACHE (仅此一旗 toggle)。
+  build SHIP = -DGDNBM_HMX_PIPE -DGDN_BR_STATIC_GAIN -DGDN_BR_STATIC_FULL -DGDN_BR_SBOOST
+               -DGDN_BR_DIAG_I16 -DGDN_BR_REQ_FUSE -DGDN_BR_FBOOST
+  base += -DGDN_BR_W16 -DGDN_BR_W16_N8 -DGDN_BR_W16_N8_FUSEDEP
+  设备 oneplus, P=4, 输入 A_u16_h32.raw, scales 2.770166930875267e-05 6.103701895199438e-05。
+
+### ΔWall (ACAC 3 窗 reps2-8 median) ###
+  win1: A=3628771  C=2874286  dWall=-20.79%
+  win2: A=3571235  C=2888033  dWall=-19.13%
+  win3: A=3298391  C=2815611  dWall=-14.64%
+  3-WINDOW MERGED: A_med=3571235  C_med=2874286  ->  dWall = -19.52%
+  -> act-cache 削 ~19.5% wall (高于命门预测的 -5~-10%; 7 个冗余 act-pack 的削减比预估更值钱)。
+     C 档 wall median ~2.87M (vs A base ~3.57M 同窗)。
+
+### 分量分解 (reps2-8, harness wall/scatter/wtpack/cons 探针; wtpack 标签实含 act-pack+wt-pack 全 PACK) ###
+  A (无 actcache):  wall ~3.72M  PACK(wtpack字段) ~3.51M  scatter ~92K  cons ~305K
+  C (+actcache):    wall ~2.85M  PACK ~2.64M             scatter ~87K  cons ~291K
+  -> PACK Σ 3.51M -> 2.64M = −25% (= 7 个 bit-identical act-pack 的削减落在 PACK 上)。
+     scatter / cons 基本不动 (act-cache 只省 act 的 fold_quant+pack, 不碰 consumer/scatter)。
+
+### 绑定约束判定 ###
+  act-cache 后 PACK 仍是绑定约束: C 档 PACK 2.64M / wall 2.85M = 93%。
+  PACK 现在 = 不可约 wt-pack + 9 个 distinct act-pack (6 distinct A + 3 distinct Tdiag, 已无冗余)。
+  下一杠杆 = wt-pack (cron#84 已判 wt-pack 非 gather-bound = HW 不可约 kmajor byte-pack) 或 精度/算法权衡。
+  -> 干净 (非精度) 路: act-cache 是 W16_N8 高精度档的"最后一磨", 兑现后到结构地板。
+
+### 裁决 ###
+  最后一磨削了 −19.5% wall (3 窗 median); 精度零退 (oc 两档 3.81e-4, T 逐字节相同, 见
+    w16n8_actcache_bitexact.txt); W16_N8 高精度档相对 SHIP u8i8 1.925M 由 +67% (~3.16-3.57M) 压到
+    +X% (~2.85M ≈ +48% vs u8i8 1.925M; 同热窗配对内 −19.5%)。wt-pack 成为新绑定约束 (HW 不可约)。
+
+### 复现 ###
+  bash scripts/w16n8_actcache_wall.sh   (WINDOWS/REPS/THREADS 可调, 默认 3/8/4)
+  设备只经 source scripts/dssh.sh。

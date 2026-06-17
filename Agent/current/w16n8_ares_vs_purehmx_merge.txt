@@ -1,0 +1,151 @@
+W16_N8 ARES vs pure-HMX — merge 逐 op 同口径对比 (act 协同到位判定)
+================================================================================
+目的: ARES 后 W16_N8 act 已 cv-resident (host cv-block + DSP alias 零拷, 照搬 pure-HMX
+  GP_RESIDENT)。理论上 W16_N8 ARES 的 merge 各 op (PACK-wt / PACK-act / MM / cv-acc /
+  renorm) 应已和 pure-HMX 收口态同水平 (都是 int16 n8 64³ matmul + cv-resident act +
+  int32 cv 累加, 相同语义)。本文件: merge 逐 op 同口径对比, 看 W16_N8 增加的成本是否一致。
+  本轮只采 trace + 渲染 + 对比 + 落盘, 不优化、不改算法。
+
+⚠️ 口径红线 (这一轮反复栽):
+  - W16_N8 (HVXMix 4-producer) vs pure-HMX (单 HMX consumer feed-bound) 结构不同。
+    merge per-op 对比必须同口径: 用 per-instance (Σ÷n) 同类 op 比, 不拿 in-pipe per-call 比真算,
+    对不齐写 "不可比"。
+  - trace 单 rep 看 STRUCTURE 不看绝对 wall。对外 wall: ARES +32.7% vs SHIP / pure-HMX 1.258M。
+  - 跨实现 matmul COUNT 不同 (ARES 12 merge-MM/head, pure-HMX 16/head) -> MM/PACK 用 per-instance
+    cyc 比, 不用 Σ 比 (Σ 受 count 污染)。
+
+================================================================================
+[1] W16_N8 ARES 态 timeline (新采, 真 ARES + GDN_BR_TRACE)
+================================================================================
+build (复现):
+  SHIP="-DGDNBM_HMX_PIPE -DGDN_BR_STATIC_GAIN -DGDN_BR_STATIC_FULL -DGDN_BR_SBOOST \
+        -DGDN_BR_DIAG_I16 -DGDN_BR_REQ_FUSE -DGDN_BR_FBOOST"
+  EXTRA_DEFS="$SHIP -DGDN_BR_W16 -DGDN_BR_W16_N8 -DGDN_BR_W16_N8_FUSEDEP \
+    -DGDN_BR_W16_N8_ACTCACHE -DGDN_BR_W16_N8_ARES -DGDN_BR_TRACE" \
+    bash example/gdn_native/baremetal/build.sh
+run (需扩展 A_ares.raw = natural || cv-block, 由 DUMP 变体抽出; 见 scripts/w16n8_ares_check.sh STEP1):
+  GDNBM_REPS=1 ./gdnbm 4 A_ares.raw T_TR.raw 32 256 32768 32768 \
+    2.770166930875267e-05 6.103701895199438e-05
+render:
+  GDN_TL_COARSE=1 python3 scripts/gdn_pipe_timeline.py T_TR.raw 130
+  python3 scripts/gdn_hvxmix_perfetto_timeline.py T_TR.raw \
+    Agent/current/timeline_hvxmix_w16n8_ares.svg
+
+产出:
+  SVG  = Agent/current/timeline_hvxmix_w16n8_ares.svg  (权威可视化, HVXMixHMX taxonomy)
+  trace 单 rep wall = 3,264,433 cyc (trace-perturbed, 只看 STRUCTURE; 对外 wall ~2.54M ARES +32.7%)
+  events = 4256, tids = [0,1,2,3=producers, 4=CONS]
+
+ASCII (GDN_TL_COARSE, 130 cols):
+  P0   busy=92%w [DIAG=18% MM=33% ACT=3% PREP=28% REQ=5% PACK=13% SPIN=3%]
+  P1   busy=92%w [DIAG=21% MM=33% ACT=3% PREP=26% REQ=5% PACK=11% SPIN=3%]
+  P2   busy=94%w [DIAG=21% MM=33% ACT=2% PREP=24% REQ=6% PACK=11% SPIN=3%]
+  P3   busy=95%w [DIAG=25% MM=33% ACT=2% PREP=24% REQ=4% PACK=11% SPIN=3%]
+  CONS busy=8%w  [MM=9%]   <- FEED-BOUND, HMX 真 MAC 闲 ~92%
+
+================================================================================
+[2] W16_N8 ARES per-stage Σ (4 producer work-volume 和) + per-instance
+================================================================================
+  stage        Σ(4prod)       n      per-inst   含义
+  -----------  -----------  -----  ----------  ---------------------------------
+  DIAG(1)        2,539,047     32      79,345   fwd-subst 串行 (精确求逆, 1/head)
+  MM(3,wrapper)  3,924,895    384      10,221   merge-MM 包装 (kstack dispatch+depack+spin), 非真 MAC
+  ACT(4)           317,645    288       1,102   wt-quant(diag rescale) + Tdiag quant
+  PREP(5,容器)    3,023,567    512       5,905   merge-operand 容器 (内含 ACT+PACK leaf)
+  REQ(7)           615,854    192       3,207   final widen+requant
+  PACK(8)        1,402,731    288       4,870   wt-pack(kmajor) + Tdiag-act-pack (off-diag act-pack=0, ARES)
+  SPIN(11)         387,980    512         757   等 HMX
+  CONS_MM(真MAC)   284,231    512         555   ★真 HMX 64³ MAC (consumer 线程)
+  (LOAD/STORE/POST < 1.5% 合计)
+
+  ★ ARES 后关键结构变化 (vs actcache 无 ARES, timeline_hvxmix_w16n8_actcache.txt):
+    PACK Σ: actcache 2,249,645 -> ARES 1,402,731 (−38%)。
+      原因: off-diag merge 的 6 个 act-pack 在 ARES 下 = alias 零拷 (gdn_w16_get_act_A 直返,
+      ZERO fold/pack)。剩下 PACK = wt-pack + Tdiag-act-pack (T_ii 是 solve 中间输出, 非 host-resident,
+      必须现 pack)。
+    ACT Σ: actcache 747,992 -> ARES 317,645 (−58%)。off-diag act fold/quant 也消失 (alias)。
+    -> act 路 (off-diag) 已在 ARES 下归零, 与 pure-HMX cv-resident act 同语义。
+
+================================================================================
+[3] pure-HMX merge per-op (同口径基准, 收口态 lean+wt-cache+B)
+================================================================================
+来源: Agent/current/timeline_cron85_wtcache.txt (per-instance 权威 PER-SEGMENT 表) +
+  Agent/current/timeline_cron87_B.txt (B-on ACC Σ)。pure-HMX P=4, 32-head, VTCM-only,
+  GP_TRACE 单 rep traced-state, 同 COARSE 口径。
+  pure-HMX per-instance (cyc/inst over 32 heads):
+    WT-PACK   n=512   mean 4026   <- LONG POLE (int16 kmajor vgather + lo/hi + bias)
+    MM(真MAC) n=768   mean  509   <- 64³ w16a16 lean matmul (consumer occupancy)
+    ACC/renorm n=1024 mean 1195 (cron85 B-off); B-on Σ=1,002,644 (renorm 折进, cron87)
+    ACT       n=768   mean  151   <- act cv->surface vxor (tiny; act 已 cv-resident)
+    OUT-COPY  n=768   mean  315   <- matmul out->cv vxor
+    SPIN      n=768   mean  787
+  注: pure-HMX 全 operand 是 weight (A@A 风格), 经 WT-PACK 打包; 无独立 act-pack
+    (act 已 cv-resident, 只有 OUT-COPY 把 MM 输出写回 cv)。
+
+================================================================================
+[4] ★★ merge 逐 op 同口径对比表 (核心交付) ★★
+================================================================================
+口径: per-instance cyc (Σ÷n) 比同类 op (跨实现 matmul count 不同, 不用 Σ 直接比)。
+  另给 Σ÷real-MAC-count 归一 (ARES 512 MAC / pure-HMX 768 MAC) 作交叉验证。
+
+  op                  W16_N8 ARES        pure-HMX 收口         差         一致?
+  ------------------  -----------------  ------------------    --------   ---------------------------
+  real 64³ HMX MAC    555 cyc/call       509 cyc/call          +9%       ✅ 一致 (同 int16 lean 核)
+  PACK-wt(kmajor)     ~4871 cyc/inst*    4026 cyc/inst         +21%      🟡 接近, W16 略贵 (*含Tdiag-act-pack)
+  act-pack(off-diag)  0 (alias 零拷)     0 (cv-resident)        0        ✅ 一致 (ARES act 协同到位!)
+  ACT(fold/quant)     1102 cyc/inst      151 cyc/inst          7.3×      🟡 W16 含 wt-quant(diag rescale)
+                                                                          + Tdiag-quant (pure-HMX 无此步)
+  operand-pack Σ/MAC  3360 (PACK+ACT)    2684 (WT-PACK)        +25%      🟡 W16 略贵 (Tdiag-act-pack 残留)
+  cv-acc / renorm     折进 FUSEDEP        1306 cyc/MAC          不可比     ⚪ W16 FUSEDEP 把 cv-acc 折进
+                      MM-wrapper          (B-on Σ/MAC)                    MM-wrapper, 无独立 ACC 计数
+  DIAG (对角求逆)      79345 cyc/head     Taylor3 折进 MM        不可比     ⚪ 算法不同: W16=精确 fwd-subst
+                      (精确 fwd-subst)    (无独立 DIAG)                    串行; pure-HMX=Taylor3 近似
+  REQ (final requant) 3208 cyc/inst      折进 renorm/ACC        不可比     ⚪ W16 独立 final requant;
+                      (n=192=6/head)                                      pure-HMX renorm 内联
+
+  * PACK-wt 4871 含 Tdiag-act-pack: ARES PACK n=288 = ~6 wt-pack/head + ~3 Tdiag-act-pack/head
+    (T_ii 是 solve 中间输出, 非 host-resident, 必须现 pack; pure-HMX 无此项)。纯 wt-pack 应 < 4871,
+    更接近 pure-HMX 4026 (口径上 ARES 把 Tdiag-act-pack 混进了 PACK 桶, 无法从 trace 完全剥离)。
+
+================================================================================
+[5] 重点回答
+================================================================================
+(Q) ARES 后 W16_N8 merge 的 act 路 + PACK 是否已和 pure-HMX 一致 (act 协同到位)?
+  ✅ act 路: 到位。off-diag merge 的 act-pack 在 ARES 下 = alias 零拷 (0 cyc), 与 pure-HMX
+     cv-resident act (只剩 OUT-COPY) 同语义同水平。PACK Σ 2.25M->1.40M (−38%)、ACT Σ
+     748K->318K (−58%) 就是 off-diag act 路归零的证据。act 协同真到位。
+  ✅ real HMX MAC: 到位。ARES 555 cyc/call ≈ pure-HMX 509 (+9%, 同 int16 lean 64³ 核, 热噪内)。
+  🟡 PACK-wt: 接近但 W16 略贵 (per-inst +21%, Σ/MAC +25%)。差距来源 = (a) Tdiag-act-pack
+     残留 (T_ii solve 输出非 host-resident, 必须现 pack — pure-HMX 无此项, 结构性不可消);
+     (b) W16 distinct off-diag T-weight 数与 pure-HMX 的 wt-cache 复用模式不同。纯 wt-pack
+     剥离 Tdiag-act-pack 后应更贴近 4026。
+
+(Q) 还有哪个 op W16_N8 比 pure-HMX 贵 (没对齐)?
+  - PACK 桶 (含 Tdiag-act-pack): +21~25%, 主要是 pure-HMX 没有的 Tdiag-act-pack (T_ii 现 pack),
+    这是 W16_N8 用精确 fwd-subst 对角 + final-merge T_ii@Sacc 结构带来的, act 协同消不掉 (T_ii
+    不是 host 输入)。属结构性残留, 非 act 协同未到位。
+  - ACT(fold/quant) per-inst 7.3× (1102 vs 151): W16 的 ACT 桶含 wt-quant(diag rescale,
+    gdn_w16_quant_i16_wide) + Tdiag-quant(gdn_w16_quant_u16_q15), pure-HMX 的 ACT 只是 act
+    cv->surface vxor。不同语义, 量级小 (Σ 318K, 占比 < 5%w), 非主导。
+  - DIAG / REQ: 算法不同 (精确 fwd-subst + 独立 final requant vs Taylor3 + 内联 renorm), 不可比。
+
+================================================================================
+[6] 一句话结论
+================================================================================
+  ARES 后 W16_N8 merge 的 ★act 路已达 pure-HMX 水平 (off-diag act-pack 归零, alias 零拷,
+  act 协同真到位)★, real HMX MAC 也一致 (555≈509)。唯一仍比 pure-HMX 贵的是 ★PACK 桶
+  (+21~25%)★, 但贵的部分主要是 pure-HMX 结构上没有的 Tdiag-act-pack (T_ii 是 solve 中间
+  输出、非 host-resident, 必须现 pack) —— 这是 W16_N8 精确 fwd-subst 对角 + final T_ii@Sacc
+  结构的内禀残留, 不是 act 协同未到位。纯 wt-pack 本身 (剥离 Tdiag) 与 pure-HMX 同水平。
+  DIAG(精确 fwd-subst vs Taylor3) / cv-acc(FUSEDEP 折叠) / REQ(独立 vs 内联) 跨实现不可比。
+
+================================================================================
+[7] 证据 / 复现
+================================================================================
+  ARES timeline:  Agent/current/timeline_hvxmix_w16n8_ares.svg (新采)
+  ARES trace blob: /tmp/aresT_TR.raw (4256 events, wall 3,264,433 cyc trace-perturbed, 单 rep)
+  pure-HMX 基准:  Agent/current/timeline_cron85_wtcache.txt (per-inst) +
+                  Agent/current/timeline_cron87_B.txt (B-on ACC Σ)
+  actcache(无ARES)对照: Agent/current/timeline_hvxmix_w16n8_actcache.txt (PACK 2.25M/ACT 748K)
+  对外 wall: ARES +32.7% vs SHIP u8i8 / pure-HMX 1.258M (Agent/current/w16n8_ares_wall.txt)
+  复现命令见 [1]。设备只经 source scripts/dssh.sh; source scripts/env.sh。

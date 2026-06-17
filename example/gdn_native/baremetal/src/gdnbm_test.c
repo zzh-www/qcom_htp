@@ -34,8 +34,12 @@ int main(int argc, char **argv) {
 
     long abytes = (long)H * C * C * 2;
     if (fsize(Apath) < abytes) { printf("A.raw too small (%ld < %ld)\n", fsize(Apath), abytes); return 3; }
-    unsigned char *A = (unsigned char *)malloc(abytes), *T = (unsigned char *)calloc(abytes, 1);
-    FILE *fa = fopen(Apath, "rb"); fread(A, 1, abytes, fa); fclose(fa);
+    /* ACVRES (照搬 pure-HMX cv-block A): the A input may be EXTENDED with a host-prepared cv-block region
+     * appended after the H natural-A heads. Read the FULL file so the appended region reaches the DSP; the
+     * DSP only reads abytes (natural A) for diag + the appended cv-block for the merges. T stays abytes. */
+    long afile = fsize(Apath); if (afile < abytes) afile = abytes;
+    unsigned char *A = (unsigned char *)malloc(afile), *T = (unsigned char *)calloc(abytes, 1);
+    FILE *fa = fopen(Apath, "rb"); fread(A, 1, afile, fa); fclose(fa);
 
     int stats[32] = {0};
     /* REPS: run the solve N times in ONE FastRPC session (env GDNBM_REPS, default 1). Repeated single-shot
@@ -43,9 +47,17 @@ int main(int argc, char **argv) {
      * remote call on the SAME handle does the steady-state measurement with NO session churn. */
     const char *re = getenv("GDNBM_REPS"); int reps = re ? atoi(re) : 1; if (reps < 1) reps = 1;
     for (int r = 0; r < reps; ++r) {
-        rc = gdnbm_solve(h, A, (int)abytes, H, C, zpA, zpT, sA.i, sT.i, nthreads, T, (int)abytes, stats, 32);
+        rc = gdnbm_solve(h, A, (int)afile, H, C, zpA, zpT, sA.i, sT.i, nthreads, T, (int)abytes, stats, 32);
         printf("gdnbm_solve rc=0x%x  P=%d  H=%d  rep=%d/%d  wall=%d scatter=%d wtpack=%d cons=%d\n",
                rc, stats[1], stats[2], r + 1, reps, stats[0], stats[9], stats[7], stats[3]);
+        if (stats[15] > 0)   /* GDN_BR_HEADLOAD_PROBE: Σ/per-head head-load copy span vs wall */
+            printf("  HEADLOAD: total_cyc=%d per_head=%d heads=%d  vs wall=%d  (Σ%%=%d, /4producers≈%d cyc wall)\n",
+                   stats[13], stats[14], stats[15], stats[0],
+                   stats[0] ? (int)((long long)stats[13] * 100 / stats[0]) : 0, stats[13] / 4);
+        if (stats[25] > 0)   /* GDN_BR_W16_PACKCNT: clean wt-pack vs act-pack Σ-work + per-inst (vs pure-HMX 4026) */
+            printf("  PACKCNT: wt_Sigma=%d wt_n=%d wt_perinst=%d | act_Sigma=%d act_n=%d act_perinst=%d\n",
+                   stats[24], (stats[28] >> 16) & 0xffff, stats[25],
+                   stats[26], stats[28] & 0xffff, stats[27]);
         if (rc) break;
     }
     /* ===== QNN-ALIGNED cycle report (cron#79, skill htp-cycle-metric). Every number is reported in

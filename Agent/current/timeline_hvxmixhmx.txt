@@ -1,0 +1,83 @@
+GDNSolveHVXMixHMX per-thread timeline (unified standard, same 口径 as pure-HMX)
+trace = 32-head solve, production default (7 flags), -DGDN_BR_TRACE, warm rep (rep2/2)
+trace-perturbed wall (single rep, for STRUCTURE only) = 1943545 cyc
+un-perturbed production wall (reps2-8 median, 3 windows) = ~1.873M cyc (VTCM-only)
+busy% = WALL-relative (busy / global wall), matching pure-HMX; producer = priority-paint view
+============================================================================================
+
+### FINE view (containers HEAD/MERGE/PREP hidden; PREP children ACT/PACK/EFF shown) ###
+events=4768  wall=1943545 cyc  (130 cols, 1 col = 14950 cyc)
+
+P0   |    DDDDDD  qqs?rLK?Lqq?DDD qLK??eqLaDDD qeLq?Lq??qDDDD qLqsKqsqq?DD  q?Kr?Lq?LDDDD qKr?Lq?eq?DDD qKq?Lq??KDDD qK?LK?Lqq?         | busy=72%wall  [DIAG=26% MM=17% ACT=9% ACC=0% REQ=9% PACK=7% EFF=2% DEPACK=1% SPIN=2% LOAD=0% STORE=2% POST=0% TABS=0%]
+P1   |     DDDDD  qqs?rLK?LKr?DDDD qLKq?KKq?DDD   qLq?Keq?LrDD  qLq?aq??L?DDD qLqL?er?LrDDD qLK??q??LDDDD q?Lq?Lqs?DDD qKq?aK?Lqr       | busy=73%wall  [DIAG=26% MM=17% ACT=9% ACC=0% REQ=9% PACK=7% EFF=2% DEPACK=1% SPIN=3% LOAD=0% STORE=2% POST=0% TABS=0%]
+P2   |      DDDD  qqs?rLq?eq?LDDDD qqr?K?LKrsDDDD qe  ?sLK?q?q?LDDD qqq?Lqq?q?LDDD  q?L?aqsqq?DDD qqq?LK?qx?DDD q?Kr?q?Kq?DDD qqersSqLaL| busy=78%wall  [DIAG=24% MM=18% ACT=10% ACC=1% REQ=9% PACK=7% EFF=2% DEPACK=1% SPIN=3% LOAD=0% STORE=3% POST=0% TABS=0%]
+P3   |        DDDD qL?rKq?LKs?DDD qK??Lq??qrDDD qLq?qqs?q?DDD qKq?Ks?qr?DDD qLq?Lq?LK?DDD qLr?Kqaq?LDDD qK?sKsLK?LDDDD qKs?Kq?qq?       | busy=72%wall  [DIAG=26% MM=17% ACT=9% ACC=0% REQ=9% PACK=8% EFF=2% DEPACK=1% SPIN=2% LOAD=0% STORE=2% POST=0% TABS=0%]
+CONS |              mm mmmmmmm     mmmmmmmmmm   mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm mmmmmm| busy=7%wall  [MM=8%]
+
+legend: L=head-LOAD  q=ACT-format  p=WT-pack  s=SPIN(wait HMX)  m=matmul(HMX)  x=OUT-copy  a=ACC/renorm  S=head-STORE
+aggregate stage cyc (summed over threads): {'DIAG': 1843592, 'MM': 1389794, 'ACT': 684587, 'ACC': 65020, 'REQ': 666169, 'PACK': 553437, 'EFF': 155548, 'DEPACK': 96805, 'SPIN': 206641, 'LOAD': 47325, 'STORE': 191619, 'POST': 1998, 'TABS': 5015}
+
+### COARSE view (PREP shown as a leaf = merge-operand-fetch total) ###
+events=4768  wall=1943545 cyc  (130 cols, 1 col = 14950 cyc)
+
+P0   |    DDDDDD  qqs?rLK?Lqq?DDD qLK??eqLaDDD qeLq?Lq??pDDDD qLqsKqsqq?DD  q?Kr?Lq?LDDDD qKr?Lq?eq?DDD qKq?Lq??KDDD qK?LK?Lqq?         | busy=102%wall  [DIAG=26% MM=17% ACT=9% PREP=33% ACC=0% REQ=9% PACK=7% EFF=2% DEPACK=1% SPIN=2% LOAD=0% STORE=2% POST=0% TABS=0%]
+P1   |     DDDDD  qqs?rLK?LKr?DDDD qLKq?KKq?DDD   qLq?Keq?LrDD  qLq?aq??L?DDD qLqL?er?LrDDD qLK??q??LDDDD q?Lq?Lqs?DDD qKq?aK?Lpr       | busy=102%wall  [DIAG=26% MM=17% ACT=9% PREP=32% ACC=0% REQ=9% PACK=7% EFF=2% DEPACK=1% SPIN=3% LOAD=0% STORE=2% POST=0% TABS=0%]
+P2   |      DDDD  qqs?rLq?eq?LDDDD qqr?K?LKrsDDDD qepp?sLK?q?q?LDDD qqq?Lqq?q?LDDD  q?L?aqsqq?DDD qqq?LK?qx?DDD q?Kr?q?Kq?DDD qqersSqLaL| busy=112%wall  [DIAG=24% MM=18% ACT=10% PREP=35% ACC=1% REQ=9% PACK=7% EFF=2% DEPACK=1% SPIN=3% LOAD=0% STORE=3% POST=0% TABS=0%]
+P3   |        DDDD qL?rKq?LKs?DDD qK??Lq??prDDD qLq?qqs?p?DDD qKq?Ks?qr?DDD qLq?Lq?LK?DDD qLr?Kqaq?LDDD qK?sKsLK?LDDDD qKs?Kq?qq?       | busy=102%wall  [DIAG=26% MM=17% ACT=9% PREP=34% ACC=0% REQ=9% PACK=8% EFF=2% DEPACK=1% SPIN=2% LOAD=0% STORE=2% POST=0% TABS=0%]
+CONS |              mm mmmmmmm     mmmmmmmmmm   mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm mmmmmm| busy=7%wall  [MM=8%]
+
+legend: L=head-LOAD  q=ACT-format  p=WT-pack  s=SPIN(wait HMX)  m=matmul(HMX)  x=OUT-copy  a=ACC/renorm  S=head-STORE
+aggregate stage cyc (summed over threads): {'DIAG': 1843592, 'MM': 1389794, 'ACT': 684587, 'PREP': 2396156, 'ACC': 65020, 'REQ': 666169, 'PACK': 553437, 'EFF': 155548, 'DEPACK': 96805, 'SPIN': 206641, 'LOAD': 47325, 'STORE': 191619, 'POST': 1998, 'TABS': 5015}
+
+============================================================================================
+### KEY READINGS (unified 口径, derived from this trace) ###
+（busy% = WALL-relative union of work intervals, no PREP-container double-count）
+
+per-thread:
+  P0  life-span 89%w   union-busy 78%w   spin 47529
+  P1  life-span 89%w   union-busy 78%w   spin 54526
+  P2  life-span 95%w   union-busy 85%w   spin 56928   <-- 临界路 (lmax)
+  P3  life-span 87%w   union-busy 78%w   spin 47658
+  CONS(HMX)  life-span 88%w   MM-busy 7%w   spin 0
+
+  producer busy%  = 78-85% wall (union, P2 critical 85%)
+  HMX consumer busy% = 7% wall (138513 cyc, n=384 matmul, per-call ~360 cyc)
+  spin Σ (4 prod) = 206641 = 10% wall (SMALL: producers feed-bound on their OWN HVX work,
+                    they are NOT waiting the HMX — opposite of pure-HMX where spin Σ was huge)
+  lmax (slowest producer life) = 1847005 = 95% wall = critical path (P2)
+
+临界路径序列 (P2, 一个 head 的串行 stage 链, 重复 ×8 heads):
+  DIAG(fwd-subst 对角块求逆, 串行递归) -> [off-diag MERGE: PREP(get_act+get_wt: QUANT/ACT + PACK kmajor
+  + EFF) -> MM(producer wrapper: K-stack gather + dispatch + SPIN-wait-HMX + DEPACK) -> ACC(int32 acc)
+  -> REQ(widen+requant)] x (off-diag blocks) -> head store
+  => 临界路 ~= DIAG(串行) + Σ off-diag(PREP+MM-wrapper+REQ); HMX 真 MAC 只占 7% 嵌在 MM-wrapper 里.
+
+producer-internal Σ work-volume (4 threads summed, bucketed by parent region):
+  DIAG(fwd-subst total)            Σ=1843592   (31% of producer-Σ)   <-- #1 算法极
+  MM(producer wrapper:gather+spin+depack) Σ=1251281
+  ACT/merge(quant/act-format)      Σ= 684587
+  REQ/standalone(widen+requant)    Σ= 666169
+  PACK/merge(kmajor pack)          Σ= 553437
+  SPIN/standalone                  Σ= 206641
+  SIG/standalone                   Σ= 191619
+  EFF/merge(-128*Σwt)              Σ= 155548
+  DEPACK/standalone                Σ=  96805
+  ACC/standalone(int32 acc/renorm) Σ=  65020
+  BIAS-PACK/standalone             Σ=  47325
+  TABS,POST                        Σ<  6000
+  ----- roofline-style buckets (Σ work-volume) -----
+  merge-glue (PREP children + ACC + REQ + DEPACK + MM-wrapper) = 60% of producer-Σ
+  diag (fwd-subst)                                             = 31% of producer-Σ
+  HMX matmul (real MAC, consumer)                              =  7% wall
+
+⚠️ 口径警告: 以上 Σ% 是 work-volume 占比 (4 线程求和), NOT wall-delta. 按 taxonomy 铁律, Σ% 不直接
+   设定 wall 优先级 (Σ 落在 roofline floor 之下). wall-delta toggle (DIAG_I16 / REQ_FUSE) 本轮被热噪声
+   淹没 (sub-3% 不可分辨), 故无法本轮以 wall-delta 重新钉死 51/29/20/7; 留 analyzer 加 gated stage-off
+   做 wall-delta.
+
+vs memory roofline (merge-GLUE 51% / diag 29% / matmul 20% / zero 7%):
+  - diag 29% -> 31% (一致, 略升)
+  - merge-glue 51% -> 60% (升: 本轮把 MM-producer-wrapper 计入 merge-glue)
+  - matmul 20% -> 7% (大降: 旧 "20%" 实为 producer-side MM-wrapper Σ, 真 HMX MAC 仅 7% wall;
+    与 cycle taxonomy "HMX matmul 只占 7%" 一致, 旧 20% 是 wrapper 误计)
+  - zero 7% -> 已并入 DEPACK/出料, 不再单列

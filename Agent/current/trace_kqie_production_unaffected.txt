@@ -1,0 +1,104 @@
+# trace-口径 task — production-codegen-unaffected proof (precise scope)
+# dev session 2026-06-17, branch pure-hmx-opt.  Closes reporter Gap 2.
+#
+# CLAIM (precise, NOT "every edit"):
+#   The 3-impl-timeline trace-口径 task's changes = { edits inside `#if defined(GDN_BR_TRACE)` guards }
+#   ∪ { pure comments }.  Therefore they contribute ZERO to any production (TRACE-off) preprocessed TU /
+#   codegen.  The production-DEFAULT solve = pure-HMX (gdn_pure_solve.cpp) was NOT touched at all.
+#   HONESTY CAVEAT: the working tree ALSO carries PRE-SESSION, non-trace-guarded W16_N8/ACVRES/ARES/BP2
+#   scaffolding (mostly in gdnbm_imp.cpp, incl. unconditional lines) that DOES appear in the SHIP TU.  That
+#   is OUT OF THIS TASK'S SCOPE; its production-unaffected was established in its own earlier rounds.  This
+#   file proves only that THIS trace task adds no production residue.
+#
+# ================================================================================================
+# (1) git diff HEAD --stat  (what the working tree changed)
+# ================================================================================================
+#   .claude/agents/analyzer.md                          |   3 +-     (agent prompt; not code)
+#   example/gdn_native/baremetal/src/gdnbm_imp.cpp      | 336 ++++++  (MOSTLY pre-session W16_N8/ACVRES/ARES/BP2
+#                                                                      scaffolding; consumer MM push at :1521 is
+#                                                                      trace-guarded.  Pre-session = out of scope.)
+#   example/gdn_native/baremetal/src/gdnbm_test.c       |  18 +-     (pre-session test harness; out of scope)
+#   example/gdn_native/solve_br_op/src/GdnSolveBR16.cpp | 529 +++++  (trace-口径 edits + pre-session W16_N8/ARES)
+#   example/gdn_native/solve_br_op/src/GdnSolveBROp.cpp |  79 +++    (trace-口径 edits + pre-session SWPIPE_KSTACK/
+#                                                                      W16_N8_ACTCACHE scaffolding)
+#
+#   PRODUCTION-DEFAULT SOLVE = pure-HMX (example/gdn_native/pure_hmx_solve/gdn_pure_solve.cpp):
+#     NOT in the changed-file list.   git diff HEAD -- .../gdn_pure_solve.cpp  ==>  EMPTY (exit 0, no output).
+#     => pure-HMX production build is byte-identical to HEAD, trivially unaffected by this (and any) task here.
+#
+# ================================================================================================
+# (2) This task's edits to the two trace files are ALL trace-guarded or comments
+# ================================================================================================
+# GdnSolveBROp.cpp — the 3 producer-MM removals (Gap 1), current line numbers:
+#   Edit A  HVX_MERGE inline vrmpy:  producer MM(3) -> DEPACK(10).  Guard: #if @1941 ... #endif @1947
+#                                    (push line 1946; comment lines 1942-1945).
+#   Edit B  HMX-merge cached path:   producer MM(3) removed, keep _p2 for ACC.  Guard: #if @2006 ... #endif @2011
+#                                    (only `(void)_p1` + _p2 capture remain; comment 2007-2009).
+#   Edit C  HMX-merge final:         producer MM(3) removed, keep _fp2 for REQ.  Guard: #if @2081 ... #endif @2086
+#                                    (only `(void)_fp1` + _fp2 capture remain; comment 2082-2084).
+#   (BROp pre-session, NOT this task: GDN_BR_W16_N8_ACTCACHE macro block ~@220; GDN_BR_SWPIPE_KSTACK
+#    functions ~@1430 — both #if-gated default-OFF; gdn_merge_wait_depack/kstack DEPACK pushes are trace-guarded.)
+# GdnSolveBR16.cpp — trace-口径 edits (per the edit log in Agent/current/timeline_3impl_kqie_unified.txt §"Edits"):
+#   every removed/added gdn_tr_push is inside a `#if defined(GDN_BR_TRACE)` block; non-trace changes in this
+#   file are the pre-session W16_N8/ACVRES/ARES helpers (out of scope), plus comments.
+#   Self-check: grep below shows the ONLY remaining stage-3 (MM) push in the WHOLE codebase is the CONSUMER.
+#
+# EXHAUSTIVE producer-MM-zeroed self-proof (run from repo root):
+#   $ grep -rnE 'gdn_tr_push\([^;]*(GDN_TR_MM|, 3,)' example/gdn_native/ scripts/
+#   example/gdn_native/baremetal/src/gdnbm_imp.cpp:1521:  gdn_tr_push((uint32_t)GDN_BR_NT, GDN_TR_MM, k0, k1);  /* consumer tid=GDN_BR_NT */
+#   => exactly ONE stage-3 push, on the consumer tid (GDN_BR_NT=4).  ZERO producer-tid MM(3) anywhere.
+#
+# ================================================================================================
+# (3) Preprocessor sentinel-residue HARD proof (SHIP flags, GDN_BR_TRACE OFF)
+# ================================================================================================
+# TU = baremetal/src/gdnbm_imp.cpp (it #includes GdnSolveBROp.cpp + GdnSolveBR16.cpp = the SHIP path).
+# SHIP cascade: -DGDNBM_HMX_PIPE -DGDN_BR_STATIC_FULL  (auto-derives GDN_BR_I16/KSTACK/...; NOT HVX_MERGE,
+#               NOT W16_N8, NOT GDN_BR_TRACE).
+# Toolchain: $HEXAGON_TOOLS_ROOT/bin/hexagon-clang++  (source scripts/env.sh first).
+#
+# Command (preprocess only, comments stripped):
+#   hexagon-clang++ -std=c++17 -E -P -O2 -mv75 -mhvx -mhvx-length=128B -mhmx \
+#       -DUSE_OS_QURT -DPREPARE_DISABLED -DGDNBM_HMX_PIPE -DGDN_BR_STATIC_FULL \
+#       -UGDN_BR_TRACE -UGDN_BR_PROBE_CYCLES <incs> \
+#       example/gdn_native/baremetal/src/gdnbm_imp.cpp -o /tmp/ship_E_notrace.i
+#
+# Sentinel greps over the SHIP-NO-TRACE preprocessed TU (11936 lines):
+#   gdn_tr_push count ............ 0   (TRACE off -> every trace push compiled out)
+#   GDN_TR_MM count .............. 0
+#   stage-3 'tr_push(..., 3,'  ... 0
+#   my comment sentinel .......... 0   (-P strips comments; defensive check)
+#   gdn_merge_wait_depack/kstack . 0   (those fns not referenced by the KSTACK SHIP path)
+#   => ZERO residue from this trace task in the production preprocessed TU.
+#   口径 honesty: this proves "this trace task adds nothing to the SHIP preprocessed output"; it does NOT
+#   claim the whole working tree == HEAD (pre-session scaffolding does appear — see (4)).
+#
+# ================================================================================================
+# (4) Working-tree vs HEAD SHIP preprocessed-TU diff — attribution to PRE-SESSION, not this task
+# ================================================================================================
+# Preprocess the SHIP TU (TRACE off) from the working tree, and from HEAD (via `git stash` of the 4 changed
+# source files), then diff:
+#   working-tree SHIP TU: 11936 lines    HEAD SHIP TU: 11935 lines
+#   diff = 9 differing lines, of which:
+#     - 8 are FARF HAP_debug_v2(...) calls that differ ONLY in the __LINE__ integer arg (e.g. 1410 vs 1199),
+#       because pre-session gdnbm_imp.cpp scaffolding shifted line numbers down.  Not semantic codegen.
+#     - 1 is the pre-session BP2 line `jb->wt2 = g_bp_wt2; jb->n2_act_pairs = g_bp_nap2; g_bp_wt2 = nullptr;`
+#   Attribution check:
+#     # of differing SHIP-TU lines that reference GdnSolveBR16.cpp or GdnSolveBROp.cpp (this task's 2 files): 0
+#   After normalizing the FARF __LINE__ integer (sed 's/gdnbm_imp.cpp", [0-9]+/.../'), the ONLY residual diff
+#   is that single pre-session g_bp_wt2 line.
+#   => 100% of the SHIP-TU delta is attributable to PRE-SESSION gdnbm_imp.cpp scaffolding; this trace-口径
+#      task contributes ZERO lines to the production preprocessed TU.
+#
+# ================================================================================================
+# (5) Reproducible production codegen (byte-identical SHIP object)
+# ================================================================================================
+# Building the SHIP object twice (TRACE off = production default) from the current working tree:
+#   hexagon-clang++ -std=c++17 -O2 -fPIC -mv75 -mhvx -mhvx-length=128B -mhmx -DUSE_OS_QURT -DPREPARE_DISABLED \
+#       -DGDNBM_HMX_PIPE -DGDN_BR_STATIC_FULL <incs> -c gdnbm_imp.cpp -o ship_{a,b}.o
+#   md5(ship_a.o) == md5(ship_b.o) == ae950d5e3903b12414de9431dab55d1a   (cmp: IDENTICAL)
+#   => production SHIP codegen is reproducible with this task's changes in the tree.
+#
+# ------------------------------------------------------------------------------------------------
+# SUMMARY: pure-HMX (production default) source untouched (git diff empty); this trace task's footprint in
+# the SHIP preprocessed TU = ZERO (0 tr_push / 0 MM / 0 lines referencing the 2 trace files); the only SHIP-TU
+# delta vs HEAD is pre-session, out-of-scope scaffolding (its own rounds proved it production-safe).

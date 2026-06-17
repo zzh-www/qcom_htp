@@ -1,0 +1,50 @@
+W16_N8 高精度档 act 上游协同 — 阶段1 上界杀手测 (PRECROUTON cap-test)
+======================================================================
+任务: 钉死 int16 态消 A act 路 (gdn_w16_fold_quant_act Σ~748K + gdn_w16_pack_act vgather-crouton)
+  的 wall 上界, 验是否 > u8i8 的 −9.75%, 决定阶段2 是否做 (阈值 ≥ −10%)。
+
+口径 (上界, ⚠️ T 错):
+  32-head VTCM-only, stats[0] graph-wall, reps2-8 median, ACAC A C 同热窗背靠背配对抵热漂。
+  A = W16_N8 base (actcache 态, 生产): SHIP + -DGDN_BR_W16 -DGDN_BR_W16_N8 -DGDN_BR_W16_N8_FUSEDEP
+      -DGDN_BR_W16_N8_ACTCACHE
+  C = A + -DGDN_BR_A_PRECROUTON (仅此一旗 toggle): A 的 gdn_w16_get_act_A 跳过 fold_quant + pack
+      两步, acttab 直指预置槽 (cr 内容随意; mxmem 时序数据无关 => 合法 wall-delta 上界; T 错=只测 wall)。
+  ⚠️ T_diag (对角逆输出) 不在 cap-test 内 — 它是求逆依赖链上的最终-merge act, 非 host 输入侧变换;
+     本任务杠杆专指 A 输入 act 路 (fold M/S = host 全局常数 gdn_fold_MS(sA), gdnbm_imp.cpp:1181,
+     对所有 head/block 相同, 不读 Tblk, 不在求逆依赖链) => 可前置/可 cv-resident。
+  SHIP = -DGDNBM_HMX_PIPE -DGDN_BR_STATIC_GAIN -DGDN_BR_STATIC_FULL -DGDN_BR_SBOOST
+         -DGDN_BR_DIAG_I16 -DGDN_BR_REQ_FUSE -DGDN_BR_FBOOST
+  设备 oneplus, P=4, 输入 A_u16_h32.raw, scales 2.770166930875267e-05 6.103701895199438e-05。
+
+### ΔWall 上界 (ACAC reps2-8 median) ###
+3 窗:
+  win1: A=3251257 | C=2625239 | dWall=-19.25%
+  win2: A=3000963 | C=2671338 | dWall=-10.98%
+  win3: A=2922422 | C=2715734 | dWall=-7.07%
+  3-WINDOW MERGED: A_med=3000963 C_med=2671338 -> dWall(上界) = -10.98%
+
+5 窗 (复跑稳定化, 推荐口径):
+  win1: A=2825095 | C=2509255 | dWall=-11.18%
+  win2: A=3257558 | C=2498002 | dWall=-23.32%
+  win3: A=2829239 | C=3084932 | dWall=+9.04%   (离群: C 撞坏热窗, C=3.08M >> 自身 median 2.51M)
+  win4: A=2916457 | C=2515299 | dWall=-13.75%
+  win5: A=2873075 | C=2507316 | dWall=-12.73%
+  5-WINDOW MERGED: A_med=2873075 C_med=2509255 -> dWall(上界) = -12.66%
+
+### 裁决 ###
+  上界 = -12.66% (5 窗 merged median; 4/5 窗 ≥ -11%, win3 +9% 是 C 撞坏热窗的离群)。
+  C 档 wall 极稳 ~2.50M (除 win3 坏窗), A base ~2.83M, 典型窗 ~-11.5%。
+  ✅ 上界 (-12.66%) > u8i8 锚点 (-9.75%) — int16 态 act 路占比更高, 与命门一致。
+  ✅ 上界 ≥ -10% 阈值 -> 阶段2 (真兑现 head-load cv) 应做。
+  预期 int16 落地: 阶段1 上界 -12.66% 是 "完全消失 A act" 的天花板; 阶段2 (b 路 head-load
+  一次转 cv) 省 vgather 往返但 fold_quant 总量不省, 实测预期 -8~12%。
+
+### 代码改动 (gated, 默认 OFF, 生产 byte-unaffected) ###
+  GdnSolveBR16.cpp gdn_w16_get_act_A: 新增 #if defined(GDN_BR_A_PRECROUTON) 分支 (actcache 态与
+    非-actcache 态各一处), 旗 ON 时 (void) 输入参数后直接 return cr, 跳过 fold_quant + pack。
+  无新文件; -DGDN_BR_A_PRECROUTON 默认 OFF -> 生产 build (不带此旗) 字节不变。
+
+### 复现 ###
+  bash scripts/w16n8_actupstream_upper.sh             (默认 3 窗)
+  WINDOWS=5 bash scripts/w16n8_actupstream_upper.sh   (推荐稳定化)
+  设备只经 source scripts/dssh.sh。

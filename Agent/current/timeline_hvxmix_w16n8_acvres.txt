@@ -1,0 +1,23 @@
+### ACVRES (host cv-block + DSP flat-copy + pointer-return) ###
+events=4256  wall=3204067 cyc  (130 cols, 1 col = 24647 cyc)
+
+P0   |    DDDDDDD qLLrLLLLLrLDDDDD qqqLqqsL?DDDDDDD qqKLL?LLLrDDDD qLrLqqLLLrDDDD qLLLLrLLLrDDDD qLLL?rLLsDDDDD qqLKLqrLLLrD qLrLqqrLL  | busy=81%wall  [DIAG=34% MM=31% ACT=2% REQ=4% PACK=10% SPIN=2% LOAD=0% STORE=0% POST=0%]
+P1   |    DDDDDDD qLLrLLrLsLLDDDD qLLKLKLrLLDDDDDDqLLKLqrLLLrDDDD qLLqqLLLrLDDDDD qqrLqLrLLDDDDDD qLqqLLLqLDDDD qLrLqqLLLDD qLKLqLrLL   | busy=81%wall  [DIAG=35% MM=30% ACT=2% REQ=3% PACK=11% SPIN=2% LOAD=0% STORE=0% POST=0%]
+P2   |    DDDDDDD qLL?LLLLLrLDDDDD qLLKLLLLLLDDDDD    qLrLqrL?qLDDD qLrLLLLLqLDDDDDDqKLqKL?LL?DDDD qqLLKLLLLLDDDD qLLrLLrLLDD qL?LLLL?qL| busy=82%wall  [DIAG=32% MM=31% ACT=2% REQ=4% PACK=10% SPIN=3% LOAD=0% STORE=0% POST=0%]
+P3   |     DDDDDD qLLrLLrLLLLDDDDD qLKLLLq?LDDDDDD qKqKLqL?LLrDDDD qLrL?rLLqLDDDDD qLLKLLLLqLDDDDD qLLrLLqLLDDDDDDqLLqqLLLrLDDDqqqLKLrLL| busy=83%wall  [DIAG=35% MM=30% ACT=2% REQ=3% PACK=10% SPIN=3% LOAD=0% STORE=0% POST=0%]
+CONS |             mmmmmmmmmm      mmmmmmmmmm      mmmmmmmmmmmmm   mmmmmmmmmmm    mmmmmmmmmmmm    mmmmmmmmmmm   mmmmmmmmmmmmmmmmmmmmmmmm| busy=8%wall  [MM=9%]
+
+legend: L=head-LOAD  q=ACT-format  p=WT-pack  s=SPIN(wait HMX)  m=matmul(HMX)  x=OUT-copy  a=ACC/renorm  S=head-STORE
+aggregate stage cyc (summed over threads): {'DIAG': 4216549, 'MM': 4081488, 'ACT': 295900, 'REQ': 482630, 'PACK': 1323664, 'SPIN': 366089, 'LOAD': 1576, 'STORE': 51208, 'POST': 2546}
+
+### BASE (actcache: per-rep fold+quant+crouton-vgather on DSP) ###
+events=4640  wall=2975076 cyc  (130 cols, 1 col = 22885 cyc)
+
+P0   |     DDDD   qLqrqLKLLL?rLrD qLrqqKKLL?LrD qLrqqqKqLqLLrD qqLLLKLL?LqLDDqqLqLLLL?LqLDDqKLLLLrsKLLLD qLrqqLKLLLLrD qKqLqLqLKLLL?r   | busy=78%wall  [DIAG=16% MM=33% ACT=6% REQ=4% PACK=19% SPIN=3% LOAD=0% STORE=0% POST=0%]
+P1   |      DDD    qq?qLKLLLLrLrDD qLLLrqr?qLqLrDDqKqqKLKLLLLrLrLrD qKqLqLLLLLLLD qL??rqrLKLKLDDqqLLLLrLrLrLDDqKLKLqLLLLq?rDqKLqLLLLrLrL| busy=80%wall  [DIAG=16% MM=33% ACT=8% REQ=4% PACK=18% SPIN=3% LOAD=0% STORE=0% POST=0%]
+P2   |     DDDD   qLq?qLLLL??rLDD qqLKLLLLLLr?DD qqLLLLLLrLqLDD qqrqrqqLqLLrD  qqKLqLqLLrLDD qqKLqLKLLrLrD qLrqqqqLqLLLD qLLLrqrLqLLL   | busy=78%wall  [DIAG=18% MM=33% ACT=5% REQ=4% PACK=19% SPIN=3% LOAD=0% STORE=0% POST=0%]
+P3   |      DDDDDD qLLqLqLqLLLLrDD qLs?rqqLqLLrDDqqKKLqLL??qLDD qL?qrqrLqLLLDD qLrqqKKLqLLrD qLrqKLqLLLLLD qqLKLLL?qLqLDDqKLqLqLLrLqL   | busy=78%wall  [DIAG=19% MM=32% ACT=5% REQ=3% PACK=19% SPIN=3% LOAD=0% STORE=0% POST=0%]
+CONS |             mmmmmmmmmmmm    mmmmmmmmmmmm  mmmmmmmmmmmm mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm| busy=9%wall  [MM=10%]
+
+legend: L=head-LOAD  q=ACT-format  p=WT-pack  s=SPIN(wait HMX)  m=matmul(HMX)  x=OUT-copy  a=ACC/renorm  S=head-STORE
+aggregate stage cyc (summed over threads): {'DIAG': 1973771, 'MM': 3989822, 'ACT': 745749, 'REQ': 445975, 'PACK': 2154514, 'SPIN': 348868, 'LOAD': 1558, 'STORE': 50920, 'POST': 2376}

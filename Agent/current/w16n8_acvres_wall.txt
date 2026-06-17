@@ -1,0 +1,45 @@
+W16_N8 高精度档 act 上游协同 — 真兑现 (ACVRES) wall 实测 (正确 T 口径)
+====================================================================
+口径: 32-head VTCM-only, stats[0] graph-wall, reps2-8 median, ACAC A C 同热窗背靠背配对。
+  A = BASE (FUSEDEP+ACTCACHE, 生产 W16_N8 高精度档, oracle); C = ACVRES (host cv-block + DSP 平拷+指针直返)。
+  C 拿的是正确 T (bit-exact, md5 == A, 见 w16n8_acvres_bitexact.txt) -> 真实 wall, 非阶段1 上界。
+  设备 oneplus, P=4, natural A_u16_h32.raw, scales 2.770166930875267e-05 6.103701895199438e-05。
+
+### ΔWall 实测 (3 组独立 run-set, BASE 侧热噪声大 / ACVRES 侧极稳) ###
+run-set #1 (5 窗): A_med=2838847 C_med=2748713 dWall=-3.18%   (per-win -1.2..-4.8%)
+run-set #2 (5 窗): A_med=2949848 C_med=2760791 dWall=-6.41%   (per-win +6.1..-19.6%, BASE win 撞热窗 3.4M)
+run-set #3 (7 窗, 推荐口径): A_med=2925534 C_med=2785376 dWall=-4.79%  (per-win +2.0..-10.5%)
+  run-set #3 逐窗: A=2869537 C=2781224 -3.08 | A=2753769 C=2810235 +2.05 | A=2925534 C=2785376 -4.79
+                  | A=3111997 C=2786332 -10.46 | A=2857511 C=2780739 -2.69 | A=2934221 C=2796149 -4.71
+                  | A=2969664 C=2775491 -6.54
+  -> 综合 (3 组): 真实 ΔWall ≈ -4..-5% (T 正确, bit-exact)。
+
+### 稳定性 (命门) ###
+  A(BASE)   spread 12.2% (2.75M..3.11M, 单窗到 3.4M): 每 rep 重算 6×(fold+quant+crouton vgather), 热敏。
+  C(ACVRES) spread  1.2% (2.78M..2.81M): host cv-block 预算, DSP 每 rep 只平拷 48KB + 指针直返, 零 fold/vgather。
+  -> C 极稳 ~2.785M 是更可信的锚; A median ~2.86-2.95M 随窗漂。dWall 被 BASE 噪声放大/缩小, 综合 -4..-5%。
+
+### 为什么没到 -12.66% 上界 (诚实根因, 非借口) ###
+  阶段1 上界 -12.66% (w16n8_actupstream_upper.txt PRECROUTON cap) = "A act 路完全消失且不付任何替代成本"。
+  ACVRES 真兑现把 6×(fold+quant+crouton vgather) 换成 "每-head 48KB DDR->VTCM HVX 平拷 (head-load) + 指针直返"。
+  那 48KB/head 平拷是结构必需 —— pure-HMX GP_CVIO 也付同样的 head-load 平拷 (gdn_pure_solve.cpp:963-969
+  d[v]=s[v]); 只有 pure-HMX 的 GP_RESIDENT (全 head A cv-block 一次性常驻 VTCM + alias 零拷) 才能再消掉它。
+  本 standalone harness 的 W16 per-producer VTCM 槽 (stride 0xA0000, acache 0x18000 + wcache 0x40000..0x54000
+  + 双缓冲 natural-A 0x60000/0x80000) 只剩 0x54000..0x60000 = 48KB 单缓冲连续空闲, 不够双缓冲 (96KB) cv-landing
+  做 DMA-overlap (DMA 引擎: 第二 dmstart 与 in-flight natural-A 预取互相 CLOBBER, 设备已验), 也不够全-head
+  常驻 (8 head × 48KB = 384KB)。=> 干净消掉 head-load 需 GP_RESIDENT 式共享常驻 VTCM 区 (重构 VTCM-acquire,
+  按 cron#74 记忆对 feed-bound 态 wall ≈ neutral, 增益不确定), 交回 core 定夺是否做。
+
+### 裁决 ###
+  ✅ 真兑现 (T 正确, bit-exact md5==BASE, max|d|=0, oc 3.81e-4 零退): 照搬 pure-HMX GP_CVIO 数据流落地 ——
+     host 一次性 cv-block A + DSP 零 fold/零 quant/零 crouton vgather, merge get_act_A = 指针直返。
+  实测 ΔWall ≈ -4..-5% (C 极稳 2.785M vs BASE 噪声 median ~2.93M)。W16_N8 高精度档相对 SHIP u8i8 1.925M
+     由 +48% (~2.85M) 压到 +X% (~2.785M ≈ +45% vs u8i8)。低于 -12.66% 上界 = head-load 平拷的结构成本
+     (pure-HMX 同付; 仅 GP_RESIDENT 全常驻可再消, 需 VTCM 重构)。
+  ⚠️ 阶段1 ACTCV (融合 fold+crouton 但 vgather 仍在 DSP) 是 ZERO; 本 ACVRES 把 fold+vgather 整体移到 host
+     预算 = 真增益 -4..-5%, 是 ACTCV 没做到的 (ACTCV 没消 vgather)。
+
+### 复现 ###
+  BITEXACT_ONLY=1 bash scripts/w16n8_acvres_check.sh    (build 3 变体 + DSP-dump cv-block + bit-exact 门)
+  bash scripts/w16n8_acvres_check.sh                     (默认 3 窗 wall; WINDOWS=7 REPS=8 推荐稳定化)
+  设备只经 source scripts/dssh.sh。

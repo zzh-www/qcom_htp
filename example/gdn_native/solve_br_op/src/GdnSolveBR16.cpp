@@ -288,6 +288,73 @@ static void gdn_w16_fold_quant_act(gdn_scr_t *sc, const uint16_t *Au, int row_st
 /* stream LUT: 4-pass dilated-kmajor halfword h -> byte offset of natural q16 (K=64,N=64).  DDR BSS;
  * offsets feed Q6_vgather (source must be the VTCM stage). */
 static uint16_t g_w16_hw[4096] __attribute__((aligned(128)));
+#if defined(GDN_BR_W16_N8)
+/* GDN_BR_W16_N8: renorm shift published by gdn_w16_kstack (out scale = in scale * 2^shift, 0 for d==1). */
+static __thread int g_w16n8_last_shift = 0;
+/* GDN_BR_W16_N8 act/out crouton_pos vgather LUTs (byte offsets into a VTCM stage): g_w16n8_qa[pack pos p]
+ * = 2*orig linear idx so surf[p] = nat[orig]; g_w16n8_qo[orig] = 2*p so cv[orig] = surf[p]. Replaces the
+ * scalar CROUTON_POS gather (which was ~44M-cyc producer-bound). */
+static uint16_t g_w16n8_qa[4096] __attribute__((aligned(128)));
+static uint16_t g_w16n8_qo[4096] __attribute__((aligned(128)));
+/* per-producer VTCM stage for the act/out crouton_pos vgather (vgather source must be VTCM). Set at the
+ * top of gdn_br_one_head16 from vt->stage (8K; reused sequentially with the wt-pack which also uses it). */
+static __thread int16_t *g_w16n8_stage = nullptr;
+#if defined(GDN_BR_W16_N8_ACVRES) || defined(GDN_BR_W16_N8_ACVRES_DUMP) || defined(GDN_BR_W16_N8_ARES)
+/* GDN_BR_W16_N8_ACVRES (真兑现, 照搬 pure-HMX GP_CVIO/GP_RESIDENT): the 6 distinct merge A-act crouton
+ * surfaces (keys {1,3,4,6,7,8}) are an INPUT-SIDE pure format transform (fold M/S = host global const
+ * gdn_fold_MS(sA), independent of head/block/Tblk -> precomputable upstream). The host prepares them ONCE
+ * (offline DSP-dump, exactly like pure-HMX's host-prepared cv-block A) into the EXTENDED A input region;
+ * the timed solve DMAs the 48KB/head cv-block into the ACTCACHE VTCM slots ONCE per head (flat copy = the
+ * GP_CVIO head-load) and pre-sets vAa[key]=1 so the merge get_act_A is a pure pointer return: ZERO fold,
+ * ZERO quant, ZERO crouton vgather (= the -DGDN_BR_A_PRECROUTON cap path, but with CORRECT data).
+ * Compact slot order over the 6 distinct keys (gdn_blk_index): {1,3,4,6,7,8} -> 0..5. */
+static const int g_acvres_keys[6] = {1, 3, 4, 6, 7, 8};
+static __thread const uint8_t *g_w16n8_acvres_src = nullptr;   /* per-head DDR cv-block (6*8KB), set by caller */
+#if defined(GDN_BR_HEADLOAD_PROBE)
+/* EXP2 probe (gated, default OFF, production byte-unaffected): isolate the per-head 48KB head-load flat copy
+ * wall occupancy. g_headload_cyc = Σ per-head copy spans across ALL producers/heads (C15:14 PCYCLE). FARF'd
+ * at solve end. Tells whether ARES vs ACVRES -8.2% is "copy instructions" (~几万) or "prep serialization". */
+static uint64_t g_headload_cyc = 0;       /* Σ copy spans, all heads */
+static uint32_t g_headload_n   = 0;       /* #heads instrumented */
+static inline uint64_t gdn_hl_pcyc(void) { uint64_t c; asm volatile("%0 = C15:14" : "=r"(c)); return c; }
+#endif
+#endif
+#if defined(GDN_BR_W16_PACKCNT)
+/* PACKCNT probe (gated, default OFF, production byte-unaffected): clean Σ-work + call-count for wt-pack vs
+ * act-pack, SEPARATELY (the GDN_BR_TRACE stage-8 bucket lumps both into one "PACK" tally, hiding the split).
+ * Σ = work-volume summed over all producer threads (C15:14 PCYCLE), exactly the口径 of pure-HMX's per-inst
+ * 4026 (Σ÷n).  per-inst = Σ÷count -> directly comparable to pure-HMX WT-PACK 4026. FARF'd at solve end. */
+static uint64_t g_wtpack_cyc = 0; static uint32_t g_wtpack_n = 0;   /* gdn_w16_pack_wt only */
+static uint64_t g_actpack_cyc = 0; static uint32_t g_actpack_n = 0; /* gdn_w16_pack_act + foldpack vgather */
+static inline uint64_t gdn_pc_pcyc(void) { uint64_t c; asm volatile("%0 = C15:14" : "=r"(c)); return c; }
+#endif
+#if defined(GDN_BR_W16_N8_ARES)
+/* GDN_BR_W16_N8_ARES (full GP_RESIDENT, 照搬 pure-HMX gdn_pure_solve.cpp:1071-1134): the 6 distinct merge
+ * A-act crouton surfaces for ALL 32 heads (32*6*8KB = 1.5MB) live in a SHARED GLOBAL VTCM tail region
+ * (vbase + P*stride), bulk-loaded ONCE at setup (host-prepared cv-block, byte-identical to the in-solve
+ * fold+crouton output -> bit-exact). The merge get_act_A returns an ALIAS pointer into that resident region
+ * (head*6 + slot_of_key)*8KB: ZERO head-load copy, ZERO fold/quant/crouton vgather. This eliminates the
+ * ACVRES per-head 48KB head-load flat copy entirely. */
+static const uint8_t *g_w16n8_ares_base = nullptr;   /* VTCM resident tail base (all 32 heads, set by caller, setup) */
+static __thread int g_w16n8_ares_head = -1;          /* this producer's current head index (set per-head in loop) */
+/* key -> compact slot index (0..5) over the 6 distinct keys {1,3,4,6,7,8}; -1 for non-merge keys. */
+static const signed char g_ares_key2slot[16] = {
+    -1, 0, -1, 1,  2, -1, 3, 4,  5, -1, -1, -1, -1, -1, -1, -1 };
+#if defined(GDN_BR_W16_N8_ARES_FASTPTR)
+/* EXP3 (gated, default OFF): per-head precomputed alias ptr table. Prep stage (head start) resolves the 6
+ * merge-key aliases ONCE into g_ares_ptr[key]; get_act_A then does a pure indexed load (no key2slot lookup,
+ * no head*6+s*0x2000 mul/add per merge-K-term). Tests if the 62K residual is a per-call branch cost. */
+static __thread const uint8_t *g_ares_ptr[16] = {0};   /* key -> resident alias ptr (set per-head, 0 = miss) */
+static inline void gdn_ares_fastptr_setup(void) {
+    for (int k = 0; k < 16; ++k) g_ares_ptr[k] = nullptr;
+    if (g_w16n8_ares_base && g_w16n8_ares_head >= 0)
+        for (int s = 0; s < 6; ++s)
+            g_ares_ptr[g_acvres_keys[s]] =
+                g_w16n8_ares_base + ((size_t)g_w16n8_ares_head * 6 + (size_t)s) * 0x2000u;
+}
+#endif
+#endif
+#endif
 static void gdn_w16_lut_init(void) {
     int h = 0;
     for (int nt = 0; nt < 2; ++nt) for (int half = 0; half < 2; ++half) for (int kt = 0; kt < 2; ++kt)
@@ -297,10 +364,27 @@ static void gdn_w16_lut_init(void) {
                 int rgrp = off / 128, rem = off % 128, col = rem / 4, row = rgrp * 4 + rem % 4;
                 g_w16_hw[h++] = (uint16_t)(2 * ((kt * 32 + row) * 64 + (nt * 32 + col)));
             }
+#if defined(GDN_BR_W16_N8)
+    for (int r = 0; r < 64; ++r) for (int c = 0; c < 64; ++c) {
+        int p = GDN_W16N8_CROUTON_POS(r, c), orig = r * 64 + c;
+        g_w16n8_qa[p] = (uint16_t)(2 * orig);   /* pack[p] gathers from nat[orig] */
+        g_w16n8_qo[orig] = (uint16_t)(2 * p);   /* cv[orig] gathers from surf[p] */
+    }
+#endif
 }
 
-/* weight pack: natural q16 (DDR ok) -> 8K 4-pass stream dst (VTCM) via vgather, + int32 colsum[64]. */
+/* weight pack: natural q16 (DDR ok) -> 8K 4-pass stream dst (VTCM) via vgather, + int32 colsum[64].
+ * The HVX vgather stream (g_w16_hw LUT, nt<2/half<2/kt<2) is byte-identical to the proven scalar
+ * w16a16_pack_wt_kmajor(.,64,64) (S1 gate: dW=0), so GDN_BR_W16_N8 reuses this SAME fast packer — the
+ * n8 lean consumer reads the kmajor stream at the same fixed offsets. (An earlier n8 build that called
+ * the SCALAR w16a16_pack_wt_kmajor here cost ~54M cyc/run = wt-pack-bound; this HVX path is the fix.) */
 static void gdn_w16_pack_wt(const int16_t *w_nat, int16_t *stage, uint8_t *dst, int32_t *colsum) {
+#if defined(GDN_BR_CAP_PACK) || defined(GDN_BR_CAP_PACK_W)
+    return;   /* cap-test: skip W16_N8 weight kmajor pack (valid wall-delta; mxmem timing data-independent) */
+#endif
+#if defined(GDN_BR_W16_PACKCNT)
+    uint64_t _pc0 = gdn_pc_pcyc();
+#endif
     for (int i = 0; i < 64; ++i) ((HVX_Vector *)stage)[i] = ((const HVX_UVector *)w_nat)[i];
     HVX_Vector *gtmp = (HVX_Vector *)(stage + 4096);
     const HVX_Vector *ofs = (const HVX_Vector *)g_w16_hw;
@@ -323,6 +407,10 @@ static void gdn_w16_pack_wt(const int16_t *w_nat, int16_t *stage, uint8_t *dst, 
     }
     HVX_VectorPair nat = Q6_W_vshuff_VVR(aH, aL, -4);
     ((HVX_Vector *)colsum)[0] = Q6_V_lo_W(nat); ((HVX_Vector *)colsum)[1] = Q6_V_hi_W(nat);
+#if defined(GDN_BR_W16_PACKCNT)
+    __sync_fetch_and_add(&g_wtpack_cyc, gdn_pc_pcyc() - _pc0);
+    __sync_fetch_and_add(&g_wtpack_n, 1u);
+#endif
 }
 
 /* bias record: 4 groups x [ctrl x32 | (eff,0) x16], eff = floor(-colsum/2) (proven contract). */
@@ -339,6 +427,25 @@ static void gdn_w16_bias(const int32_t *cs, int32_t *bias) {
 /* act pack: natural u16 rows -> PADDED 2048B crouton16 blocks (16 blocks, live 512B; mm64-proven —
  * compact 512B-stride act blocks REFUTED on device, the kernel reads past the live span). */
 static void gdn_w16_pack_act(const uint16_t *nat, uint8_t *blk) {
+#if defined(GDN_BR_CAP_PACK) || defined(GDN_BR_CAP_PACK_A)
+    return;   /* cap-test: skip W16 act crouton pack (valid wall-delta; mxmem timing data-independent) */
+#endif
+#if defined(GDN_BR_W16_PACKCNT)
+    uint64_t _pc0 = gdn_pc_pcyc();
+#endif
+#if defined(GDN_BR_W16_N8)
+    /* GDN_BR_W16_N8: DENSE n8 crouton_pos layout (S0-proven bit-exact to native ConvLayer_s1), produced by
+     * HVX vgather (g_w16n8_qa LUT) from a VTCM stage -> flat 8KB surface (4 tiles x 2KB); the lean consumer
+     * reads atab[i]=blk+(i&3)*2048. (Scalar CROUTON_POS gather was ~44M-cyc producer-bound; this is the fix.) */
+    int16_t *stage = g_w16n8_stage;
+    for (int i = 0; i < 64; ++i) ((HVX_Vector *)stage)[i] = ((const HVX_UVector *)nat)[i];   /* nat -> VTCM */
+    HVX_Vector *g = (HVX_Vector *)(stage + 4096);
+    const HVX_Vector *o = (const HVX_Vector *)g_w16n8_qa;
+    for (int v = 0; v < 64; ++v) {
+        Q6_vgather_ARMVh((void *)g, (uint32_t)(uintptr_t)stage, 8191, o[v]);
+        ((HVX_Vector *)blk)[v] = *g;   /* blk[pack pos] = nat[orig] (act has no zp xform) */
+    }
+#else
     for (int r4 = 0; r4 < 8; ++r4) for (int m32 = 0; m32 < 2; ++m32) for (int rp = 0; rp < 2; ++rp) {
         int r0 = m32 * 32 + r4 * 4 + rp * 2;
         HVX_Vector v0 = ((const HVX_Vector *)nat)[r0], v1 = ((const HVX_Vector *)nat)[r0 + 1];
@@ -346,10 +453,65 @@ static void gdn_w16_pack_act(const uint16_t *nat, uint8_t *blk) {
         *(HVX_Vector *)(blk + (size_t)(r4 * 2 + 0) * 2048 + (m32 * 2 + rp) * 128) = Q6_V_lo_W(s);
         *(HVX_Vector *)(blk + (size_t)(r4 * 2 + 1) * 2048 + (m32 * 2 + rp) * 128) = Q6_V_hi_W(s);
     }
+#endif
+#if defined(GDN_BR_W16_PACKCNT)
+    __sync_fetch_and_add(&g_actpack_cyc, gdn_pc_pcyc() - _pc0);
+    __sync_fetch_and_add(&g_actpack_n, 1u);
+#endif
 }
+
+#if defined(GDN_BR_W16_N8) && defined(GDN_BR_W16_N8_ACTCV)
+/* GDN_BR_W16_N8_ACTCV (path b真兑现): FUSED fold+quant+crouton straight into the cv-resident surface.
+ * The A act path is a pure input-side format transform (fold M/S = host global const gdn_fold_MS(sA),
+ * independent of head/block/Tblk -> hoistable / cv-resident, like pure-HMX's gp_cv_to_surf contract).
+ * Fuse eliminates the qbuf16(nat) intermediate of the default (fold->qbuf16 ; pack copies qbuf16->stage):
+ * fold writes the folded q15 nat DIRECTLY into the VTCM stage, then the crouton vgather runs in place.
+ * The folded q15 nat bytes are byte-IDENTICAL to the default fold output, so the gathered surface is
+ * byte-identical too (bit-exact: same Au + same M/S/g + same g_w16n8_qa LUT). */
+static void gdn_w16_foldpack_act_cv(gdn_scr_t *sc, const uint16_t *Au, int row_stride,
+                                    int zpA, int M, int S, uint8_t *blk) {
+    (void)sc; (void)zpA;
+    const int Mrep = (M & 0xFFFF) * 0x10001;
+    float g = (float)(1.0 / (1 << GDN_BR_F)) / GDN_W16_sAa;
+    int Mq = (int)(g * 32768.0f + 0.5f); if (Mq > 32767) Mq = 32767;
+    int Rq = (Mq & 0xFFFF) | (Mq << 16);
+    const HVX_Vector vxor = Q6_V_vsplat_R(0x80008000), vrndS = Q6_V_vsplat_R(1 << (S - 1));
+    int16_t *stage = g_w16n8_stage;                 /* fold writes folded q15 nat straight into VTCM stage */
+    for (int r = 0; r < BL; ++r) {
+        HVX_VectorPair fp = Q6_Ww_vmpy_VhRh(Q6_V_vxor_VV(*(const HVX_UVector *)(Au + r * row_stride), vxor), Mrep);
+        HVX_Vector i0 = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_V_lo_W(fp), vrndS), S);
+        HVX_Vector i1 = Q6_Vw_vasr_VwR(Q6_Vw_vadd_VwVw(Q6_V_hi_W(fp), vrndS), S);
+        HVX_VectorPair s = Q6_W_vshuff_VVR(i1, i0, -4);
+        HVX_Vector f16 = Q6_Vh_vpack_VwVw_sat(Q6_V_hi_W(s), Q6_V_lo_W(s));
+        ((HVX_Vector *)stage)[r] = Q6_V_vxor_VV(Q6_Vh_vmpy_VhRh_s1_rnd_sat(f16, Rq), Q6_V_vsplat_R(0x80008000));
+    }
+#if defined(GDN_BR_CAP_PACK) || defined(GDN_BR_CAP_PACK_A)
+    return;
+#endif
+    HVX_Vector *gptr = (HVX_Vector *)(stage + 4096);
+    const HVX_Vector *o = (const HVX_Vector *)g_w16n8_qa;
+    for (int v = 0; v < 64; ++v) {                  /* crouton vgather IN PLACE from the stage (no nat copy) */
+        Q6_vgather_ARMVh((void *)gptr, (uint32_t)(uintptr_t)stage, 8191, o[v]);
+        ((HVX_Vector *)blk)[v] = *gptr;
+    }
+}
+#endif
 
 /* out depack: padded crouton16 surface (u16 zp 32768) -> natural int16 codes. */
 static void gdn_w16_depack_out(const uint8_t *surf, int16_t *out) {
+#if defined(GDN_BR_W16_N8)
+    /* GDN_BR_W16_N8: inverse crouton_pos via HVX vgather (g_w16n8_qo) from a VTCM stage; u16 zp 32768 ->
+     * int16 code via xor 0x8000 (= -32768). */
+    const HVX_Vector X = Q6_Vh_vsplat_R(0x8000);
+    int16_t *stage = g_w16n8_stage;
+    for (int i = 0; i < 64; ++i) ((HVX_Vector *)stage)[i] = ((const HVX_Vector *)surf)[i];   /* surf -> VTCM */
+    HVX_Vector *g = (HVX_Vector *)(stage + 4096);
+    const HVX_Vector *o = (const HVX_Vector *)g_w16n8_qo;
+    for (int v = 0; v < 64; ++v) {
+        Q6_vgather_ARMVh((void *)g, (uint32_t)(uintptr_t)stage, 8191, o[v]);
+        ((HVX_Vector *)out)[v] = Q6_V_vxor_VV(*g, X);   /* out[orig] = surf[pack pos] ^ zp */
+    }
+#else
     const HVX_Vector X = Q6_Vh_vsplat_R(0x8000);
     for (int r4 = 0; r4 < 8; ++r4) for (int m32 = 0; m32 < 2; ++m32) for (int rp = 0; rp < 2; ++rp) {
         int r0 = m32 * 32 + r4 * 4 + rp * 2;
@@ -359,6 +521,7 @@ static void gdn_w16_depack_out(const uint8_t *surf, int16_t *out) {
         ((HVX_Vector *)out)[r0]     = Q6_V_vxor_VV(Q6_V_lo_W(d), X);
         ((HVX_Vector *)out)[r0 + 1] = Q6_V_vxor_VV(Q6_V_hi_W(d), X);
     }
+#endif
 }
 
 /* Q15 quant int16->u16 (g<1, zp 32768 via xor). */
@@ -371,10 +534,61 @@ static void gdn_w16_quant_u16_q15(const int16_t *codes, float g, uint16_t *out) 
 }
 
 /* ---- W16 operand getters ---- */
-/* A_ik act: use-once -> fold+quant+pack TRANSIENT into padded slot m (32K each; no cache). */
+/* A_ik act: fold+quant+pack the crouton16 surface.
+ *  default  : use-once -> TRANSIENT padded slot m (no cache; 7/16 packs are bit-identical repacks).
+ *  ACTCACHE : per-distinct-key cache keyed by gdn_blk_index(i,k) into a persistent 8KB slot (restores the
+ *             SHIP u8i8 gdn_get_act_A vAa pattern W16_N8 dropped) -> on hit skip BOTH fold+quant AND pack.
+ *             The skipped repack is byte-identical to the cached surface, so the cache is bit-exact. */
 static const uint8_t *gdn_w16_get_act_A(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_t *Ah,
                                         int i, int k, int C_, int zpA, int M, int S, int slot) {
+#if defined(GDN_BR_W16_N8_ACTCACHE)
+    (void)slot;
+    int key = gdn_blk_index(i, k);
+    uint8_t *cr = GDN_W16_ACTC_A(vt, key);
+#if defined(GDN_BR_W16_N8_ARES)
+    /* full GP_RESIDENT: alias the resident-tail surface for (this head, this key); ZERO copy, ZERO fold/pack
+     * (= -DGDN_BR_A_PRECROUTON pointer return, but with CORRECT host-prepared resident data). */
+#if defined(GDN_BR_W16_N8_ARES_FASTPTR)
+    /* EXP3: pure indexed load — prep已把 6 个 alias 指针写进 g_ares_ptr[key] (per-head 一次性)。 */
+    if (g_ares_ptr[key]) { (void)Ah; (void)C_; (void)zpA; (void)M; (void)S; return g_ares_ptr[key]; }
+#else
+    if (g_w16n8_ares_base && g_w16n8_ares_head >= 0) {
+        int s = g_ares_key2slot[key];   /* 0..5 over {1,3,4,6,7,8}; merge keys only */
+        if (s >= 0) {
+            (void)Ah; (void)C_; (void)zpA; (void)M; (void)S;
+            return g_w16n8_ares_base + ((size_t)g_w16n8_ares_head * 6 + (size_t)s) * 0x2000u;
+        }
+    }
+#endif
+#endif
+#if defined(GDN_BR_A_PRECROUTON)
+    /* ROUTE "A pre-crouton cv-resident" (W16_N8 upper-bound cap-test): the A fold+quant+crouton is a pure
+     * input-side format transform (fold M/S = host global const gdn_fold_MS(sA), independent of head/block/Tblk)
+     * -> it can be hoisted upstream/cv-resident.  Cap-test: skip BOTH fold+quant AND pack (cr holds whatever;
+     * mxmem timing is data-independent => valid wall-delta UPPER BOUND; T is WRONG -> wall口径 only). */
+    (void)Ah; (void)C_; (void)zpA; (void)M; (void)S; return cr;
+#endif
+    if (sc->vAa[key]) return cr;   /* cache hit: surface already packed (bit-identical repack avoided) */
+#else
     uint8_t *cr = GDN_W16_ACT_SLOT(vt, slot);
+#if defined(GDN_BR_A_PRECROUTON)
+    (void)Ah; (void)C_; (void)zpA; (void)M; (void)S; return cr;
+#endif
+#endif
+#if defined(GDN_BR_W16_N8_ACTCV)
+    /* path b真兑现: ONE fused fold+quant+crouton -> cv-resident surface (no qbuf16 nat round-trip). */
+#if defined(GDN_BR_TRACE)
+    uint64_t _t0 = gdn_trnow();
+#endif
+    gdn_w16_foldpack_act_cv(sc, Ah + (size_t)i * BL * C_ + k * BL, C_, zpA, M, S, cr);
+#if defined(GDN_BR_TRACE)
+    gdn_tr_push((uint32_t)(sc - g_scr), 8, _t0, gdn_trnow());
+#endif
+#if defined(GDN_BR_W16_N8_ACTCACHE)
+    sc->vAa[key] = 1;
+#endif
+    return cr;
+#endif
 #if defined(GDN_BR_TRACE)
     uint64_t _t0 = gdn_trnow();
 #endif
@@ -386,10 +600,35 @@ static const uint8_t *gdn_w16_get_act_A(gdn_scr_t *sc, const gdn_vtcm_t *vt, con
 #if defined(GDN_BR_TRACE)
     gdn_tr_push((uint32_t)(sc - g_scr), 8, _t1, gdn_trnow());
 #endif
+#if defined(GDN_BR_W16_N8_ACTCACHE)
+    sc->vAa[key] = 1;
+#endif
     return cr;
 }
-/* T_ii act: quant ONCE to natural u16 cache (8K VTCM), re-pack per final merge into slot 0. */
+/* T_ii act as final-merge activation: quant (Tblk16 -> u16 q15 nat) + crouton pack.
+ *  default  : quant cached as NATURAL u16 by i (vTa), but RE-PACKED into slot 0 every final merge.
+ *  ACTCACHE : quant + pack ONCE into a persistent 8KB slot keyed by i; on hit skip both (cuts the 3
+ *             T_ii repacks).  Bit-exact: same Tblk16[bii] -> same nat -> same packed surface. */
 static const uint8_t *gdn_w16_get_act_Tdiag(gdn_scr_t *sc, const gdn_vtcm_t *vt, int i) {
+#if defined(GDN_BR_W16_N8_ACTCACHE)
+    uint8_t *cr = GDN_W16_ACTC_T(vt, i);
+    if (sc->vTa[i]) return cr;     /* cache hit: packed surface already present */
+    int bii = gdn_blk_index(i, i);
+    uint16_t *nat = GDN_W16_ACTC_NAT(vt);   /* transient nat scratch (reused; packed surface is cached) */
+#if defined(GDN_BR_TRACE)
+    uint64_t _t0 = gdn_trnow();
+#endif
+    gdn_w16_quant_u16_q15(sc->Tblk16[bii], GDN_BR_TI / GDN_W16_sTa, nat);
+#if defined(GDN_BR_TRACE)
+    uint64_t _t1 = gdn_trnow(); gdn_tr_push((uint32_t)(sc - g_scr), 4, _t0, _t1);
+#endif
+    gdn_w16_pack_act(nat, cr);
+#if defined(GDN_BR_TRACE)
+    gdn_tr_push((uint32_t)(sc - g_scr), 8, _t1, gdn_trnow());
+#endif
+    sc->vTa[i] = 1;
+    return cr;
+#else
     uint16_t *nat = GDN_W16_TDIAG_NAT(vt, i);
     if (!sc->vTa[i]) {
         int bii = gdn_blk_index(i, i);
@@ -411,6 +650,7 @@ static const uint8_t *gdn_w16_get_act_Tdiag(gdn_scr_t *sc, const gdn_vtcm_t *vt,
     gdn_tr_push((uint32_t)(sc - g_scr), 8, _t1, gdn_trnow());
 #endif
     return cr;
+#endif
 }
 /* T_kj weight: off-diag codes are ALREADY @sTw16 (<32639, final-merge drain) -> pack directly;
  * diag (k==j) rescales TI->sTw16 (g~1.98) first. */
@@ -437,11 +677,135 @@ static const int8_t *gdn_w16_get_wt_T(gdn_scr_t *sc, const gdn_vtcm_t *vt, int k
     return st;
 }
 
+#if defined(GDN_BR_W16_N8)
+/* ---- GDN_BR_W16_N8 cv-domain int32 accumulate (bit-exact replica of pure-HMX gp_acc_*; the int16
+ * sat-add path GDN_W16_NOSTACK has a precision pit, so n8 always uses int32 acc + renorm). ---- */
+static inline void gdn_w16n8_acc_zero(int32_t *acc) {
+    HVX_Vector *d = (HVX_Vector *)acc, z = Q6_V_vzero();
+    for (int i = 0; i < 128; ++i) d[i] = z;
+}
+/* acc += sxt32(int16 cv) >> sh  (sh==0 for same-scale K-terms). */
+static inline void gdn_w16n8_acc_addsh(int32_t *acc, const int16_t *p, int sh) {
+    const HVX_Vector *vp = (const HVX_Vector *)p; HVX_Vector *d = (HVX_Vector *)acc;
+    for (int i = 0; i < 64; ++i) { HVX_VectorPair w = Q6_Ww_vsxt_Vh(vp[i]);
+        d[2 * i]     = Q6_Vw_vadd_VwVw(d[2 * i],     Q6_Vw_vasr_VwR(Q6_V_lo_W(w), sh));
+        d[2 * i + 1] = Q6_Vw_vadd_VwVw(d[2 * i + 1], Q6_Vw_vasr_VwR(Q6_V_hi_W(w), sh)); }
+}
+#if defined(GDN_BR_W16_N8_FUSEDEP)
+/* FUSED-DEPACK acc += sxt32(surf u16 ^ zp)  in TILED (crouton16 surface) coordinates, sh==0.
+ * Reads the 8KB tiled HMX out surface directly (zp 32768 -> int16 code via xor 0x8000), skipping the
+ * per-block untile (gdn_w16_depack_out). Untiling is a pure index permutation, and sxt32+add is a
+ * per-element linear op, so accumulating in tiled order then untiling ONCE at the end (gdn_w16n8_untile_cv)
+ * is byte-exact identical to the per-block untile+acc path. Saves d-1 untile gathers. */
+static inline void gdn_w16n8_acc_add_surf(int32_t *acc, const uint8_t *surf) {
+    const HVX_Vector X = Q6_Vh_vsplat_R(0x8000);
+    const HVX_Vector *vp = (const HVX_Vector *)surf; HVX_Vector *d = (HVX_Vector *)acc;
+    for (int i = 0; i < 64; ++i) { HVX_VectorPair w = Q6_Ww_vsxt_Vh(Q6_V_vxor_VV(vp[i], X));
+        d[2 * i]     = Q6_Vw_vadd_VwVw(d[2 * i],     Q6_V_lo_W(w));
+        d[2 * i + 1] = Q6_Vw_vadd_VwVw(d[2 * i + 1], Q6_V_hi_W(w)); }
+}
+/* untile a TILED int16 cv buffer (surf order, NO zp) -> natural int16 codes, once. Same crouton_pos
+ * inverse gather as gdn_w16_depack_out but no xor (cv is already a signed code). */
+static inline void gdn_w16n8_untile_cv(const int16_t *cv_tiled, int16_t *out) {
+    int16_t *stage = g_w16n8_stage;
+    for (int i = 0; i < 64; ++i) ((HVX_Vector *)stage)[i] = ((const HVX_Vector *)cv_tiled)[i];
+    HVX_Vector *g = (HVX_Vector *)(stage + 4096);
+    const HVX_Vector *o = (const HVX_Vector *)g_w16n8_qo;
+    for (int v = 0; v < 64; ++v) {
+        Q6_vgather_ARMVh((void *)g, (uint32_t)(uintptr_t)stage, 8191, o[v]);
+        ((HVX_Vector *)out)[v] = *g;   /* out[orig] = cv_tiled[pack pos] */
+    }
+}
+#endif
+static inline int32_t gdn_w16n8_acc_absmax(const int32_t *acc) {
+    const HVX_Vector *d = (const HVX_Vector *)acc; HVX_Vector mx = Q6_V_vzero();
+    for (int i = 0; i < 128; ++i) mx = Q6_Vw_vmax_VwVw(mx, Q6_Vw_vabs_Vw(d[i]));
+    for (int sh = 64; sh >= 4; sh >>= 1) mx = Q6_Vw_vmax_VwVw(mx, Q6_V_vror_VR(mx, sh));
+    union { HVX_Vector v; int32_t w[32]; } u; u.v = mx; return u.w[0];
+}
+/* int32 acc -> int16 cv at shift s (s>0 = asr-sat, s<0 = asl), clamp +-32639. */
+static inline void gdn_w16n8_acc_to_cv(int16_t *cv, const int32_t *acc, int s) {
+    const HVX_Vector *d = (const HVX_Vector *)acc; HVX_Vector *o = (HVX_Vector *)cv;
+    const HVX_Vector CP = Q6_Vh_vsplat_R(32639), CN = Q6_Vh_vsplat_R(-32639);
+    for (int i = 0; i < 64; ++i) { HVX_Vector lo = d[2 * i], hi = d[2 * i + 1];
+        if (s < 0) { lo = Q6_Vw_vasl_VwR(lo, -s); hi = Q6_Vw_vasl_VwR(hi, -s); }
+        o[i] = Q6_Vh_vasr_VwVwR_sat(hi, lo, s > 0 ? (s & 31) : 0);
+        o[i] = Q6_Vh_vmin_VhVh(Q6_Vh_vmax_VhVh(o[i], CN), CP); }
+}
+/* renorm: pick s so absmax fits +-32639, write cv, return s (out scale = in scale * 2^s). */
+static inline int gdn_w16n8_renorm(int32_t *acc, int16_t *cv) {
+    int32_t mx = gdn_w16n8_acc_absmax(acc);
+    int s = 0; while ((mx >> s) > 32639) ++s;
+    if (s == 0) { while (mx && (mx << 1) <= 16384) { mx <<= 1; --s; } }
+    gdn_w16n8_acc_to_cv(cv, acc, s); return s;
+}
+#endif  /* GDN_BR_W16_N8 */
+
 /* one w16a16 64^3 (K=64d) matmul: act = d padded crouton16 caches, wt = nt-major d-stacked stream copy,
  * bias = summed colsum.  Dispatch to the consumer; depack into natural int16 codes (scale = caller's). */
 static void gdn_w16_kstack(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint8_t *const act_cr[],
                            const int8_t *const wt_st[], const int32_t *const cs_blk[], int d,
                            int16_t *out_codes) {
+#if defined(GDN_BR_W16_N8)
+    /* GDN_BR_W16_N8: d SINGLE-block n8 dense dispatches + cv-domain int32 accumulate at the FIXED static
+     * scale (GDN_W16_sS). Each block drains at the same 1/32767 gain landing at GDN_W16_sS, so the d terms
+     * sum with sh=0 in int32 (full precision, no per-block int16 sat-add pit), then write back to int16 at
+     * the SAME scale (asr 0, saturate +-32639) -> Sacc16 stays @GDN_W16_sS, byte-compatible with the n64
+     * K-stack contract (the static gain chain guarantees the K-sum fits int16, codes ~<=12.5K). No renorm:
+     * the downstream final merge requantizes Sacc16 assuming the constant GDN_W16_sS (line ~1099). */
+    int32_t acc[BL * BL] __attribute__((aligned(128)));
+    gdn_w16n8_acc_zero(acc);
+    int16_t blk[BL * BL] __attribute__((aligned(128)));
+    for (int m = 0; m < d; ++m) {
+        /* act tiles: flat 8KB crouton_pos surface, atab[i] = act_cr[m] + (i&3)*2048 (lean reads 0..3). */
+        for (int i = 0; i < 4; ++i) {
+            vt->acttab[i] = (int32_t)(uintptr_t)(act_cr[m] + (size_t)(i & 3) * 2048);
+            vt->outtab[i] = (int32_t)(uintptr_t)(vt->out + (size_t)(i & 3) * 2048);
+        }
+        gdn_w16_bias((int32_t *)cs_blk[m], vt->bias);   /* per-block colsum -> bias (single block, no sum) */
+        g_kstack_nap = 2;
+        g_hmx_dispatch(sc, (gdn_vtcm_t *)vt, wt_st[m], nullptr, 0.f, 0, 0);
+#if defined(GDN_BR_TRACE)
+        uint64_t _dp0 = gdn_trnow();   /* pure-HMX口径: producer post-dispatch depack/accumulate (dispatch pushed SPIN); NO producer MM */
+#endif
+#if defined(GDN_BR_W16_N8_FUSEDEP)
+        if (d == 1) {                                     /* single block: untile final codes directly */
+            gdn_w16_depack_out(vt->out, out_codes); g_w16n8_last_shift = 0;
+#if defined(GDN_BR_TRACE)
+            gdn_tr_push((uint32_t)(sc - g_scr), 10, _dp0, gdn_trnow());   /* DEPACK */
+#endif
+            return;
+        }
+        gdn_w16n8_acc_add_surf(acc, vt->out);             /* accumulate in TILED coords, no per-block untile */
+#else
+        gdn_w16_depack_out(vt->out, (d == 1) ? out_codes : blk);
+        if (d == 1) { g_w16n8_last_shift = 0;
+#if defined(GDN_BR_TRACE)
+            gdn_tr_push((uint32_t)(sc - g_scr), 10, _dp0, gdn_trnow());   /* DEPACK */
+#endif
+            return;   /* single block: codes already final, scale unchanged */
+        }
+        gdn_w16n8_acc_addsh(acc, blk, 0);
+#endif
+#if defined(GDN_BR_TRACE)
+        gdn_tr_push((uint32_t)(sc - g_scr), 10, _dp0, gdn_trnow());   /* DEPACK (per-block depack+accumulate) */
+#endif
+    }
+#if defined(GDN_BR_TRACE)
+    uint64_t _dpf0 = gdn_trnow();
+#endif
+#if defined(GDN_BR_W16_N8_FUSEDEP)
+    gdn_w16n8_acc_to_cv(blk, acc, 0);                     /* int32 sum -> tiled int16 cv @GDN_W16_sS */
+    gdn_w16n8_untile_cv(blk, out_codes);                  /* ONE untile -> natural codes */
+#else
+    gdn_w16n8_acc_to_cv(out_codes, acc, 0);   /* int32 sum -> int16 @GDN_W16_sS (sat +-32639) */
+#endif
+#if defined(GDN_BR_TRACE)
+    gdn_tr_push((uint32_t)(sc - g_scr), 10, _dpf0, gdn_trnow());   /* DEPACK (final untile/to_cv) */
+#endif
+    g_w16n8_last_shift = 0;
+    return;
+#endif
     int8_t *w = vt->wt;
     /* stream order for K=64d = [nt][half][kt 0..2d-1]; one cached 64-block holds [nt][half][kt 0..1] in
      * 16-vec (2K) quarters -> quarter q of blk m lands at (q*d + m)*16 vecs.  d==1 = identity. */
@@ -465,7 +829,13 @@ static void gdn_w16_kstack(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint8_t *c
     g_kstack_nap = Kt;
     g_hmx_dispatch(sc, (gdn_vtcm_t *)vt, w, nullptr, 0.f, 0, 0);
     g_kstack_nap = 2;
+#if defined(GDN_BR_TRACE)
+    uint64_t _dpn0 = gdn_trnow();
+#endif
     gdn_w16_depack_out(vt->out, out_codes);
+#if defined(GDN_BR_TRACE)
+    gdn_tr_push((uint32_t)(sc - g_scr), 10, _dpn0, gdn_trnow());   /* DEPACK */
+#endif
 }
 #endif  /* GDN_BR_W16 */
 
@@ -643,12 +1013,38 @@ static void gdn_br_one_head16(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_
 #if defined(GDN_BR_TRACE)
     uint32_t _tid = (uint32_t)(sc - g_scr); uint64_t _hd0 = gdn_trnow();
 #endif
+#if defined(GDN_BR_W16_N8)
+    g_w16n8_stage = vt->stage;   /* VTCM stage for the act/out crouton_pos vgather */
+#endif
     for (int b = 0; b < GDN_BR_NBLK; ++b) { sc->vAa[b] = 0; sc->vTw[b] = 0;
 #if defined(GDN_BR_BP4)
         sc->vBa[b] = 0;
 #endif
     }
     for (int i = 0; i < NB; ++i) sc->vTa[i] = 0;
+#if defined(GDN_BR_W16_N8_ACVRES)
+    /* GP_CVIO head-load (照搬 pure-HMX): bring the host-prepared 6 cv-block A surfaces (DDR) into the
+     * ACTCACHE VTCM slots and mark them valid. The merge get_act_A then returns the pointer with ZERO
+     * fold/quant/vgather (the surfaces are byte-identical to the in-solve fold+crouton output -> bit-exact).
+     * The per-head 48KB DDR->VTCM flat copy IS the GP_CVIO head-load (overlaps the natural-A prefetch DMA). */
+    if (g_w16n8_acvres_src) {
+#if defined(GDN_BR_HEADLOAD_PROBE)
+        uint64_t _hl0 = gdn_hl_pcyc();
+#endif
+        for (int s = 0; s < 6; ++s) {
+            int key = g_acvres_keys[s];
+            const HVX_Vector *src = (const HVX_Vector *)(g_w16n8_acvres_src + (size_t)s * 0x2000u);
+            HVX_Vector *dst = (HVX_Vector *)GDN_W16_ACTC_A(vt, key);
+            for (int v = 0; v < 64; ++v) dst[v] = src[v];   /* 8KB = 64 HVX vectors, flat copy */
+            sc->vAa[key] = 1;                                /* pre-valid -> get_act_A cache-hit (pointer return) */
+        }
+#if defined(GDN_BR_HEADLOAD_PROBE)
+        uint64_t _hl1 = gdn_hl_pcyc();
+        __sync_fetch_and_add(&g_headload_cyc, _hl1 - _hl0);   /* Σ 48KB head-load copy span, all heads */
+        __sync_fetch_and_add(&g_headload_n, 1u);
+#endif
+    }
+#endif
     /* diag: forward-subst (proven int32 path) -> narrow to int16 store. */
     for (int i = 0; i < NB; ++i) {
         int bi = gdn_blk_index(i, i);
@@ -690,6 +1086,75 @@ static void gdn_br_one_head16(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_
     }
     /* off-diagonal merges. */
 #if !defined(GDN_BR_CAP_OFFDIAG)   /* cap-test: skip ALL off-diag (DIAG-only wall floor; T wrong but DIAG timing valid) */
+#if defined(GDN_BR_SWPIPE_KSTACK) && defined(GDN_BR_KSTACK) && !defined(GDN_BR_W16) && !defined(GDN_BR_BP4)
+    /* EXP-B (疑点3) cross-block software pipeline over the Sigma_k merge: dispatch block n's K-stack matmul
+     * async, then prep block n+1's operand CACHES (acache/wcache fills — safe, distinct VTCM slots) while the
+     * consumer runs n; then wait+depack n and do n's data-dependent finalize (widen + final-merge + requant).
+     * Block order = (d outer, j inner), same as the sync loop -> identical results.  Gated default OFF. */
+    {
+        struct { int i, j, d, bij; } blk[GDN_BR_NBLK]; int NBK = 0;
+        for (int d = 1; d < NB; ++d) for (int j = 0; j + d < NB; ++j) {
+            blk[NBK].d = d; blk[NBK].j = j; blk[NBK].i = j + d; blk[NBK].bij = gdn_blk_index(j + d, j); ++NBK;
+        }
+        /* per-block prepped operand list + dispatch state (1 job in flight; carry the in-flight block). */
+        const uint8_t *p_act[GDN_BR_NB]; const int8_t *p_wt[GDN_BR_NB]; const int32_t *p_eff[GDN_BR_NB];
+        /* prep ACTIVATIONS only (gdn_get_act_A: depends ONLY on A input, NEVER on a prior block's T result
+         * -> safe to overlap the consumer).  WEIGHTS (gdn_get_wt_T16) read Tblk16[k,j], which an EARLIER
+         * block's finalize produces -> a forward-subst dependency, so weights are fetched AFTER finalize. */
+        auto prep_acts = [&](int bk, const uint8_t **act_cr, float *sa_out) {
+            int i = blk[bk].i, j = blk[bk].j; float sak = 0.f;
+            for (int k = j; k < i; ++k) { float sa2; act_cr[k - j] = gdn_get_act_A(sc, vt, Ah, i, k, C, zpA, M, S, &sa2); sak = sa2; }
+            *sa_out = sak;
+        };
+        auto fetch_wts = [&](int bk, const int8_t **wt_km, const int32_t **eff_blk, float *sw_out) {
+            int i = blk[bk].i, j = blk[bk].j; float swk = 0.f;
+            for (int k = j; k < i; ++k) { float sw2; const int32_t *eff2; int wc2;
+                wt_km[k - j] = gdn_get_wt_T16(sc, vt, k, j, &sw2, &eff2, &wc2); eff_blk[k - j] = eff2; swk = sw2; }
+            *sw_out = swk;
+        };
+        float cur_sa = 0.f, cur_sw = 0.f, s_S_cur = 0.f;
+        for (int bk = 0; bk < NBK; ++bk) {
+            int i = blk[bk].i, j = blk[bk].j, d = blk[bk].d, bij = blk[bk].bij;
+            if (bk == 0) { prep_acts(0, p_act, &cur_sa); fetch_wts(0, p_wt, p_eff, &cur_sw); }
+            const uint8_t *n_act[GDN_BR_NB]; float n_sa = 0.f;
+            s_S_cur = gdn_merge_kstack_dispatch(sc, vt, p_act, p_wt, p_eff, d, cur_sa, cur_sw);   /* async, no spin */
+            /* overlap: prep NEXT block's ACTIVATIONS (dependency-free) while the consumer runs THIS block. */
+            if (bk + 1 < NBK) prep_acts(bk + 1, n_act, &n_sa);
+            gdn_merge_kstack_wait_depack(sc, vt, sc->termi);          /* spin (hidden by the act-prep above) + depack */
+            gdn_widen_i8_to_i16(sc->termi, sc->Sacc16);
+            float s_S = s_S_cur;
+            /* ---- finalize (identical to the sync KSTACK path) ---- */
+            { float sa_ii, sw_S, sij; int scolabs;
+              const uint8_t *a_ii = gdn_get_act_Tdiag16(sc, vt, i, &sa_ii);
+              gdn_quant_i8_i16w(sc->Sacc16, s_S, GDN_OPS_sSacc, sc->wtbuf);
+              sw_S = GDN_OPS_sSacc;
+              gdn_effective(sc->wtbuf, sc->eff, &scolabs);
+              gdn_pack_w8_kmajor(sc->wtbuf, vt->wt);
+#if defined(GDN_BR_FBOOST)
+              g_force_sP = GDN_OPS_sTw * 0.5f;
+#else
+              g_force_sP = GDN_OPS_sTw;
+#endif
+              gdn_merge_packed(sc, vt, a_ii, sa_ii, vt->wt, sc->eff, sw_S, scolabs, sc->termi, &sij);
+              g_force_sP = 0.f;
+#if defined(GDN_BR_REQ_FUSE)
+              gdn_requant_from_i8(sc->termi, sij, sT, zpT, Th, i * BL, j * BL, C, sc->Tblk16[bij]);
+              sc->Tscl[bij] = sij;
+#else
+              gdn_widen_i8_to_i16(sc->termi, sc->Tblk16[bij]); sc->Tscl[bij] = sij;
+              gdn_requant_i16(sc->Tblk16[bij], sij, sT, zpT, Th, i * BL, j * BL, C);
+#endif
+            }
+            /* now THIS block's Tblk16[bij] is finalized -> the next block's weights (which may read it via
+             * forward-subst) are safe to fetch.  Carry the overlap-prefetched acts + these wts to next iter. */
+            if (bk + 1 < NBK) {
+                for (int m = 0; m < GDN_BR_NB; ++m) p_act[m] = n_act[m];
+                cur_sa = n_sa;
+                fetch_wts(bk + 1, p_wt, p_eff, &cur_sw);
+            }
+        }
+    }
+#else
     for (int d = 1; d < NB; ++d) {
         for (int j = 0; j + d < NB; ++j) {
             int i = j + d, bij = gdn_blk_index(i, j);
@@ -708,9 +1173,6 @@ static void gdn_br_one_head16(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_
                     gdn_tr_push(_tid, 5, _p0, gdn_trnow());   /* PREP */
 #endif
                 }
-#if defined(GDN_BR_TRACE)
-                uint64_t _m0 = gdn_trnow();
-#endif
 #if defined(GDN_W16_NOSTACK)
                 /* bisect/fallback: d single-K dispatches + int16 sat add on the producer */
                 for (int m = 0; m < d; ++m) {
@@ -724,6 +1186,13 @@ static void gdn_br_one_head16(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_
                 gdn_w16_kstack(sc, vt, act_cr, wt_st, cs_blk, d, sc->Sacc16);
 #endif
                 s_S = GDN_W16_sS;
+#if defined(GDN_BR_W16_N8)
+                /* n8 cv-domain renorm rescaled the K-sum: out scale = nominal * 2^shift (shift small int). */
+                { int _sh = g_w16n8_last_shift; float _p = 1.0f;
+                  if (_sh > 0) for (int _i = 0; _i < _sh; ++_i) _p *= 2.0f;
+                  else for (int _i = 0; _i < -_sh; ++_i) _p *= 0.5f;
+                  s_S = GDN_W16_sS * _p; }
+#endif
 #if defined(GDN_W16_DBG_S)
                 /* debug: dump Sacc16 codes of (i=2,j=0,d=2) as u16 into the (0,1) upper-tri block */
                 if (i == 2 && j == 0)
@@ -741,9 +1210,7 @@ static void gdn_br_one_head16(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_
                     }
                 }
 #endif
-#if defined(GDN_BR_TRACE)
-                gdn_tr_push(_tid, 3, _m0, gdn_trnow());   /* MM (K-stack + depack) */
-#endif
+                /* pure-HMX口径: NO producer MM(3); consumer pushes MM(3), gdn_w16_kstack pushes SPIN+DEPACK. */
             }
 #elif defined(GDN_BR_BP4)
             /* byte-pass inner, FUSED 2 dispatches: HH @gb; L = K=2*64d stack [Al@Wh + Ah@Wl2] @gb/16.
@@ -781,6 +1248,9 @@ static void gdn_br_one_head16(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_
                 }
                 int32_t effs[BL] __attribute__((aligned(128)));
                 for (int n = 0; n < BL; ++n) effs[n] = effh[n] + effl[n];
+#if defined(GDN_BR_TRACE)
+                gdn_tr_push(_tid, 8, _m0, gdn_trnow());   /* PACK (pre-dispatch weight gather; bp_pass dispatch pushes SPIN) */
+#endif
                 if (d == 1) {                                   /* PAIR: HH + fused L (K=128 [Al|Ah]x[Wh|Wl2]) */
                     al_cr[1] = ah_cr[0];
                     gdn_bp_pass_pair(sc, vt, ah_cr, whs, effh, 1, gb,
@@ -793,6 +1263,9 @@ static void gdn_br_one_head16(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_
                     HVX_Vector *a = (HVX_Vector *)sc->wtbuf; const HVX_Vector *b = (const HVX_Vector *)sc->actbuf;
                     for (int v = 0; v < (BL * BL) / 128; ++v) a[v] = Q6_Vb_vadd_VbVb_sat(a[v], b[v]);
                 }
+#if defined(GDN_BR_TRACE)
+                uint64_t _bpd0 = gdn_trnow();
+#endif
                 gdn_bp_combine(sc->termi, (const int8_t *)sc->wtbuf, 4, effh, gb, sc->Sacc16);
                 s_S = (128.0f * (float)GDN_OPS_COLABS * (float)d * GDN_OPS_sAa * GDN_OPS_sTw / 127.0f) / 1024.0f;
 #if defined(GDN_BP_DBG_S)
@@ -803,7 +1276,8 @@ static void gdn_br_one_head16(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_
                     }
 #endif
 #if defined(GDN_BR_TRACE)
-                gdn_tr_push(_tid, 3, _m0, gdn_trnow());   /* MM (2 byte passes + combine) */
+                /* pure-HMX口径: NO producer MM(3). bp_pass dispatch pushes SPIN; combine = DEPACK below. */
+                gdn_tr_push(_tid, 10, _bpd0, gdn_trnow());   /* DEPACK (byte-pass combine, producer-side) */
 #endif
             }
 #elif defined(GDN_BR_KSTACK)
@@ -824,12 +1298,10 @@ static void gdn_br_one_head16(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_
                     uint64_t _p1 = gdn_trnow(); gdn_tr_push(_tid, 5, _p0, _p1);   /* PREP */
 #endif
                 }
-#if defined(GDN_BR_TRACE)
-                uint64_t _m0 = gdn_trnow();
-#endif
                 s_S = gdn_merge_kstack(sc, vt, act_cr, wt_km, eff_blk, d, sa, sw, sc->termi);
 #if defined(GDN_BR_TRACE)
-                uint64_t _m1 = gdn_trnow(); gdn_tr_push(_tid, 3, _m0, _m1);   /* MM (K-stack, 1 dispatch) */
+                /* pure-HMX口径: NO producer MM(3); gdn_merge_kstack pushes SPIN (dispatch) + DEPACK. */
+                uint64_t _m1 = gdn_trnow();
 #endif
                 gdn_widen_i8_to_i16(sc->termi, sc->Sacc16);   /* int8 Sacc (= Sigma_k) -> int16 for the final-merge requant */
 #if defined(GDN_BR_TRACE)
@@ -871,7 +1343,8 @@ static void gdn_br_one_head16(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_
 #endif
                 gdn_merge_packed(sc, vt, a, sa, w, eff, sw, wcolabs, sc->termi, &sterm);
 #if defined(GDN_BR_TRACE)
-                uint64_t _p2 = gdn_trnow(); gdn_tr_push(_tid, 3, _p1, _p2);   /* MM */
+                /* pure-HMX口径: NO producer MM(3); gdn_merge_packed pushes SPIN (dispatch) + DEPACK + TABS. */
+                uint64_t _p2 = gdn_trnow(); (void)_p1;
 #endif
                 if (first) s_S = sterm;                          /* static: all inner terms share scale (sAa,sTw fixed) */
                 gdn_acc16(sc, sc->termi, first);
@@ -907,10 +1380,14 @@ static void gdn_br_one_head16(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_
                 float gOH = 65536.0f * GDN_BR_TI * GDN_BP_sSacc16 / GDN_OPS_sTw;
                 gdn_bp_pass_pair(sc, vt, ah1, vt->wt, effh, 1, gOH,
                                  al2, vt->wt, effs, 2, gOH / 32.0f, sc->termi, (int8_t *)sc->wtbuf);
+#if defined(GDN_BR_TRACE)
+                uint64_t _fd0 = gdn_trnow(); (void)_f1;
+#endif
                 gdn_bp_combine(sc->termi, (const int8_t *)sc->wtbuf, 5, effh, gOH, sc->Tblk16[bij]);
                 sij = GDN_BP_sTw16;
 #if defined(GDN_BR_TRACE)
-                gdn_tr_push(_tid, 3, _f1, gdn_trnow());   /* MM (final 2 passes + combine) */
+                /* pure-HMX口径: NO producer MM(3); bp_pass dispatch pushes SPIN, combine = DEPACK. */
+                gdn_tr_push(_tid, 10, _fd0, gdn_trnow());   /* DEPACK (final combine) */
 #endif
             }
             sc->Tscl[bij] = sij;
@@ -936,7 +1413,8 @@ static void gdn_br_one_head16(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_
                 gdn_w16_kstack(sc, vt, acr, wst, csb, 1, sc->Tblk16[bij]);
                 sij = GDN_W16_sTw;
 #if defined(GDN_BR_TRACE)
-                gdn_tr_push(_tid, 3, _f1, gdn_trnow());   /* MM (final) */
+                /* pure-HMX口径: NO producer MM(3); gdn_w16_kstack pushes SPIN (dispatch) + DEPACK. */
+                (void)_f1;
 #endif
             }
             sc->Tscl[bij] = sij;
@@ -976,7 +1454,8 @@ static void gdn_br_one_head16(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_
             gdn_merge_packed(sc, vt, a_ii, sa_ii, vt->wt, sc->eff, sw_S, scolabs, sc->termi, &sij);
             g_force_sP = 0.f;
 #if defined(GDN_BR_TRACE)
-            uint64_t _f2 = gdn_trnow(); gdn_tr_push(_tid, 3, _f1, _f2);   /* MM (final) */
+            /* pure-HMX口径: NO producer MM(3); gdn_merge_packed pushes SPIN (dispatch) + DEPACK + TABS. */
+            uint64_t _f2 = gdn_trnow(); (void)_f1;
 #endif
 #if defined(GDN_BR_REQ_FUSE)
             gdn_requant_from_i8(sc->termi, sij, sT, zpT, Th, i * BL, j * BL, C, sc->Tblk16[bij]);
@@ -994,6 +1473,20 @@ static void gdn_br_one_head16(gdn_scr_t *sc, const gdn_vtcm_t *vt, const uint16_
 #endif
         }
     }
+#endif  /* GDN_BR_SWPIPE_KSTACK pipeline vs sync loop */
 #endif  /* !GDN_BR_CAP_OFFDIAG */
+#if defined(GDN_BR_W16_N8_ACVRES_DUMP)
+    /* DUMP: after the solve filled the 6 distinct A-act crouton surfaces into the ACTCACHE slots (vAa[key]=1),
+     * copy them into this head's T output region so the host can save them as the cv-block A input for the
+     * ACVRES timed build. 6 surfaces x 8KB = 48KB; Th head region is 256*256*2 = 128KB (fits). T is GARBAGE
+     * in this build (it is the dump carrier; correct-T reference comes from the plain ACTCACHE base). */
+    { uint8_t *od = (uint8_t *)Th;
+      for (int s = 0; s < 6; ++s) {
+          int key = g_acvres_keys[s];
+          const HVX_Vector *src = (const HVX_Vector *)GDN_W16_ACTC_A(vt, key);
+          HVX_Vector *dst = (HVX_Vector *)(od + (size_t)s * 0x2000u);
+          for (int v = 0; v < 64; ++v) dst[v] = src[v];
+      } }
+#endif
 }
 #endif  /* GDN_BR_I16 && __hexagon__ */

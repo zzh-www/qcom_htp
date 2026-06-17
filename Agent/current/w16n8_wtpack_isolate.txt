@@ -1,0 +1,77 @@
+==================================================================
+ 实验 A: W16_N8 ARES 态剥离纯 wt-pack vs Tdiag-act-pack
+ Wed Jun 17 05:37:03 CST 2026  WINDOWS=5 REPS=8 THREADS=4
+==================================================================
+
+### 方法2 (决定性, 同 pure-HMX 4026 口径): PACKCNT clean Σ-work + per-inst ###
+gdnbm_solve rc=0x0  P=4  H=32  rep=1/4  wall=2587336 scatter=86353 wtpack=2311676 cons=289849
+  PACKCNT: wt_Sigma=1569762 wt_n=384 wt_perinst=4087 | act_Sigma=452644 act_n=96 act_perinst=4715
+gdnbm_solve rc=0x0  P=4  H=32  rep=2/4  wall=2565461 scatter=88302 wtpack=2330794 cons=292524
+  PACKCNT: wt_Sigma=3152829 wt_n=768 wt_perinst=4105 | act_Sigma=947728 act_n=192 act_perinst=4936
+gdnbm_solve rc=0x0  P=4  H=32  rep=3/4  wall=2584877 scatter=85574 wtpack=2344462 cons=286883
+  PACKCNT: wt_Sigma=4786540 wt_n=1152 wt_perinst=4154 | act_Sigma=1409198 act_n=288 act_perinst=4893
+gdnbm_solve rc=0x0  P=4  H=32  rep=4/4  wall=2579256 scatter=87577 wtpack=2340089 cons=287763
+  PACKCNT: wt_Sigma=6340925 wt_n=1536 wt_perinst=4128 | act_Sigma=1863935 act_n=384 act_perinst=4853
+
+### 方法1 (cap wall-delta, 真 wall 口径) ACAC paired x5 ###
+win1: BASE=2531467 2486722 2554645 7 | CAPW=2191493 2154196 2234689 7 (Δwt=339974) | CAPA=2392199 2360372 2433596 7 (Δact_Tdiag=139268)
+win2: BASE=2532482 2518361 2605917 7 | CAPW=2221943 2142308 2246599 7 (Δwt=310539) | CAPA=2380361 2362868 2442786 7 (Δact_Tdiag=152121)
+win3: BASE=2500729 2483695 2566758 7 | CAPW=2216158 2120493 2232405 7 (Δwt=284571) | CAPA=2402229 2339785 2442660 7 (Δact_Tdiag=98500)
+win4: BASE=2516207 2476054 2576196 7 | CAPW=2215358 2169011 2276097 7 (Δwt=300849) | CAPA=2388524 2345156 2424710 7 (Δact_Tdiag=127683)
+win5: BASE=2540969 2476452 2561673 7 | CAPW=2181918 2159311 2218217 7 (Δwt=359051) | CAPA=2372386 2337892 2396022 7 (Δact_Tdiag=168583)
+
+===== 方法1 MERGED (paired same-window, medians) =====
+BASE wall median = 2531467  (spread 1.6%)
+CAPW wall median = 2215358  (spread 1.8%)  -> wt-pack WALL-delta = 316109 (+12.5% of wall)
+CAPA wall median = 2388524  (spread 1.2%)  -> Tdiag-act WALL-delta = 142943 (+5.6% of wall)
+  注: wall-delta 是 4-producer 并行后的 wall 影响, 非 Σ-work; per-inst 比较看方法2。
+  BASE wins=[2531467, 2532482, 2500729, 2516207, 2540969]
+  CAPW wins=[2191493, 2221943, 2216158, 2215358, 2181918]
+  CAPA wins=[2392199, 2380361, 2402229, 2388524, 2372386]
+
+
+==================================================================
+ VERDICT (决定性): 纯 wt-pack ≈ pure-HMX 4026, analyzer 的 +27%(~5100) 被推翻
+==================================================================
+方法2 per-rep delta (PACKCNT 计数器是全局累计, 取相邻 rep 差 = 单次 solve 的干净值):
+  rep1  d_wtΣ=1,569,762 d_wtN=384 -> wt per-inst=4087 | d_actΣ=452,644 d_actN=96 -> act per-inst=4715
+  rep2  d_wtΣ=1,583,067 d_wtN=384 -> wt per-inst=4122 | d_actΣ=495,084 d_actN=96 -> act per-inst=5157
+  rep3  d_wtΣ=1,633,711 d_wtN=384 -> wt per-inst=4254 | d_actΣ=461,470 d_actN=96 -> act per-inst=4806
+  rep4  d_wtΣ=1,554,385 d_wtN=384 -> wt per-inst=4047 | d_actΣ=454,737 d_actN=96 -> act per-inst=4736
+
+口径 = Σ-work(C15:14, 全 4 producer) ÷ count, 与 pure-HMX WT-PACK 4026 完全同口径(Σ÷n)。
+
+  纯 wt-pack per-inst       = ~4047–4254 (median ~4113), n=384 = 12 wt-pack/head × 32
+       vs pure-HMX 4026     = +0.5 ~ +5.7% (median +2.2%)  -> 基本贴平 (NOT +27%)
+  Tdiag-act-pack per-inst   = ~4715–5157 (median ~4795), n=96 = 3 Tdiag-act-pack/head × 32
+       (prompt 猜 ~4411; 实测更高 ~4795。Tdiag-act-pack 比纯 wt-pack 还贵, 不是 wt-pack 拖累。)
+
+结论:
+  * analyzer 的 "纯 wt-pack ~5100 / +27% = 可削杠杆" 被剥离实测 REFUTED。
+  * 之前 trace stage-8 PACK 桶的 4871(mixed) 是 wt-pack(4113) + Tdiag-act-pack(4795) 的加权混合;
+    PACKCNT 把两者分开计数后, 纯 wt-pack 落在 pure-HMX 4026 ±2%, 即 W16_N8 wt-pack 已与 pure-HMX
+    优化后水平等价 (gather/staging 路径上没有未对齐的 per-inst 杠杆)。
+  * analyzer 用 actcache→ARES Σ delta 回推 ~5100 = 回推时把 Tdiag-act-pack 的份额算进了 wt-pack 桶
+    (两者都在 ARES 态的 PACK 路径, Σ delta 无法分离), 高估了纯 wt-pack。
+
+方法1 cap wall-delta 旁证 (真 wall 口径, 4-producer 并行后):
+  wt-pack WALL-delta = 316,109 cyc = +12.5% of 2.53M wall   (n=384 inst)
+  Tdiag-act WALL-delta = 142,943 cyc = +5.6% of wall          (n=96 inst)
+  注: wall-delta 反映 COUNT × 并行后串行残留, 不是 per-inst 效率; wt-pack 的 12.5% 来自它 inst 数多
+      (384 vs Tdiag 96), 单 inst 已是 pure-HMX 水平。降 wt-pack wall 只能减 COUNT 或加并行, 不能靠
+      "移植 pure-HMX 优化降 per-inst"(已等价)。
+
+==================================================================
+ 实验 B 决策: 不做
+==================================================================
+任务条件 = "确认 A 是 +27% 才做 B"。A 实测 = +2.2% (基本贴平), 推翻 +27%。
+gather-batch / 去 staging copy 这两条 pure-HMX 优化的目标是把 per-inst 从 ~5100 降到 ~4026;
+但纯 wt-pack 实测已在 4026 ±2%, 即 pure-HMX 那两条优化兑现后的水平本身就是 ~4026, 我们已经在那。
+没有 ~5100→4026 的 gap 可兑现 -> 移植无 per-inst 增益空间, 不做 (避免 no-op 实验)。
+
+诚实点:
+  - rep1 单次 solve(最干净) wt per-inst=4087, +1.5% vs 4026; 4-rep 跨度 4047–4254 (热噪声),
+    最坏 +5.7%。无论取哪个都远 < +27%。
+  - W16 比 pure-HMX 真正"略贵"的是 COUNT(12 wt-pack/head)+ Tdiag-act-pack(pure-HMX 无此项,
+    因其全 operand 是 weight); 这是 W16 算法结构(中间 T_ii 需现 pack)的内禀残留, 不是 wt-pack
+    实现退化。要再降需减 matmul/减 distinct-key, 属算法权衡, 非本实验范围。

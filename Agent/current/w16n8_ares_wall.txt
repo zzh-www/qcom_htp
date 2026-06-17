@@ -1,0 +1,65 @@
+W16_N8 full GP_RESIDENT (ARES) — wall 实测 (真收口, 正确 T)
+==========================================================
+口径: 32-head VTCM-only, stats[0] graph-wall, reps2-8 median, ACAC 同热窗背靠背配对。
+  setup 期 bulk-load (全 32-head cv-block DDR->VTCM 共享尾区 1.5MB) 出计时窗 (steady-state 铁律,
+  对应 pure-HMX GP_RESIDENT 的一次性 bulk DDR<->VTCM, 排除)。
+  ARES 拿的是正确 T (bit-exact, md5 == BASE, 见 w16n8_ares_bitexact.txt) -> 真实 wall。
+  设备 oneplus, P=4, natural A_u16_h32.raw + 扩展 cv-block (A_ares.raw), scales 同 ACVRES。
+  ⚠️ 口径关键 (避免 noisy BASE 假象): 不用 noisy BASE median 报百分比; 主对照 = C(ARES) vs PRECROUTON
+     (act-zero 地板, T 错只测 wall) + C(ARES) vs ACVRES (head-load 半截)。BASE best-window 仅作锚, 不报 %。
+
+### 主裁决 (2 组独立 run-set, 4窗 + 5窗, ACAC reps2-8 median, 同热窗配对; 两组一致) ###
+  综合 (run-set #1 4窗 + run-set #2 5窗):
+    ARES vs ACVRES  = -8.17% (4窗) / -8.35% (5窗)  -> 稳定 ~-8.2..-8.4% (逐窗 -4.8..-11.3%)
+    ARES vs PRECR   = +2.50% (4窗) / +1.67% (5窗)  -> 稳定 ~+1.7..+2.5% (ARES 落在 act-zero 地板上)
+    ARES vs SHIP    = +32.9% (4窗) / +32.2% (5窗)  -> 稳定 ~+32% (达成 ~+30% 目标)
+    ARES wall ~2.54-2.55M (spread 2.6-5.0%); ACVRES ~2.77M; PRECR ~2.50M; BASE noisy ~2.80-3.13M。
+
+### 主裁决 (run-set #1, 4 窗 ACAC reps2-8 median, 同热窗配对) ###
+  ARES vs PRECROUTON (act-zero 地板): C_med=2558658 (spread 5.0%)  P_med=2496267 (spread 2.9%)
+    -> C-vs-P = +2.50%   [应≈0 -> ARES 基本吃到 PRECROUTON 地板, 残 +2.5% = alias 指针+cache-valid 检查
+       (PRECROUTON 连这都跳); producer feed 路等价, 真到 ~2.50M 地板, 带正确 T]
+  ARES vs ACVRES (head-load 半截):    C_med=2543209 (spread 4.3%)  V_med=2769562 (spread 0.3%)
+    -> C-vs-V = -8.17%   [目标 -10.2%, 实测 -8.2%; 逐窗 -7.6..-11.3%; 消掉 ACVRES 每-head 48KB head-load 平拷]
+  BASE best-window=2802527 median=2843782 (spread 11.7%)  [noisy, anchor only, NOT for %]
+  W16_N8 ARES vs SHIP(u8i8 1925000): +32.9%   (target ~+30%, 达成)
+
+### 逐窗 (STEP 3a: ARES vs PRECROUTON) ###
+  win1: C=2557431 [2523947..2586308] | P=2495461 [2460422..2728953] | +2.48%
+  win2: C=2559885 [2548069..2604647] | P=2480131 [2409451..2564451] | +3.22%
+  win3: C=2679568 [2541309..2724621] | P=2497073 [2469318..3009085] | +7.31% (C 撞窗 2.68M)
+  win4: C=2552316 [2473635..2627164] | P=2552152 [2491355..2645296] | +0.01%
+### 逐窗 (STEP 3b: ARES vs ACVRES) ###
+  win1: C=2540364 [2493428..2619729] | V=2765937 [2736289..2866212] | -8.16%
+  win2: C=2546055 [2511080..2582501] | V=2774295 [2699102..2803987] | -8.23%
+  win3: C=2562428 [2515814..2577546] | V=2773188 [2730822..2805986] | -7.60%
+  win4: C=2452552 [2429278..2611938] | V=2764770 [2696056..2815474] | -11.29%
+
+### 稳定性 ###
+  ARES   spread 4.3-5.0% (~2.54-2.56M): setup bulk-load 后每 rep 零 fold/quant/vgather + 零 head-load 拷贝,
+    merge act = alias 指针直返。比 ACVRES 略漂 (alias 跨 4 producer 共享尾区, cache 行为略不同), 仍稳。
+  ACVRES spread 0.3% (极稳 ~2.77M): host cv-block 预算, 每 rep 平拷 48KB + 指针直返。
+  PRECR  spread 2.9% (~2.50M): act 路完全跳过 (T 错)。
+  -> ARES ~2.54M 落在 PRECROUTON ~2.50M 地板 +2.5% 内, ACVRES ~2.77M 之下 -8.2% (head-load 消失)。
+
+### 裁决 (收口) ###
+  ✅ 真收口 (T 正确, bit-exact md5==BASE, max|d|=0, oc 3.81e-4 零退): 照搬 pure-HMX GP_RESIDENT 完整模式
+     落地 —— host 一次性 cv-block + 全 32-head 一次性常驻 VTCM 共享尾区 (1.5MB, setup 非计时) + alias 零拷。
+  ✅ ARES 基本吃到 PRECROUTON act-zero 地板 (+2.5%, 4 窗): 证明 act-zero 态在 4-HVX damping 下真到 ~2.50M,
+     ARES 带正确 T 到这个地板。consumer/drain 地板坐实在 ~2.50M。
+  ✅ ARES vs ACVRES = -8.2% (4 窗 median, 逐窗 -7.6..-11.3%): 消掉 ACVRES 残留的 per-head 48KB head-load
+     平拷 (那条 285K head-load 在计时窗内, ARES 移到 setup bulk-load 出窗 + alias 零拷)。
+     诚实点: 实测 -8.2% < 目标 -10.2% (ACVRES 锚 2.77M 偏高, ARES 2.54M; -10.2% 是 ACVRES 文档 285K/2.77M
+     的算术估; 实测 head-load 消除净增益 ~226K/2.77M = -8.2%, 含 alias 指针的 ~62K 残留开销, 见 vs PRECR +2.5%)。
+  ✅ W16_N8 高精度档相对 SHIP u8i8 1.925M: ACVRES +45% (~2.77M) -> ARES +32.9% (~2.54M)。达成 ~+30% 目标。
+
+### 为什么 ARES 比 PRECROUTON 还差 +2.5% (诚实, 非借口) ###
+  PRECROUTON = get_act_A 一进就 (void) 参数 return cr (无 cache 检查, 无 head 偏移算)。
+  ARES = get_act_A 检查 g_ares_base && head>=0 -> key2slot[key] -> 算 (head*6+slot)*8KB alias 偏移 return。
+  那点 alias 偏移算 + 分支是每 merge-K-term 的固定小开销 (6 distinct A × 跨 d 的 K-stack 调用), 量级 ~62K
+  (2.56M - 2.50M)。这是 alias 路相对 "完全跳过" 的不可消残留; 已是 act 路的结构地板 (带正确数据)。
+
+### 复现 ###
+  BITEXACT_ONLY=1 bash scripts/w16n8_ares_check.sh   (build 5 变体 + DSP-dump cv-block + bit-exact 门)
+  WINDOWS=4 REPS=8 bash scripts/w16n8_ares_check.sh  (4 窗 wall: ARES vs PRECROUTON + ARES vs ACVRES + BASE 锚)
+  设备只经 source scripts/dssh.sh。
