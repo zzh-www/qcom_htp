@@ -1,0 +1,24 @@
+================================================================================
+pure-HMX (生产 lean+wt-cache+B) — P2.3 PMU真值 demo (device-measured)
+================================================================================
+DATE     : (fill at write time)
+DEVICE   : oneplus (termux sshd; v75 cDSP TURBO)
+口径     : 32-head TOTAL wall (stats[0]=makespan), VTCM-only, reps2-N median (绝不取 min),
+           同热窗 ACAC 配对取 delta; PCYCLE=C15:14=QHAS (no conversion).
+clock self-check : wall/µs = PCYCLE/µs ≈ TURBO 1594 (>> => wrong counter, re-measure).
+字段映射 : §4 dictionary; paths present = ['pure'].
+           ⚠ stats[4] = feed_Σ on HVXMix but spin_Σ on pure-HMX; lmax = stats[8] (HVXMix)
+           vs stats[11] (pure-HMX). pure-HMX feed_Σ = production decomposition (not in stats).
+REPRODUCE: EXTRA_DEFS='-DGDNBM_GDN_PURE_SOLVE -DGP_PMU_UTIL' bash example/gdn_native/baremetal/build.sh; uv run python scripts/run_w16a16_head_phase4.py --deploy --threads 4 --heads 32 --scale 0.05 --reps 6
+--------------------------------------------------------------------------------
+| P | path    | wall    | cbusy  | feed_Σ  | spin_Σ | lmax    | percall | honest-tail (§3) |
+|---|---------|---------|--------|---------|--------|---------|---------|------------------|
+| 4 | pure    | 1.257M  | 0.406M | 3.643M  | 0.571M | 1.086M  | 481     | 0.347M           |
+
+serial floor (§3 honest-tail, NOT constant-K regression intercept):
+  tail(P=4) = 0.347M
+  spread across P = 0.000M  (≈flat (true serial floor))
+
+utilization (§6):
+  P=4: PMU真值 (§6 tier-1): HMX COPROC_BUSY/CYCLES=10%, THREAD_IDLE=100%
+================================================================================

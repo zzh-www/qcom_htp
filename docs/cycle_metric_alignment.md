@@ -209,12 +209,21 @@ utilization  : PMU真值 if present, else "steady-derived (non-PMU)" (§6); NEVE
 ================================================================================
 ```
 
-> **P2 待办 (tooling, not this round):** collapse the 5 timeline scripts
-> (`gdn_pipe_timeline.py / gdn_pure_perfetto_timeline.py / gdn_hvxmix_perfetto_timeline.py /
-> gdn_perfetto_timeline.py / gdn_3impl_aggregate_timeline.py`) into ONE parameterized tool driven by the
-> §5 stage spec; a single unified perf-report generator emitting the §7 template; PMU真值 into the perf
-> tables (§6); and one reusable measurement harness. This section (the SPEC) is the contract those tools
-> must implement.
+> **P2 tooling — BUILT (2026-06-17), implements this SPEC:**
+> - **timeline (§5):** `scripts/htp_timeline.py` — ONE parameterized tool (`single` / `aggregate` /
+>   `ascii` modes), the §5 stage→class table is its single source. The 5 old scripts
+>   (`gdn_{pipe,pure_perfetto,hvxmix_perfetto,perfetto,3impl_aggregate}_timeline.py`) are now DEPRECATED
+>   wrappers that forward to it. Regression: aggregate re-render from the archived blobs is byte-identical
+>   to `Agent/current/timeline_3impl_aggregate.svg` (all 13749 timeline rects), MM consumer-only.
+> - **perf report (§7/§4/§3):** `scripts/htp_perf_report.py` — emits the §7 template, §4 stats[]
+>   disambiguation, honest-tail serial floor (§3). Regression: reproduces ARES honest-tail @P4 = 0.254M
+>   and pure-HMX @P4 = 0.349M.
+> - **PMU真值 (§6 tier-1):** `-DGP_PMU_UTIL` (default OFF) post-solve SEPARATE PMU pass → `stats[20..23]`;
+>   the report generator prefers it. Device-verified clean-wall-safe (ACAC paired clean-vs-PMU wall in
+>   thermal noise; production byte stream identical-except-`__LINE__`). Evidence:
+>   `Agent/current/p2_tooling/p2.3_pmu_device_evidence.txt`.
+> - **reusable harness:** skill `htp-kernel-measurement` (`.codex/skills/`, symlinked into `.claude/skills/`).
+> This section (the SPEC) is the contract those tools implement.
 
 ---
 

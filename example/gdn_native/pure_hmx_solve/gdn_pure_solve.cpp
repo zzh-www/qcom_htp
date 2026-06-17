@@ -41,8 +41,8 @@
 #include "w16a16_mm.h"
 #include "hexagon_types.h"
 #include "hvx_hexagon_protos.h"
-#ifdef GP_PKTPROBE
-#include "qurt_pmu.h"
+#if defined(GP_PKTPROBE) || defined(GP_PMU_UTIL)
+#include "qurt_pmu.h"     /* GP_PMU_UTIL (P2.3): PMU真值 utilization into the perf table, SEPARATE pass */
 #endif
 
 namespace gdn_pure {
@@ -1421,6 +1421,8 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
         if (statsLen > 5) stats[5] = (int)per;
         FARF(ALWAYS, "GDN_PURE MM64-bench: %llu cyc/call (single 64^3 w16a16, resident, back-to-back, steady)", (unsigned long long)per);
     }
+#if !defined(GP_PMU_UTIL)   /* P2.3: under GP_PMU_UTIL the NTSWEEP micro-bench's stats[20..23] are reused
+                             * for the post-solve PMU真值 pass; skip NTSWEEP so the slots are free. */
     {   /* SELF-MEASURED dominant-path (cron#69, no QNN): sweep descriptor n_tiles = the mxmem MAC-walk
          * count. n_tiles=8 = the EXACT 64^3 MAC; >8 = bit-identical REDUNDANT walks. So wall(nt) =
          * fixed_overhead(load act+wt into mxmem, drain out, setup) + nt * per_walk_mxmem. The SLOPE
@@ -1448,6 +1450,7 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
         if (statsLen > 25) stats[25] = (int)conv8;
         if (statsLen > 26) stats[26] = (int)intercept;
     }
+#endif  /* !GP_PMU_UTIL (NTSWEEP) */
     {   /* DISTINCT-TILE test (cron#70, no QNN): native QNN op lays act/out into 32 DISTINCT contiguous tiles
          * (act_tbl[i]=base+i*2048, dumped via custom-op DESC_DUMP); our crouton8 collapses to 4 reused
          * (i&3)*2048. Hypothesis: reused tiles serialize mxmem (loads to the same VTCM addr/bank can't
@@ -2386,6 +2389,37 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
     }
     uint64_t t1 = gp_pcyc(), us1 = HAP_perf_get_time_us();
 
+    /* clean wall = t1 - t0 is now CAPTURED (above). Anything below this point does NOT touch t0/t1, so
+     * stats[0]=wall stays干净 (§2.3 hard constraint). */
+#if defined(GP_PMU_UTIL)
+    int pmu_coproc_pc = 0, pmu_idle_pc = 0, pmu_cyc1_pc = 0, pmu_pk_pc = 0;
+    /* P2.3 (§6 tier-1): SEPARATE post-solve PMU pass — read the consumer's HMX occupancy真值
+     * (COPROC_BUSY = HMX MACing) + THREAD_IDLE (consumer waiting on HMX) over a back-to-back kernel
+     * loop. The HMX lock (hl/hctx, acquired L1113) is STILL held here. This pass runs AFTER the clean
+     * wall is captured, so it cannot perturb stats[0]; PMU真值 lands in spare slots stats[20..23].
+     * cnt0=COMMITTED_PKT_ANY(0x03) cnt1=CYCLES_1_THREAD_RUNNING(0x3b) cnt2=THREAD_IDLE_PVIEW(0xe5)
+     * cnt3=COPROC_BUSY_PVIEW(0xed) — same event codes as the STALLBRK probe (proven pattern). */
+    if (hl == 0) {
+        const int PB = 256;
+        qurt_pmu_enable(1);
+        qurt_pmu_set(QURT_PMUEVTCFG, (0xedu << 24) | (0xe5u << 16) | (0x3bu << 8) | 0x03u);
+        for (int w = 0; w < 32; ++w) w16a16_mm_run(&g_ctx[0].mm);   /* warm */
+        unsigned a0 = qurt_pmu_get(QURT_PMUCNT0), b0 = qurt_pmu_get(QURT_PMUCNT1),
+                 c0 = qurt_pmu_get(QURT_PMUCNT2), d0 = qurt_pmu_get(QURT_PMUCNT3);
+        for (int i = 0; i < PB; ++i) w16a16_mm_run(&g_ctx[0].mm);
+        unsigned pk = qurt_pmu_get(QURT_PMUCNT0) - a0, run1 = qurt_pmu_get(QURT_PMUCNT1) - b0,
+                 idle = qurt_pmu_get(QURT_PMUCNT2) - c0, coproc = qurt_pmu_get(QURT_PMUCNT3) - d0;
+        qurt_pmu_enable(0);
+        /* report per-call (the canonical 'per-conv' unit). util = COPROC_BUSY/CYCLES_1_THREAD_RUNNING. */
+        pmu_coproc_pc = (int)(coproc / PB); pmu_idle_pc = (int)(idle / PB);
+        pmu_cyc1_pc = (int)(run1 / PB);     pmu_pk_pc = (int)(pk / PB);
+        FARF(ALWAYS, "GDN_PURE PMU_UTIL(separate pass, clean-wall-safe): per-call COPROC_BUSY=%d THREAD_IDLE=%d "
+             "CYCLES_1T=%d PKT=%d | HMX-util(COPROC/CYC1T)=%d%% (CYC1T basis)",
+             pmu_coproc_pc, pmu_idle_pc, pmu_cyc1_pc, pmu_pk_pc,
+             pmu_cyc1_pc ? (pmu_coproc_pc * 100 / pmu_cyc1_pc) : 0);
+    }
+#endif
+
 #if GP_RESIDENT
     {   /* one-time bulk VTCM->DDR store of ALL heads' T (lower-tri) + exps -> block(0,1). OUTSIDE timed region. */
         uint64_t b0 = gp_pcyc();
@@ -2457,6 +2491,17 @@ int run(int P, int H, const uint8_t *A, int *stats, int statsLen, void *T, int T
     FARF(ALWAYS, "GDN_PURE WTVEC_SPLIT(live) gather-issue=%llu pack=%llu (sum=%llu vs wt_vec=%llu)",
          (unsigned long long)g_wtv_gather, (unsigned long long)g_wtv_pack,
          (unsigned long long)(g_wtv_gather + g_wtv_pack), (unsigned long long)wt_vec);
+#endif
+#if defined(GP_PMU_UTIL)
+    /* P2.3 (§6 tier-1): PMU真值 per-call -> spare slots [20..23]; htp_perf_report.py reads these.
+     * stats[20]=COPROC_BUSY/call (HMX MAC busy) stats[21]=THREAD_IDLE/call (consumer wait)
+     * stats[22]=CYCLES_1_THREAD_RUNNING/call (basis) stats[23]=COMMITTED_PKT_ANY/call. wall(stats[0])
+     * was captured BEFORE this pass => unpolluted. */
+    if (statsLen > 20) stats[20] = pmu_coproc_pc;
+    if (statsLen > 21) stats[21] = pmu_idle_pc;
+    if (statsLen > 22) stats[22] = pmu_cyc1_pc;
+    if (statsLen > 23) stats[23] = pmu_pk_pc;
+    if (statsLen > 26) stats[26] = 0x504D5555;   /* "PMUU" host-side build marker (NTSWEEP gated off here) */
 #endif
     if (statsLen > 28) stats[28] = (int)outcopy;              /* cron#79: 卸料 Σ (gp_surf_to_cv) <-> q::*OutputSlice */
     if (statsLen > 29) stats[29] = (int)((uint32_t)H * 24u);  /* cron#79: N_conv = H*24 (Newton=0); per-conv basis */

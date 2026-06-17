@@ -1,0 +1,33 @@
+================================================================================
+ARES W16_N8 高精度档 — honest-tail (repro perf_ares_bserial_pin.txt)
+================================================================================
+DATE     : (fill at write time)
+DEVICE   : oneplus (termux sshd; v75 cDSP)
+口径     : 32-head TOTAL wall (stats[0]=makespan), VTCM-only, reps2-N median (绝不取 min),
+           同热窗 ACAC 配对取 delta; PCYCLE=C15:14=QHAS (no conversion).
+clock self-check : wall/µs = PCYCLE/µs ≈ TURBO 1594 (>> => wrong counter, re-measure).
+字段映射 : §4 dictionary; paths present = ['hvxmix'].
+           ⚠ stats[4] = feed_Σ on HVXMix but spin_Σ on pure-HMX; lmax = stats[8] (HVXMix)
+           vs stats[11] (pure-HMX). pure-HMX feed_Σ = production decomposition (not in stats).
+REPRODUCE: bash scripts/ares_bserial_psweep.sh
+--------------------------------------------------------------------------------
+| P | path    | wall    | cbusy  | feed_Σ  | spin_Σ | lmax    | percall | honest-tail (§3) |
+|---|---------|---------|--------|---------|--------|---------|---------|------------------|
+| 4 | hvxmix  | 2.522M  | 0.289M | 9.070M  | 0.348M | 2.402M  | —       | 0.254M           |
+| 3 | hvxmix  | 3.124M  | 0.272M | 8.372M  | 0.322M | 3.007M  | —       | 0.333M           |
+| 2 | hvxmix  | 4.261M  | 0.258M | 7.992M  | 0.302M | 4.153M  | —       | 0.265M           |
+| 1 | hvxmix  | 7.932M  | 0.254M | 7.570M  | 0.280M | 7.850M  | —       | 0.362M           |
+
+serial floor (§3 honest-tail, NOT constant-K regression intercept):
+  tail(P=4) = 0.254M
+  tail(P=3) = 0.333M
+  tail(P=2) = 0.265M
+  tail(P=1) = 0.362M
+  spread across P = 0.108M  (≈flat (true serial floor))
+
+utilization (§6):
+  P=4: steady-derived (non-PMU, §6 tier-2): HVX util/thread (feed/P)/lmax = 94.4%
+  P=3: steady-derived (non-PMU, §6 tier-2): HVX util/thread (feed/P)/lmax = 92.8%
+  P=2: steady-derived (non-PMU, §6 tier-2): HVX util/thread (feed/P)/lmax = 96.2%
+  P=1: steady-derived (non-PMU, §6 tier-2): HVX util/thread (feed/P)/lmax = 96.4%
+================================================================================

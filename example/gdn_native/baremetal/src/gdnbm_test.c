@@ -115,9 +115,20 @@ int main(int argc, char **argv) {
     printf("  raw stats[12..19]: %d %d %d %d %d %d %d %d\n",
            stats[12], stats[13], stats[14], stats[15], stats[16], stats[17], stats[18], stats[19]);
     if (!is_pktprobe) {   /* production: stats[20..27] = NTSWEEP/DISTINCT-TILE micro-bench (always run) */
+        /* P2.3: GP_PMU_UTIL build reuses stats[20..23] for the post-solve PMU真值 pass (NTSWEEP gated off
+         * there) and signs stats[26]="PMUU"; host prints the §6 tier-1 PMU line + raw [20..23] then. */
+        if (stats[26] == 0x504D5555 /* "PMUU" */) {
+            int cyc1 = stats[22];
+            printf("  PMU_UTIL (§6 tier-1, separate clean-wall-safe pass): per-call COPROC_BUSY=%d THREAD_IDLE=%d "
+                   "CYCLES_1T=%d PKT=%d | HMX-util COPROC/CYC1T=%d%%\n",
+                   stats[20], stats[21], stats[22], stats[23], cyc1 ? stats[20] * 100 / cyc1 : 0);
+            printf("  raw PMU stats[20..23]: %d %d %d %d  (COPROC THREAD_IDLE CYC1T PKT, per-call)\n",
+                   stats[20], stats[21], stats[22], stats[23]);
+        } else {
         printf("  NTSWEEP nt8=%d nt16=%d nt32=%d nt64=%d | per-walk=%d pure-conv(8walk)=%d fixed-feed=%d\n",
                stats[20], stats[21], stats[22], stats[23], stats[24], stats[25], stats[26]);
         printf("  DISTINCT-TILE nt8 32-distinct=%d (vs 4-reused nt8=%d; native 370)\n", stats[27], stats[20]);
+        }
     } else {   /* cron#80 gap#2: GP_PKTPROBE diagnostic build (explicit magic stats[31] == "PKTP"). Host prints
                 * only the EARLY single-final-writer slots that always run (packets/PMU/SMT); the later
                 * DILATE/fp16/FANOUT sub-blocks reuse stats[18/19] AND can fault in this from-scratch

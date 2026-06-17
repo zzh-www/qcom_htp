@@ -1,0 +1,55 @@
+================================================================================
+P2.3 — PMU真值 入 perf 表 (代码改动 + 设备验证)  2026-06-17
+  GP_PMU_UTIL (default OFF) = post-solve SEPARATE PMU pass; PMU真值 -> stats[20..23];
+  htp_perf_report.py 优先用 PMU真值 (§6 tier-1)。
+  HARD CONSTRAINT met: wall(stats[0]) 不被污染 (clean wall captured BEFORE the PMU pass)。
+================================================================================
+DEVICE   : oneplus (termux sshd; v75 cDSP TURBO); clock self-check 1592-1594 (TURBO ok)
+口径     : 32-head TOTAL wall (stats[0]), VTCM-only, reps2-6 median (never min), ACAC paired.
+
+CODE CHANGE (需 reporter 审; guards + 生产字节证据见下)
+----------------------------------------------------------------
+- example/gdn_native/pure_hmx_solve/gdn_pure_solve.cpp
+  * L44   : #include "qurt_pmu.h" guard 扩成 `#if defined(GP_PKTPROBE) || defined(GP_PMU_UTIL)`
+  * L1424 : NTSWEEP micro-bench 块包 `#if !defined(GP_PMU_UTIL)` (PMU build 下让出 stats[20..23])
+  * L2391 : post-solve SEPARATE PMU pass `#if defined(GP_PMU_UTIL)` (HMX lock 仍持有;
+            COPROC_BUSY/THREAD_IDLE/CYCLES_1T/PKT per-call; 在 clean wall t1 capture 之后)
+  * L2492 : `#if defined(GP_PMU_UTIL)` 写 stats[20..23]=PMU真值 + stats[26]="PMUU" host marker
+- example/gdn_native/baremetal/src/gdnbm_test.c
+  * host 端: `if (stats[26]==0x504D5555)` 打印 PMU_UTIL §6 tier-1 行 + raw PMU stats[20..23];
+    production (NTSWEEP 写 stats[26]=intercept, 非 magic) 走原 NTSWEEP/DISTINCT-TILE 分支不变。
+
+生产字节证据 (production default = GP_PMU_UTIL OFF)
+----------------------------------------------------------------
+- 预处理 production-default (-DGDNBM_GDN_PURE_SOLVE, 无 GP_PMU_UTIL):
+    GP_PMU_UTIL/PMU_UTIL/pmu_coproc_pc/0x504D5555 残留 = 0 (grep -c)
+- production 代码流 diff (baseline via git-stash vs post-change), 规范化掉 __LINE__ 字面量后:
+    EMPTY = "PRODUCTION IDENTICAL (gdn_pure_solve.cpp differs ONLY by __LINE__ in debug-FARF strings)"
+  (.o raw 字节差仅来自 FARF/HAP_debug_v2 里嵌入的 __LINE__ 常量, 因新增行位移; 非行为改动)
+- production build 设备实跑: NTSWEEP nt8=479 / DISTINCT-TILE 正常打印, 无 PMU 行 (host 分支未走)。
+
+PMU真值 (设备实测, GP_PMU_UTIL build, P=4 H=32, per-call)
+----------------------------------------------------------------
+  PMU_UTIL (§6 tier-1, separate clean-wall-safe pass):
+    per-call COPROC_BUSY=52  THREAD_IDLE=475  CYCLES_1T=475  PKT=108
+    HMX-util COPROC/CYC1T = 10%
+  解读: CYCLES_1T per-call=475 ≈ lean per-call occupancy 479/481 (一致, 同口径自证);
+        COPROC_BUSY=52 = HMX MAC 引擎每 call 真 MAC 仅 52 cyc, 其余是 feed/setup latency =>
+        PMU真值坐实 "feed/latency-bound, 非 MAC-bound" (HMX MAC 占 per-call 仅 ~10%)。
+
+NO-POLLUTION 证据 (ACAC paired, reps2-6 median, 同 device session)
+----------------------------------------------------------------
+  C1-clean=1.263M  P1-pmu=1.254M  C2-clean=1.257M  P2-pmu=1.249M  C3-clean=1.257M
+  clean median ~1.257M  vs  pmu-on median ~1.252M  => Δ ~ -0.4% (热噪声内, 各窗 spread 1-10%)。
+  => PMU-on wall 与 clean wall 在热噪声内一致 (PMU-on 略低 = NTSWEEP 让出节省一点 pre-solve 活,
+     不动计时 solve)。wall 口径未被 PMU pass 污染。CONFIRMED。
+  oc = 4.238e-3 bit-exact (PMU-on 与 clean 均一致)。
+
+REPRODUCE
+----------------------------------------------------------------
+  # PMU真值 build + run:
+  EXTRA_DEFS="-DGDNBM_GDN_PURE_SOLVE -DGP_PMU_UTIL" bash example/gdn_native/baremetal/build.sh
+  uv run python scripts/run_w16a16_head_phase4.py --deploy --threads 4 --heads 32 --scale 0.05 --reps 6
+  # PMU 行需直跑 device 看 host stdout (run harness _keys 不含 "PMU"); 或 grep "PMU_UTIL".
+  # report: python scripts/htp_perf_report.py <spec.json>  (pmu 段填 coproc_busy/thread_idle).
+================================================================================

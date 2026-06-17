@@ -1,0 +1,26 @@
+================================================================================
+pure-HMX (生产 lean+wt-cache+B) — repro perf_3impl_cron82kqie.txt
+================================================================================
+DATE     : (fill at write time)
+DEVICE   : oneplus (termux sshd; v75 cDSP TURBO)
+口径     : 32-head TOTAL wall (stats[0]=makespan), VTCM-only, reps2-N median (绝不取 min),
+           同热窗 ACAC 配对取 delta; PCYCLE=C15:14=QHAS (no conversion).
+clock self-check : wall/µs = PCYCLE/µs ≈ TURBO 1594 (>> => wrong counter, re-measure).
+字段映射 : §4 dictionary; paths present = ['pure'].
+           ⚠ stats[4] = feed_Σ on HVXMix but spin_Σ on pure-HMX; lmax = stats[8] (HVXMix)
+           vs stats[11] (pure-HMX). pure-HMX feed_Σ = production decomposition (not in stats).
+REPRODUCE: uv run python scripts/run_w16a16_head_phase4.py --deploy --threads 4 --heads 32 --scale 0.05 --reps 8
+--------------------------------------------------------------------------------
+| P | path    | wall    | cbusy  | feed_Σ  | spin_Σ | lmax    | percall | honest-tail (§3) |
+|---|---------|---------|--------|---------|--------|---------|---------|------------------|
+| 4 | pure    | 1.259M  | 0.387M | 3.643M  | 0.570M | 1.094M  | 479     | 0.349M           |
+| 2 | pure    | 2.122M  | 0.365M | —       | 0.414M | 1.930M  | 480     | — (no feed_Σ)    |
+
+serial floor (§3 honest-tail, NOT constant-K regression intercept):
+  tail(P=4) = 0.349M
+  spread across P = 0.000M  (≈flat (true serial floor))
+
+utilization (§6):
+  P=4: PMU真值 (§6 tier-1): HMX COPROC_BUSY/CYCLES=31%, THREAD_IDLE=13%
+  P=2: steady-derived (non-PMU, §6 tier-2): HMX util cbusy/wall = 17.2%
+================================================================================
