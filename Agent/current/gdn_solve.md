@@ -73,8 +73,10 @@ GDN/KDA linear-attention 在 v75 HTP 上的核心难点 = 每 head 对 C×C 下�
 | 标准名 | 定义 | 矩阵乘在哪 | 对角块求逆在哪 | 现状/角色 |
 |---|---|---|---|---|
 | **GDNSolveHVX** | 纯 HVX | HVX vrmpy(int8)/`gdn_matmul_i16`(int16) | HVX forward-subst | 基线 ~3.97M，只测不改 |
-| **GDNSolveHVXMixHMX** | HVX 喂数 + HMX 算 matmul | **HMX**（u8i8 mxmem） | **HVX forward-subst（并行 4 单元）** | 另一路线 ~1.79M（release doc `docs/gdn_inverse.md`） |
-| **GDNSolveHMX** | 全程 HMX（连对角求逆都 matmul） | HMX | HMX（Taylor(3)/Newton=0 矩阵乘） | **当前最快路线 ~1.258M（VTCM-only，−26% vs native 1.703M，cron#89，生产默认 lean+wt-cache+B）；release doc `docs/gdn_inverse_pure_hmx.md`，过程/极限 `pure_hmx_solve_build.md`** |
+| **GDNSolveHVXMixHMX** | HVX 喂数 + HMX 算 matmul | **HMX**（u8i8 mxmem） | **HVX forward-subst（并行 4 单元）** | 备选路线；**SHIP = HVXMix 默认档**(u8i8, ~1.83–1.89M, oc 3.10e-3) / **ARES = W16_N8 备选高精度档**(oc 1.16e-3, ~2.5M, gated)（release doc `docs/gdn_inverse.md`） |
+| **GDNSolveHMX** | 全程 HMX（连对角求逆都 matmul） | HMX | HMX（Taylor(3)/Newton=0 矩阵乘） | **最佳实践(推荐,最快) ~1.258M（VTCM-only，−26% vs native 1.703M，cron#89，生产默认 lean+wt-cache+B）；release doc `docs/gdn_inverse_pure_hmx.md`，过程/极限 `pure_hmx_solve_build.md`** |
+
+> **角色定位（2026-06-17 用户裁定）：`GDNSolveHMX` pure-HMX = 最佳实践（最快 ~1.258M，推荐）；`GDNSolveHVXMixHMX` = 备选路线，其内 SHIP(u8i8) = HVXMix 默认档、ARES(W16_N8) = HVXMix 备选高精度档；`GDNSolveHVX` = 纯-HVX 基线（只测不改）。**
 
 代码标识符不变：`gdn_merge_hvx`(`GDN_BR_HVX_MERGE`)、`gdn_merge_packed`、`our_v73deep_kernel` 等。
 
