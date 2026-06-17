@@ -707,6 +707,16 @@ static inline void gdn_w16n8_acc_add_surf(int32_t *acc, const uint8_t *surf) {
 /* untile a TILED int16 cv buffer (surf order, NO zp) -> natural int16 codes, once. Same crouton_pos
  * inverse gather as gdn_w16_depack_out but no xor (cv is already a signed code). */
 static inline void gdn_w16n8_untile_cv(const int16_t *cv_tiled, int16_t *out) {
+#if defined(GDN_BR_W16N8_UNTILE_CAP)
+    /* cap-test (timing-only, gated default-OFF, PRODUCTION BYTES UNAFFECTED): short-circuit the per-output
+     * untile vgather (the 64x Q6_vgather_ARMVh below) — replace with a straight vector copy so the gather
+     * engine work / contention is removed but a valid surface is still written (out garbage; downstream
+     * mxmem timing is data-independent => wall-delta is a VALID UPPER BOUND on what untile->vxor can buy).
+     * Measures the untile gather's contribution to wall and to feed_Σ(P) growth. Does NOT change precision
+     * and is NOT a real vxor implementation — only an upper-bound probe. */
+    for (int i = 0; i < 64; ++i) ((HVX_Vector *)out)[i] = ((const HVX_Vector *)cv_tiled)[i];
+    return;
+#else
     int16_t *stage = g_w16n8_stage;
     for (int i = 0; i < 64; ++i) ((HVX_Vector *)stage)[i] = ((const HVX_Vector *)cv_tiled)[i];
     HVX_Vector *g = (HVX_Vector *)(stage + 4096);
@@ -715,6 +725,7 @@ static inline void gdn_w16n8_untile_cv(const int16_t *cv_tiled, int16_t *out) {
         Q6_vgather_ARMVh((void *)g, (uint32_t)(uintptr_t)stage, 8191, o[v]);
         ((HVX_Vector *)out)[v] = *g;   /* out[orig] = cv_tiled[pack pos] */
     }
+#endif
 }
 #endif
 static inline int32_t gdn_w16n8_acc_absmax(const int32_t *acc) {

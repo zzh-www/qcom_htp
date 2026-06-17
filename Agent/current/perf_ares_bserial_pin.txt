@@ -1,0 +1,222 @@
+================================================================================
+ARES (W16_N8 高精度档) b_serial 0.767M 归因钉死 — cap-test / P-sweep (不落地)
+  目标: 钉死 b_serial 0.767M 的 (b1)HW-pack / (c)gather-争用 / (b2)精确对角 各占多少。
+  本轮 ONLY cap-test/P-sweep 量上界 + 坐实 contention; 不动精度、不求 bit-exact 真兑现。
+================================================================================
+DATE     : 2026-06-17
+DEVICE   : oneplus (termux sshd; v75 cDSP)
+口径     : 32-head TOTAL wall (stats[0]=makespan), VTCM-only, reps2-N median (绝不取 min),
+           同热窗 ACAC 配对取 delta。完全照 perf_3impl_cron82kqie.txt 文件头 +
+           perf_baseline_cron82_leanmm.txt。authoritative scales 2.770166930875267e-05 /
+           6.103701895199438e-05, A_u16_h32.raw (真 GDN-like, 非 synthetic scale 0.05),
+           host args: ./gdnbm <P> <Ain> <Tout> 32 256 32768 32768 <s0> <s1>。
+           ARES 用扩展 A_ares.raw (natural||cv-block, 由 DUMP run 生成, 见 w16n8_ares_8win.sh)。
+
+字段映射 (HVXMix ARES path, gdnbm 打印 raw stats[0..11]):
+  wall   = stats[0]  (makespan t1-t0)
+  cbusy  = stats[3]  (HMX Σ cycles_used = consumer mxmem 整核占用)
+  feed_Σ = stats[4]  (Σ over producers of life-spin = HVX work-volume Σ)  [ARES 语义]
+  lmax   = stats[8]  (slowest-prod-life = critical path)
+  spin   = stats[9]  (avg/prod)  => spin_Σ = stats[9]*P
+  ⚠️ pure-HMX path 的 stats[] 语义不同: stats[4]=spin_Σ(非 feed_Σ), stats[11]=lmax。
+     pure-HMX feed_Σ 是 production 分解值(3.643M), 不直接在 stats 里。P-sweep 拟合
+     只需 wall vs P, 故 pure-HMX 段只取 wall(stats[0]) 做拟合, feed_Σ 引 perf_3impl。
+
+REPRODUCE (本轮)
+----------------------------------------------------------------
+  EXP1 P-sweep : bash scripts/ares_bserial_psweep.sh   (ARES+pure-HMX, P=1,2,3,4)
+  EXP2 untile-cap: bash scripts/ares_untile_cap.sh     (ARES base vs GDN_BR_W16N8_UNTILE_CAP, P=4 ACAC)
+  EXP3 fwd-cap   : bash scripts/ares_fwd_cap.sh        (ARES base vs -DGDN_BR_FWD_ROWS=4, P=4 ACAC)
+  build base flags = perf_3impl ARES 行:
+    SHIP="-DGDNBM_HMX_PIPE -DGDN_BR_STATIC_GAIN -DGDN_BR_STATIC_FULL -DGDN_BR_SBOOST -DGDN_BR_DIAG_I16 -DGDN_BR_REQ_FUSE -DGDN_BR_FBOOST"
+    ARES_BASE="$SHIP -DGDN_BR_W16 -DGDN_BR_W16_N8 -DGDN_BR_W16_N8_FUSEDEP -DGDN_BR_W16_N8_ACTCACHE -DGDN_BR_W16_N8_ARES"
+    pure-HMX  = "-DGDNBM_GDN_PURE_SOLVE"
+
+================================================================================
+[增量落盘区] 每跑完一个 P 点/一个实验立即写这里
+================================================================================
+
+================================================================================
+EXP1: P-sweep (ARES + pure-HMX, P=1..4)  REPS=8  2026-06-17 15:56:54
+================================================================================
+
+--- P=1 (reps2-8 median) ---
+ARES wall=7976129  |      clock self-check wall/us = 7932240/4977 = 1593.8  (TURBO ~1594; >> => wrong counter, re-measure)
+ARES   raw stats[0..11]: 7932240 1 32 254093 7570102 7932240 4977 7849889 7849889 279787 7849889 279787
+PURE wall=0  | 
+PURE 
+
+--- P=2 (reps2-8 median) ---
+ARES wall=4260863  |      clock self-check wall/us = 4260654/2673 = 1594.0  (TURBO ~1594; >> => wrong counter, re-measure)
+ARES   raw stats[0..11]: 4260654 2 32 257804 7991523 4260654 2673 4140359 4153493 151164 4140359 149237
+PURE wall=0  | 
+PURE 
+
+--- P=3 (reps2-8 median) ---
+ARES wall=3152051  |      clock self-check wall/us = 3123703/1960 = 1593.7  (TURBO ~1594; >> => wrong counter, re-measure)
+ARES   raw stats[0..11]: 3123703 3 32 272343 8372325 3123703 1960 2720081 3007031 107436 2967521 112167
+PURE wall=0  | 
+PURE 
+
+--- P=4 (reps2-8 median) ---
+ARES wall=2527576  |      clock self-check wall/us = 2521897/1582 = 1594.1  (TURBO ~1594; >> => wrong counter, re-measure)
+ARES   raw stats[0..11]: 2521897 4 32 288599 9070354 2521897 1582 2299911 2402059 87062 2299911 85250
+PURE wall=0  | 
+PURE 
+
+(EXP1 P-sweep done; fit computed in followup python)
+
+--- EXP1 判读: ARES 4-pt P-sweep (PURE 段见下方单独跑) ---
+ARES wall(reps2-8 med): P1=7.976M P2=4.261M P3=3.152M P4=2.528M  (clock 1593-1594 TURBO 全过)
+ARES feed_Σ(stats[4]): P1=7.570M P2=7.992M P3=8.372M P4=9.070M
+  => feed_Σ 随 P 单调上涨 +19.8% (P1->P4) / +13.5% (P2->P4) === CONTENTION 坐实。
+     HMX cbusy(stats[3]) 同期 ~flat (254K->289K, +14%, 不随 P 缩放=HMX 非瓶颈)。
+     更多 producer = 更多"总 HVX 活" = gather/SMT 共享引擎串行化的签名。
+ARES fit:
+  2-pt (P4,P2)  : K=6.933M  b_serial=0.794M   (perf_3impl 旧: K=6.955M b=0.767M, 一致)
+  4-pt LSQ      : K=7.259M  b_serial=0.698M   (residuals +19K/-67K/+34K/+14K, RMS 39K=0.9% wall)
+  wall*P 线性拟合: K=7.182M  b_serial=0.734M
+  => b_serial 三法收敛 0.70-0.79M (robust, 钉死)。 K/feed_Σ(P4)=0.80。
+     ⚠️ feed_Σ 本身随 P 涨(contention) => 2-pt fit 的 K 用了 P2/P4 两个被 contention
+        抬高的点, 把一部分 contention 折进 K, b_serial 被这部分 contention 略微"分担";
+        4-pt LSQ b_serial 0.698M 比 2-pt 0.794M 低 ~100K = contention 曲率被 4 点摊薄。
+     => 结论: b_serial 真值 ~0.70M (4-pt, 比 2-pt 更分得开 contention 曲率)。
+
+--- EXP1 pure-HMX 4-pt P-sweep (run_w16a16_head_phase4.py --reps 8; oc=4.238e-3 全过; clock 1592-1595 TURBO) ---
+pure wall(reps2-8 med): P1=3.761M P2=2.112M P3=1.507M P4=1.260M
+pure wt-pack(stats[7], feed proxy): P1=1.989M P2=2.013M P3=2.026M P4=2.073M  => +4.2% over P1->P4
+  (pure path stats[4]=spin_Σ 非 feed_Σ; wt-pack stats[7] 是 pure 的主 HVX feed work proxy)
+pure cons/HMX(stats[3]): 360K->387K (+7%, 与 ARES cbusy 同量级 flat)
+pure fit:
+  4-pt LSQ : K=3.351M  b_serial=0.415M  (residuals -4K/+21K/-25K/+8K, RMS 17K — 极干净)
+  2-pt(P4,P2): K=3.405M  b_serial=0.409M  (perf_3impl 旧: K=3.452M b=0.396M, 一致)
+
+================================================================================
+EXP1 钉死结论 (contention 坐实/否)
+================================================================================
+对照 (the kill):
+  ARES feed_Σ 随 P +19.8% (P1->P4)  ===  CONTENTION 坐实 (gather/SMT 共享引擎串行化)
+  pure wt-pack 随 P  +4.2% (P1->P4)  ===  ~无 contention (干净并行 producer feed)
+  HMX 占用 (cbusy/cons) 两者都 ~flat (+14% / +7%) => HMX 不是瓶颈, 两者都 feed-bound。
+  ARES b_serial(4-pt) 0.698M  vs  pure b_serial(4-pt) 0.415M  (差 ~0.28M)。
+
+=> HA-c (contention 是 ARES b_serial 的主差异项) 部分成立但需精确措辞:
+   - feed_Σ +19.8% 涨幅是 ADDITIONAL HVX work 被多线程"造"出来的 (gather 引擎争用/SMT
+     issue-slot 争用), 这部分 NOT P-可约 => 它抬高了 effective K 而非直接进 b_serial。
+   - b_serial 本身 (固定串行底, 4-pt 0.698M) 比 pure 0.415M 高 ~0.28M; 这 0.28M 才是
+     ARES 真正"多出来的固定串行底"。
+   - contention (feed +19.8%) 和 b_serial (+0.28M vs pure) 是两个独立信号: contention 进 K,
+     固定串行底进 b。两者合起来才是 ARES 比 pure 慢 (2.528M vs 1.260M, P=4) 的来源。
+   => 修正 doc "串行 merge-GLUE" 措辞: ARES 的劣势 = (1) feed work-volume 本就更大
+      (W16 双-pass, P4 feed 9.07M vs pure 2.07M) + (2) 该 feed 有 +19.8% 的 P-contention
+      (gather/SMT) 抬 K + (3) 固定串行底 b_serial 比 pure 高 0.28M。不是单一"串行胶水"。
+
+================================================================================
+EXP2: untile_cv gather cap-test (timing-only上界)  P=4 REPS=8 WIN=5  2026-06-17 15:59:35
+================================================================================
+win1: BASE wall=2518161 feed_Σ=8906890 | CAP wall=2395552 feed_Σ=8474152 | Δwall=-4.87%
+win2: BASE wall=2525338 feed_Σ=8981077 | CAP wall=2418361 feed_Σ=8534138 | Δwall=-4.24%
+win3: BASE wall=2534199 feed_Σ=8950141 | CAP wall=2375738 feed_Σ=8608270 | Δwall=-6.25%
+win4: BASE wall=2506803 feed_Σ=9019698 | CAP wall=2424290 feed_Σ=8619514 | Δwall=-3.29%
+win5: BASE wall=2503939 feed_Σ=9031102 | CAP wall=2399334 feed_Σ=8569332 | Δwall=-4.18%
+
+=== EXP2 RESULT (untile cap-test, P=4) ===
+  BASE wall median=2518161  CAP wall median=2399334
+  Δwall same-window paired: median=-4.24%  range=[-6.25,-3.29]  n=5
+  BASE feed_Σ median=8.981M  CAP feed_Σ median=8.569M  Δfeed=-4.6%
+  => untile->vxor 干净杠杆 wall 上界 = |-4.2|%  (cap 短路 gather, garbage out, 数据无关 mxmem timing => 有效上界)
+(EXP2 done)
+
+================================================================================
+EXP2 钉死结论 (untile->vxor 干净杠杆真值上界)
+================================================================================
+cap = 短路 untile_cv 的 64x Q6_vgather_ARMVh -> 直拷贝 (garbage out, mxmem timing 数据无关 => 有效上界)。
+5 窗同窗 ACAC 配对 (P=4, reps2-8 median):
+  Δwall same-window paired median = -4.24%  (range -3.29..-6.25%, n=5)
+  BASE feed_Σ 8.981M -> CAP feed_Σ 8.569M = -4.6% (gather work 被短路, feed_Σ 回落 === untile
+     gather 确实是 feed_Σ-P-涨/contention 的贡献者之一)。
+=> untile->vxor 唯一干净杠杆 wall 上界 = ~4.2% (即把整个 untile gather 完全消掉的理论极限;
+   真 vxor 实现还要做有效重排, 实得 < 4.2%)。
+⚠️ 推翻 analyzer EST: analyzer 估 -5~12% (-> ARES ~2.2-2.4M) 偏乐观。实测上界仅 -4.2%
+   (-> 即便完全消掉 gather, ARES P=4 wall 2.518M -> 最好 ~2.41M, 到不了 2.2-2.4M 区间的低端)。
+   untile gather 不是 ARES 的主成本; 它只占 wall ~4.2%。
+
+================================================================================
+EXP3: DIAG fwd-subst cap-test (-DGDN_BR_FWD_ROWS=4 = 1/16)  P=4 REPS=8 WIN=5  2026-06-17 16:00:51
+================================================================================
+win1: BASE wall=2524606 feed_Σ=8978971 | CAP wall=2482372 feed_Σ=8867994 | Δwall=-1.67%
+win2: BASE wall=2520113 feed_Σ=8854285 | CAP wall=2453242 feed_Σ=9198991 | Δwall=-2.65%
+win3: BASE wall=2518460 feed_Σ=8980700 | CAP wall=2462727 feed_Σ=8548428 | Δwall=-2.21%
+win4: BASE wall=2511564 feed_Σ=8903008 | CAP wall=2463825 feed_Σ=8914961 | Δwall=-1.90%
+win5: BASE wall=2497632 feed_Σ=9085615 | CAP wall=2473750 feed_Σ=8857375 | Δwall=-0.96%
+
+=== EXP3 RESULT (fwd-subst cap to 1/16, P=4) ===
+  BASE wall median=2518460  CAP wall median=2463825
+  Δwall same-window paired: median=-1.90%  range=[-2.65,-0.96]  n=5
+  BASE feed_Σ median=8.979M  CAP feed_Σ median=8.868M  Δfeed=-1.2%
+  => |Δwall|=1.9%  =>  SMT 藏住 (b_serial 主要是 HW-pack + gather-争用, 非对角)
+(EXP3 done)
+
+================================================================================
+EXP3 钉死结论 (精确对角 fwd-subst 是否仍藏)
+================================================================================
+cap = -DGDN_BR_FWD_ROWS=4 (内层 fwd-subst 砍到 4/64 = 1/16; ARES 走 GDN_BR_DIAG_I16 ->
+  gdn_solve_diag64_i16 -> gdn_diag_fwdsubst, cap 确在活跃路径上)。
+5 窗同窗 ACAC 配对 (P=4, reps2-8 median):
+  Δwall same-window paired median = -1.90%  (range -0.96..-2.65%, n=5)  << 5% 阈值
+  feed_Σ 仅 -1.2% (噪声内, 砍 15/16 的对角内层活只让总 HVX feed 降 1.2% => 对角 work
+     占总 feed 极小, 且基本被 SMT issue-slot 吸收)。
+=> 精确对角 fwd-subst 在当前规模仍 MOSTLY 藏住 (cap 1/16 只动 wall 1.9% < 5%)。
+   旧 142.9K-era "全藏" 结论本轮在 2.5M DIAG Σ 规模重验 = 基本成立 (有 ~1.9% 残漏, 非 0)。
+   => 精确对角 NOT b_serial 主成分; (b2) 对角贡献 b_serial ~ 1.9% wall ≈ 0.048M (上界,
+      因为 cap 1/16 不是全消, 真对角串行底 <= 此值的 16/15 ≈ 0.05M 量级)。
+
+================================================================================
+最终归因 (3 实验合成) — ARES b_serial / contention 钉死
+================================================================================
+口径回顾: wall = K/P + b_serial. ARES P=4 wall 2.518M.
+  K(4-pt LSQ)=7.259M, b_serial(4-pt)=0.698M (2-pt 0.794M; 4-pt 更分得开 contention 曲率 => 取 0.70M)。
+  pure-HMX b_serial=0.415M => ARES 多出的固定串行底 = +0.28M。
+
+两个独立信号 (别混):
+  (A) b_serial = 固定串行底 (P-不可约 intercept) = 0.70M。
+  (B) contention = feed_Σ 随 P +19.8% (P1 7.57M -> P4 9.07M) = +1.50M added feed @P4
+      = ~0.375M wall-equivalent (/P=4)。它进 effective K, NOT b_serial。
+
+三杠杆 cap-test 在 P=4 全 wall 上的占比 (有效上界):
+  | 杠杆                  | EXP | Δwall (cap)  | wall-equiv | feed_Σ Δ | 性质                         |
+  |-----------------------|-----|--------------|------------|----------|------------------------------|
+  | (c) untile gather     | 2   | -4.24%       | 0.107M     | -4.6%    | gather争用+pack, 唯一干净杠杆 |
+  | (b2) precise-diag fwd | 3   | -1.90%       | 0.048M     | -1.2%    | 大部分 SMT 藏住, 残漏 1.9%    |
+  | (b1) HW-pack 残余      | -   | (=剩余)      | bulk       | -        | int16 kmajor byte-pack 不可约 |
+
+=> ARES b_serial 0.767M(旧2-pt)/0.70M(本轮4-pt) 三成分实测:
+   (b1) HW-pack int16 byte-pack = 主成分 (bulk, ~0.46M 量级, 与 analyzer/cron#84 'wt-pack
+        非 gather-bound = HW 不可约 kmajor byte-pack' 结构侧一致; cap 不到=结构不可约)。
+   (c)  gather-争用 = feed_Σ +19.8% 是真信号 (HA-c 坐实), 但它主要进 K 不进 b_serial;
+        其中 untile gather 这一项 = wall 4.2% (0.107M wall / 0.104M feed-equiv), 是 (c) 里
+        唯一能用 vxor 干净拿掉的子项。其余 contention (~0.27M wall-equiv) = W16 双-pass
+        pack/depack gather + SMT issue-slot 争用, 非干净可消。
+   (b2) precise-diag = 最小 (<=0.05M, wall 1.9%), 当前规模仍 MOSTLY SMT 藏住 (重验旧结论成立)。
+
+HA-c (contention 是 ARES b_serial 主差异项) 裁定:
+  ❌ 措辞需修正. contention 真实存在 (feed +19.8% 坐实) 但它进 K 不进 b_serial.
+  ARES b_serial 的主差异项是 (b1) HW-pack (结构不可约), NOT contention.
+  ARES 比 pure 慢 (2.518M vs 1.260M @P4) 的总账 = (1) feed work-volume 本就 4.4×
+  (9.07M vs 2.07M, W16 双-pass) + (2) 该 feed 有 +19.8% P-contention 抬 K + (3) b_serial
+  +0.28M. 不是单一"串行 merge-GLUE".
+
+untile->vxor 唯一干净杠杆真值上界 = -4.2% wall (推翻 analyzer EST -5~12%; 偏乐观).
+  即便完全消掉 untile gather, ARES P=4 2.518M -> 最好 ~2.41M, 到不了 2.2-2.4M 低端.
+
+================================================================================
+device / clock self-check (全实验)
+================================================================================
+- 全部 reps2-8 median (绝不取 min), VTCM-only, 32-head TOTAL wall.
+- clock self-check: ARES 1593-1594, pure-HMX 1592-1595 (PCYCLE/µs ≈ TURBO 1594, 计数器 OK)。
+- ARES oc = == BASE oracle bit-exact (引 perf_3impl, 本轮 cap-test 不验精度, garbage out by design)。
+- pure-HMX oc = 4.238e-3 (本轮实测, 与 perf_3impl 一致)。
+- cap-test 代码改动: 仅 GdnSolveBR16.cpp:709 gdn_w16n8_untile_cv 加 #if defined(GDN_BR_W16N8_UNTILE_CAP)
+  guard (默认 OFF => #else 走原 gather 路, 生产字节不受影响)。EXP3 用现成 -DGDN_BR_FWD_ROWS=4
+  (GdnSolveBROp.cpp:350 已有 #ifndef 默认 BL)。两者默认 build 与改动前逐字节相同。未 commit。
+================================================================================

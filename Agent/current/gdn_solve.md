@@ -46,16 +46,23 @@ GDN/KDA linear-attention 在 v75 HTP 上的核心难点 = 每 head 对 C×C 下�
 | wall (P=4, reps2-N med) | 1.892M | 2.506M | 1.259M | graph-wall stats[0], VTCM-only |
 | cbusy(HMX Σ) / HMX 闲 | 0.140M / 92%闲 | 0.297M / 88%闲 | 0.387M / 69%闲 | stats[3] consumer mxmem Σ |
 | feed_Σ (HVX work-volume Σ) | 6.894M | 9.145M | 3.643M | stats[4] / pure 分解Σ |
-| b_serial (串行地板) | 0.849M | 0.767M | 0.396M | P-sweep: P4 − K/4 |
+| b_serial (常数-K 拟合 ⚠️) | 0.849M | 0.767M | 0.396M | wall=K/P+b 拟合值; ⚠️ ARES 此值混入 contention 曲率, 真固定底 honest-tail≈0.25M(见(3)) |
 | K/feed_Σ (feed 并行占比) | 0.61 | 0.76 | 0.95 | slope ÷ 实测 feed_Σ |
 | HVX-util/thread (稳态推导,非 PMU) | 96% | 94% | 83% | (feed/P)/lmax |
 
-口径自洽校验:pure-HMX b_serial 0.396M ≈ cron#82 独立测 0.376M(热噪声内一致)。三方案都 feed-bound(HMX 闲 69-92%,HVX-util 83-96%)。
+口径自洽校验:pure-HMX feed 几乎不随 P 涨(+4.2%),常数-K 拟合成立、b_serial 0.396M ≈ cron#82 独立测 0.376M;**ARES feed 随 P 涨 19.8%,常数-K 拟合不成立,其 b_serial 0.767M 是 artifact(见(3) honest-tail 修正)**。三方案都 feed-bound(HMX 闲 69-92%)。
 
-**(3) 关键结论 + 更正旧措辞。**
-- 🔴 **更正(被推翻的 artifact 措辞):"HVXMix 的 HVX 利用率比不上 pure-HMX" 是 ERROR** —— 真值相反:HVXMix HVX 瞬时利用率反而**更高**(SHIP 96% / ARES 94% vs pure 83%)。旧单-rep trace 图说的 "58% vs 82%" 是 trace artifact,**已作废**。
-- 真正的差距 = **(a) ~2× 的 HVX work-volume**(feed_Σ 6.9M/9.1M vs pure 3.6M)**+ (b) 一段不随 P 缩的串行 merge-GLUE**(K/feed 0.61/0.76 vs pure 0.95;b_serial 2.1×/1.9× pure)。pure-HMX 用 cv-block I/O 契约 + VTCM 常驻把这段串行胶水消掉了,所以 feed 几乎全 P-可约、b_serial 只有一半。
-- ⚠️ **"HVXMix off-diag merge 已对齐 pure-HMX / 干净路到结构地板" 加 nuance**:off-diag merge **MATMUL** 对齐 pure-HMX 属实,但 HVXMix **仍扛着 pure-HMX 已消除的串行 merge-GLUE**(b_serial 2× pure)。这是**已定位的真差距/候选杠杆**(把 pure-HMX 的 cv-block I/O 契约更彻底搬到 HVXMix,削这段串行胶水),analyzer 正在评估能削多少。故 **"HVXMix 已到地板" 这条尚未定论,待 analyzer。**(注:pure-HMX 自身的干净路结构地板判定 cron#86 不受影响。)
+**(3) 关键结论(2026-06-17 analyzer 收敛终判,3 实验 cron#82 口径钉死;dev 钉死数据 `perf_ares_bserial_pin.txt` + analyzer 对抗复算)。**
+- 🔴 **更正(被推翻的 artifact 措辞):"HVXMix 的 HVX 利用率比不上 pure-HMX" 是 ERROR** —— 真值相反:HVXMix HVX 瞬时利用率反而**更高**(SHIP 96% / ARES 94% vs pure 83%)。旧单-rep trace 图的 "58% vs 82%" 是 trace artifact,**已作废**。
+- 🔴 **"串行 merge-GLUE 是 ARES 候选杠杆" = REFUTED**。按 **honest-tail**(`wall − 实测feed_Σ(P)/P`,不假设常数 K)用 4-pt P-sweep 原始点复算:ARES 真·固定串行底 @P4 = **0.254M**,跨 P flat,**反而低于 pure-HMX 0.349M**(因 ARES HMX cbusy 0.289M < pure 0.387M)。上表 `wall=K/P+b` 回归得的 b_serial 0.767M 是 **contention 曲率被折进截距的口径 artifact**(feed_Σ 随 P 涨 19.8% 违反常数-K 假设),**ARES 没有"多出 pure 的串行胶水"**。(典型"两数差 ~2× 先疑口径":回归 b 0.77M vs honest-tail 0.25M 差 3× = 测量模型错,非真串行。)
+- **自洽分账(ARES 2.522M vs pure 1.260M @P4,差 +1.262M 几乎全在 feed/P=K 段,固定底差 ≈ 0):**
+  - raw work-volume **+0.982M(主因,在 K)**= W16 双-pass **2.08×** 单线程 HVX 活(P=1 干净 feed 7.57M vs pure 3.64M)。**这才是 ARES 慢的真·最大差异项**(非 contention、非串行底)。
+  - contention **+0.375M wall-equiv(在 K)**= feed_Σ 随 P +19.8% = gather/SMT issue-slot 争用(pure 仅 +4.2%),抬 effective K、NOT P-可约。
+  - 固定串行底 **−0.095M(在 b)**:ARES 反更低。
+  - pack(wt-pack)per-inst 4113 ≈ pure 4026、在 K(cap-delta×4≈1.26M=K 的 18%)**不在 b_serial** —— dev 旧"pack 0.46M=b_serial 主成分"措辞数量+归属双错,撤销。
+- **唯一干净杠杆 = `gdn_w16n8_untile_cv` 输出重排 64× vgather → vxor**(`GdnSolveBR16.cpp:709`):5 窗 ACAC cap 实测全消上界 **−4.24%**(真 vxor 实得 <4.2%);**推翻旧 EST −5~12%**。
+- ⚠️ **"HVXMix 已到地板" 现钉死**:ARES **clean 地板 ≈ 2.41M**(保 oc 1.16e-3 bit-exact;= 唯一干净杠杆 untile≤4.2% 兑现后)。越过 → pure-HMX 1.259M **需精度/算法授权**(减 matmul/降 Taylor 阶/降 pack 精度 = 放弃 W16 高精度档,干净路到不了)。精确对角(EXP3 cap 1/16 残漏 −1.9%≈≤0.05M、mostly SMT 藏住)非干净路大杠杆。"off-diag merge MATMUL 对齐 pure-HMX" 维持(per-inst pack 贴平 pure)。(pure-HMX 自身 cron#86 地板不受影响。)
+- 🟡 **仍 EST/待补**:真 vxor 实得增益(<4.2%,待实现 + ==BASE oracle bit-exact 门);对角残漏 ≤0.05M。
 
 **(4) 复现。** 三方案 reproduce 段(SHIP/ARES/pure build+run flags、A_ares.raw 扩展 A 装配)= `Agent/current/perf_3impl_cron82kqie.txt` 文件头 REPRODUCE 段;trace blob 抓取 = `scripts/gdn_capture_3impl_traces.sh`;聚合 SVG 重绘 = `scripts/gdn_3impl_aggregate_timeline.py <ship.raw> <ares.raw> <purehmx.raw> <out.svg>`(blob 归档于 `Agent/current/trace_blobs_3impl/`)。
 
