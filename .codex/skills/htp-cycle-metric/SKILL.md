@@ -1,6 +1,6 @@
 ---
 name: htp-cycle-metric
-description: The single home for how to COUNT and REPORT HTP cycles unambiguously. ONE vocabulary only — the QNN optrace fields (num_dominant_path_cycles, per-unit cycles_used, graph-wall span); all self-invented口径 names (op-latency/unit-busy/per-call-wall/domain/feed-inclusive/①②③④) are DELETED as meaningless. Use whenever you make a cycle/perf claim or an "ours vs QNN is Nx" comparison. Pins: QNN cycles == C15:14 PCYCLE (no conversion, bare-metal maps onto the same fields); THE rule = compare same field + same shape + same scenario; why num_dominant_path ≠ cycles_used (same op, two values: 370 vs 1388 on native 64³); the traps that give 2–6× wrong numbers; and the 64³-custom-op-under-optrace recipe. Full manual: docs/cycle_metric_alignment.md.
+description: The single home for how to COUNT and REPORT HTP cycles unambiguously. ONE vocabulary only — the QNN optrace fields (num_dominant_path_cycles, per-unit cycles_used, graph-wall span); all self-invented口径 names (op-latency/unit-busy/per-call-wall/domain/feed-inclusive/①②③④) are DELETED as meaningless. Use whenever you make a cycle/perf claim or an "ours vs QNN is Nx" comparison. Pins: QNN cycles == C15:14 PCYCLE (no conversion, bare-metal maps onto the same fields); THE rule = compare same field + same shape + same scenario; why num_dominant_path ≠ cycles_used (same op, two values: 370 vs 1388 on native 64³); the traps that give 2–6× wrong numbers (incl. regression-intercept-inflation — use the honest-tail for the serial floor, not a constant-K wall=K/P+b fit); and the 64³-custom-op-under-optrace recipe. Authoritative measurement standard + full manual: docs/cycle_metric_alignment.md § "HTP Kernel Measurement Standard".
 ---
 
 # HTP Cycle Metric (unify on QNN optrace fields)
@@ -169,6 +169,18 @@ it's producer-bound, HMX idle-mostly, so its marginal HMX add is small.)
      roofline floor max(parallel-feed/P, serial-consumer-occupancy), not from lmax alone.
    Full level taxonomy (6 levels: HMX-unit-MAC / consumer-occupancy / Σ-work-volume / critical-path /
    roofline-floor / wall): `docs/cycle_metric_alignment.md` §"Canonical cycle taxonomy".
+
+8. **regression-intercept-inflation — the serial floor 口径 (this round; cost a 3× over-stated serial floor).**
+   The serial floor (the part of the wall that does NOT shrink with more producers P) must be the
+   **honest-tail `tail(P) = wall(P) − 实测feed_Σ(P)/P`** (each P's OWN measured `feed_Σ`), **NOT** the
+   intercept `b` of a constant-K least-squares fit `wall = K/P + b`. When `feed_Σ` grows with P (gather /
+   SMT contention manufactures extra HVX work), the straight-line fit folds the contention curvature into
+   `b` and INFLATES the serial floor. Device proof (ARES, `feed_Σ` +19.8% P1→P4): regression-`b` = **0.767M**
+   vs honest-tail = **0.254M** (3×, and the honest-tail is even below pure-HMX's). Constant-K is the special
+   case valid ONLY when `feed_Σ` is ~flat in P (pure-HMX: regression-b 0.396M ≈ honest-tail). Always compute
+   the honest-tail first; only collapse to a constant-K intercept after confirming feed is flat. And never
+   extrapolate any P-fit past the HVX-unit count (P=4 on v75; P=6 rebounds +25.6%). Full definition + worked
+   example: `docs/cycle_metric_alignment.md` §"HTP Kernel Measurement Standard" → honest-tail.
 
 ## Getting a hand-written op measured under the SAME QNN optrace (apples-to-apples)
 

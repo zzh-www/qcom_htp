@@ -90,6 +90,19 @@ print(f"total span={t1-t0:,}  (÷heads for per-head)")
 ```
 Always paste the rendered timeline into the analysis/report — it is how you reach the optimum, and it is required.
 
+### Utilization 口径 + single-rep traces are STRUCTURE-ONLY (authoritative standard)
+
+Two rules that the bare-metal hand-written kernels share with the QNN flow (full standard:
+`docs/cycle_metric_alignment.md` §"HTP Kernel Measurement Standard"):
+
+- **A single-rep trace is trace-perturbed — read it for STRUCTURE ONLY** (stage mix + relative span), never
+  for absolute wall or utilization. The void source: single-rep trace utilization% (58%/82%/8×DEPACK were
+  all artifacts). The authoritative wall/utilization comes from the **steady-state table** (reps2-N median).
+- **Utilization 口径, in fixed order of trust:** (1) **PMU THREAD_IDLE真值** (`qurt_pmu_*`) — prefer it
+  whenever present; (2) else **honest steady-state derivation** (`(busiest-domain cycles_used)/wall`, or
+  `(feed/P)/lmax` + spin share) and **explicitly label it "steady-derived (non-PMU)"**; (3) ❌ never a
+  single-rep trace utilization%. (DOMAIN cycle = real time = busiest unit, not the sum — see Flow C.)
+
 **Why both [coarse+fine] are mandatory (they can disagree):** `Accelerator (execute) time` (compute) vs `QNN
 accelerator (execute) time` (full-graph WALL incl. per-op dispatch/scheduling overhead) can tell
 opposite stories. Real case — GdnSolve op vs 363-node int8-matmul solve:

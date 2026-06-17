@@ -206,6 +206,14 @@ HA-c (contention 是 ARES b_serial 主差异项) 裁定:
   (9.07M vs 2.07M, W16 双-pass) + (2) 该 feed 有 +19.8% P-contention 抬 K + (3) b_serial
   +0.28M. 不是单一"串行 merge-GLUE".
 
+  ⚠️⚠️ analyzer 收敛终判订正 (2026-06-17, 权威=gdn_solve.md §1.2 + cycle_metric §3, 本段以下作废):
+   - (1) 数错: raw work-volume = 2.08× NOT 4.4× (= P=1 干净 feed 7.57M / pure 3.64M;
+         上行 "9.07M vs 2.07M" 双错: 用了带 contention 的 P=4 + 错的 pure 值 2.07M 应为 3.64M)。
+   - (3) 错: 没有 "+0.28M 串行底". honest-tail (wall−实测feed_Σ(P)/P) 复算 ARES 真固定底
+         @P4 = 0.254M, 跨 P flat, 反低于 pure 0.349M。dev 引的 b_serial +0.28M / "(b1)HW-pack
+         是 b_serial 主项" 都是常数-K 回归把 contention 曲率折进截距的 artifact (pack 并行在 K 不在 b)。
+   - 正解: ARES vs pure +1.262M 几乎全在 feed/P(K): raw 2.08× +0.982M + contention +0.375M; 固定底差≈0。
+
 untile->vxor 唯一干净杠杆真值上界 = -4.2% wall (推翻 analyzer EST -5~12%; 偏乐观).
   即便完全消掉 untile gather, ARES P=4 2.518M -> 最好 ~2.41M, 到不了 2.2-2.4M 低端.
 

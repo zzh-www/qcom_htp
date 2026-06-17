@@ -38,6 +38,186 @@ alignment.
    than the bare-metal; the 70–83K baseline was ~2× too optimistic. (They are different algorithms:
    shipped = forward-substitution, HMX idle; bare-metal = block-recursive with int8-HMX merges.)
 
+---
+
+# § HTP Kernel Measurement Standard (统一可信 QNN-标准 — THE authoritative dictionary)
+
+**This section is the single authoritative source for how every hand-written HTP kernel's cycles are
+counted, reported, and timelined.** It applies to ALL handwriting implementations (pure-HMX GDNSolveHMX,
+HVXMix GDNSolveHVXMixHMX SHIP/ARES, pure-HVX GDNSolveHVX, and any future kernel) as the common scale for
+all kernel/latency verification. It does not replace the sections below — it consolidates and references
+them. The two skills `htp-cycle-metric` and `qnn-htp-profiling` point here. (Tooling — one parameterized
+timeline tool, a report generator, PMU-in-table, a reusable harness — is **P2 and not yet built**; see the
+"P2 待办" note at the end of this section.)
+
+> **One-line discipline:** every cycle number = **value + QNN field name + shape + scenario**, measured at
+> the standard anchors below, never an invented label.
+
+## 1. The anchors (THE standard — every perf claim must satisfy ALL of these)
+
+| anchor | rule | why / trap it kills |
+|---|---|---|
+| **steady-state** | reps2-N **median** (typ. reps2-8). **NEVER min, NEVER a single rep.** | min hides throttle; single-rep is trace-perturbed |
+| **VTCM-only** | wall excludes the one-time bulk DDR↔VTCM move (intermediates are VTCM-resident, the iron law). | bulk DDR in the timing window is an artifact (cron#74) |
+| **32-head TOTAL wall** | the metric is the **32-head total** graph wall (`stats[0]` makespan), **never per-head**. | an 88K tiler artifact once inverted a verdict via per-head |
+| **PCYCLE = one counter** | report in **PCYCLE = C15:14 = QHAS `cycles` = optrace** (ratio 0.9963, no conversion). Clock self-check `wall/µs ≈ 1422–1594` (v75 TURBO); if ≫ that you read the wrong counter. | counter-mixing (runtrace ~1.78 GHz / "4209 acc-cyc") = trap #3 |
+| **same-thermal ACAC paired** | A/B compared **same hot window**, interleaved (A,C,A,C…), delta of the pair. **Never** compare a fresh number to a fixed historical constant. | cross-window thermal drift = the −15.5%→−7.3% lucky-window correction (cron#85) |
+| **same 口径, never cross-mix tables** | A/B-toggle baseline (one flag differs) is a DIFFERENT 口径 from a production-default baseline; never put them in the same table. | cron#85 −7.3% toggle vs cron#87 −7.6% production |
+| **the 8 traps** | obey traps #1–8 in skill `htp-cycle-metric` (regression-intercept-inflation = the new #8, see §3 below). | each gives a 2–6× wrong number |
+
+## 2. The "4 questions" → QNN field map (the ONLY legal vocabulary; ruling 2026-06-17)
+
+The user's spoken "4 口径" are **NOT four labels** — they are **four QUESTIONS you might be asking**, each
+of which maps to a QNN optrace field name. **Pick the question, then report the field.** The deleted
+self-invented names (`op-latency / per-call / unit-busy / domain / feed-inclusive / ①②③④`) stay DELETED —
+do NOT revive them as a "4-口径" set.
+
+| the question you are asking | QNN field to report | how to read | unit it answers about |
+|---|---|---|---|
+| **Q1. how long is this op's critical path (latency)?** (dependency chains, idle-mostly unit) | **`num_dominant_path_cycles`** | per-op `htp_op_types[].num_dominant_path_cycles_htp_0`; graph `data.dominant_path_htp_0` | the op's ideal-overlap floor |
+| **Q2. how busy / occupied is this unit (throughput / occupancy)?** (saturated bottleneck unit) | per-unit **`cycles_used`** (HMX `g_cbusy`/`stats[3]`; max over HVX threads) | `htp_resources[].cycles_used`; for SEQUENCE throughput use the `start_cycle` retire interval, NEVER `cycles_used`/N (trap #6) | one unit's occupancy |
+| **Q3. what does ONE feed-inclusive call cost (per-call)?** | per-call **`cycles_used` occupancy** (bare-metal C15:14 back-to-back; `stats[5]`) | a single back-to-back read = that op's `cycles_used` | one kernel invocation, fed |
+| **Q4. what is the end-to-end makespan (graph-wall)?** — **THE final verdict** | **graph wall = `max(end_cycle) − min(start_cycle)`** (`stats[0]`) | the 32-head TOTAL wall, the headline number | the whole graph |
+
+Pick Q1 vs Q2 by whether that unit is the saturated bottleneck (latency-vs-throughput trap, §"Per-op"
+below). Cross-impl comparison = pick ONE field, read it on both sides at the SAME shape+scenario (Q4
+graph-wall÷N for cross-impl; never Q1 vs Q3 across instruments).
+
+## 3. honest-tail — the serial floor 口径 (REPLACES constant-K regression b_serial)
+
+**Definition.** The serial floor (the part of the wall that does NOT shrink with more producer threads) is
+the **honest-tail**:
+
+> **`tail(P) = wall(P) − 实测feed_Σ(P) / P`** — using each P's OWN measured `feed_Σ(P)`, NOT a constant.
+
+**WHY the old constant-K regression fails.** The previous口径 fit `wall = K/P + b_serial` (a constant-K
+least-squares over a P-sweep) and read the intercept `b` as the serial floor. That is correct ONLY when
+`feed_Σ` does not grow with P. When more producers **manufacture extra HVX work** (gather-engine / SMT
+issue-slot contention), `feed_Σ(P)` rises with P, the `wall(P)` points bend, and a straight-line fit
+**folds that contention curvature into the intercept**, inflating `b_serial`. The contention belongs in the
+**effective K** (P-non-reducible added feed), not in the serial floor.
+
+**Worked example (ARES, `Agent/current/perf_ares_bserial_pin.txt`).** ARES `feed_Σ` grows **+19.8% P1→P4**
+(7.57M→9.07M) = contention confirmed.
+
+| 口径 | ARES serial floor | note |
+|---|---|---|
+| constant-K regression intercept `b` | **0.767M** (2-pt) / 0.70M (4-pt LSQ) | folds contention curvature into `b` ⇒ inflated |
+| **honest-tail `tail(P)=wall−feed_Σ(P)/P`** | **~0.254M** (flat across P) | the TRUE serial floor — even **below** pure-HMX's 0.349M |
+
+The 3× gap (0.767M vs 0.254M) is a pure 口径 trap: the regression made ARES look like it had a huge serial
+floor when its real serial tail is small (its disadvantage is the **2.08× larger feed work-volume**, P=1 clean
+feed 7.57M vs pure 3.64M, + that feed's +19.8% P-contention, NOT a "serial merge-glue floor"). **pure-HMX is the special case where they
+agree** (wt-pack +4.2% P1→P4 ≈ flat, K/feed≈0.95 ⇒ regression-b 0.396M ≈ honest-tail) — which is exactly
+why constant-K was not caught earlier; it only bites the HVXMix routes.
+
+**This is trap #8 (new headline trap in skill `htp-cycle-metric`): regression-intercept-inflation.** Always compute the serial floor
+as the per-P honest-tail; only collapse to a constant-K intercept after checking `feed_Σ` is flat in P.
+(Corollary, cron#84: never extrapolate any P-fit past the HVX-unit count P=4 on v75 — P=6 rebounds +25.6%.)
+
+## 4. Unified `stats[]` field dictionary (canonical, cross-impl)
+
+**All perf落盘 uses these canonical field names.** The bare-metal harness packs raw numbers into `stats[n]`,
+but **`stats[n]` indices have DIFFERENT meaning in the HVXMix path vs the pure-HMX path** — this table is
+the disambiguation authority (basis = `Agent/current/perf_3impl_cron82kqie.txt`). Report by the **canonical
+field name**, and cite which path's `stats[n]` it came from.
+
+| canonical field | meaning | HVXMix path (SHIP/ARES, `gdnbm_imp.cpp:1534-1577`) | pure-HMX path (`gdn_pure_solve`) | QNN field (Q#) |
+|---|---|---|---|---|
+| **wall** | 32-head TOTAL makespan | `stats[0]` | `stats[0]` | graph-wall (Q4) |
+| **cbusy** | HMX Σ occupancy = consumer mxmem 整核 | `stats[3]` | `stats[3]` | `cycles_used` (Q2) |
+| **feed_Σ** | HVX work-volume Σ | `stats[4]` (= Σ producer life-spin) | **NOT `stats[4]`** — production decomposition value (wt+bias+act+renorm/acc+outcopy); `stats[4]` here = **spin_Σ** | per-op `cycles` Σ (装料) |
+| **spin_Σ** | producer idle-wait Σ (waiting the 1 HMX) | `stats[9]` (avg/prod) × P | **`stats[4]`** | waste (not a category) |
+| **us** | HAP_perf real µs (clock self-check) | `stats[6]` | `stats[6]` | (µs sanity) |
+| **lmin** | earliest-finishing producer life | `stats[7]` | — | critical-path (Q1-ish) |
+| **lmax** | slowest-prod-life = critical path | `stats[8]` | **`stats[11]`** | critical-path (Q1) |
+| **per-call occupancy** | one fed kernel call | `stats[5]` | `stats[5]` | `cycles_used` per-call (Q3) |
+| **wt-pack Σ** | weight-pack work Σ | `stats[24]` (per-inst `stats[25]`), needs `-DGDN_BR_W16_PACKCNT` | `stats[7]` (pure feed proxy) | 装料-wt `cycles` |
+| **act-pack Σ** | act-pack work Σ | `stats[26]` (per-inst `stats[27]`) | (folded in act) | 装料-act `cycles` |
+
+**The two booby-traps to memorize:** (a) `stats[4]` = **feed_Σ on HVXMix** but **spin_Σ on pure-HMX**;
+(b) `lmax` = `stats[8]` on HVXMix but `stats[11]` on pure-HMX. Never read `stats[n]` cross-path without
+this table. Segment↔QNN-op↔category↔field detail = §"Canonical 口径 map" below (cron#79).
+
+## 5. Cross-impl timeline stage-id spec (canonical stage → class)
+
+All 5 timeline scripts share the binary blob format **magic `0x47545203`**:
+`[magic u32][n u32][wall u64][base u64]` then `n × {tid u32, stage u32, t0 u64, t1 u64}`; `tid 0..3` = the
+4 HVX producers, `tid 4` = the main-thread HMX consumer. But **stage-id integers mean different things per
+impl** — this table is the normalization authority (seed = `scripts/gdn_3impl_aggregate_timeline.py:60-94`,
+the only script that already handles per-impl mapping).
+
+| stage-id | canonical CLASS | HVXMix (SHIP/ARES) raw | pure-HMX (GP) raw |
+|---|---|---|---|
+| 3 | **MM** (64³ matmul on HMX) | MM | MM |
+| 4 | **ACT** (act / quant format) | QUANT | ACT |
+| 5 | **PACK** (operand prep — kmajor/crouton; PREP and WT-PACK both归一 to PACK **as a LEAF in BOTH**) | PREP | WT-PACK |
+| 6 | **ACC** (int32 acc / renorm) | ACC | ACC |
+| 7 | **REQ** (widen+requant, merge-final) — HVXMix only | REQ | — |
+| 8 | **PACK** (also packs) | PACK | — |
+| 9 | **EFF** (effective −128·Σwt) — SHIP only | EFF | — |
+| 10 | **DEPACK** (DEPACK / OUT-COPY 归一) | DEPACK | OUT-COPY |
+| 11 | **SPIN** (producer idle-wait on the 1 HMX) | SPIN | SPIN |
+| 12 | **LOAD** | LOAD | LOAD |
+| 13 | **STORE** | STORE | STORE |
+| 14 | **POST** | POST | — |
+| 15 | **TABS** | TABS | — |
+| 1 | **DIAG** (fwd-subst) — HVXMix only | DIAG | — |
+| — | **container** = `{0, 2}` (HEAD/MERGE/WT-PACK wrapper — skip, draw nested) | `{0,2}` | `{0,2}` |
+
+**Hard rules:**
+- **MM (stage 3) is emitted ONLY on the consumer tid (tid 4)** — a producer never runs mxmem; it packs,
+  hands off, SPINs, DEPACKs. Orange (MM) on a producer row = a double-counting bug (the old HVXMix
+  whole-handshake-as-MM error, fixed 2026-06-17).
+- **Stage 5 is a PACK LEAF in BOTH taxonomies** (symmetry fix 2026-06-17): putting PREP(5) in CONTAINER on
+  HVXMix while GP drew it as a leaf掏空ed the HVXMix producer rows ~20-30pp and FAKED a low producer
+  occupancy. Both draw 5 as a PACK leaf so the three routes render on the SAME 口径.
+- A **single-rep trace is trace-perturbed**: read it for STRUCTURE ONLY (stage mix + relative length).
+  **Utilization is taken from the steady-state表, NEVER off the single-rep trace.**
+
+## 6. Utilization 口径 (which source to trust)
+
+Three sources have coexisted; the order of trust is fixed:
+1. **PMU THREAD_IDLE真值** (`qurt_pmu_*`, `-DGP_PKTPROBE` probe block) — the TRUTH. **Prefer it when present.**
+   (Currently PMU is only in the diagnostic probe block, not yet in the perf tables — that is **P2**.)
+2. **honest steady-state derivation** (`(feed/P)/lmax` + spin share, or `cbusy/wall`) — use when no PMU,
+   and **explicitly label it "steady-derived (non-PMU)"**.
+3. ❌ **single-rep trace utilization% — VOID** (58%/82%/8×DEPACK were all trace artifacts, cron#82kqie).
+   Never quote a utilization off a single-rep trace.
+
+## 7. perf report template (mandatory file header + field order)
+
+Every perf落盘 file starts with this header (skeleton), then the canonical-field table (§4 order), then
+conclusions + reproduce (per `feedback_docs_conclusions_not_log` — conclusions, not a log):
+
+```
+================================================================================
+<TITLE — what is being measured + which impl(s)>
+================================================================================
+DATE     : YYYY-MM-DD
+DEVICE   : oneplus (termux sshd; v75 cDSP TURBO)
+口径     : 32-head TOTAL wall (stats[0]=makespan), VTCM-only, reps2-N median (绝不取 min),
+           同热窗 ACAC 配对取 delta; PCYCLE=C15:14=QHAS (no conversion).
+           authoritative scales 2.770166930875267e-05 / 6.103701895199438e-05, A_u16_h32.raw.
+clock self-check : wall/µs = PCYCLE/µs ≈ TURBO 1594 (>> => wrong counter, re-measure).
+字段映射 : <which path's stats[n] → canonical field; cite §4 dictionary; flag stats[4]/lmax path-difference>.
+REPRODUCE: <exact build flags + run command, in-repo paths only (feedback_docs_reproduction_over_local_paths)>
+--------------------------------------------------------------------------------
+canonical fields (§4 order): wall | cbusy | feed_Σ | spin_Σ | lmax | per-call occ | wt-pack Σ | oc/bit-exact
+serial floor : honest-tail tail(P)=wall(P)−feed_Σ(P)/P  (NOT constant-K regression; §3)
+utilization  : PMU真值 if present, else "steady-derived (non-PMU)" (§6); NEVER single-rep trace
+================================================================================
+```
+
+> **P2 待办 (tooling, not this round):** collapse the 5 timeline scripts
+> (`gdn_pipe_timeline.py / gdn_pure_perfetto_timeline.py / gdn_hvxmix_perfetto_timeline.py /
+> gdn_perfetto_timeline.py / gdn_3impl_aggregate_timeline.py`) into ONE parameterized tool driven by the
+> §5 stage spec; a single unified perf-report generator emitting the §7 template; PMU真值 into the perf
+> tables (§6); and one reusable measurement harness. This section (the SPEC) is the contract those tools
+> must implement.
+
+---
+
 ## What each number actually measures
 
 ### Shipped `GdnSolve` — QHAS / optrace
@@ -192,7 +372,7 @@ repeatedly inverted verdicts. Unit = PCYCLE (= C15:14 = optrace; this baseline s
 | **Consumer kernel occupancy (整核)** | the consumer *thread* running the matmul kernel (convhhh) per call = thread-wall | **~1576/conv** = MAC(~363) + non-MAC bloat(~1213: bias staircase + M-loop + 14 cyc/pkt packet-stall); total `cbusy` **1.31M** | **"HMX compute / 真算" — this is the classic confusion.** It is thread-occupancy, mostly liftable. |
 | **Σ work-volume** | a stage's cycles summed across ALL threads/calls — NOT a wall | e.g. wt-vec Σ 2.05M = 4 producer threads = 0.51M/thread | a wall; **never rank wall levers by a Σ %** |
 | **Critical-path / thread-life** | the slowest single-thread span — correlates with wall | slowest-prod-life lmax = **1.53M** (= feed 1.00M + spin 0.50M + skew) | "producer work" (it includes spin = waiting the HMX) |
-| **Roofline floor** | ~~max(parallel producer-feed/P, serial consumer-occupancy)~~ → **wall(P) = feed_Σ/P + b_serial** (cron#82: `max(...)` is only a LOWER BOUND — it dropped the serial constant `b_serial`) | A态 current = 1.31M; **lean (cron#82 VERIFIED) = feed_Σ/P 1.004M + b_serial 0.376M ≈ 1.41M** (P-fit `wall=4.136M/P+0.376M`, slope 4.136M ≈ HVX-Σ 4.02M within 3%) | the bare `max(feed/P, consumer)` — it ignores b_serial (mostly glue) |
+| **Roofline floor** | ~~max(parallel producer-feed/P, serial consumer-occupancy)~~ → **wall(P) = feed_Σ/P + b_serial** (cron#82: `max(...)` is only a LOWER BOUND — it dropped the serial constant `b_serial`). **⚠️口径 caveat (see §HTP Kernel Measurement Standard / honest-tail): the constant-K regression `wall=K/P+b` is ONLY valid when feed_Σ does NOT grow with P. When feed_Σ rises with P (contention, e.g. ARES feed_Σ +19.8% P1→P4), the regression folds the contention curvature into the intercept and `b_serial` is inflated — use the per-P honest-tail `tail(P)=wall(P)−feed_Σ(P)/P` instead.** | A态 current = 1.31M; **lean (cron#82 VERIFIED) = feed_Σ/P 1.004M + b_serial 0.376M ≈ 1.41M** (P-fit `wall=4.136M/P+0.376M`, slope 4.136M ≈ HVX-Σ 4.02M within 3%; pure-HMX feed is ~flat in P so the regression-b ≈ honest-tail here — the trap only bites the HVXMix routes) | the bare `max(feed/P, consumer)` — it ignores b_serial (mostly glue) |
 | **Wall** | 32-head TOTAL, VTCM-only, reps2-8 median | **PRODUCTION DEFAULT (cron#89) = lean + wt-cache + B ≈ 1.258M; native escape (`-DGP_NO_LEANMM`) = 1.703M ⇒ −26% vs native**; chain: lean 1.391M (cron#83) → +wt-cache ~1.30M (cron#87) → +B ~1.258M (cron#89). 优化线收口. | — |
 
 **The crucial distinction (memorize): consumer-thread-occupancy ≠ HMX-unit-MAC.** Same 16 tile-MAC →
@@ -226,8 +406,8 @@ lean dilate micro 363 cyc vs convhhh 1576 cyc (4.3×). The 1213-cyc difference i
 | producer feed_Σ (HVX work-volume) | ~4.02M | ~4.02M (unchanged) | wt-vec 2.054M + wt-bias 0.456M + act 0.112M + renorm/acc 1.255M + outcopy 0.139M (逐字 perf_baseline_cron77.txt) | 🟢 |
 | producer feed/P (P=4) | 1.00M | **~1.0M** | feed_Σ ÷ P; cron#82 confirmed via P-sweep slope | 🟢 |
 | **bottleneck** | (escape) consumer-occupancy-bound | **FEED-BOUND** (consumer 0.379M ≪ feed/P, lmax 1.238M) | 翻转 = cron#82/#83 实测 | 🟢 |
-| **b_serial (serial floor)** | — | **~0.376M** | glue 0.215M + 残留 spin 0.136M/thread + skew 0.055M — the constant `max(...)` dropped | 🟢 |
-| **wall ceiling formula** | ~~max(feed/P, consumer)~~ 🔴 REFUTED | **wall(P) = feed_Σ/P + b_serial** | P-fit `wall=4.136M/P+0.376M`, slope 4.136M ≈ HVX-Σ 4.02M (3%) | 🟢 |
+| **b_serial / serial-tail (serial floor)** | — | **~0.376M** | glue 0.215M + 残留 spin 0.136M/thread + skew 0.055M — the constant `max(...)` dropped. **⚠️ This 0.376M is the constant-K regression intercept; for pure-HMX it agrees with the honest-tail `tail(P)=wall(P)−feed_Σ(P)/P` because pure-HMX feed is ~flat in P (wt-pack +4.2% P1→P4, K/feed≈0.95). For routes whose feed grows with P (ARES/SHIP) the regression intercept INFLATES — prefer the honest-tail; see §HTP Kernel Measurement Standard → honest-tail (ARES regression-b 0.70–0.79M vs honest-tail 0.254M = 3×).** | 🟢 |
+| **wall ceiling formula** | ~~max(feed/P, consumer)~~ 🔴 REFUTED | **wall(P) = feed_Σ/P + b_serial**, with the serial floor = **honest-tail `tail(P)=wall(P) − feed_Σ(P)/P`** (per-P measured feed, NOT a constant-K assumption) | P-fit `wall=4.136M/P+0.376M`, slope 4.136M ≈ HVX-Σ 4.02M (3%); valid only up to P=4 (4-HVX ceiling, cron#84) AND only where feed_Σ is ~flat in P — else use honest-tail | 🟢 |
 | ~~wall ceiling (after lean consumer)~~ | ~~~1.0M + glue ≈ **−42%**~~ | 🔴 **REFUTED → real −18.3% (prod default) / −18.6% (gated)** | ~~derived (max(feed/P,consumer) 漏 b_serial)~~ | 🔴 REFUTED |
 | ~~next-step feed/P (🟡, UNMEASURED): wt-vec halved → ~1.12M; P=6 → ~1.07M~~ | — | 🔴 **cron#84 REFUTED on device** (wave1 P-sweep: P=2 2.44M / P=4 1.37M / P=6 1.72M = +25.6% rebound, 4-HVX ceiling, fixed P=4; wave2 wt-vec→vshuff bit-exact but wall unchanged, wt-vec Σ 2.08M→2.05M unmoved ⇒ wt-pack is NOT gather-bound) | both DERIVED estimates 🔴 refuted by Phase 3 measurement | 🔴 REFUTED |
 | **wt-cache (cron#85 gated → cron#87 PRODUCTION DEFAULT, commit 736b309/01c5376)** | — | **wall −7.6% PRODUCTION (cron#87, ~1.30M / median 1.299M)**; cron#85 gated toggle −7.3% PINNED; wt-pack Σ 2.53M→2.08M (−18%, 640→512 pack, per-head WT-PACK 20→16) | per-producer wt-cache removes 128 redundant merge T-block re-packs; **cron#87 PROMOTED to production default** (gate `#ifdef GP_WTCACHE`→`#ifndef GP_NO_WTCACHE`, 9 sites; `-DGP_NO_WTCACHE` escapes; orthogonal to GP_NO_LEANMM, 4 states self-consistent). cron#85 −7.3% 口径 = A/B same-kernel toggle (do not cross-mix with cron#82 A=convhhh baseline) | 🟢 (−7.6% production 3-window; gated toggle −7.3% pinned; 🔴 the initial single-window −15.5% is a refuted lucky-window artifact) |
@@ -464,9 +644,15 @@ promotion commit d075ccd). What IS done vs what is NOT yet measured:
   trade-off (fewer matmuls / lower Taylor order, crossing the oc sweet spot), USER AUTHORIZATION required, not
   done. Do not write "≤1.0M reachable (clean path)".
 - **General methodology rule (cron#82):** never report a ceiling as `max(parallel extremes)`. Always
-  `feed_Σ/P + b_serial` with a P-sweep-measured b_serial. `max(...)` is a lower bound only.
+  `feed_Σ/P + b_serial` with a P-sweep-measured serial floor. `max(...)` is a lower bound only.
   **cron#84 corollary: a linear P-fit (`feed_Σ/P + b_serial`) is only valid up to the HVX-unit count —
   beyond P=4 (v75) over-subscription rebounds the wall; never extrapolate the fit past the unit ceiling.**
+  **honest-tail corollary (this round): the serial floor MUST be the per-P honest-tail
+  `tail(P)=wall(P) − 实测feed_Σ(P)/P` (using each P's MEASURED feed_Σ), NOT a constant-K regression
+  intercept. When feed_Σ grows with P (contention), `wall=K/P+b` folds the contention curvature into `b`
+  and over-states the serial floor (ARES: regression-b 0.70–0.79M vs honest-tail 0.254M = 3×). Constant-K
+  regression is a special case valid only when feed_Σ is ~flat in P (pure-HMX). Full definition + worked
+  example: §"HTP Kernel Measurement Standard" → honest-tail.**
 
 ---
 
